@@ -86,7 +86,7 @@ class CarlaCore:
                 "-windowed",
                 "-ResX={}".format(self.config["resolution_x"]),
                 "-ResY={}".format(self.config["resolution_y"]),
-                "-opengl",
+                "",
             ]
         else:
             server_command = [
@@ -207,7 +207,7 @@ class CarlaCore:
         if self.hero is not None:
             self.hero.destroy()
             self.hero = None
-
+    
         random.shuffle(spawn_points, random.random)
         for i in range(0,len(spawn_points)):
             next_spawn_point = spawn_points[i % len(spawn_points)]

@@ -3,12 +3,12 @@
 framework: "torch"
 num_workers: 1
 num_gpus_per_worker: 1
-num_cpus_per_worker: 8
+num_cpus_per_worker: 3
 rollout_fragment_length: 16
 timesteps_per_iteration: 2000
-train_batch_size: 64
+train_batch_size: 16
 learning_starts: 5000
-buffer_size: 20000
+buffer_size: 15000
 lr: 0.0003
 "exploration_config": {
   "type": "EpsilonGreedy",
@@ -21,7 +21,7 @@ env_config:
   carla:
     host: "localhost"
     timeout: 20.0
-    timestep: 0.05
+    timestep: 0.1
     retries_on_error: 25
     resolution_x: 600
     resolution_y: 600
@@ -32,7 +32,7 @@ env_config:
 
   experiment:
     hero:
-      blueprint: "vehicle.lincoln.mkz2017"
+      blueprint: "vehicle.mercedes.coupe_2020"
       sensors:
         collision:
           type: "sensor.other.collision"
@@ -57,7 +57,7 @@ env_config:
       n_vehicles: 0
       n_walkers: 0
       tm_hybrid_mode: True
-    town: "Town05_Opt"
+    town: "Town05"
     weather: "CloudySunset"
     others:
       framestack: 1

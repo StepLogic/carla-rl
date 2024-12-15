@@ -9,7 +9,10 @@
 You can visualize experiment results in ~/ray_results using TensorBoard.
 """
 from __future__ import print_function
+import os
 
+
+# os.environ["PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION"]="python"
 import argparse
 import os
 import yaml
@@ -32,21 +35,38 @@ EXPERIMENT_CLASS = DQNExperiment
 
 def run(args):
     try:
-        ray.init(address= "auto" if args.auto else None)
-        tune.run(CustomDQNTrainer,
-                 name=args.name,
-                 local_dir=args.directory,
-                 stop={
-                     "perf/ram_util_percent": 85.0,
-                     "timesteps_total": args.stop_timesteps
-                 },
-                 checkpoint_freq=1,
-                 checkpoint_at_end=True,
-                 restore=get_checkpoint(args.name, args.directory,
-                                        args.restore, args.overwrite),
-                 config=args.config,
-                 queue_trials=True)
+        ray.init(
+            address="auto" if args.auto else None,
+            ignore_reinit_error=True,
+            local_mode=False,
+            include_dashboard=True
+        )
 
+        tune.run(
+            CustomDQNTrainer,
+            name=args.name,
+            local_dir=args.directory,
+            stop={
+                "perf/ram_util_percent": 85.0,
+                "timesteps_total": args.stop_timesteps
+            },
+            checkpoint_freq=1,
+            checkpoint_at_end=True,
+            restore=get_checkpoint(args.name, args.directory,True, False),
+            config=args.config,
+            max_failures=-1,
+            keep_checkpoints_num=5,
+            reuse_actors=False,
+            fail_fast=False,
+            # max_retries=3,
+            # retry_on_error=True,
+            sync_config=tune.SyncConfig(
+                sync_on_checkpoint=True,
+                sync_period=300  # sync every 5 minutes
+            ),
+            resume="AUTO",  # Automatically detect if experiment exists and resume
+            raise_on_failed_trial=False
+        )
     finally:
         kill_all_servers()
         ray.shutdown()
@@ -83,7 +103,7 @@ def main():
                            help="Flag to restore from the specified directory")
     argparser.add_argument("--overwrite",
                            action="store_true",
-                           default=False,
+                           default=True,
                            help="Flag to overwrite a specific directory (warning: all content of the folder will be lost.)")
     argparser.add_argument("--tboff",
                            action="store_true",

@@ -2,9 +2,9 @@
 
 import os
 import torch
-from ray.rllib.agents.dqn import SACTrainer
+from ray.rllib.agents.sac import SACTrainer
 
-class CustomDQNTrainer(SACTrainer):
+class CustomSACTrainer(SACTrainer):
     def setup(self, config):
         SACTrainer.setup(self, config)  # Try direct parent class call instead of super()
     

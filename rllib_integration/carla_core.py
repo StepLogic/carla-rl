@@ -58,9 +58,9 @@ class CarlaCore:
         self.hero = None
         self.config = join_dicts(BASE_CORE_CONFIG, config)
         self.sensor_interface = SensorInterface()
-
         self.init_server()
         self.connect_client()
+        self.sensors=[]
 
     def init_server(self):
         """Start a server on a random port"""
@@ -170,7 +170,7 @@ class CarlaCore:
         """This function resets / spawns the hero vehicle and its sensors"""
 
         # Part 1: destroy all sensors (if necessary)
-        self.sensor_interface.destroy()
+        # self.sensor_interface.destroy()
 
         self.world.tick()
 
@@ -200,36 +200,45 @@ class CarlaCore:
         else:
             spawn_points = self.map.get_spawn_points()
 
-        self.hero_blueprints = self.world.get_blueprint_library().find(hero_config['blueprint'])
-        self.hero_blueprints.set_attribute("role_name", "hero")
 
         # If already spawned, destroy it
         if self.hero is not None:
-            self.hero.destroy()
-            self.hero = None
-    
-        random.shuffle(spawn_points, random.random)
-        for i in range(0,len(spawn_points)):
-            next_spawn_point = spawn_points[i % len(spawn_points)]
-            self.hero = self.world.try_spawn_actor(self.hero_blueprints, next_spawn_point)
-            if self.hero is not None:
-                print("Hero spawned!")
-                break
-            else:
-                print("Could not spawn hero, changing spawn point")
+            # self.hero.destroy()
+            
+            self.hero.set_simulate_physics(False)
+            next_spawn_point=random.choice(spawn_points)
+            self.hero.set_transform(next_spawn_point)
+            self.hero.set_simulate_physics(True)
+            # for sensor in self.sensors:
+            #     # breakpoint()
+            #     if hasattr(sensor,"update_location"):
+            #         sensor.update_location()
+            
+        else:
+            self.hero_blueprints = self.world.get_blueprint_library().find(hero_config['blueprint'])
+            self.hero_blueprints.set_attribute("role_name", "hero")
+            random.shuffle(spawn_points, random.random)
+            for i in range(0,len(spawn_points)):
+                next_spawn_point = spawn_points[i % len(spawn_points)]
+                self.hero = self.world.try_spawn_actor(self.hero_blueprints, next_spawn_point)
+                if self.hero is not None:
+                    print("Hero spawned!")
+                    break
+                else:
+                    print("Could not spawn hero, changing spawn point")
 
-        if self.hero is None:
-            print("We ran out of spawn points")
-            return
+            if self.hero is None:
+                print("We ran out of spawn points")
+                return
 
+            self.world.tick()
+
+            # Part 3: Spawn the new sensors
+            for name, attributes in hero_config["sensors"].items():
+                self.sensors.append(SensorFactory.spawn(name, attributes, self.sensor_interface, self.hero))
+
+            # Not needed anymore. This tick will happen when calling CarlaCore.tick()
         self.world.tick()
-
-        # Part 3: Spawn the new sensors
-        for name, attributes in hero_config["sensors"].items():
-            sensor = SensorFactory.spawn(name, attributes, self.sensor_interface, self.hero)
-
-        # Not needed anymore. This tick will happen when calling CarlaCore.tick()
-        # self.world.tick()
 
         return self.hero
 

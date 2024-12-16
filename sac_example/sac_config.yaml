@@ -81,8 +81,8 @@ env_config:
       max_dist: 200
       target_speed: 5.0
 
-evaluation:
-  evaluation_interval: 10
-  evaluation_duration: 5
-  evaluation_duration_unit: "episodes"
-  evaluation_parallel_to_training: true
+# evaluation:
+#   evaluation_interval: 10
+#   evaluation_duration: 5
+#   evaluation_duration_unit: "episodes"
+#   evaluation_parallel_to_training: true

@@ -13,7 +13,6 @@ class SensorFactory(object):
     """
     Class to simplify the creation of the different CARLA sensors
     """
-
     @staticmethod
     def spawn(name, attributes, interface, parent):
         attributes = attributes.copy()
@@ -45,7 +44,8 @@ class SensorFactory(object):
             sensor = Obstacle(name, attributes, interface, parent)
         elif type_ == "sensor.birdview":  # Pseudosensor
             sensor = BirdviewManager(name, attributes, interface, parent)
+        elif type_ == "sensor.goal":  # Pseudosensor
+            sensor = GoalImageSensor(name, attributes, interface, parent)
         else:
             raise RuntimeError("Sensor of type {} not supported".format(type_))
-
         return sensor

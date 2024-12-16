@@ -1,49 +1,63 @@
+# Modified from https://github.com/carla-simulator/rllib-integration/blob/main/dqn_example/dqn_experiment.py
+
 import math
 import numpy as np
-from gym.spaces import Box, Tuple
+from gym.spaces import Box, Discrete, Tuple,Dict
+
 import carla
+
 from rllib_integration.base_experiment import BaseExperiment
 from rllib_integration.helper import post_process_image
 
-class SACExperiment(BaseExperiment):
+
+class STBL3Experiment(BaseExperiment):
     def __init__(self, config={}):
-        super().__init__(config)
+        super().__init__(config)  # Creates a self.config with the experiment configuration
+
         self.frame_stack = self.config["others"]["framestack"]
         self.max_time_idle = self.config["others"]["max_time_idle"]
         self.max_dist = self.config["others"]["max_dist"]
         self.target_speed = self.config["others"]["target_speed"]
         self.allowed_types = [carla.LaneType.Driving, carla.LaneType.Parking]
         self.last_action = None
-        self.max_steer=0.5
-
+        # control variables
+        self.max_steer = 0.5
+        self.max_throttle = 0.6
+        self.prev_steer = 0.0
+        self.prev_throttle = 0.0
 
     def reset(self):
+        """Called at the beginning and each time the simulation is reset"""
+
+        # Ending variables
         self.time_idle = 0
         self.time_episode = 0
         self.done_time_idle = False
         self.done_falling = False
         self.done_dist = False
+
+        # hero variables
         self.last_location = None
         self.last_velocity = 0
         self.distance_travelled = 0.0
+
+        # Sensor stack
         self.prev_vec_0 = None
         self.prev_vec_1 = None
         self.prev_vec_2 = None
         self.prev_image_0 = None
         self.prev_image_1 = None
         self.prev_image_2 = None
+
+        # control variables
         self.max_steer = 0.5
         self.max_throttle = 0.6
         self.prev_steer = 0.0
         self.prev_throttle = 0.0
-        self.max_steer=0.5
 
     def get_action_space(self):
-        return Box(
-            low=np.array([-self.max_steer, -1.0]),
-            high=np.array([self.max_steer, 1.0]),
-            dtype=np.float32
-        )
+        """Returns the action space, in this case, a discrete space"""
+        return Discrete(len(self.get_actions()))
 
     def get_observation_space(self):
         image_space = Box(
@@ -52,46 +66,72 @@ class SACExperiment(BaseExperiment):
             shape=(84, 84, self.frame_stack,),
             dtype=np.float32,
         )
+        
         vec_space = Box(
             low=-5.1,
             high=5.1,
             shape=(4 * self.frame_stack,),
             dtype=np.float32,
         )
-        return Tuple((image_space, vec_space))
+
+        return Dict({"image":image_space, "vector":vec_space})
+
+    def get_action_space(self):
+        """Returns the continuous action space for steering and throttle"""
+        return Box(
+            low=np.array([-self.max_steer, -1.0]),  # [steering, throttle/brake]
+            high=np.array([self.max_steer, 1.0]),
+            dtype=np.float32
+        )
 
     def compute_action(self, action):
+        """Convert continuous actions to CARLA vehicle controls"""
         steer, throttle_brake = action
-        vehicle_control = carla.VehicleControl()
-        vehicle_control.steer = float(np.clip(steer, -self.max_steer, self.max_steer))
+
+        action = carla.VehicleControl()
+        # Smooth steering using previous value
+        action.steer = float(np.clip(self.prev_steer + steer, -self.max_steer, self.max_steer))
         
+        # Handle throttle and brake separately
         if throttle_brake >= 0:
-            vehicle_control.throttle = float(np.clip(throttle_brake, 0.0, self.max_throttle))
-            vehicle_control.brake = 0.0
+            action.throttle = float(np.clip(throttle_brake, 0.0, self.max_throttle))
+            action.brake = 0.0
         else:
-            vehicle_control.throttle = 0.0
-            vehicle_control.brake = float(np.clip(-throttle_brake, 0.0, 1.0))
+            action.throttle = 0.0
+            action.brake = float(np.clip(-throttle_brake, 0.0, 1.0))
 
-        vehicle_control.reverse = False
-        vehicle_control.hand_brake = False
+        action.reverse = False
+        action.hand_brake = False
 
-        self.last_action = vehicle_control
-        self.prev_steer = vehicle_control.steer
-        self.prev_throttle = vehicle_control.throttle
+        self.last_action = action
+        self.prev_steer = action.steer
+        self.prev_throttle = action.throttle
 
-        return vehicle_control
+        return action
 
+    # Remove the get_actions method since we're using continuous actions
     def get_observation(self, sensor_data, core):
+        """Function to do all the post processing of observations (sensor data).
+
+        :param sensor_data: dictionary {sensor_name: sensor_data}
+
+        Should return a tuple or list with two items, the processed observations,
+        as well as a variable with additional information about such observation.
+        The information variable can be empty
+        """
         vecs = self.get_vec_obs(sensor_data, core)
         images = self.get_img_obs(sensor_data, core)
-        return (images, vecs), {}
+
+        return {"image":images, "vector":vecs}, {}
 
     def get_vec_obs(self, sensor_data, core):
         vec = np.zeros(4)
         vec[0] = self.prev_steer / self.max_steer
         vec[1] = self.prev_throttle / self.max_throttle
+        
         hero = core.hero
         vec[2] = np.clip(self.get_speed(hero)/self.target_speed, 0.0, 1.0)
+
         vec[3] = self.time_idle / self.max_time_idle
 
         if self.prev_vec_0 is None:
@@ -115,7 +155,7 @@ class SACExperiment(BaseExperiment):
         return vecs
 
     def get_img_obs(self, sensor_data, core):
-        image = post_process_image(sensor_data['rgb'][1], normalized=True, grayscale=True)
+        image = post_process_image(sensor_data['rgb'][1], normalized = True, grayscale = True)
 
         if self.prev_image_0 is None:
             self.prev_image_0 = image
@@ -136,12 +176,14 @@ class SACExperiment(BaseExperiment):
         self.prev_image_0 = image
 
         return images
-
+    
     def get_speed(self, hero):
+        """Computes the speed of the hero vehicle in Km/h"""
         vel = hero.get_velocity()
         return 3.6 * math.sqrt(vel.x ** 2 + vel.y ** 2 + vel.z ** 2)
 
     def get_done_status(self, sensor_data, core):
+        """Returns whether or not the experiment has to end"""
         hero = core.hero
         self.done_time_idle = self.max_time_idle < self.time_idle
         if self.get_speed(hero) > 1.0:
@@ -157,44 +199,42 @@ class SACExperiment(BaseExperiment):
 
     def compute_reward(self, sensor_data, core):
         hero = core.hero
+
+        # Hero-related variables
         hero_location = hero.get_location()
         hero_velocity = self.get_speed(hero)
 
-        if self.last_location is None:
+        # Initialize last location
+        if self.last_location == None:
             self.last_location = hero_location
 
-        delta_distance = float(np.sqrt(np.square(hero_location.x - self.last_location.x) + 
+        # Compute deltas
+        delta_distance = float(np.sqrt(np.square(hero_location.x - self.last_location.x) + \
                             np.square(hero_location.y - self.last_location.y)))
         self.distance_travelled += delta_distance
 
+        # Update variables
         self.last_location = hero_location
         self.last_velocity = hero_velocity
 
-        # Speed matching reward
-        speed_reward = -abs(hero_velocity - self.target_speed) / self.target_speed
-        
-        # Progress reward
-        progress_reward = delta_distance * 2.0
-        
-        # Action smoothness penalty
-        if self.last_action is not None:
-            smoothness_penalty = -abs(self.last_action.steer) * 0.2
+        # Reward if going forward
+        if hero_velocity < self.target_speed:
+            reward = delta_distance
         else:
-            smoothness_penalty = 0.0
+            reward = 0.0
 
-        # Combine rewards
-        reward = speed_reward + progress_reward + smoothness_penalty
-
-        # Terminal rewards/penalties
         if self.done_falling:
-            reward += -50.0
+            reward += -1.0
         if self.done_dist:
-            reward += 100.0
+            print("Max dist travelled")
+            reward += 1.0
         if self.done_time_idle:
-            reward += -50.0
+            print("Done idle")
+            reward += -1.0
         if self.collision:
-            reward += -50.0
+            print('collision')
+            reward += -1.0
         if self.diff_lane:
-            reward += -25.0
+            reward += -1.0
 
-        return reward
+        return reward*10

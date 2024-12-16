@@ -11,6 +11,7 @@ Here are defined all the CARLA sensors
 
 import copy
 import math
+import cv2
 import numpy as np
 
 import carla
@@ -72,6 +73,7 @@ class CarlaSensor(BaseSensor):
         self.sensor = world.spawn_actor(blueprint, transform, attach_to=self.parent)
 
         self.sensor.listen(self.callback)
+    
 
     def destroy(self):
         if self.sensor is not None:
@@ -104,7 +106,57 @@ class BaseCamera(CarlaSensor):
         array = array[:, :, ::-1]
         return array
 
+class GoalImageSensor(BaseSensor):
+    def __init__(self, name, attributes, interface, parent):
+        super().__init__(name, attributes, interface, parent)
+        self.world = self.parent.get_world()
+        type_ = self.attributes.pop("type", "")
+        # type_ = self.attributes.pop("type", "")
+        self.sensor=None
+        transform = self.attributes.pop("transform", "0,0,0,0,0,0")
+        if isinstance(transform, str):
+            transform = [float(x) for x in transform.split(",")]
+        assert len(transform) == 6
 
+        self.blueprint = self.world.get_blueprint_library().find("sensor.camera.rgb")
+        self.town_map= self.world.get_map()
+        self.blueprint.set_attribute("role_name", name)
+        for key, value in attributes.items():
+            self.blueprint.set_attribute(str(key), str(value))
+
+        self.transform = carla.Transform(
+            carla.Location(transform[0], transform[1], transform[2]),
+            carla.Rotation(transform[4], transform[5], transform[3])
+        )
+ 
+        self.update_location()
+        self.sensor.listen(self.callback)
+        
+    def update_location(self):
+        wp=self.town_map.get_waypoint(self.parent.get_transform().location)
+        if not wp is None:
+            wp=wp.next(10)[-1]
+            wp=wp.transform
+            wp.location=wp.location+self.transform.location
+        else:
+            wp=self.transform
+        self.sensor = self.world.spawn_actor(self.blueprint, wp)
+        self.loc=wp.location
+ 
+
+    def parse(self, sensor_data):
+        """Parses the Image into an numpy array"""
+        # sensor_data: [fov, height, width, raw_data]
+        array = np.frombuffer(sensor_data.raw_data, dtype=np.dtype("uint8"))
+        array = np.reshape(array, (sensor_data.height, sensor_data.width, 4))
+        array = array[:, :, :3]
+        array = array[:, :, ::-1]
+        cv2.imwrite("test.jpg",array)
+        return [array,self.loc.distance(self.parent.get_location()),np.array([self.loc.x,self.loc.y,self.loc.z])]
+    def destroy(self):
+        if self.sensor is not None:
+            self.sensor.destroy()
+            self.sensor = None
 class CameraRGB(BaseCamera):
 
     def __init__(self, name, attributes, interface, parent):

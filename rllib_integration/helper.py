@@ -119,3 +119,6 @@ def launch_tensorboard(logdir, host="localhost", port="6006"):
     tb = program.TensorBoard()
     tb.configure(argv=[None, "--logdir", logdir, "--host", host, "--port", port])
     url = tb.launch()
+def carla_location_to_np_array(location):
+    return np.array([location.x, location.y, location.z])
+

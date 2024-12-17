@@ -104,6 +104,7 @@ class BaseCamera(CarlaSensor):
         array = np.reshape(array, (sensor_data.height, sensor_data.width, 4))
         array = array[:, :, :3]
         array = array[:, :, ::-1]
+        cv2.imwrite("obs.jpg",array)
         return array
 
 class GoalImageSensor(BaseSensor):

@@ -113,10 +113,11 @@ class GoalImageSensor(BaseSensor):
         type_ = self.attributes.pop("type", "")
         # type_ = self.attributes.pop("type", "")
         self.sensor=None
-        transform = self.attributes.pop("transform", "0,0,0,0,0,0")
-        if isinstance(transform, str):
-            transform = [float(x) for x in transform.split(",")]
-        assert len(transform) == 6
+        self.transform = self.attributes.pop("transform")
+        # print(self.transform,"str")
+        # if isinstance(transform, str):
+        #     transform = [float(x) for x in transform.split(",")]
+        # assert len(transform) == 6
 
         self.blueprint = self.world.get_blueprint_library().find("sensor.camera.rgb")
         self.town_map= self.world.get_map()
@@ -124,24 +125,29 @@ class GoalImageSensor(BaseSensor):
         for key, value in attributes.items():
             self.blueprint.set_attribute(str(key), str(value))
 
-        self.transform = carla.Transform(
-            carla.Location(transform[0], transform[1], transform[2]),
-            carla.Rotation(transform[4], transform[5], transform[3])
-        )
- 
-        self.update_location()
+        # self.transform = carla.Transform(
+        #     carla.Location(transform[0], transform[1], transform[2]),
+        #     carla.Rotation(transform[4], transform[5], transform[3])
+        # )
+        # self.transform.location = self.transform.location + carla.Location(x=0.0,y=0.0,z=5.0)
+        self.transform.location.z += 2.0
+        self.sensor = self.world.spawn_actor(self.blueprint, self.transform)
+        # self.update_location(self.transform)
         self.sensor.listen(self.callback)
+        self.loc=self.transform.location
         
-    def update_location(self):
-        wp=self.town_map.get_waypoint(self.parent.get_transform().location)
-        if not wp is None:
-            wp=wp.next(10)[-1]
-            wp=wp.transform
-            wp.location=wp.location+self.transform.location
-        else:
-            wp=self.transform
-        self.sensor = self.world.spawn_actor(self.blueprint, wp)
-        self.loc=wp.location
+    def update_location(self,transform):
+        # wp=self.town_map.get_waypoint(self.parent.get_transform().location)
+        # if not wp is None:
+        #     wp=wp.next(10)[-1]
+        #     wp=wp.transform
+        #     wp.location=wp.location+self.transform.location
+        # else:
+        #     wp=self.transform
+        # breakpoint()
+        transform.location.z += 2.0
+        self.sensor.set_transform(transform)
+        self.loc=transform.location
  
 
     def parse(self, sensor_data):

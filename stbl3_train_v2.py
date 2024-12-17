@@ -2,12 +2,14 @@
 
 import os
 import argparse
+import gym.wrappers
 import yaml
 import numpy as np
 from typing import Dict, Tuple
 import torch
 import torch.nn as nn
 from gym import spaces
+import gym
 from stable_baselines3.common.noise import OrnsteinUhlenbeckActionNoise
 import carla
 from stable_baselines3 import DQN, SAC,PPO
@@ -15,9 +17,9 @@ from stable_baselines3.common.torch_layers import BaseFeaturesExtractor
 from stable_baselines3.common.callbacks import BaseCallback, CheckpointCallback, CallbackList
 from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.vec_env import DummyVecEnv
-from rllib_integration.carla_env import CarlaEnv
+from rllib_integration.carla_goal_env import CarlaGoalEnv
 from rllib_integration.helper import post_process_image
-from stbl3_goal_experiments import STBL3GoalExperiment
+from stbl3_experiments_v2 import STBL3GoalExperiment
 
 class CarlaCNN(BaseFeaturesExtractor):
     """CNN feature extractor for CARLA images"""
@@ -40,7 +42,7 @@ class CarlaCNN(BaseFeaturesExtractor):
             n_flatten = self.cnn(torch.zeros(1, 1, 84, 84)).shape[1]
         
         self.linear = nn.Sequential(
-            nn.Linear(n_flatten*2 + 2, features_dim),  # +4 for the vector observations
+            nn.Linear(n_flatten*2 + 4, features_dim),  # +4 for the vector observations
             nn.ReLU()
         )
 
@@ -109,7 +111,7 @@ config = {
                         "type": "sensor.goal",
                         "image_size_x": 300,
                         "image_size_y": 300,
-                        "transform": "1.9, 0.0, 1.7, 0.0, -15.0, 0.0",
+                        # "transform": "1.9, 0.0, 1.7, 0.0, -15.0, 0.0",
                         # "attach":False
                     },
                     "lane_invasion": {
@@ -137,7 +139,7 @@ config = {
             "others": {
                 "framestack": 1,
                 "max_time_idle": 600,
-                "max_dist": 4000,
+                "max_dist": 200,
                 "target_speed": 5.0
             }
         }
@@ -150,7 +152,8 @@ def main():
     args = parser.parse_args()
 
     # Create environment
-    env = CarlaEnv(config["env_config"])
+    env = CarlaGoalEnv(config["env_config"])
+    env=gym.wrappers.TimeLimit(env,max_episode_steps=1500)
     n_actions = env.action_space.shape[0]
     action_noise = OrnsteinUhlenbeckActionNoise(
         mean=np.zeros(n_actions),

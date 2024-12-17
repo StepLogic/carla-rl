@@ -13,12 +13,12 @@ import subprocess
 import time
 import psutil
 import logging
-
+import numpy as np
 import carla
 
 from rllib_integration.sensors.sensor_interface import SensorInterface
 from rllib_integration.sensors.factory import SensorFactory
-from rllib_integration.helper import join_dicts
+from rllib_integration.helper import join_dicts,carla_location_to_np_array,get_curve
 
 BASE_CORE_CONFIG = {
     "host": "localhost",  # Client host
@@ -164,6 +164,23 @@ class CarlaCore:
             experiment_config["background_activity"]["n_vehicles"],
             experiment_config["background_activity"]["n_walkers"],
         )
+    def compute_dot(self, origin: carla.Transform, destination: carla.Transform) -> float:
+        dest_loc = np.array([
+            destination.location.x,
+            destination.location.y,
+            destination.location.z
+        ])
+        origin_loc = np.array([
+            origin.location.x,
+            origin.location.y,
+            origin.location.z
+        ])
+        forward = np.array([
+            origin.get_forward_vector().x,
+            origin.get_forward_vector().y,
+            origin.get_forward_vector().z
+        ])
+        return np.dot(dest_loc - origin_loc, forward)
 
 
     def reset_hero(self, hero_config):
@@ -176,66 +193,120 @@ class CarlaCore:
 
         # Part 2: Spawn the ego vehicle
         user_spawn_points = hero_config["spawn_points"]
-        if user_spawn_points:
-            spawn_points = []
-            for transform in user_spawn_points:
-
-                transform = [float(x) for x in transform.split(",")]
-                if len(transform) == 3:
-                    location = carla.Location(
-                        transform[0], transform[1], transform[2]
-                    )
-                    waypoint = self.map.get_waypoint(location)
-                    waypoint = waypoint.previous(random.uniform(0, 5))[0]
-                    transform = carla.Transform(
-                        location, waypoint.transform.rotation
-                    )
-                else:
-                    assert len(transform) == 6
-                    transform = carla.Transform(
-                        carla.Location(transform[0], transform[1], transform[2]),
-                        carla.Rotation(transform[4], transform[5], transform[3])
-                    )
-                spawn_points.append(transform)
-        else:
-            spawn_points = self.map.get_spawn_points()
-
-
-        # If already spawned, destroy it
-        if self.hero is not None:
-            # self.hero.destroy()
-            
-            self.hero.set_simulate_physics(False)
-            next_spawn_point=random.choice(spawn_points)
-            self.hero.set_transform(next_spawn_point)
-            self.hero.set_simulate_physics(True)
-            # for sensor in self.sensors:
-            #     # breakpoint()
-            #     if hasattr(sensor,"update_location"):
-            #         sensor.update_location()
-            
-        else:
+        trajectories=hero_config.get("trajectories",None)
+        # breakpoint()
+        if not trajectories is None:
+            trajectory = random.choice(trajectories)
             self.hero_blueprints = self.world.get_blueprint_library().find(hero_config['blueprint'])
             self.hero_blueprints.set_attribute("role_name", "hero")
-            random.shuffle(spawn_points, random.random)
-            for i in range(0,len(spawn_points)):
-                next_spawn_point = spawn_points[i % len(spawn_points)]
-                self.hero = self.world.try_spawn_actor(self.hero_blueprints, next_spawn_point)
+            xy_points = np.array([
+                [wp.transform.location.x, wp.transform.location.y] 
+                for wp in trajectory
+            ])
+            
+            # Set origin and destination
+            origin, destination = trajectory[0], trajectory[-1]
+            if self.compute_dot(origin.transform, destination.transform) < 0.0:
+                origin, destination = destination, origin
+                
+            # Prepare transforms
+            origin_transform = origin.transform
+            origin_transform.location.z += 1.0
+            self.destination = destination.transform
+            
+            # Calculate initial distance
+            # self.distance_to_goal = np.linalg.norm(
+            #     carla_location_to_np_array(origin_transform.location) -
+            #     carla_location_to_np_array(self.destination.location)
+            # )
+            self.spline = get_curve(xy_points)
+            if self.hero is None:
+                self.hero = self.world.try_spawn_actor(self.hero_blueprints, origin_transform)
                 if self.hero is not None:
                     print("Hero spawned!")
-                    break
+                    # break
                 else:
                     print("Could not spawn hero, changing spawn point")
+                # if self.hero is None:
+                #     print("We ran out of spawn points")
+                #     return
+                self.world.tick()
+            else:
+                self.hero.set_simulate_physics(False)
+                self.hero.set_transform(origin_transform)
+                self.hero.set_simulate_physics(True)
 
-            if self.hero is None:
-                print("We ran out of spawn points")
-                return
 
-            self.world.tick()
+            if len(self.sensors)==0:
+                # Part 3: Spawn the new sensors
+                for name, attributes in hero_config["sensors"].items():
+                    if name =="goal":
+                        attributes["transform"]=self.destination
+                    self.sensors.append(SensorFactory.spawn(name, attributes, self.sensor_interface, self.hero))
+            else:
+                for sensor in self.sensors:
+                    if hasattr(sensor,"update_location"):
+                        # breakpoint()
+                        sensor.update_location(self.destination)
+                
+                    
+        else:
+            if user_spawn_points:
+                spawn_points = []
+                for transform in user_spawn_points:
 
-            # Part 3: Spawn the new sensors
-            for name, attributes in hero_config["sensors"].items():
-                self.sensors.append(SensorFactory.spawn(name, attributes, self.sensor_interface, self.hero))
+                    transform = [float(x) for x in transform.split(",")]
+                    if len(transform) == 3:
+                        location = carla.Location(
+                            transform[0], transform[1], transform[2]
+                        )
+                        waypoint = self.map.get_waypoint(location)
+                        waypoint = waypoint.previous(random.uniform(0, 5))[0]
+                        transform = carla.Transform(
+                            location, waypoint.transform.rotation
+                        )
+                    else:
+                        assert len(transform) == 6
+                        transform = carla.Transform(
+                            carla.Location(transform[0], transform[1], transform[2]),
+                            carla.Rotation(transform[4], transform[5], transform[3])
+                        )
+                    spawn_points.append(transform)
+            else:
+                spawn_points = self.map.get_spawn_points()
+            # If already spawned, destroy it
+            if self.hero is not None:
+                # self.hero.destroy()
+                self.hero.set_simulate_physics(False)
+                next_spawn_point=random.choice(spawn_points)
+                self.hero.set_transform(next_spawn_point)
+                self.hero.set_simulate_physics(True)
+                
+            else:
+                self.hero_blueprints = self.world.get_blueprint_library().find(hero_config['blueprint'])
+                self.hero_blueprints.set_attribute("role_name", "hero")
+                random.shuffle(spawn_points, random.random)
+                for i in range(0,len(spawn_points)):
+                    next_spawn_point = spawn_points[i % len(spawn_points)]
+                    self.hero = self.world.try_spawn_actor(self.hero_blueprints, next_spawn_point)
+                    if self.hero is not None:
+                        print("Hero spawned!")
+                        break
+                    else:
+                        print("Could not spawn hero, changing spawn point")
+
+                if self.hero is None:
+                    print("We ran out of spawn points")
+                    return
+
+                self.world.tick()
+
+                # Part 3: Spawn the new sensors
+                for name, attributes in hero_config["sensors"].items():
+                    self.sensors.append(SensorFactory.spawn(name, attributes, self.sensor_interface, self.hero))
+
+
+
 
             # Not needed anymore. This tick will happen when calling CarlaCore.tick()
         self.world.tick()

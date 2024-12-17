@@ -21,7 +21,7 @@ class STBL3Experiment(BaseExperiment):
         self.allowed_types = [carla.LaneType.Driving, carla.LaneType.Parking]
         self.last_action = None
 
-    def reset(self):
+    def reset(self,*arg,**kwargs):
         """Called at the beginning and each time the simulation is reset"""
 
         # Ending variables

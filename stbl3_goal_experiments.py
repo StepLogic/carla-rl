@@ -26,7 +26,7 @@ class STBL3GoalExperiment(BaseExperiment):
         self.prev_steer = 0.0
         self.prev_throttle = 0.0
 
-    def reset(self):
+    def reset(self,*arg,**kwargs):
         """Called at the beginning and each time the simulation is reset"""
 
         # Ending variables
@@ -72,7 +72,7 @@ class STBL3GoalExperiment(BaseExperiment):
         vec_space = Box(
             low=-5.1,
             high=5.1,
-            shape=(4 * self.frame_stack,),
+            shape=(1 * self.frame_stack,),
             dtype=np.float32,
         )
 

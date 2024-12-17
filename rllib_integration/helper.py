@@ -122,3 +122,43 @@ def launch_tensorboard(logdir, host="localhost", port="6006"):
 def carla_location_to_np_array(location):
     return np.array([location.x, location.y, location.z])
 
+import collections
+from dataclasses import dataclass
+import heapq
+from scipy.optimize import fsolve, root
+from scipy.interpolate import splprep, splev
+import numpy as np
+from scipy.optimize import fsolve,root     
+from scipy.interpolate import splprep, splev
+import numpy as np
+import matplotlib.pyplot as plt
+from scipy.optimize import fsolve,root
+
+def make_curve(points):
+    t = np.linspace(0, 1, len(points))
+    tckp, u = splprep(points.T, u=t,k=3 )
+    return lambda t:np.array(splev(t,tckp)),tckp
+
+def derivative_curve(tckp):
+    return lambda t:np.array(splev(t,tckp,der=1))
+
+def get_curve(points):
+        indx = np.argsort(points[:,0])
+        # print(points,points.shape)
+        points = points[indx]
+        f_t,tckp=make_curve(points)
+        f_prime_t=derivative_curve(tckp)
+        t_samples = np.linspace(0, 1, 1000)
+        curve_points = np.array([f_t(t) for t in t_samples])
+        def curve(x):
+            func=lambda v:np.dot((x-f_t(v[-1])).T,f_prime_t(v[-1]))
+            t_initial=0.5
+            # result=root(func,[t_initial],method="anderson")
+            # if result.success:
+            #     t=result.x.squeeze()
+            #     return f_t(t),f_prime_t(t)
+            distances = np.linalg.norm(curve_points - x, axis=1)
+            closest_idx = np.argmin(distances)
+            t = t_samples[closest_idx]
+            return f_t(t),f_prime_t(t)
+        return curve

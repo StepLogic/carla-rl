@@ -91,7 +91,8 @@ config = {
             "quality_level": "Low",
             "enable_map_assets": True,
             "enable_rendering": True,
-            "show_display": True
+            "show_display": True,
+            "town":"Town05"
         },
         "experiment": {
             "type":STBL3GoalExperiment,

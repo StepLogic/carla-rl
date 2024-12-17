@@ -116,6 +116,11 @@ class CarlaCore:
             try:
                 self.client = carla.Client(self.config["host"], self.server_port)
                 self.client.set_timeout(self.config["timeout"])
+                self.world = self.client.load_world(
+                    self.config["town"],
+                    reset_settings = False,
+                    map_layers = carla.MapLayer.All if self.config["enable_map_assets"] else carla.MapLayer.NONE)
+            
                 self.world = self.client.get_world()
 
                 settings = self.world.get_settings()
@@ -136,10 +141,6 @@ class CarlaCore:
     def setup_experiment(self, experiment_config):
         """Initialize the hero and sensors"""
 
-        self.world = self.client.load_world(
-            map_name = experiment_config["town"],
-            reset_settings = False,
-            map_layers = carla.MapLayer.All if self.config["enable_map_assets"] else carla.MapLayer.NONE)
 
         self.map = self.world.get_map()
 

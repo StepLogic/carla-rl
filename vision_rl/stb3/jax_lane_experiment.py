@@ -229,11 +229,11 @@ class JAXLaneExperiment(BaseExperiment):
         self.last_velocity = hero_velocity
 
         # Reward if going forward
-        if hero_velocity < self.target_speed:
-            reward = delta_distance
-        else:
-            reward = 0.0
-
+        # if hero_velocity < self.target_speed:
+            # reward = delta_distance
+        # else:
+            # reward = 0.0
+        reward=0.001
         if self.done_falling:
             reward += -1.0
         if self.done_dist:

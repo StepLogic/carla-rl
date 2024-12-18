@@ -1,0 +1,14 @@
+gym
+gymnasium
+stable_baselines3
+wandb
+opencv-python
+carla==0.9.15
+jax
+jaxlib
+pygame
+tqdm
+ml_collections
+flax
+tensorflow_probability
+shimmy

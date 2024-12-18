@@ -273,7 +273,11 @@ class CarlaCore:
                         )
                     spawn_points.append(transform)
             else:
-                spawn_points = self.map.generate_waypoints(20)
+                def filter(wp):
+                    # if not wp.is_junction:
+                        return wp.transform
+                spawn_points = list(map(filter,self.map.generate_waypoints(2)))
+                # breakpoint()
             # If already spawned, destroy it
             if self.hero is not None:
                 # self.hero.destroy()

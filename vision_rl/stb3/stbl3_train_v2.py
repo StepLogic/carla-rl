@@ -129,8 +129,8 @@ config = {
                 "n_walkers": 0,
                 "tm_hybrid_mode": True
             },
-            # "town": "Town05",
-            "weather": "CloudySunset",
+            "town": "Town02",
+            # "weather": "CloudySunset",
             "others": {
                 "framestack": 1,
                 "max_time_idle": 600,
@@ -140,7 +140,7 @@ config = {
         }
     }
 }
-
+os.environ["CARLA_ROOT"]='/home/robotlab/Apps/CARLA_0.9.15'
 def main():
     parser = argparse.ArgumentParser(description="SAC training script for CARLA")
     parser.add_argument("--output_dir", default="./results")
@@ -148,7 +148,7 @@ def main():
 
     # Create environment
     env = CarlaGoalEnv(config["env_config"])
-    env=gym.wrappers.TimeLimit(env,max_episode_steps=1500)
+    env=gym.wrappers.TimeLimit(env,max_episode_steps=2500)
     n_actions = env.action_space.shape[0]
     action_noise = OrnsteinUhlenbeckActionNoise(
         mean=np.zeros(n_actions),

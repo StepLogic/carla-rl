@@ -17,9 +17,9 @@ import yaml
 
 import ray
 from ray import tune
-
-from vision_rl.rllib_integration.carla_env import CarlaEnv
-from vision_rl.rllib_integration.carla_core import kill_all_servers
+import os
+from rllib_integration.carla_env import CarlaEnv
+from rllib_integration.carla_core import kill_all_servers
 
 from vision_rl.rllib_integration.helper import get_checkpoint, launch_tensorboard
 
@@ -31,8 +31,8 @@ from vision_rl.sac_example.sac_trainer import CustomSACTrainer
 # from dqn_example.dqn_trainer import CustomDQNTrainer
 
 # Set the experiment to EXPERIMENT_CLASS so that it is passed to the configuration
-EXPERIMENT_CLASS = SACExperiment
-
+EXPERIMENT_CLASS = DQNExperiment
+os.environ["CARLA_ROOT"]='/home/robotlab/Apps/CARLA_0.9.15'
 
 def run(args):
     try:

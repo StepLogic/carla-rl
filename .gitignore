@@ -6,3 +6,5 @@ __pycache__
 map_cache
 cache
 results/*
+runs/*
+checkpoints/*

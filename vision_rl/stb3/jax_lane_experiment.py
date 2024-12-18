@@ -195,6 +195,10 @@ class JAXLaneExperiment(BaseExperiment):
             self.time_idle = 0
         else:
             self.time_idle += 1
+        if self.prev_steer:
+            self.time_idle+=1
+        else:
+            self.time_idle=10
         self.time_episode += 1
         self.done_dist = self.distance_travelled > self.max_dist
         self.done_falling = hero.get_location().z < -0.5

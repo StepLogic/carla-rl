@@ -63,20 +63,22 @@ class JAXGoalExperiment(BaseExperiment):
 
     def get_observation_space(self):
         image_space = Box(
-            low=-1.0,
-            high=1.0,
-            shape=(84, 84, self.frame_stack,),
-            dtype=np.float32,
+            low=0,
+            high=255,
+            shape=(84, 84,3),
+            dtype=np.uint8,
         )
         
         vec_space = Box(
             low=-5.1,
             high=5.1,
-            shape=(4 * self.frame_stack,),
+            # shape=(4 * self.frame_stack,),
+            shape=(4,),
             dtype=np.float32,
         )
 
-        return Dict({"obs":image_space,"goal":image_space})
+        return Dict({"obs":image_space,"states":vec_space,"goal":image_space})
+
 
     def get_action_space(self):
         """Returns the continuous action space for steering and throttle"""
@@ -121,11 +123,11 @@ class JAXGoalExperiment(BaseExperiment):
         as well as a variable with additional information about such observation.
         The information variable can be empty
         """
-        # vecs = self.get_vec_obs(sensor_data, core)
+        vecs = self.get_vec_obs(sensor_data, core)
         images,goal = self.get_img_obs(sensor_data, core)
         self.achieved_goal=images
 
-        return {"obs":images,"goal":goal}, self.info
+        return {"obs":images,"goal":goal,"states":vecs}, self.info
 
     def get_vec_obs(self, sensor_data, core):
         vec = np.zeros(4)
@@ -158,9 +160,9 @@ class JAXGoalExperiment(BaseExperiment):
 
     def get_img_obs(self, sensor_data, core):
 
-        image = post_process_image(sensor_data['rgb'][1], normalized = True, grayscale = True)
+        image = post_process_image(sensor_data['rgb'][1], normalized = False, grayscale = False)
         # breakpoint()
-        goal = post_process_image(sensor_data['goal'][1][0], normalized = True, grayscale = True)
+        goal = post_process_image(sensor_data['goal'][1][0], normalized = False, grayscale = False)
 
         if self.prev_image_0 is None:
             self.prev_image_0 = image

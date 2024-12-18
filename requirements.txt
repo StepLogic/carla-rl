@@ -12,3 +12,4 @@ ml_collections
 flax
 tensorflow_probability
 shimmy
+tensorboard

@@ -1,3 +1,4 @@
+from collections import deque
 from functools import partial
 from random import sample
 from typing import Dict, Iterable, Optional, Tuple, Union
@@ -44,6 +45,9 @@ def _sample(
 ) -> DatasetDict:
     if isinstance(dataset_dict, np.ndarray):
         return dataset_dict[indx]
+    if isinstance(dataset_dict, deque):
+        # breakpoint()
+        return np.array(dataset_dict)[indx]
     elif isinstance(dataset_dict, dict):
         batch = {}
         for k, v in dataset_dict.items():

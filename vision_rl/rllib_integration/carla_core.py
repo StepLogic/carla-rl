@@ -274,7 +274,7 @@ class CarlaCore:
                         )
                     spawn_points.append(transform)
             else:
-                spawn_points = self.map.get_spawn_points()
+                spawn_points = self.map.generate_waypoints(20)
             # If already spawned, destroy it
             if self.hero is not None:
                 # self.hero.destroy()

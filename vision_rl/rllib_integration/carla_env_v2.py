@@ -33,6 +33,7 @@ class CarlaEnv(gym.Env):
     def reset(self):
         # Reset sensors hero and experiment
         self.experiment.reset(self)
+        self.experiment.config["hero"]["trajectories"]=self.experiment.trajectories
         self.hero = self.core.reset_hero(self.experiment.config["hero"])
         # Tick once and get the observations
         sensor_data = self.core.tick(None)

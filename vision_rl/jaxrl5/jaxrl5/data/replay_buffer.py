@@ -29,11 +29,16 @@ def _insert_recursively(
 ):
     if isinstance(dataset_dict, np.ndarray):
         dataset_dict[insert_index] = data_dict
+    elif isinstance(dataset_dict, collections.deque):
+        dataset_dict[insert_index] = data_dict
     elif isinstance(dataset_dict, dict):
+        # print(dataset_dict.keys(),data_dict.keys())
+        # breakpoint()
         assert dataset_dict.keys() == data_dict.keys()
         for k in dataset_dict.keys():
             _insert_recursively(dataset_dict[k], data_dict[k], insert_index)
     else:
+        print(type(dataset_dict),data_dict)
         raise TypeError()
 
 
@@ -92,10 +97,11 @@ class ReplayBuffer(Dataset):
             yield queue.popleft()
             enqueue(1)
 
-    def sample_future_observation(self, indices: np.ndarray, sample_futures: str = "uniform"):
+    def sample_future_observation(self, indices: np.ndarray, sample_futures: str = "exponential_no_wrap"):
         if sample_futures == 'uniform':
             ep_begin = indices - _sample(self.dataset_dict['observations']['index'], indices)
             ep_end = ep_begin + _sample(self.dataset_dict['observations']['ep_len'], indices)
+            print(ep_begin,ep_end)
             future_indices = np.random.randint(ep_begin, ep_end, indices.shape)
         elif sample_futures == 'exponential':
             ep_len = _sample(self.dataset_dict['observations']['ep_len'], indices)

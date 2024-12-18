@@ -406,7 +406,7 @@ def setup_training():
     # config.model.target_entropy = -3.0  # Typically negative dimension of action space
     
     # Optional: Modify any config parameters
-    config.training.max_steps = int(1e9)  # Reduced for example
+    config.training.max_steps = int(1e7)  # Reduced for example
     config.training.start_training = 5000
     config.training.batch_size = 32
     config.eval.eval_interval = 50000
@@ -468,6 +468,7 @@ def train_agent(config):
     sigma = 0.5 * np.ones(action_dim)
     noise = OrnsteinUhlenbeckActionNoise(mean=mean, sigma=sigma)
     noise.reset()
+    success_queue=deque(maxlen=100)
 
     # Create agent
     model_cls=config.model.model_cls
@@ -562,7 +563,8 @@ def train_agent(config):
                 for k, v in info['episode'].items():
                         decode = {'r': 'return', 'l': 'length', 't': 'time'}
                         writer.add_scalar(f'training/{decode[k]}', v, i)
-                # writer.add_scalar(f'training/success_rate', np.mean(env.unwrapped.sr_counter), i)
+                success_queue.append(info.get("is_success",0))
+                writer.add_scalar(f'training/success_rate', np.mean(success_queue), i)
                 (observation, info), done = env.reset(), False
                 noise.reset()
 

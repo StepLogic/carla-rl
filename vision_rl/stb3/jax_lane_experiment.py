@@ -125,7 +125,7 @@ class JAXLaneExperiment(BaseExperiment):
         vecs = self.get_vec_obs(sensor_data, core)
         images = self.get_img_obs(sensor_data, core)
 
-        return {"obs":images,"states":vecs}, {}
+        return {"obs":images,"states":vecs}, self.info
 
     def get_vec_obs(self, sensor_data, core):
         vec = np.zeros(4)
@@ -187,6 +187,7 @@ class JAXLaneExperiment(BaseExperiment):
 
     def get_done_status(self, sensor_data, core):
         """Returns whether or not the experiment has to end"""
+        self.info=dict()
         hero = core.hero
         self.done_time_idle = self.max_time_idle < self.time_idle
         if self.get_speed(hero) > 1.0:
@@ -198,6 +199,8 @@ class JAXLaneExperiment(BaseExperiment):
         self.done_falling = hero.get_location().z < -0.5
         self.diff_lane = 'lane_invasion' in sensor_data.keys()
         self.collision = 'collision' in sensor_data.keys()
+        if self.done_dist:
+            self.info=dict(is_success=True,distance_to_goal=self.distance_travelled)
         return self.done_time_idle or self.done_falling or self.done_dist or self.diff_lane or self.collision
 
     def compute_reward(self, sensor_data, core):

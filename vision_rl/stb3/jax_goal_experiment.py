@@ -219,35 +219,38 @@ class JAXGoalExperiment(BaseExperiment):
         # Initialize last location
         if self.last_location == None:
             self.last_location = hero_location
-
+        transform = hero.get_transform()
         # Compute deltas
         # delta_distance = float(np.sqrt(np.square(hero_location.x - self.last_location.x) + np.square(hero_location.y - self.last_location.y)))
         delta_loc=carla_location_to_np_array(self.last_location)-carla_location_to_np_array(hero_location)
         displacement=np.dot(delta_loc,goal_loc/np.linalg.norm(goal_loc))
+        location = np.array([transform.location.x, transform.location.y])
+        f, d_f = core.spline(location)
+        d_to_lane = np.linalg.norm(f - location)
+        # max_dev = hero.bounding_box.extent.y * 2
         # Update variables
         self.last_location = hero_location
         self.last_velocity = hero_velocity
 
         # Reward if going forward
-        reward=displacement
+        reward=displacement+np.exp(-d_to_lane)
         # if hero_velocity < self.target_speed:
         #     reward = delta_distance
         # else:
         #     reward = 0.0
-
-        if self.done_falling:
-            reward += -1.0
+        # if self.done_falling:
+        #     reward += -1.0
         # if self.done_dist:
         #     print("Max dist travelled")
         #     reward += 1.0
         # if self.done_time_idle:
         #     print("Done idle")
         #     reward += -1.0
-        if self.collision:
-            # print('collision')
-            reward += -1.0
-        if self.diff_lane:
-            reward += -1.0
+        # if self.collision:
+        #     # print('collision')
+        #     reward += -1.0
+        # if self.diff_lane:
+        #     reward += -1.0
         if dist<=1.5:
             reward += 1.0
 

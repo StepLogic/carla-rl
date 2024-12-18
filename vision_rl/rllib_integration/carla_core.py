@@ -16,9 +16,9 @@ import logging
 import numpy as np
 import carla
 
-from rllib_integration.sensors.sensor_interface import SensorInterface
-from rllib_integration.sensors.factory import SensorFactory
-from rllib_integration.helper import draw_waypoints, join_dicts,carla_location_to_np_array,get_curve
+from vision_rl.rllib_integration.sensors.sensor_interface import SensorInterface
+from vision_rl.rllib_integration.sensors.factory import SensorFactory
+from vision_rl.rllib_integration.helper import draw_waypoints, join_dicts,carla_location_to_np_array,get_curve
 
 BASE_CORE_CONFIG = {
     "host": "localhost",  # Client host

@@ -56,6 +56,7 @@ class JAXLaneExperiment(BaseExperiment):
         self.max_throttle = 0.6
         self.prev_steer = 0.0
         self.prev_throttle = 0.0
+        self.info=dict()
 
     # def get_action_space(self):
     #     """Returns the action space, in this case, a discrete space"""

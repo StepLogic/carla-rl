@@ -14,9 +14,6 @@ jaxrl5/agents/agent.py
 jaxrl5/agents/drq/__init__.py
 jaxrl5/agents/drq/augmentations.py
 jaxrl5/agents/drq/drq_learner.py
-jaxrl5/agents/drq_vae/__init__.py
-jaxrl5/agents/drq_vae/augmentations.py
-jaxrl5/agents/drq_vae/drq_learner.py
 jaxrl5/agents/iql/__init__.py
 jaxrl5/agents/iql/iql_learner.py
 jaxrl5/agents/pixel_iql/__init__.py
@@ -28,8 +25,8 @@ jaxrl5/data/__init__.py
 jaxrl5/data/d4rl_datasets.py
 jaxrl5/data/dataset.py
 jaxrl5/data/dataset_utils.py
+jaxrl5/data/hindsight_replay_buffer.py
 jaxrl5/data/memory_efficient_replay_buffer.py
-jaxrl5/data/rb.py
 jaxrl5/data/replay_buffer.py
 jaxrl5/distributions/__init__.py
 jaxrl5/distributions/iql_distributions.py

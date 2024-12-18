@@ -1,5 +1,7 @@
+from collections import deque
+import copy
 import numpy as np
-from typing import Optional, Iterable, Callable, Dict
+from typing import Optional, Iterable, Callable, Dict, Any
 from enum import Enum
 from flax.core import frozen_dict
 import gymnasium as gym
@@ -9,23 +11,25 @@ from jaxrl5.data.replay_buffer import ReplayBuffer, _sample
 
 class GoalSelectionStrategy(Enum):
     """Goal selection strategies for HER."""
-    FINAL = "final"  # Select the final state of the episode as goal
-    FUTURE = "future"  # Select a future state as goal
-    EPISODE = "episode"  # Select a random state from the same episode
+    FINAL = "final"
+    FUTURE = "future"
+    EPISODE = "episode"
 
 class HindsightReplayBuffer(ReplayBuffer):
     """
-    Hindsight Experience Replay buffer with episode tracking.
+    Hindsight Experience Replay buffer with support for mixed scalar and array info values.
     """
     def __init__(
         self,
         observation_space: gym.Space,
         action_space: gym.Space,
         capacity: int,
-        goal_selection_strategy: str = "future",
+        goal_selection_strategy: str = "final",
         n_sampled_goals: int = 4,
         success_threshold: float = 0.0,
         relabel_fn: Optional[Callable[[DatasetDict], DatasetDict]] = None,
+        info_keys: Optional[list[str]] = None,
+        info_shapes: Optional[Dict[str, tuple]] = None,
     ):
         super().__init__(
             observation_space=observation_space,
@@ -42,15 +46,41 @@ class HindsightReplayBuffer(ReplayBuffer):
         # Initialize episode tracking arrays
         self._current_episode_steps = 0
         self._episode_lengths = np.zeros(capacity, dtype=np.int32)
+        
+        # Initialize info storage with proper shapes
+        self._info_keys = info_keys or []
+        self._info_shapes = info_shapes or {}
+        if self._info_keys:
+            self.dataset_dict['infos'] = {
+                key: deque(maxlen=capacity)
+                for key in self._info_keys
+            }
 
     def insert(self, data_dict: DatasetDict):
-        """Insert a transition and update episode tracking."""
+        """Insert a transition with proper handling of scalar and array info."""
+        # Handle info values
+        if 'infos' in data_dict and self._info_keys:
+            info_dict = data_dict['infos']
+            if isinstance(info_dict, dict):
+                for key in self._info_keys:
+                    if key in info_dict:
+                        value = info_dict[key]
+                        # Convert scalar to numpy array if needed
+                        if np.isscalar(value):
+                            value = np.array([value], dtype=np.float32)
+                        # Ensure correct shape for array values
+                        elif isinstance(value, (list, np.ndarray)):
+                            value = np.asarray(value, dtype=np.float32)
+                            expected_shape = self._info_shapes.get(key, (1,))
+                            if value.shape != expected_shape:
+                                value = value.reshape(expected_shape)
+                        self.dataset_dict['infos'][key].append(value)
+
         # Add episode tracking info to observations
         if isinstance(data_dict['observations'], dict):
             data_dict['observations']['index'] = np.array([self._current_episode_steps])
             data_dict['observations']['ep_len'] = np.array([0])  # Will be updated on episode end
             
-            # Also add to next_observations for consistency
             data_dict['next_observations']['index'] = np.array([self._current_episode_steps + 1])
             data_dict['next_observations']['ep_len'] = np.array([0])
         else:
@@ -68,7 +98,7 @@ class HindsightReplayBuffer(ReplayBuffer):
             data_dict['observations'] = obs_dict
             data_dict['next_observations'] = next_obs_dict
         
-        # Insert the transition
+        # Insert the transition using parent class method
         super().insert(data_dict)
         
         # Update episode tracking
@@ -91,7 +121,7 @@ class HindsightReplayBuffer(ReplayBuffer):
             self._episode_lengths[ep_start:ep_start + self._current_episode_steps] = self._current_episode_steps
             self._current_episode_steps = 0
 
-    def _sample_goals(self, indices: np.ndarray, strategy: str = "future") -> np.ndarray:
+    def _sample_goals(self, indices: np.ndarray, strategy: str = "episode") -> np.ndarray:
         """Sample future observations as goals using the specified strategy."""
         if strategy == "future":
             return self.sample_future_observation(indices, "uniform")
@@ -120,13 +150,16 @@ class HindsightReplayBuffer(ReplayBuffer):
             
         relabel_indices = np.random.choice(batch_size, size=n_relabel, replace=False)
         new_goals = self._sample_goals(relabel_indices, self.goal_selection_strategy)
-        
-        samples['observations']['goal'][relabel_indices] = new_goals
-        samples['next_observations']['goal'][relabel_indices] = new_goals
+        # breakpoint()
+        resampled=copy.deepcopy(samples)
+        resampled['observations']['goal'][relabel_indices] = new_goals["goal"]
+        resampled['next_observations']['goal'][relabel_indices] = new_goals["goal"]
+        breakpoint()
+        resampled["infos"]["goal"]=new_goals["infos"]["goal"]
         
         if self._relabel_fn is not None:
-            samples = self._relabel_fn(samples)
-            
+            samples = self._relabel_fn(samples,resampled)
+        
         return frozen_dict.freeze(samples)
 
     def sample(
@@ -150,7 +183,6 @@ class HindsightReplayBuffer(ReplayBuffer):
         
         if relabel:
             samples = self._relabel_batch(samples)
-            
         return samples
 
     def get_iterator(self, queue_size: int = 2, sample_args: dict = {}):

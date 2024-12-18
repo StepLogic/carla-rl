@@ -36,10 +36,9 @@ class PixelMultiplexer(nn.Module):
             if self.encoder_cls is not None:
                 x = x.astype(jnp.float32) / 255.0
                 if depth_key is not None:
-                    # The last dim is always for stacking, even if it's 1.
                     x = jnp.concatenate([x, observations[depth_key]], axis=-2)
-
                 x = jnp.reshape(x, (*x.shape[:-2], -1))
+                # breakpoint()
                 x = self.encoder_cls(name=f"encoder_{i}")(x)
 
             if self.stop_gradient:
@@ -52,7 +51,6 @@ class PixelMultiplexer(nn.Module):
             xs.append(x)
 
         x = jnp.concatenate(xs, axis=-1)
-
         if "states" in observations:
             y = nn.Dense(self.latent_dim, kernel_init=default_init())(
                 observations["states"]

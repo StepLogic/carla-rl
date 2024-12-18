@@ -11,7 +11,7 @@ from vision_rl.rllib_integration.base_experiment import BaseExperiment
 from vision_rl.rllib_integration.helper import carla_location_to_np_array, post_process_image
 
 
-class JAXGoalExperiment(BaseExperiment):
+class JAXSparseGoalExperiment(BaseExperiment):
     def __init__(self, config={}):
         super().__init__(config)  # Creates a self.config with the experiment configuration
 
@@ -68,6 +68,7 @@ class JAXGoalExperiment(BaseExperiment):
         self.max_throttle = 0.6
         self.prev_steer = 0.0
         self.prev_throttle = 0.0
+        self.info=dict()
         if self.trajectories is None:
             self._cache_waypoints(core.core.world)
 
@@ -92,7 +93,19 @@ class JAXGoalExperiment(BaseExperiment):
             dtype=np.float32,
         )
 
-        return Dict({"obs":image_space,"states":vec_space,"goal":image_space})
+        return Dict({"obs":image_space,"states":vec_space,"goal":image_space ,"index":Box(
+            low=-5.1,
+            high=5.1,
+            # shape=(4 * self.frame_stack,),
+            shape=(1,),
+            dtype=np.float32,
+        ) ,"ep_len":Box(
+            low=-5.1,
+            high=5.1,
+            # shape=(4 * self.frame_stack,),
+            shape=(1,),
+            dtype=np.float32,
+        )})
 
 
     def get_action_space(self):
@@ -206,7 +219,7 @@ class JAXGoalExperiment(BaseExperiment):
 
     def get_done_status(self, sensor_data, core):
         """Returns whether or not the experiment has to end"""
-        self.info=dict()
+        
         hero = core.hero
         self.done_time_idle = self.max_time_idle < self.time_idle
         if self.get_speed(hero) > 1.0:
@@ -219,8 +232,8 @@ class JAXGoalExperiment(BaseExperiment):
         self.done_falling = hero.get_location().z < -0.5
         self.diff_lane = 'lane_invasion' in sensor_data.keys()
         self.collision = 'collision' in sensor_data.keys()
-        if dist:
-            self.info.update(dict(is_success=dist<=1.5,distance_to_goal=self.distance_travelled,collision=self.collision))
+        # if dist:
+        self.info.update(dict(is_success=int(dist<=1.5),distance_to_goal=self.distance_travelled,collision=int(self.collision)))
         return self.done_time_idle or self.done_falling or self.done_dist or self.diff_lane or self.collision or dist<=1.5
 
     def compute_reward(self, sensor_data, core):
@@ -249,7 +262,8 @@ class JAXGoalExperiment(BaseExperiment):
         self.last_velocity = hero_velocity
 
         # Reward if going forward
-        reward=displacement+np.exp(-d_to_lane)
+        # reward=displacement+np.exp(-d_to_lane)
+        reward=0.0
         # if hero_velocity < self.target_speed:
         #     reward = delta_distance
         # else:

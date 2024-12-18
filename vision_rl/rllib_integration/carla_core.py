@@ -16,9 +16,9 @@ import logging
 import numpy as np
 import carla
 
-from vision_rl.rllib_integration.sensors.sensor_interface import SensorInterface
-from vision_rl.rllib_integration.sensors.factory import SensorFactory
-from vision_rl.rllib_integration.helper import join_dicts, get_curve
+from rllib_integration.sensors.sensor_interface import SensorInterface
+from rllib_integration.sensors.factory import SensorFactory
+from rllib_integration.helper import draw_waypoints, join_dicts,carla_location_to_np_array,get_curve
 
 BASE_CORE_CONFIG = {
     "host": "localhost",  # Client host
@@ -82,14 +82,14 @@ class CarlaCore:
         if self.config["show_display"]:
             server_command = [
                 "{}/CarlaUE4.sh".format(os.environ["CARLA_ROOT"]),
-                "-windowed",
+                "-windowed -prefernvidia",
                 "-ResX={}".format(self.config["resolution_x"]),
                 "-ResY={}".format(self.config["resolution_y"]),
                 "",
             ]
         else:
             server_command = [
-                "DISPLAY= ",
+                # "DISPLAY= ",
                 "{}/CarlaUE4.sh".format(os.environ["CARLA_ROOT"]),
                 "-opengl"  # no-display isn't supported for Unreal 4.24 with vulkan
             ]
@@ -147,11 +147,10 @@ class CarlaCore:
         # weather = getattr(carla.WeatherParameters, experiment_config["weather"])
         # self.world.set_weather(weather)
 
-        # self.tm_port = self.server_port // 10 + self.server_port % 10
-        # while is_used(self.tm_port):
-        #     print("Traffic manager's port " + str(self.tm_port) + " is already being used. Checking the next one")
-        #     tm_port += 1
-        # print("Traffic manager connected to port " + str(self.tm_port))
+        # self.world = self.client.load_world(
+        #     map_name = experiment_config["town"],
+        #     reset_settings = False,
+        #     map_layers = carla.MapLayer.All if self.config["enable_map_assets"] else carla.MapLayer.NONE)
 
         # self.traffic_manager = self.client.get_trafficmanager(self.tm_port)
         # self.traffic_manager.set_hybrid_physics_mode(experiment_config["background_activity"]["tm_hybrid_mode"])
@@ -209,7 +208,7 @@ class CarlaCore:
             origin, destination = trajectory[0], trajectory[-1]
             if self.compute_dot(origin.transform, destination.transform) < 0.0:
                 origin, destination = destination, origin
-                
+            draw_waypoints(self.world,[destination])
             # Prepare transforms
             origin_transform = origin.transform
             origin_transform.location.z += 1.0

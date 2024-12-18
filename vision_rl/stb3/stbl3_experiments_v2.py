@@ -137,8 +137,8 @@ class STBL3GoalExperiment(BaseExperiment):
     def get_action_space(self):
         """Returns the continuous action space for steering and throttle"""
         return Box(
-            low=np.array([-self.max_steer, -1.0]),  # [steering, throttle/brake]
-            high=np.array([self.max_steer, 1.0]),
+            low=np.array([-self.max_steer, -self.max_throttle]),  # [steering, throttle/brake]
+            high=np.array([self.max_steer, self.max_throttle]),
             dtype=np.float32
         )
 
@@ -257,7 +257,9 @@ class STBL3GoalExperiment(BaseExperiment):
         self.done_falling = hero.get_location().z < -0.5
         self.diff_lane = 'lane_invasion' in sensor_data.keys()
         self.collision = 'collision' in sensor_data.keys()
-        done=self.done_time_idle or self.done_falling or self.done_dist or self.diff_lane or self.collision or distance_to_goal<=1.5 or self.large_deviation
+        # done=self.done_time_idle or self.done_falling or self.done_dist or self.diff_lane or self.collision or distance_to_goal<=1.5 or self.large_deviation
+        done=distance_to_goal<=1.5
+        print(distance_to_goal)
         if done:
             self.info=dict(is_success=distance_to_goal<=1.5,distance_to_goal=self.last_distance_to_goal)
         return  done
@@ -320,38 +322,40 @@ class STBL3GoalExperiment(BaseExperiment):
         # done = distance_to_goal <= 2.0
         
         # Calculate reward
-        reward = delta_distance
+        # reward = delta_distance
         # Update variables
         self.last_location = hero_location
         self.last_velocity = hero_velocity
 
         # Reward if going forward
-        if hero_velocity < self.target_speed:
-            reward = abs(displacement)
-        else:
-            reward = 0.0
+        # if hero_velocity < self.target_speed:
+            # reward = abs(displacement)
+        # else:
+            # reward = 0.0
         # print(reward)
-
+        reward=-1.0
         if self.done_falling:
-            # reward += -1.0
-            print("Falling")
+            reward += -1.0
+            # print("Falling")
         if self.done_dist:
-            print("Max dist travelled")
+            # print("Max dist travelled")
             # reward += 1.0
+            pass
         if self.done_time_idle:
-            print("Done idle")
+            # print("Done idle")
             reward += -1.0
         if self.collision:
-            print('collision')
+            # print('collision')
             reward += -1.0
         if self.diff_lane:
-            print("Lane Invasion")
+            # print("Lane Invasion")
             reward += -1.0
         if distance_to_goal<=1.5:
-            reward+=1.0
+            # reward+=1.0
+            pass
         if self.large_deviation:
             reward += -1.0
-            print("Short path deviation")
+            # print("Short path deviation")
         self.last_distance_to_goal=distance_to_goal
         # print(distance_to_goal)
         return reward*10

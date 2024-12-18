@@ -571,7 +571,7 @@ def train_agent(config):
             observation = next_observation
 
             # Update agent
-            if i >= config.training.start_training:
+            if i >= config.training.start_training and i % config.training.utd_ratio == 0:
 
                 batch = next(replay_buffer_iterator)
                 agent, update_info = agent.update(batch, utd_ratio=config.training.utd_ratio)

@@ -38,9 +38,7 @@ class PixelMultiplexer(nn.Module):
                 if depth_key is not None:
                     x = jnp.concatenate([x, observations[depth_key]], axis=-2)
                 x = jnp.reshape(x, (*x.shape[:-2], -1))
-                # breakpoint()
                 x = self.encoder_cls(name=f"encoder_{i}")(x)
-
             if self.stop_gradient:
                 # We do not update conv layers with policy gradients.
                 x = jax.lax.stop_gradient(x)

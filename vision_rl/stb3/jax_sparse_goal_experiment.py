@@ -92,8 +92,16 @@ class JAXSparseGoalExperiment(BaseExperiment):
             shape=(4,),
             dtype=np.float32,
         )
+        loc = Box(
+            low=-5.1,
+            high=5.1,
+            # shape=(4 * self.frame_stack,),
+            shape=(3,),
+            dtype=np.float32,
+        )
 
-        return Dict({"obs":image_space,"states":vec_space,"goal":image_space ,"index":Box(
+        return Dict({"obs":image_space,"states":vec_space,"goal":image_space,"obs_location":loc,"goal_location":loc 
+                     ,"index":Box(
             low=-5.1,
             high=5.1,
             # shape=(4 * self.frame_stack,),
@@ -156,7 +164,7 @@ class JAXSparseGoalExperiment(BaseExperiment):
         self.achieved_goal=images
         hero_location = core.hero.get_location()
         self.info.update(dict(obs=carla_location_to_np_array(hero_location),goal=sensor_data['goal'][1][-1]))
-        return {"obs":images,"goal":goal,"states":vecs}, self.info
+        return {"obs":images,"goal":goal,"states":vecs,"obs_location":carla_location_to_np_array(hero_location),"goal_location":sensor_data['goal'][1][-1]}, self.info
 
     def get_vec_obs(self, sensor_data, core):
         vec = np.zeros(4)

@@ -102,14 +102,15 @@ experiment_config = {
 }
 
 
-def batch_compute_reward_from_observation(infos: Dict[str, np.ndarray]) -> np.ndarray:
+def batch_compute_reward_from_observation(resampled_batch: Dict[str, np.ndarray],masks) -> np.ndarray:
 
-    goal_distances = np.linalg.norm(infos['obs'] - infos["goal"])
-    terminates = infos['collision']>0.0
+    goal_distances = np.linalg.norm(resampled_batch["observations"]['obs_location'] - resampled_batch["observations"]["goal_location"],axis=-1)
+    # terminates = infos['collision']>0.0
     successes = goal_distances <= 1.5
     rewards = np.where(successes,10.0,0.0)
-    rewards = np.where(terminates,0.0, 0.0)
-    return rewards
+    masks=np.where(successes,1.0,masks)
+    # rewards = np.where(terminates,0.0, 0.0)
+    return rewards,masks
 
 def select(samples, batch_size):
     """
@@ -141,9 +142,8 @@ def relabel(batch: Dict[str, Any],resampled_batch:Dict[str, Any]) -> Dict[str, A
     observation = resampled_batch['observations']
     next_observation = resampled_batch['next_observations']
     # future_observation = batch['future_observations']
-    info = resampled_batch['infos']
+    # info = resampled_batch['infos']
     # next_info = batch['next_infos']
-    
     # # Extract image goals
     # original_goal = observation['goal']
     # original_goal_next = next_observation['goal']
@@ -178,13 +178,13 @@ def relabel(batch: Dict[str, Any],resampled_batch:Dict[str, Any]) -> Dict[str, A
     # next_observation['goal'] = goals_next
     
     # Update info metrics for new goals
-    future_info = resampled_batch['infos']
-    relabeled_info = {
-        'obs': info['obs'],  # Speed remains same
-        'goal': info['goal'],  # Lane deviation remains same
-        'distance_to_goal': future_info['distance_to_goal'] , # Update distance to new goal
-        'collision':info['collision']
-    }
+    # future_info = resampled_batch['infos']
+    # relabeled_info = {
+    #     'obs': info['obs'],  # Speed remains same
+    #     'goal': info['goal'],  # Lane deviation remains same
+    #     'distance_to_goal': future_info['distance_to_goal'] , # Update distance to new goal
+    #     'collision':info['collision']
+    # }
     
     # relabeled_next_info = {
     #     'velocity': next_info['velocity'],
@@ -194,14 +194,15 @@ def relabel(batch: Dict[str, Any],resampled_batch:Dict[str, Any]) -> Dict[str, A
     # }
     
     # Compute new rewards with updated info
-    reward = batch_compute_reward_from_observation(relabeled_info)
+    reward,masks = batch_compute_reward_from_observation(resampled_batch,resampled_batch["masks"])
     
     return {
         **batch,
         'observations': observation,
         'next_observations': next_observation,
         'rewards': reward,
-        'infos': relabeled_info,
+        "masks":masks
+        # 'infos': relabeled_info,
     }
 
 # Example usage with memory efficient replay buffer
@@ -380,8 +381,8 @@ def setup_training():
     
     # Optional: Modify any config parameters
     config.training.max_steps = int(1e7)  # Reduced for example
-    config.training.start_training = 5000
-    config.training.batch_size = 32
+    config.training.start_training = 1000
+    config.training.batch_size = 8
     config.eval.eval_interval = 50000
     config.training.replay_buffer_size = int(1e5)
     return config
@@ -466,6 +467,7 @@ def train_agent(config):
         env.observation_space,
         env.action_space,
         config.training.replay_buffer_size,
+
         info_keys=['obs', 'collision','goal',"is_success","distance_to_goal"],
         info_shapes={
         'scalar_info': (1,),      # Scalar values stored as 1D array
@@ -486,8 +488,8 @@ def train_agent(config):
     })
 
     # # # Helper function for relabeling
-    def do_relabel_batch(batch):
-        return filter_batch(relabel(batch))
+    def do_relabel_batch(batch,resampled_batch):
+        return filter_batch(relabel(batch,resampled_batch))
     
     replay_buffer._relabel_fn = do_relabel_batch
 
@@ -556,6 +558,7 @@ def train_agent(config):
             if i >= config.training.start_training and i % config.training.utd_ratio == 0 :
 
                 batch = next(replay_buffer_iterator)
+                # breakpoint()
                 agent, update_info = agent.update(batch, utd_ratio=config.training.utd_ratio)
                     # Log training metrics
                 if i % config.eval.log_interval == 0:

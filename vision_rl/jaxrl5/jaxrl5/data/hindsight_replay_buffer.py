@@ -126,16 +126,16 @@ class HindsightReplayBuffer(ReplayBuffer):
         if strategy == "future":
             return self.sample_future_observation(indices, "uniform")
         elif strategy == "final":
-            ep_begin = indices - _sample(self.dataset_dict['observations']['index'], indices)
+            ep_begin = _sample(self.dataset_dict['observations']['index'], indices.astype(int))
             ep_len = _sample(self.dataset_dict['observations']['ep_len'], indices)
             final_indices = (ep_begin + ep_len - 1) % self._capacity
-            return _sample(self.dataset_dict['observations'], final_indices)
+            return _sample(self.dataset_dict['observations'], final_indices.astype(int))
         elif strategy == "episode":
-            ep_begin = indices - _sample(self.dataset_dict['observations']['index'], indices)
+            ep_begin = _sample(self.dataset_dict['observations']['index'], indices)
             ep_len = _sample(self.dataset_dict['observations']['ep_len'], indices)
             random_offset = np.random.randint(0, ep_len, size=indices.shape)
             episode_indices = (ep_begin + random_offset) % self._capacity
-            return _sample(self.dataset_dict['observations'], episode_indices)
+            return _sample(self.dataset_dict['observations'], episode_indices.astype(int))
         else:
             raise ValueError(f"Unknown goal selection strategy: {strategy}")
 
@@ -143,20 +143,21 @@ class HindsightReplayBuffer(ReplayBuffer):
         """Relabel a batch of samples with new goals."""
         samples = frozen_dict.unfreeze(samples)
         batch_size = samples['observations']['obs'].shape[0]
-        n_relabel = int(batch_size * self.her_ratio)
+        n_relabel = int(batch_size)
         
         if n_relabel == 0:
             return frozen_dict.freeze(samples)
             
         relabel_indices = np.random.choice(batch_size, size=n_relabel, replace=False)
+
         new_goals = self._sample_goals(relabel_indices, self.goal_selection_strategy)
         # breakpoint()
         resampled=copy.deepcopy(samples)
-        resampled['observations']['goal'][relabel_indices] = new_goals["goal"]
-        resampled['next_observations']['goal'][relabel_indices] = new_goals["goal"]
-        breakpoint()
-        resampled["infos"]["goal"]=new_goals["infos"]["goal"]
-        
+        # breakpoint()
+        shape=new_goals["goal"].shape
+        resampled['observations']['goal'][relabel_indices] = new_goals["goal"].reshape(np.prod(shape[:2]),*shape[2:])
+        resampled['next_observations']['goal'][relabel_indices] = new_goals["goal"].reshape(np.prod(shape[:2]),*shape[2:])
+        # resampled["infos"]["goal"]=new_goals["infos"]["goal"]
         if self._relabel_fn is not None:
             samples = self._relabel_fn(samples,resampled)
         
@@ -172,6 +173,7 @@ class HindsightReplayBuffer(ReplayBuffer):
         relabel: bool = True
     ) -> frozen_dict.FrozenDict:
         """Sample a batch of transitions and apply HER relabeling."""
+        # breakpoint()
         samples = super().sample(
             batch_size=batch_size,
             keys=keys,

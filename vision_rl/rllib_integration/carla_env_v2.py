@@ -30,7 +30,7 @@ class CarlaEnv(gym.Env):
         self.core.setup_experiment(self.experiment.config)
         self.reset()
 
-    def reset(self):
+    def reset(self,seed=None,*args,**kwargs):
         # Reset sensors hero and experiment
         self.experiment.reset(self)
         if hasattr(self.experiment,"trajectories"):

@@ -12,7 +12,8 @@ from stable_baselines3.common.torch_layers import BaseFeaturesExtractor
 from stable_baselines3.common.callbacks import CheckpointCallback
 from vision_rl.rllib_integration.carla_env import CarlaEnv
 from stbl3_continous_experiments import STBL3Experiment
-
+from stable_baselines3.common.callbacks import CheckpointCallback, StopTrainingOnNoModelImprovement, EvalCallback, \
+    CallbackList
 class CarlaCNN(BaseFeaturesExtractor):
     """CNN feature extractor for CARLA images"""
     
@@ -134,7 +135,7 @@ def main():
     parser = argparse.ArgumentParser(description="SAC training script for CARLA")
     parser.add_argument("--output_dir", default="./results")
     args = parser.parse_args()
-
+    
     # Create environment
     env = CarlaEnv(config["env_config"])
     n_actions = env.action_space.shape[0]
@@ -144,6 +145,16 @@ def main():
         theta=0.15,
         dt=1e-2,
         initial_noise=None
+    )
+    eval_callback = EvalCallback(
+        env,
+        best_model_save_path="./results",
+        # log_path=f"{args.checkpoint_path}/logs",
+        n_eval_episodes=10,
+        eval_freq=int(50e3),
+        # callback_after_eval=stop_train_callback,
+        deterministic=True,
+        # render=True
     )
     # Create SAC model
     model = SAC(
@@ -165,7 +176,7 @@ def main():
         gamma=0.99,
         # train_freq=1,
         # gradient_steps=1,
-        # action_noise=action_noise,      # SAC handles exploration internally
+        action_noise=action_noise,      # SAC handles exploration internally
         # optimize_memory_usage=True,
         ent_coef="auto",        # Automatic entropy tuning
         # target_entropy="auto",  # Automatically set target entropy
@@ -175,6 +186,7 @@ def main():
 
     # Setup callbacks
     callbacks = [
+        eval_callback,
         CheckpointCallback(
             save_freq=10000,
             save_path=args.output_dir,

@@ -195,10 +195,10 @@ class JAXLaneExperiment(BaseExperiment):
             self.time_idle = 0
         else:
             self.time_idle += 1
-        if self.prev_steer:
+        if abs(self.prev_steer)>0.8:
             self.time_idle+=1
         else:
-            self.time_idle=10
+            self.time_idle=0
         self.time_episode += 1
         self.done_dist = self.distance_travelled > self.max_dist
         self.done_falling = hero.get_location().z < -0.5
@@ -229,11 +229,11 @@ class JAXLaneExperiment(BaseExperiment):
         self.last_velocity = hero_velocity
 
         # Reward if going forward
-        # if hero_velocity < self.target_speed:
-            # reward = delta_distance
-        # else:
-            # reward = 0.0
-        reward=0.001
+        if hero_velocity < self.target_speed:
+            reward = delta_distance
+        else:
+            reward = 0.0
+        # reward=0.001
         if self.done_falling:
             reward += -1.0
         if self.done_dist:

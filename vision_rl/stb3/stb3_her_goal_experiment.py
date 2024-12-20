@@ -268,24 +268,24 @@ class STB3HERGoalExperiment(BaseExperiment):
 
         # Reward if going forward
         # reward=displacement+np.exp(-d_to_lane)
-        reward=0.0
-        # if hero_velocity < self.target_speed:
-        #     reward = delta_distance
-        # else:
-        #     reward = 0.0
-        # if self.done_falling:
-        #     reward += -1.0
-        # if self.done_dist:
+        
+        if hero_velocity < self.target_speed:
+            reward=displacement
+        else:
+            reward = 0.0
+        if self.done_falling:
+            reward += -1.0
+        if self.done_dist:
         #     print("Max dist travelled")
-        #     reward += 1.0
-        # if self.done_time_idle:
+            reward += 1.0
+        if self.done_time_idle:
         #     print("Done idle")
-        #     reward += -1.0
-        # if self.collision:
+            reward += -1.0
+        if self.collision:
         #     # print('collision')
-        #     reward += -1.0
-        # if self.diff_lane:
-        #     reward += -1.0
+            reward += -1.0
+        if self.diff_lane:
+            reward += -1.0
         if dist<=1.5:
             reward += 1.0
 

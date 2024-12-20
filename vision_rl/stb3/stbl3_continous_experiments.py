@@ -156,7 +156,7 @@ class STBL3Experiment(BaseExperiment):
         return vecs
 
     def get_img_obs(self, sensor_data, core):
-        image = post_process_image(sensor_data['rgb'][1], normalized = True, grayscale = True)
+        image = post_process_image(sensor_data['rgb'][1], normalized = True,crop=False, grayscale = True)
 
         if self.prev_image_0 is None:
             self.prev_image_0 = image
@@ -186,6 +186,7 @@ class STBL3Experiment(BaseExperiment):
     def get_done_status(self, sensor_data, core):
         """Returns whether or not the experiment has to end"""
         hero = core.hero
+        self.info=dict()
         self.done_time_idle = self.max_time_idle < self.time_idle
         if self.get_speed(hero) > 1.0:
             self.time_idle = 0

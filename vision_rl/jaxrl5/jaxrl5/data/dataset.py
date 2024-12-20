@@ -44,6 +44,11 @@ def _sample(
     dataset_dict: Union[np.ndarray, DatasetDict], indx: np.ndarray
 ) -> DatasetDict:
     if isinstance(dataset_dict, np.ndarray):
+<<<<<<< HEAD
+=======
+        # breakpoint()
+        # print(type(indx),indx)
+>>>>>>> 6957dd6 (update)
         return dataset_dict[indx]
     if isinstance(dataset_dict, deque):
         # breakpoint()

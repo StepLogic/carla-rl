@@ -7,11 +7,15 @@ import torch
 import torch.nn as nn
 from gym import spaces
 from stable_baselines3.common.noise import OrnsteinUhlenbeckActionNoise
-from stable_baselines3 import SAC
+from stable_baselines3 import PPO, SAC
 from stable_baselines3.common.torch_layers import BaseFeaturesExtractor
 from stable_baselines3.common.callbacks import CheckpointCallback
 from vision_rl.rllib_integration.carla_env import CarlaEnv
-from stbl3_imu_experiments import STBL3Experiment
+from stbl3_continous_experiments import STBL3Experiment
+from vision_rl.rllib_integration.carla_her_goal import CarlaGoalEnv
+from vision_rl.stb3.ImageHER import HerReplayBuffer, HerReplayBufferModified
+from vision_rl.stb3.stb3_her_goal_experiment import STB3HERGoalExperiment
+from vision_rl.stb3.stb3_ppo_goal_experiment import STB3PPOGoalExperiment
 
 class CarlaCNN(BaseFeaturesExtractor):
     """CNN feature extractor for CARLA images"""
@@ -20,7 +24,7 @@ class CarlaCNN(BaseFeaturesExtractor):
         super().__init__(observation_space, features_dim)
         
         self.cnn = nn.Sequential(
-            nn.Conv2d(1, 32, kernel_size=8, stride=4),
+            nn.Conv2d(3, 32, kernel_size=8, stride=4),
             nn.ReLU(),
             nn.Conv2d(32, 64, kernel_size=4, stride=2),
             nn.ReLU(),
@@ -31,23 +35,25 @@ class CarlaCNN(BaseFeaturesExtractor):
         
         # Compute shape by doing one forward pass
         with torch.no_grad():
-            n_flatten = self.cnn(torch.zeros(1, 1, 84, 84)).shape[1]
+            n_flatten = self.cnn(torch.zeros(1, 3, 84, 84)).shape[1]
         
         self.linear = nn.Sequential(
-            nn.Linear(n_flatten + 6, features_dim),  # +4 for the vector observations
+            nn.Linear(n_flatten*2 + 4, features_dim),  # +4 for the vector observations
             nn.ReLU()
         )
 
     def forward(self, observations: torch.Tensor) -> torch.Tensor:
         # Split observations into image and vector parts
-        image = observations['image']
-        vector = observations['vector']
+        # breakpoint()
+        image = observations['observation']
+        goal=observations['goal']
+        vector = observations['states']
         # breakpoint()
         # Process image through CNN
-        image_features = self.cnn(image.permute(0,3,1,2))
-        
+        image_features = self.cnn(image)
+        goal_features = self.cnn(goal)
         # Concatenate with vector observations
-        combined = torch.cat([image_features, vector], dim=1)
+        combined = torch.cat([image_features,goal_features, vector], dim=1)
         
         
         return self.linear(combined)
@@ -85,7 +91,7 @@ config = {
             "town":"Town02"
         },
         "experiment": {
-            "type":STBL3Experiment,
+            "type":STB3PPOGoalExperiment,
             "hero": {
                 "blueprint": "vehicle.mercedes.coupe_2020",
                 "sensors": {
@@ -98,8 +104,12 @@ config = {
                         "image_size_y": 180,
                         "transform": "1.9, 0.0, 1.7, 0.0, -15.0, 0.0"
                     },
-                    "imu":{
-                        "type":"sensor.other.imu"
+                    "goal": {
+                        "type": "sensor.goal",
+                        "image_size_x": 300,
+                        "image_size_y": 300,
+                        # "transform": "1.9, 0.0, 1.7, 0.0, -15.0, 0.0",
+                        # "attach":False
                     },
                     "lane_invasion": {
                         "type": "sensor.other.lane_invasion"
@@ -125,8 +135,8 @@ config = {
             "weather": "CloudySunset",
             "others": {
                 "framestack": 1,
-                "max_time_idle": 600,
-                "max_dist": 4000,
+                "max_time_idle": 200,
+                "max_dist": 200,
                 "target_speed": 5.0
             }
         }
@@ -139,7 +149,7 @@ def main():
     args = parser.parse_args()
 
     # Create environment
-    env = CarlaEnv(config["env_config"])
+    env = CarlaGoalEnv(config["env_config"])
     n_actions = env.action_space.shape[0]
     action_noise = OrnsteinUhlenbeckActionNoise(
         mean=np.zeros(n_actions),
@@ -149,9 +159,10 @@ def main():
         initial_noise=None
     )
     # Create SAC model
-    model = SAC(
+    model = PPO(
         "MultiInputPolicy",
         env,
+        # replay_buffer_class=HerReplayBufferModified,
         policy_kwargs=dict(
             features_extractor_class=CarlaCNN,
             features_extractor_kwargs=dict(features_dim=512),
@@ -161,16 +172,16 @@ def main():
             )
         ),
         learning_rate=3e-4,
-        buffer_size=100000,
-        learning_starts=5000,
+        # buffer_size=100000,
+        # learning_starts=5000,
         batch_size=16,
-        tau=0.005,              # Target network update rate
+        # tau=0.005,              # Target network update rate
         gamma=0.99,
         # train_freq=1,
         # gradient_steps=1,
         # action_noise=action_noise,      # SAC handles exploration internally
         # optimize_memory_usage=True,
-        ent_coef="auto",        # Automatic entropy tuning
+        # ent_coef="auto",        # Automatic entropy tuning
         # target_entropy="auto",  # Automatically set target entropy
         tensorboard_log=os.path.join(args.output_dir, "tensorboard"),
         verbose=1

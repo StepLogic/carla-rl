@@ -26,6 +26,7 @@ class STBL3Experiment(BaseExperiment):
         self.prev_steer = 0.0
         self.prev_throttle = 0.0
         self.info=dict()
+        self.heading=np.random.uniform(0.0,2*np.pi)
 
     def reset(self,*arg,**kwargs):
         """Called at the beginning and each time the simulation is reset"""
@@ -56,6 +57,7 @@ class STBL3Experiment(BaseExperiment):
         self.prev_steer = 0.0
         self.prev_throttle = 0.0
         self.info=dict()
+        self.heading=np.pi/2
 
     # def get_action_space(self):
     #     """Returns the action space, in this case, a discrete space"""
@@ -72,7 +74,7 @@ class STBL3Experiment(BaseExperiment):
         vec_space = Box(
             low=-5.1,
             high=5.1,
-            shape=(4 * self.frame_stack,),
+            shape=(6 * self.frame_stack,),
             dtype=np.float32,
         )
 
@@ -126,14 +128,16 @@ class STBL3Experiment(BaseExperiment):
         return {"image":images, "vector":vecs}, self.info
 
     def get_vec_obs(self, sensor_data, core):
-        vec = np.zeros(4)
+        imu =sensor_data['imu'][1]
+        vec = np.zeros(6)
         vec[0] = self.prev_steer / self.max_steer
         vec[1] = self.prev_throttle / self.max_throttle
-        
+
         hero = core.hero
         vec[2] = np.clip(self.get_speed(hero)/self.target_speed, 0.0, 1.0)
-
         vec[3] = self.time_idle / self.max_time_idle
+        vec[4]=imu[-1]
+        vec[5]=self.heading
 
         if self.prev_vec_0 is None:
             self.prev_vec_0 = vec
@@ -199,12 +203,12 @@ class STBL3Experiment(BaseExperiment):
         done=self.done_time_idle or self.done_falling or self.done_dist or self.diff_lane or self.collision
         if done:
             self.info.update(is_success=self.done_dist)
-            print(self.distance_travelled)
+            # print(self.distance_travelled)
         return done
 
     def compute_reward(self, sensor_data, core):
         hero = core.hero
-
+        heading =sensor_data['imu'][1][-1]
         # Hero-related variables
         hero_location = hero.get_location()
         hero_velocity = self.get_speed(hero)
@@ -222,9 +226,10 @@ class STBL3Experiment(BaseExperiment):
         self.last_location = hero_location
         self.last_velocity = hero_velocity
 
+
         # Reward if going forward
         if hero_velocity < self.target_speed:
-            reward = delta_distance
+            reward = delta_distance - np.clip((heading-self.heading)/np.pi,-0.1,0.1)
         else:
             reward = 0.0
 

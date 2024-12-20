@@ -18,7 +18,7 @@ import numpy as np
 from tensorboard import program
 
 
-def post_process_image(image, normalized=True, grayscale=True,crop=False):
+def post_process_image(image, normalized=True, grayscale=True,crop=True):
     """
     Convert image to gray scale and normalize between -1 and 1 if required
     :param image:

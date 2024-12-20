@@ -1,16 +1,17 @@
 # Modified from https://github.com/carla-simulator/rllib-integration/blob/main/dqn_example/dqn_experiment.py
 
+from collections import defaultdict
 import math
 import numpy as np
-from gym.spaces import Box, Dict
+from gymnasium.spaces import Box, Dict
 
 import carla
 
 from vision_rl.rllib_integration.base_experiment import BaseExperiment
-from vision_rl.rllib_integration.helper import post_process_image
+from vision_rl.rllib_integration.helper import carla_location_to_np_array, post_process_image
 
 
-class STBL3Experiment(BaseExperiment):
+class STB3PPOGoalExperiment(BaseExperiment):
     def __init__(self, config={}):
         super().__init__(config)  # Creates a self.config with the experiment configuration
 
@@ -25,9 +26,20 @@ class STBL3Experiment(BaseExperiment):
         self.max_throttle = 0.6
         self.prev_steer = 0.0
         self.prev_throttle = 0.0
+        self.achieved_goal=None
+        self.trajectories=None
+        self.large_deviation=False
         self.info=dict()
 
-    def reset(self,*arg,**kwargs):
+    def _cache_waypoints(self,world) -> None:
+        env_map = world.get_map()
+        waypoints = env_map.generate_waypoints(distance=2)
+        trajectories = defaultdict(list)
+        for wpt in waypoints:
+            trajectories[f"{wpt.road_id}-{wpt.lane_id}"].append(wpt)
+        self.trajectories = [traj for traj in trajectories.values() if len(traj) > 3]
+
+    def reset(self,core):
         """Called at the beginning and each time the simulation is reset"""
 
         # Ending variables
@@ -36,6 +48,7 @@ class STBL3Experiment(BaseExperiment):
         self.done_time_idle = False
         self.done_falling = False
         self.done_dist = False
+        # self.step=0
 
         # hero variables
         self.last_location = None
@@ -56,6 +69,9 @@ class STBL3Experiment(BaseExperiment):
         self.prev_steer = 0.0
         self.prev_throttle = 0.0
         self.info=dict()
+        if self.trajectories is None:
+            self._cache_waypoints(core.core.world)
+
 
     # def get_action_space(self):
     #     """Returns the action space, in this case, a discrete space"""
@@ -63,20 +79,32 @@ class STBL3Experiment(BaseExperiment):
 
     def get_observation_space(self):
         image_space = Box(
-            low=-1.0,
-            high=1.0,
-            shape=(84, 84, self.frame_stack,),
-            dtype=np.float32,
+            low=0,
+            high=255,
+            shape=(84, 84,3),
+            dtype=np.uint8,
         )
         
         vec_space = Box(
             low=-5.1,
             high=5.1,
-            shape=(4 * self.frame_stack,),
+            # shape=(4 * self.frame_stack,),
+            shape=(4,),
+            dtype=np.float32,
+        )
+        loc = Box(
+            low=-5.1,
+            high=5.1,
+            # shape=(4 * self.frame_stack,),
+            shape=(3,),
             dtype=np.float32,
         )
 
-        return Dict({"image":image_space, "vector":vec_space})
+        return Dict({"observation":image_space,"states":vec_space,
+                     "goal":image_space,
+                     "achieved_goal":loc,
+                     "desired_goal":loc,})
+
 
     def get_action_space(self):
         """Returns the continuous action space for steering and throttle"""
@@ -122,8 +150,11 @@ class STBL3Experiment(BaseExperiment):
         The information variable can be empty
         """
         vecs = self.get_vec_obs(sensor_data, core)
-        images = self.get_img_obs(sensor_data, core)
-        return {"image":images, "vector":vecs}, self.info
+        images,goal = self.get_img_obs(sensor_data, core)
+        self.achieved_goal=images
+        hero_location = core.hero.get_location()
+        self.info.update(dict(obs=carla_location_to_np_array(hero_location),goal=sensor_data['goal'][1][-1]))
+        return {"observation":images,"states":vecs,"goal":goal,"achieved_goal":carla_location_to_np_array(hero_location),"desired_goal":sensor_data['goal'][1][-1]}, self.info
 
     def get_vec_obs(self, sensor_data, core):
         vec = np.zeros(4)
@@ -152,11 +183,13 @@ class STBL3Experiment(BaseExperiment):
         self.prev_vec_2 = self.prev_vec_1
         self.prev_vec_1 = self.prev_vec_0
         self.prev_vec_0 = vec
-
         return vecs
 
     def get_img_obs(self, sensor_data, core):
-        image = post_process_image(sensor_data['rgb'][1], normalized = True, grayscale = True)
+
+        image = post_process_image(sensor_data['rgb'][1], normalized = False, grayscale = False)
+        # breakpoint()
+        goal = post_process_image(sensor_data['goal'][1][0], normalized = False, grayscale = False)
 
         if self.prev_image_0 is None:
             self.prev_image_0 = image
@@ -176,8 +209,7 @@ class STBL3Experiment(BaseExperiment):
         self.prev_image_1 = self.prev_image_0
         self.prev_image_0 = image
 
-        return images
-    
+        return images,goal
     def get_speed(self, hero):
         """Computes the speed of the hero vehicle in Km/h"""
         vel = hero.get_velocity()
@@ -185,6 +217,7 @@ class STBL3Experiment(BaseExperiment):
 
     def get_done_status(self, sensor_data, core):
         """Returns whether or not the experiment has to end"""
+        
         hero = core.hero
         self.done_time_idle = self.max_time_idle < self.time_idle
         if self.get_speed(hero) > 1.0:
@@ -192,19 +225,27 @@ class STBL3Experiment(BaseExperiment):
         else:
             self.time_idle += 1
         self.time_episode += 1
+        # dist=sensor_data['goal'][1][1]
+        goal_loc=sensor_data['goal'][1][-1]
+        hero_location = hero.get_location()
+        hero_location=carla_location_to_np_array(hero_location)
+        dist=np.linalg.norm(goal_loc - hero_location)
         self.done_dist = self.distance_travelled > self.max_dist
         self.done_falling = hero.get_location().z < -0.5
         self.diff_lane = 'lane_invasion' in sensor_data.keys()
         self.collision = 'collision' in sensor_data.keys()
-        done=self.done_time_idle or self.done_falling or self.done_dist or self.diff_lane or self.collision
+        done=self.done_time_idle or self.done_falling or self.done_dist or self.diff_lane or self.collision or dist<=3.0
+        # if dist:
+        # print(dist)
         if done:
-            self.info.update(is_success=self.done_dist)
-            print(self.distance_travelled)
+            self.info.update(dict(is_success=int(dist<=3.0),distance_to_goal=self.distance_travelled,collision=int(self.collision)))
         return done
 
     def compute_reward(self, sensor_data, core):
         hero = core.hero
 
+        goal_loc=sensor_data['goal'][1][-1]
+        dist=sensor_data['goal'][1][1]
         # Hero-related variables
         hero_location = hero.get_location()
         hero_velocity = self.get_speed(hero)
@@ -212,34 +253,51 @@ class STBL3Experiment(BaseExperiment):
         # Initialize last location
         if self.last_location == None:
             self.last_location = hero_location
-
+        transform = hero.get_transform()
         # Compute deltas
-        delta_distance = float(np.sqrt(np.square(hero_location.x - self.last_location.x) + \
-                            np.square(hero_location.y - self.last_location.y)))
-        self.distance_travelled += delta_distance
-
+        # delta_distance = float(np.sqrt(np.square(hero_location.x - self.last_location.x) + np.square(hero_location.y - self.last_location.y)))
+        delta_loc=carla_location_to_np_array(self.last_location)-carla_location_to_np_array(hero_location)
+        displacement=np.dot(delta_loc,goal_loc/np.linalg.norm(goal_loc))
+        location = np.array([transform.location.x, transform.location.y])
+        f, d_f = core.spline(location)
+        d_to_lane = np.linalg.norm(f - location)
+        # max_dev = hero.bounding_box.extent.y * 2
         # Update variables
         self.last_location = hero_location
         self.last_velocity = hero_velocity
 
         # Reward if going forward
+        # reward=displacement+np.exp(-d_to_lane)
+        # reward=displacement+0.01
         if hero_velocity < self.target_speed:
-            reward = delta_distance
+            reward = displacement
         else:
             reward = 0.0
-
         if self.done_falling:
             reward += -1.0
         if self.done_dist:
-            print("Max dist travelled")
+        #     print("Max dist travelled")
             reward += 1.0
         if self.done_time_idle:
-            print("Done idle")
+        #     print("Done idle")
             reward += -1.0
         if self.collision:
-            print('collision')
+        #     # print('collision')
             reward += -1.0
         if self.diff_lane:
             reward += -1.0
+        if dist<=1.5:
+            reward += 1.0
 
-        return reward*10
+        return reward
+    def compute_hinsight_rewards(self,            
+            achieved_goal,
+            desired_goal,
+            info
+            ):
+        dist = np.linalg.norm(np.subtract(achieved_goal ,desired_goal),axis=-1)
+        # breakpoint()
+        return np.where(dist<=3.0,10,0)
+
+        
+    

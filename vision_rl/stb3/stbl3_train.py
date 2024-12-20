@@ -124,7 +124,7 @@ config = {
             "others": {
                 "framestack": 1,
                 "max_time_idle": 600,
-                "max_dist": 4000,
+                "max_dist": 200,
                 "target_speed": 5.0
             }
         }

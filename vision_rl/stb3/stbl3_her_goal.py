@@ -10,8 +10,8 @@ from stable_baselines3.common.noise import OrnsteinUhlenbeckActionNoise
 from stable_baselines3 import SAC
 from stable_baselines3.common.torch_layers import BaseFeaturesExtractor
 from stable_baselines3.common.callbacks import CheckpointCallback
-from vision_rl.rllib_integration.carla_env import CarlaEnv
-from stbl3_continous_experiments import STBL3Experiment
+# from vision_rl.rllib_integration.carla_env import CarlaEnv
+# from stbl3_continous_experiments import STBL3Experiment
 from vision_rl.rllib_integration.carla_her_goal import CarlaGoalEnv
 from vision_rl.stb3.ImageHER import HerReplayBuffer, HerReplayBufferModified
 from vision_rl.stb3.stb3_her_goal_experiment import STB3HERGoalExperiment
@@ -135,7 +135,7 @@ config = {
             "others": {
                 "framestack": 1,
                 "max_time_idle": 600,
-                "max_dist": 4000,
+                "max_dist": 200,
                 "target_speed": 5.0
             }
         }
@@ -161,7 +161,7 @@ def main():
     model = SAC(
         "MultiInputPolicy",
         env,
-        replay_buffer_class=HerReplayBufferModified,
+        # replay_buffer_class=HerReplayBufferModified,
         policy_kwargs=dict(
             features_extractor_class=CarlaCNN,
             features_extractor_kwargs=dict(features_dim=512),

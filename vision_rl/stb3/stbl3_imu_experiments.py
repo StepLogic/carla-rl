@@ -26,9 +26,10 @@ class STBL3Experiment(BaseExperiment):
         self.prev_steer = 0.0
         self.prev_throttle = 0.0
         self.info=dict()
-        self.heading=np.random.uniform(0.0,2*np.pi)
+        self.heading=None
+        # self.start_heading=None
 
-    def reset(self,*arg,**kwargs):
+    def reset(self,core):
         """Called at the beginning and each time the simulation is reset"""
 
         # Ending variables
@@ -57,7 +58,7 @@ class STBL3Experiment(BaseExperiment):
         self.prev_steer = 0.0
         self.prev_throttle = 0.0
         self.info=dict()
-        self.heading=np.pi/2
+        self.heading = None
 
     # def get_action_space(self):
     #     """Returns the action space, in this case, a discrete space"""
@@ -129,10 +130,11 @@ class STBL3Experiment(BaseExperiment):
 
     def get_vec_obs(self, sensor_data, core):
         imu =sensor_data['imu'][1]
+        if self.heading is None:
+            self.heading=imu[-1] + np.pi
         vec = np.zeros(6)
         vec[0] = self.prev_steer / self.max_steer
         vec[1] = self.prev_throttle / self.max_throttle
-
         hero = core.hero
         vec[2] = np.clip(self.get_speed(hero)/self.target_speed, 0.0, 1.0)
         vec[3] = self.time_idle / self.max_time_idle
@@ -201,6 +203,7 @@ class STBL3Experiment(BaseExperiment):
         self.diff_lane = 'lane_invasion' in sensor_data.keys()
         self.collision = 'collision' in sensor_data.keys()
         done=self.done_time_idle or self.done_falling or self.done_dist or self.diff_lane or self.collision
+        
         if done:
             self.info.update(is_success=self.done_dist)
             # print(self.distance_travelled)
@@ -210,6 +213,7 @@ class STBL3Experiment(BaseExperiment):
         hero = core.hero
         heading =sensor_data['imu'][1][-1]
         # Hero-related variables
+        # print("heading",heading)
         hero_location = hero.get_location()
         hero_velocity = self.get_speed(hero)
 
@@ -229,7 +233,8 @@ class STBL3Experiment(BaseExperiment):
 
         # Reward if going forward
         if hero_velocity < self.target_speed:
-            reward = delta_distance - np.clip((heading-self.heading)/np.pi,-0.1,0.1)
+            # print(heading-self.heading)
+            reward = delta_distance - (1/(1 + np.exp(-abs(self.heading-heading))))*0.1
         else:
             reward = 0.0
 

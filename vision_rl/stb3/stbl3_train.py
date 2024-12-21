@@ -9,9 +9,9 @@ from gym import spaces
 from stable_baselines3.common.noise import OrnsteinUhlenbeckActionNoise
 from stable_baselines3 import SAC
 from stable_baselines3.common.torch_layers import BaseFeaturesExtractor
-from stable_baselines3.common.callbacks import CheckpointCallback
+from stable_baselines3.common.callbacks import CheckpointCallback,EvalCallback
 from vision_rl.rllib_integration.carla_env import CarlaEnv
-from stbl3_imu_experiments import STBL3Experiment
+from vision_rl.stb3.stbl3_imu_experiments import STBL3Experiment
 
 class CarlaCNN(BaseFeaturesExtractor):
     """CNN feature extractor for CARLA images"""

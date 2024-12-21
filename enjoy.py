@@ -1,10 +1,11 @@
 from stable_baselines3 import SAC
 # from stable_baselines3.common.evaluation import evaluate_policy
 from stable_baselines3.sac.policies import MlpPolicy
-from vision_rl.stb3.stbl3_her_goal import config ,CarlaGoalEnv
+# from vision_rl.stb3.stbl3_her_goal import config ,CarlaGoalEnv
+from vision_rl.stb3.stbl3_train import CarlaEnv,config
 # Create the model and the training environment
 
-env = CarlaGoalEnv(config["env_config"])
+env = CarlaEnv(config["env_config"])
 import warnings
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
@@ -150,8 +151,8 @@ def evaluate_policy(
     return mean_reward, std_reward
 
 # the saved model does not contain the replay buffer
-loaded_model = SAC.load("/home/robotlab/scratch/carla-rl/results/final_model.zip",env)
+loaded_model = SAC.load("/home/kojogyaase/Projects/Research/carla-rl/results/final_model",env)
 
-mean_reward, std_reward = evaluate_policy(loaded_model, env, n_eval_episodes=100, deterministic=False)
+mean_reward, std_reward = evaluate_policy(loaded_model, env, n_eval_episodes=100, deterministic=True)
 
 print(f"mean_reward={mean_reward:.2f} +/- {std_reward}")

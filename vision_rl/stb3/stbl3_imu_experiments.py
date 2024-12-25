@@ -162,7 +162,7 @@ class STBL3Experiment(BaseExperiment):
         return vecs
 
     def get_img_obs(self, sensor_data, core):
-        image = post_process_image(sensor_data['rgb'][1], normalized = True, grayscale = True)
+        image = post_process_image(sensor_data['rgb'][1], normalized = True,crop=False, grayscale = True)
 
         if self.prev_image_0 is None:
             self.prev_image_0 = image

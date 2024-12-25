@@ -165,7 +165,7 @@ def get_curve(points):
             t = t_samples[closest_idx]
             return f_t(t),f_prime_t(t)
         return curve
-def draw_waypoints(world, waypoints, z=0.5, lifetime=30.0, color=(255,0,0)):
+def draw_waypoints(world, waypoints, z=0.5, lifetime=1, color=(255,0,0)):
     """
     Draw a list of waypoints at a certain height given in z.
 
@@ -178,5 +178,5 @@ def draw_waypoints(world, waypoints, z=0.5, lifetime=30.0, color=(255,0,0)):
         begin = wpt_t.location + carla.Location(z=z)
         angle = math.radians(wpt_t.rotation.yaw)
         end = begin + carla.Location(x=math.cos(angle), y=math.sin(angle))
-        world.debug.draw_arrow(begin, end, color=carla.Color(*color), arrow_size=0.3, life_time=lifetime)
+        # world.debug.draw_arrow(begin, end, color=carla.Color(*color), arrow_size=0.3,lifetime=lifetime)
         # world.debug.draw_string(begin,f"{wpt.road_id} {wpt.lane_id} {wpt.section_id}", color=carla.Color(*color), life_time=lifetime)

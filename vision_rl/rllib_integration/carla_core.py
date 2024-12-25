@@ -61,6 +61,7 @@ class CarlaCore:
         self.init_server()
         self.connect_client()
         self.sensors=[]
+        self.step_callbacks=[]
 
     def init_server(self):
         """Start a server on a random port"""
@@ -115,7 +116,7 @@ class CarlaCore:
         for i in range(self.config["retries_on_error"]):
             try:
                 self.client = carla.Client(self.config["host"], self.server_port)
-                self.world = self.client.load_world("Town04")
+                self.world = self.client.load_world("Town01")
                 self.client.set_timeout(self.config["timeout"])
                 # print(self.config["town"])
 
@@ -194,9 +195,12 @@ class CarlaCore:
         # Part 2: Spawn the ego vehicle
         user_spawn_points = hero_config["spawn_points"]
         trajectories=hero_config.get("trajectories",None)
+        traj_indx=hero_config.get("trajectory_end",-1)
+        # print(traj_indx)
         # breakpoint()
+        self.step_callbacks=[]
         if not trajectories is None:
-            trajectory = random.choice(trajectories)
+            trajectory = random.choice(trajectories[:-1])
             self.hero_blueprints = self.world.get_blueprint_library().find(hero_config['blueprint'])
             self.hero_blueprints.set_attribute("role_name", "hero")
             xy_points = np.array([
@@ -208,7 +212,8 @@ class CarlaCore:
             origin, destination = trajectory[0], trajectory[-1]
             if self.compute_dot(origin.transform, destination.transform) < 0.0:
                 origin, destination = destination, origin
-            draw_waypoints(self.world,[destination])
+            
+            self.step_callbacks.append(lambda:draw_waypoints(self.world,[destination]))
             # Prepare transforms
             origin_transform = origin.transform
             origin_transform.location.z += 1.0
@@ -404,10 +409,12 @@ class CarlaCore:
         # Move hero vehicle
         if control is not None:
             self.apply_hero_control(control)
-
+        for callback in self.step_callbacks:
+            if callable(callback):
+                callback()
         # Tick once the simulation
         self.world.tick()
-
+        
         # Move the spectator
         if self.config["enable_rendering"]:
             self.set_spectator_camera_view()

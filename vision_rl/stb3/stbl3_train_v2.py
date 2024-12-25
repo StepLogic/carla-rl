@@ -7,13 +7,13 @@ import numpy as np
 import torch
 import torch.nn as nn
 from gym import spaces
-import gym
+import gymnasium as gym
 from stable_baselines3.common.noise import OrnsteinUhlenbeckActionNoise
 from stable_baselines3 import SAC
 from stable_baselines3.common.torch_layers import BaseFeaturesExtractor
-from stable_baselines3.common.callbacks import CheckpointCallback
+from stable_baselines3.common.callbacks import CheckpointCallback,EvalCallback
 from vision_rl.rllib_integration.carla_goal_env import CarlaGoalEnv
-from stbl3_experiments_v2 import STBL3GoalExperiment
+from vision_rl.stb3.stbl3_experiments_v2 import STBL3GoalExperiment
 
 class CarlaCNN(BaseFeaturesExtractor):
     """CNN feature extractor for CARLA images"""
@@ -21,7 +21,7 @@ class CarlaCNN(BaseFeaturesExtractor):
     def __init__(self, observation_space: spaces.Box, features_dim: int = 512):
         super().__init__(observation_space, features_dim)
         
-        self.cnn = nn.Sequential(
+        self.image_cnn = nn.Sequential(
             nn.Conv2d(1, 32, kernel_size=8, stride=4),
             nn.ReLU(),
             nn.Conv2d(32, 64, kernel_size=4, stride=2),
@@ -30,13 +30,23 @@ class CarlaCNN(BaseFeaturesExtractor):
             nn.ReLU(),
             nn.Flatten(),
         )
-        
+
+        self.goal_cnn = nn.Sequential(
+            nn.Conv2d(1, 32, kernel_size=8, stride=4),
+            nn.ReLU(),
+            nn.Conv2d(32, 64, kernel_size=4, stride=2),
+            nn.ReLU(),
+            nn.Conv2d(64, 64, kernel_size=3, stride=1),
+            nn.ReLU(),
+            nn.Flatten(),
+        )
         # Compute shape by doing one forward pass
         with torch.no_grad():
-            n_flatten = self.cnn(torch.zeros(1, 1, 84, 84)).shape[1]
+            image_flatten = self.image_cnn(torch.zeros(1, 1, 84, 84)).shape[1]
+            goal_flatten = self.goal_cnn(torch.zeros(1, 1, 84, 84)).shape[1]
         
         self.linear = nn.Sequential(
-            nn.Linear(n_flatten*2 + 4, features_dim),  # +4 for the vector observations
+            nn.Linear(image_flatten+goal_flatten+ 6, features_dim),  # +4 for the vector observations
             nn.ReLU()
         )
 
@@ -45,10 +55,12 @@ class CarlaCNN(BaseFeaturesExtractor):
         image = observations['image']
         goal = observations['goal']
         vector = observations['vector']
+        # breakpoint()
         
         # Process image through CNN
-        image_features = self.cnn(image.permute(0,3,1,2))
-        goal_features = self.cnn(goal.permute(0,3,1,2))
+        image_features = self.image_cnn(image.permute(0,3,1,2))
+        # goal=torch.concat([image,goal],axis=-1)
+        goal_features = self.goal_cnn(goal.permute(0,3,1,2))
         
         # Concatenate with vector observations
         combined = torch.cat([image_features,goal_features,vector], dim=1)
@@ -109,6 +121,10 @@ config = {
                         # "transform": "1.9, 0.0, 1.7, 0.0, -15.0, 0.0",
                         # "attach":False
                     },
+
+                    "imu":{
+                        "type":"sensor.other.imu"
+                    },
                     "lane_invasion": {
                         "type": "sensor.other.lane_invasion"
                     }
@@ -140,7 +156,7 @@ config = {
         }
     }
 }
-os.environ["CARLA_ROOT"]='/home/robotlab/Apps/CARLA_0.9.15'
+# os.environ["CARLA_ROOT"]='/home/robotlab/Apps/CARLA_0.9.15'
 def main():
     parser = argparse.ArgumentParser(description="SAC training script for CARLA")
     parser.add_argument("--output_dir", default="./results")
@@ -148,7 +164,7 @@ def main():
 
     # Create environment
     env = CarlaGoalEnv(config["env_config"])
-    env=gym.wrappers.TimeLimit(env,max_episode_steps=2500)
+    # env=gym.wrappers.TimeLimit(env,max_episode_steps=2500)
     n_actions = env.action_space.shape[0]
     action_noise = OrnsteinUhlenbeckActionNoise(
         mean=np.zeros(n_actions),
@@ -156,6 +172,16 @@ def main():
         theta=0.15,
         dt=1e-2,
         initial_noise=None
+    )
+    eval_callback = EvalCallback(
+        env,
+        best_model_save_path="./results",
+        # log_path=f"{args.checkpoint_path}/logs",
+        n_eval_episodes=10,
+        eval_freq=int(50e3),
+        # callback_after_eval=stop_train_callback,
+        deterministic=True,
+        # render=True
     )
     # Create SAC model
     model = SAC(
@@ -192,11 +218,12 @@ def main():
             save_path=args.output_dir,
             name_prefix="sac_carla"
         ),
+        eval_callback
     ]
 
     # Train model
     model.learn(
-        total_timesteps=1000000,
+        total_timesteps=10000000,
         callback=callbacks
     )
 

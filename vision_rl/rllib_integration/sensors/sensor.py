@@ -158,7 +158,7 @@ class GoalImageSensor(BaseSensor):
         array = np.reshape(array, (sensor_data.height, sensor_data.width, 4))
         array = array[:, :, :3]
         array = array[:, :, ::-1]
-        # cv2.imwrite("test.jpg",array)
+        cv2.imwrite("test.jpg",array)
         return [array,self.loc.distance(self.parent.get_location()),np.array([self.loc.x,self.loc.y,self.loc.z])]
     def destroy(self):
         if self.sensor is not None:

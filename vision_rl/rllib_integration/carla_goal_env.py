@@ -7,7 +7,7 @@
 # For a copy, see <https://opensource.org/licenses/MIT>.
 
 from __future__ import print_function
-import gym
+import gymnasium as gym
 from vision_rl.rllib_integration.carla_core import CarlaCore
 
 class CarlaGoalEnv(gym.Env):
@@ -27,17 +27,19 @@ class CarlaGoalEnv(gym.Env):
 
         self.reset()
 
-    def reset(self):
+    def reset(self,*arg,**kwargs):
         # Reset sensors hero and experiment
         self.experiment.reset(self)
         # breakpoint()
         self.experiment.config["hero"]["trajectories"]=self.experiment.trajectories
+        if hasattr(self.experiment,"curriculum_step"):
+            self.experiment.config["hero"]["trajectory_end"]=self.experiment.curriculum_step
         self.hero = self.core.reset_hero(self.experiment.config["hero"])
         
         # Tick once and get the observations
         sensor_data = self.core.tick(None)
         observation, _ = self.experiment.get_observation(sensor_data, self.core)
-        return observation
+        return observation , _
 
     def step(self, action):
         """Computes one tick of the environment in order to return the new observation,
@@ -47,4 +49,4 @@ class CarlaGoalEnv(gym.Env):
         observation, info = self.experiment.get_observation(sensor_data, self.core)
         done = self.experiment.get_done_status(sensor_data, self.core)
         reward = self.experiment.compute_reward(sensor_data, self.core)
-        return observation, reward, done, info or self.experiment.info
+        return observation, reward, done,False, info or self.experiment.info

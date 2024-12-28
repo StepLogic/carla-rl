@@ -10,7 +10,7 @@ import math
 import numpy as np
 from scipy.interpolate import splprep, splev
 
-def compute_heading(location1, location2):
+def relative_compute_heading(location1, location2):
     dx = location2[0] - location1[0]
     dy = location2[1] - location1[1]
     heading_rad = math.atan2(dy, dx)
@@ -18,6 +18,15 @@ def compute_heading(location1, location2):
     if heading_deg < 0:
         heading_deg += 360
     return heading_deg
+
+def absolute_heading(location):
+    dx = location[0]
+    dy = location[1]
+    heading_rad = math.atan2(dy, dx)
+    heading_deg = math.degrees(heading_rad)
+    if heading_deg < 0:
+        heading_deg += 360
+    return heading_deg+np.random.normal(0,1)
 
 def make_curve(points):
     t = np.linspace(0, 1, len(points))
@@ -163,9 +172,7 @@ class JAXGoalExperiments(BaseExperiment):
     def get_vec_obs(self, sensor_data, core):
         imu = sensor_data['imu'][1]
         if self.heading is None:
-            heading = np.deg2rad(compute_heading(carla_location_to_np_array(core.hero.get_location()),sensor_data['goal'][1][-1]))
-            self.heading = (imu[-1] + heading) % (2*np.pi)
-
+            self.heading = np.deg2rad(absolute_heading(sensor_data['goal'][1][-1]))
         vec = np.zeros(6)
         vec[0] = self.prev_steer / self.max_steer
         vec[1] = self.prev_throttle / self.max_throttle

@@ -70,6 +70,7 @@ class JAXGoalExperiments(BaseExperiment):
         self.total_distance = None
         self.curriculum_step = 1
         self.max_curriculum_steps = 5
+        self.goal_threshold=2.5
 
     def _cache_waypoints(self,world) -> None:
             env_map = world.get_map()
@@ -239,7 +240,7 @@ class JAXGoalExperiments(BaseExperiment):
             self.time_idle += 1
         self.time_episode += 1
         
-        wp=core.map.get_waypoint(hero.get_transform().location)
+        # wp=core.map.get_waypoint(hero.get_transform().location)
         goal_location = sensor_data['goal'][1][-1]
         distance_to_goal = np.linalg.norm(goal_location[:2]-carla_location_to_np_array(hero.get_transform().location)[:2])
         self.done_falling = hero.get_location().z < -0.5
@@ -248,11 +249,11 @@ class JAXGoalExperiments(BaseExperiment):
 
 
         done = (self.done_time_idle or self.done_falling or self.diff_lane or 
-                self.collision or distance_to_goal <= 1.5 or wp is None)
+                self.collision or distance_to_goal <=self.goal_threshold)
         # done = distance_to_goal <= 1.5
         if done:
             self.info = dict(
-                is_success=distance_to_goal <= 2.5,
+                is_success=distance_to_goal <= self.goal_threshold,
                 distance_completed=self.distance_travelled
             )
         return done
@@ -281,7 +282,7 @@ class JAXGoalExperiments(BaseExperiment):
         # vehicle_yaw = vehicle_transform.rotation.yaw
 
         # Get waypoint's yaw
-        waypoint = core.map.get_waypoint(hero_location)
+        # waypoint = core.map.get_waypoint(hero_location)
 
         # Dense progress reward
         # reward = min(distance_to_goal/self.total_distance,1.0)
@@ -317,11 +318,11 @@ class JAXGoalExperiments(BaseExperiment):
             reward -= 0.0  # Optional penalty for exceeding target speed
         
         # Terminal rewards/penalties
-        if self.done_falling or self.collision or self.done_time_idle or self.diff_lane or waypoint is None:
+        if self.done_falling or self.collision or self.done_time_idle or self.diff_lane:
             reward += -1.0
         
         # Goal reward
-        if distance_to_goal <= 2.5:
+        if distance_to_goal <= self.goal_threshold:
             reward += 1.0
             # Uncomment if curriculum learning is being used
             # if self.curriculum_step < self.max_curriculum_steps:

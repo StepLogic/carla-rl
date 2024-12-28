@@ -312,9 +312,9 @@ class JAXGoalExperiments(BaseExperiment):
     
         # Reward for velocity
         if hero_velocity < self.target_speed:
-            reward += (displacement + delta_distance) * 0.5
+            reward += displacement
         else:
-            reward -= 0.5  # Optional penalty for exceeding target speed
+            reward -= 0.0  # Optional penalty for exceeding target speed
         
         # Terminal rewards/penalties
         if self.done_falling or self.collision or self.done_time_idle or self.diff_lane or waypoint is None:

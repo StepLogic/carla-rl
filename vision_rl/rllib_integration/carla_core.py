@@ -58,10 +58,12 @@ class CarlaCore:
         self.hero = None
         self.config = join_dicts(BASE_CORE_CONFIG, config)
         self.sensor_interface = SensorInterface()
+        self.waypoints=None
         self.init_server()
         self.connect_client()
         self.sensors=[]
         self.step_callbacks=[]
+
 
     def init_server(self):
         """Start a server on a random port"""
@@ -116,7 +118,7 @@ class CarlaCore:
         for i in range(self.config["retries_on_error"]):
             try:
                 self.client = carla.Client(self.config["host"], self.server_port)
-                self.world = self.client.load_world("Town01")
+                self.world = self.client.load_world("Town04")
                 self.client.set_timeout(self.config["timeout"])
                 # print(self.config["town"])
 
@@ -131,9 +133,13 @@ class CarlaCore:
                 settings.fixed_delta_seconds = self.config["timestep"]
                 self.world.apply_settings(settings)
                 self.world.tick()
-
+                if self.waypoints is None:
+                    self.waypoints=[]
+                    for wps in self.map.generate_waypoints(2):
+                            self.waypoints.append(wps)
+                        # return
+                time.sleep(3)
                 return
-
             except Exception as e:
                 print(" Waiting for server to be ready: {}, attempt {} of {}".format(e, i + 1, self.config["retries_on_error"]))
                 time.sleep(3)
@@ -194,37 +200,38 @@ class CarlaCore:
 
         # Part 2: Spawn the ego vehicle
         user_spawn_points = hero_config["spawn_points"]
-        trajectories=hero_config.get("trajectories",None)
-        traj_indx=hero_config.get("trajectory_end",-1)
+        is_goal_env=hero_config.get("is_goal_env",False)
+        # traj_indx=hero_config.get("trajectory_end",-1)
         # print(traj_indx)
         # breakpoint()
+
         self.step_callbacks=[]
-        if not trajectories is None:
-            trajectory = random.choice(trajectories[:-1])
+        if is_goal_env:
+            # trajectory = random.choice(trajectories[:-1])
             self.hero_blueprints = self.world.get_blueprint_library().find(hero_config['blueprint'])
             self.hero_blueprints.set_attribute("role_name", "hero")
-            xy_points = np.array([
-                [wp.transform.location.x, wp.transform.location.y] 
-                for wp in trajectory
-            ])
-            
+            # xy_points = np.array([
+            #     [wp.transform.location.x, wp.transform.location.y] 
+            #     for wp in trajectory
+            # ])
             # Set origin and destination
-            origin, destination = trajectory[0], trajectory[-1]
-            if self.compute_dot(origin.transform, destination.transform) < 0.0:
-                origin, destination = destination, origin
-            
+            # origin, destination = trajectory[0], trajectory[-1]
+            # if self.compute_dot(origin.transform, destination.transform) < 0.0:
+            #     origin, destination = destination, origin
+            origin=random.choice(self.waypoints)
+            destination=random.choice(origin.next(random.randint(10,200)))
             self.step_callbacks.append(lambda:draw_waypoints(self.world,[destination]))
             # Prepare transforms
             origin_transform = origin.transform
             origin_transform.location.z += 1.0
             self.destination = destination.transform
-            
+
             # Calculate initial distance
             # self.distance_to_goal = np.linalg.norm(
             #     carla_location_to_np_array(origin_transform.location) -
             #     carla_location_to_np_array(self.destination.location)
             # )
-            self.spline = get_curve(xy_points)
+            # self.spline = get_curve(xy_points)
             if self.hero is None:
                 self.hero = self.world.try_spawn_actor(self.hero_blueprints, origin_transform)
                 if self.hero is not None:
@@ -241,7 +248,6 @@ class CarlaCore:
                 self.hero.set_transform(origin_transform)
                 self.hero.set_simulate_physics(True)
 
-
             if len(self.sensors)==0:
                 # Part 3: Spawn the new sensors
                 for name, attributes in hero_config["sensors"].items():
@@ -254,7 +260,7 @@ class CarlaCore:
                         # breakpoint()
                         sensor.update_location(self.destination)
                 
-                    
+                  
         else:
             if user_spawn_points:
                 spawn_points = []
@@ -278,10 +284,10 @@ class CarlaCore:
                         )
                     spawn_points.append(transform)
             else:
-                def filter(wp):
-                    # if not wp.is_junction:
-                        return wp.transform
-                spawn_points = list(map(filter,self.map.generate_waypoints(2)))
+                # def filter(wp):
+                #     # if not wp.is_junction:
+                #         return wp.transform
+                spawn_points = list(map(lambda x:x.transform,self.waypoints))
                 # breakpoint()
             # If already spawned, destroy it
             if self.hero is not None:

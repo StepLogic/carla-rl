@@ -1,6 +1,5 @@
 # Modified from https://github.com/carla-simulator/rllib-integration/blob/main/dqn_example/dqn_experiment.py
 
-from collections import defaultdict
 import math
 import numpy as np
 from gymnasium.spaces import Box, Dict
@@ -8,10 +7,10 @@ from gymnasium.spaces import Box, Dict
 import carla
 
 from vision_rl.rllib_integration.base_experiment import BaseExperiment
-from vision_rl.rllib_integration.helper import carla_location_to_np_array, post_process_image
+from vision_rl.rllib_integration.helper import post_process_image
 
 
-class JAXGoalExperiment(BaseExperiment):
+class JAXExperiments(BaseExperiment):
     def __init__(self, config={}):
         super().__init__(config)  # Creates a self.config with the experiment configuration
 
@@ -26,20 +25,9 @@ class JAXGoalExperiment(BaseExperiment):
         self.max_throttle = 0.6
         self.prev_steer = 0.0
         self.prev_throttle = 0.0
-        self.achieved_goal=None
-        self.trajectories=None
-        self.large_deviation=False
         self.info=dict()
 
-    def _cache_waypoints(self,world) -> None:
-        env_map = world.get_map()
-        waypoints = env_map.generate_waypoints(distance=2)
-        trajectories = defaultdict(list)
-        for wpt in waypoints:
-            trajectories[f"{wpt.road_id}-{wpt.lane_id}"].append(wpt)
-        self.trajectories = [traj for traj in trajectories.values() if len(traj) > 3]
-
-    def reset(self,core):
+    def reset(self,*arg,**kwargs):
         """Called at the beginning and each time the simulation is reset"""
 
         # Ending variables
@@ -48,7 +36,6 @@ class JAXGoalExperiment(BaseExperiment):
         self.done_time_idle = False
         self.done_falling = False
         self.done_dist = False
-        # self.step=0
 
         # hero variables
         self.last_location = None
@@ -68,9 +55,7 @@ class JAXGoalExperiment(BaseExperiment):
         self.max_throttle = 0.6
         self.prev_steer = 0.0
         self.prev_throttle = 0.0
-        if self.trajectories is None:
-            self._cache_waypoints(core.core.world)
-
+        self.info=dict()
 
     # def get_action_space(self):
     #     """Returns the action space, in this case, a discrete space"""
@@ -78,29 +63,20 @@ class JAXGoalExperiment(BaseExperiment):
 
     def get_observation_space(self):
         image_space = Box(
-            low=0,
-            high=255,
+            low=-1.0,
+            high=1.0,
             shape=(84, 84,3),
-            dtype=np.uint8,
+            dtype=np.float32,
         )
         
         vec_space = Box(
             low=-5.1,
             high=5.1,
-            # shape=(4 * self.frame_stack,),
-            shape=(4,),
-            dtype=np.float32,
-        )
-        loc = Box(
-            low=-5.1,
-            high=5.1,
-            # shape=(4 * self.frame_stack,),
-            shape=(3,),
+            shape=(4 * self.frame_stack,),
             dtype=np.float32,
         )
 
-        return Dict({"obs":image_space,"states":vec_space,"goal":image_space,"obs_location":loc,"goal_location":loc})
-
+        return Dict({"pixels":image_space, "states":vec_space})
 
     def get_action_space(self):
         """Returns the continuous action space for steering and throttle"""
@@ -146,11 +122,8 @@ class JAXGoalExperiment(BaseExperiment):
         The information variable can be empty
         """
         vecs = self.get_vec_obs(sensor_data, core)
-        images,goal = self.get_img_obs(sensor_data, core)
-        self.achieved_goal=images
-        hero_location = core.hero.get_location()
-        self.info.update(dict(obs=carla_location_to_np_array(hero_location),goal=sensor_data['goal'][1][-1]))
-        return {"obs":images,"goal":goal,"states":vecs,"obs_location":carla_location_to_np_array(hero_location),"goal_location":sensor_data['goal'][1][-1]}, self.info
+        images = self.get_img_obs(sensor_data, core)
+        return {"pixels":images, "states":vecs}, self.info
 
     def get_vec_obs(self, sensor_data, core):
         vec = np.zeros(4)
@@ -179,21 +152,17 @@ class JAXGoalExperiment(BaseExperiment):
         self.prev_vec_2 = self.prev_vec_1
         self.prev_vec_1 = self.prev_vec_0
         self.prev_vec_0 = vec
+
         return vecs
 
     def get_img_obs(self, sensor_data, core):
-
-        image = post_process_image(sensor_data['rgb'][1], normalized = False, grayscale = False)
-        # breakpoint()
-        goal = post_process_image(sensor_data['goal'][1][0], normalized = False, grayscale = False)
+        image = post_process_image(sensor_data['rgb'][1], normalized = True,crop=False, grayscale = False)
 
         if self.prev_image_0 is None:
             self.prev_image_0 = image
             self.prev_image_1 = self.prev_image_0
             self.prev_image_2 = self.prev_image_1
-
         images = image
-
         if self.frame_stack >= 2:
             images = np.concatenate([self.prev_image_0, images], axis=2)
         if self.frame_stack >= 3 and images is not None:
@@ -205,7 +174,8 @@ class JAXGoalExperiment(BaseExperiment):
         self.prev_image_1 = self.prev_image_0
         self.prev_image_0 = image
 
-        return images,goal
+        return images
+    
     def get_speed(self, hero):
         """Computes the speed of the hero vehicle in Km/h"""
         vel = hero.get_velocity()
@@ -213,28 +183,27 @@ class JAXGoalExperiment(BaseExperiment):
 
     def get_done_status(self, sensor_data, core):
         """Returns whether or not the experiment has to end"""
-        self.info=dict()
         hero = core.hero
+        self.info=dict()
         self.done_time_idle = self.max_time_idle < self.time_idle
         if self.get_speed(hero) > 1.0:
             self.time_idle = 0
         else:
             self.time_idle += 1
         self.time_episode += 1
-        dist=sensor_data['goal'][1][1]
         self.done_dist = self.distance_travelled > self.max_dist
         self.done_falling = hero.get_location().z < -0.5
         self.diff_lane = 'lane_invasion' in sensor_data.keys()
         self.collision = 'collision' in sensor_data.keys()
-        if dist:
-            self.info.update(dict(is_success=dist<=1.5,distance_to_goal=self.distance_travelled,collision=self.collision))
-        return self.done_time_idle or self.done_falling or self.done_dist or self.diff_lane or self.collision or dist<=1.5
+        done=self.done_time_idle or self.done_falling or self.done_dist or self.diff_lane or self.collision
+        if done:
+            self.info.update(is_success=self.done_dist)
+            # print(self.distance_travelled)
+        return done
 
     def compute_reward(self, sensor_data, core):
         hero = core.hero
 
-        goal_loc=sensor_data['goal'][1][-1]
-        dist=sensor_data['goal'][1][1]
         # Hero-related variables
         hero_location = hero.get_location()
         hero_velocity = self.get_speed(hero)
@@ -242,39 +211,34 @@ class JAXGoalExperiment(BaseExperiment):
         # Initialize last location
         if self.last_location == None:
             self.last_location = hero_location
-        transform = hero.get_transform()
+
         # Compute deltas
-        # delta_distance = float(np.sqrt(np.square(hero_location.x - self.last_location.x) + np.square(hero_location.y - self.last_location.y)))
-        delta_loc=carla_location_to_np_array(self.last_location)-carla_location_to_np_array(hero_location)
-        displacement=np.dot(delta_loc,goal_loc/np.linalg.norm(goal_loc))
-        location = np.array([transform.location.x, transform.location.y])
-        f, d_f = core.spline(location)
-        d_to_lane = np.linalg.norm(f - location)
-        # max_dev = hero.bounding_box.extent.y * 2
+        delta_distance = float(np.sqrt(np.square(hero_location.x - self.last_location.x) + \
+                            np.square(hero_location.y - self.last_location.y)))
+        self.distance_travelled += delta_distance
+
         # Update variables
         self.last_location = hero_location
         self.last_velocity = hero_velocity
 
         # Reward if going forward
-        reward=displacement+np.exp(-d_to_lane)
-        # if hero_velocity < self.target_speed:
-        #     reward = delta_distance
-        # else:
-        #     reward = 0.0
-        # if self.done_falling:
-        #     reward += -1.0
-        # if self.done_dist:
-        #     print("Max dist travelled")
-        #     reward += 1.0
-        # if self.done_time_idle:
-        #     print("Done idle")
-        #     reward += -1.0
-        # if self.collision:
-        #     # print('collision')
-        #     reward += -1.0
-        # if self.diff_lane:
-        #     reward += -1.0
-        if dist<=1.5:
+        if hero_velocity < self.target_speed:
+            reward = delta_distance
+        else:
+            reward = 0.0
+
+        if self.done_falling:
+            reward += -1.0
+        if self.done_dist:
+            print("Max dist travelled")
             reward += 1.0
+        if self.done_time_idle:
+            print("Done idle")
+            reward += -1.0
+        if self.collision:
+            print('collision')
+            reward += -1.0
+        if self.diff_lane:
+            reward += -1.0
 
         return reward*10

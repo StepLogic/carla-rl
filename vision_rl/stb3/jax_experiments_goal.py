@@ -41,12 +41,12 @@ def get_curve(points):
         return f_t(t),f_prime_t(t)
     return curve
 
-class STBL3GoalExperiment(BaseExperiment):
+class JAXGoalExperiments(BaseExperiment):
     def __init__(self,config={}):
         super().__init__(config)
         self.frame_stack = self.config["others"]["framestack"]
-        self.max_time_idle = 150  # Reduced from 300
-        self.max_dist = 100  # Added reasonable distance limit
+        self.max_time_idle = self.config["others"]["max_time_idle"]
+        self.max_dist = self.config["others"]["max_dist"]
         self.target_speed = self.config["others"]["target_speed"]
         self.allowed_types = [carla.LaneType.Driving, carla.LaneType.Parking]
         self.last_action = None
@@ -91,8 +91,8 @@ class STBL3GoalExperiment(BaseExperiment):
         self.prev_image_1 = None
         self.prev_image_2 = None
 
-        self.max_steer = 1.0
-        self.max_throttle = 1.0
+        # self.max_steer = 1.0
+        # self.max_throttle = 1.0
         self.prev_steer = 0.0
         self.prev_reward=None
         self.prev_throttle = 0.0
@@ -106,7 +106,7 @@ class STBL3GoalExperiment(BaseExperiment):
         image_space = Box(
             low=-1.0,
             high=1.0,
-            shape=(84, 84, self.frame_stack,),
+            shape=(84, 84,1,),
             dtype=np.float32,
         )
         goal_image_space = Box(
@@ -121,7 +121,7 @@ class STBL3GoalExperiment(BaseExperiment):
             shape=(6 * self.frame_stack,),
             dtype=np.float32,
         )
-        return gym.spaces.Dict({"image":image_space,"goal":goal_image_space, "vector":vec_space})
+        return gym.spaces.Dict({"pixels":image_space,"goal":goal_image_space, "vector":vec_space})
 
     def get_action_space(self):
         return Box(
@@ -158,7 +158,7 @@ class STBL3GoalExperiment(BaseExperiment):
             self.total_distance = np.linalg.norm(goal_location[:2]-carla_location_to_np_array(hero.get_transform().location)[:2])
         vecs = self.get_vec_obs(sensor_data, core)
         images, goal = self.get_img_obs(sensor_data, core)
-        return {"image":images, "goal":goal, "vector":vecs}, None
+        return {"pixels":images, "goal":goal, "vector":vecs}, self.info
 
     def get_vec_obs(self, sensor_data, core):
         imu = sensor_data['imu'][1]
@@ -246,7 +246,7 @@ class STBL3GoalExperiment(BaseExperiment):
         if done:
             self.info = dict(
                 is_success=distance_to_goal <= 1.5,
-                distance_to_goal=self.last_distance_to_goal
+                distance_completed=self.distance_travelled
             )
         return done
 
@@ -256,22 +256,22 @@ class STBL3GoalExperiment(BaseExperiment):
         hero_location = hero.get_location()
         hero_velocity = self.get_speed(hero)
         # hero_velocity=np.dot(carla_location_to_np_array(hero.get_velocity()),goal_loc/np.linalg.norm(goal_loc))
-        distance_to_goal = np.linalg.norm(goal_loc-carla_location_to_np_array(hero.get_transform().location))
-        displacement=np.dot(carla_location_to_np_array(hero.get_transform().location),goal_loc/np.linalg.norm(goal_loc))
+        distance_to_goal = np.linalg.norm(goal_loc-carla_location_to_np_array(hero_location))
       
         # print(self.total_distance,distance_to_goal)
         # displ=np.dot(carla_location_to_np_array(hero.get_velocity()),goal_location/np.linalg.norm(goal_location))
         if self.last_location is None:
             self.last_location = hero_location
             self.last_distance_to_goal = distance_to_goal
-        if self.prev_reward is None:
-            self.prev_reward=displacement
-            
+        # if self.prev_reward is None:
+            # self.prev_reward=displacement
+        displacement=np.dot(carla_location_to_np_array(hero_location)-carla_location_to_np_array(self.last_location),goal_loc/np.linalg.norm(goal_loc))
+
         delta_distance = float(np.sqrt(np.square(hero_location.x - self.last_location.x) + \
                             np.square(hero_location.y - self.last_location.y)))
         self.distance_travelled += delta_distance
-        vehicle_transform = hero.get_transform()
-        vehicle_yaw = vehicle_transform.rotation.yaw
+        # vehicle_transform = hero.get_transform()
+        # vehicle_yaw = vehicle_transform.rotation.yaw
 
         # Get waypoint's yaw
         waypoint = core.map.get_waypoint(hero_location)
@@ -289,35 +289,38 @@ class STBL3GoalExperiment(BaseExperiment):
         # heading_reward = -heading_diff/(2*np.pi)
         # reward += 0.1 * heading_reward
 
-        # Update distance traveled
-        delta_distance = float(np.sqrt(np.square(hero_location.x - self.last_location.x) + \
-                            np.square(hero_location.y - self.last_location.y)))
-        self.distance_travelled += delta_distance
-        reward=displacement
-        yaw_diff_rad=0.0
-        if not waypoint is None:
-                waypoint_yaw = waypoint.transform.rotation.yaw
-                yaw_diff = (vehicle_yaw - waypoint_yaw) % 360.0
-                if yaw_diff > 180:
-                    yaw_diff -= 360.0
-                yaw_diff_rad = np.deg2rad(yaw_diff)
+        # # Update distance traveled
+        # delta_distance = float(np.sqrt(np.square(hero_location.x - self.last_location.x) + \
+        #                     np.square(hero_location.y - self.last_location.y)))
+        # self.distance_travelled += delta_distance
+        # reward=displacement
+        # yaw_diff_rad=0.0
+        # if not waypoint is None:
+        #         waypoint_yaw = waypoint.transform.rotation.yaw
+        #         yaw_diff = (vehicle_yaw - waypoint_yaw) % 360.0
+        #         if yaw_diff > 180:
+        #             yaw_diff -= 360.0
+        #         yaw_diff_rad = np.deg2rad(yaw_diff)
+        reward = -(1e-3)  # Base step penalty
+    
+        # Reward for velocity
         if hero_velocity < self.target_speed:
-            step_reward=self.prev_reward-reward - abs(yaw_diff_rad)
+            reward += (displacement + delta_distance) * 0.5
         else:
-            step_reward = 0.0
-        # # Terminal rewards/penalties
+            reward -= 0.5  # Optional penalty for exceeding target speed
+        
+        # Terminal rewards/penalties
         if self.done_falling or self.collision or self.done_time_idle or self.diff_lane or waypoint is None:
-            step_reward += -1.0
+            reward += -1.0
+        
+        # Goal reward
         if distance_to_goal <= 2.5:
-            step_reward += 1.0
-        #     if self.curriculum_step < self.max_curriculum_steps:
-        #         self.curriculum_step += 1
-        # Update tracking variables
+            reward += 1.0
+            # Uncomment if curriculum learning is being used
+            # if self.curriculum_step < self.max_curriculum_steps:
+            #     self.curriculum_step += 1
+        
+        # Scale the reward
         self.last_location = hero_location
-        self.last_velocity = hero_velocity
         self.last_distance_to_goal = distance_to_goal
-        # print(step_reward,self.prev_reward,reward)
-        self.prev_reward=reward
-        
-        
-        return step_reward
+        return reward * 10

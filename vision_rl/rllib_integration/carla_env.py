@@ -9,7 +9,7 @@
 
 from __future__ import print_function
 
-import gym
+import gymnasium as gym
 
 from vision_rl.rllib_integration.carla_core import CarlaCore
 
@@ -32,7 +32,7 @@ class CarlaEnv(gym.Env):
 
         self.reset()
 
-    def reset(self):
+    def reset(self,*args,**kwargs):
         # Reset sensors hero and experiment
         self.experiment.reset(self)
         self.hero = self.core.reset_hero(self.experiment.config["hero"])
@@ -40,7 +40,7 @@ class CarlaEnv(gym.Env):
         sensor_data = self.core.tick(None)
         observation, _ = self.experiment.get_observation(sensor_data, self.core)
 
-        return observation
+        return observation,{"ok":"ok"}
 
     def step(self, action):
         """Computes one tick of the environment in order to return the new observation,
@@ -50,4 +50,4 @@ class CarlaEnv(gym.Env):
         done = self.experiment.get_done_status(sensor_data, self.core)
         observation, info = self.experiment.get_observation(sensor_data, self.core)
         reward = self.experiment.compute_reward(sensor_data, self.core)
-        return observation, reward, done, info
+        return observation, reward, done,False, info

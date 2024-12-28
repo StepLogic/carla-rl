@@ -231,7 +231,6 @@ class STBL3GoalExperiment(BaseExperiment):
         else:
             self.time_idle += 1
         self.time_episode += 1
-        
         wp=core.map.get_waypoint(hero.get_transform().location)
         goal_location = sensor_data['goal'][1][-1]
         distance_to_goal = np.linalg.norm(goal_location[:2]-carla_location_to_np_array(hero.get_transform().location)[:2])
@@ -258,7 +257,7 @@ class STBL3GoalExperiment(BaseExperiment):
         # hero_velocity=np.dot(carla_location_to_np_array(hero.get_velocity()),goal_loc/np.linalg.norm(goal_loc))
         distance_to_goal = np.linalg.norm(goal_loc-carla_location_to_np_array(hero.get_transform().location))
         displacement=np.dot(carla_location_to_np_array(hero.get_transform().location),goal_loc/np.linalg.norm(goal_loc))
-      
+        
         # print(self.total_distance,distance_to_goal)
         # displ=np.dot(carla_location_to_np_array(hero.get_velocity()),goal_location/np.linalg.norm(goal_location))
         if self.last_location is None:
@@ -270,12 +269,7 @@ class STBL3GoalExperiment(BaseExperiment):
         delta_distance = float(np.sqrt(np.square(hero_location.x - self.last_location.x) + \
                             np.square(hero_location.y - self.last_location.y)))
         self.distance_travelled += delta_distance
-        vehicle_transform = hero.get_transform()
-        vehicle_yaw = vehicle_transform.rotation.yaw
-
-        # Get waypoint's yaw
-        waypoint = core.map.get_waypoint(hero_location)
-
+        wp=core.map.get_waypoint(hero.get_transform().location)
         # Dense progress reward
         # reward = min(distance_to_goal/self.total_distance,1.0)
         
@@ -294,19 +288,16 @@ class STBL3GoalExperiment(BaseExperiment):
                             np.square(hero_location.y - self.last_location.y)))
         self.distance_travelled += delta_distance
         reward=displacement
-        yaw_diff_rad=0.0
-        if not waypoint is None:
-                waypoint_yaw = waypoint.transform.rotation.yaw
-                yaw_diff = (vehicle_yaw - waypoint_yaw) % 360.0
-                if yaw_diff > 180:
-                    yaw_diff -= 360.0
-                yaw_diff_rad = np.deg2rad(yaw_diff)
+
         if hero_velocity < self.target_speed:
-            step_reward=self.prev_reward-reward - abs(yaw_diff_rad)
+        #     # print(heading-self.heading)
+        #     # reward = delta_distance -min(abs(self.target_speed-hero_velocity)/self.target_speed,1.0) - (1-min(distance_to_goal/self.total_distance,1.0))
+        #     reward = hero_velocity*3.6/self.target_speed
+                step_reward=self.prev_reward-reward - -0.1
         else:
-            step_reward = 0.0
+            step_reward = -0.1
         # # Terminal rewards/penalties
-        if self.done_falling or self.collision or self.done_time_idle or self.diff_lane or waypoint is None:
+        if self.done_falling or self.collision or self.done_time_idle or self.diff_lane or wp is None:
             step_reward += -1.0
         if distance_to_goal <= 2.5:
             step_reward += 1.0

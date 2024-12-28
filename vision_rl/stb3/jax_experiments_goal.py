@@ -245,7 +245,7 @@ class JAXGoalExperiments(BaseExperiment):
         # done = distance_to_goal <= 1.5
         if done:
             self.info = dict(
-                is_success=distance_to_goal <= 1.5,
+                is_success=distance_to_goal <= 2.5,
                 distance_completed=self.distance_travelled
             )
         return done

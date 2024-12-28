@@ -8,4 +8,5 @@ cache
 results/*
 runs/*
 checkpoints/*
+logs/*
 fastrlap-release/*

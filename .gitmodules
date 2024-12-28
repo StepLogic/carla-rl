@@ -1,0 +1,3 @@
+[submodule "jaxrl2"]
+	path = jaxrl2
+	url = https://github.com/StepLogic/jaxrl2.git

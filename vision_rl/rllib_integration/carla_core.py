@@ -201,7 +201,7 @@ class CarlaCore:
         # Part 2: Spawn the ego vehicle
         user_spawn_points = hero_config["spawn_points"]
         is_goal_env=hero_config.get("is_goal_env",False)
-        # traj_indx=hero_config.get("trajectory_end",-1)
+
         # print(traj_indx)
         # breakpoint()
 
@@ -218,9 +218,10 @@ class CarlaCore:
             # origin, destination = trajectory[0], trajectory[-1]
             # if self.compute_dot(origin.transform, destination.transform) < 0.0:
             #     origin, destination = destination, origin
+            cm_step=hero_config.get("curriculum_step",1)        
             origin=random.choice(self.waypoints)
-            destination=random.choice(origin.next(random.randint(10,200)))
-            self.step_callbacks.append(lambda:draw_waypoints(self.world,[destination]))
+            destination=random.choice(origin.next(random.randint(8,cm_step*10)))
+            # self.step_callbacks.append(lambda:draw_waypoints(self.world,[destination]))
             # Prepare transforms
             origin_transform = origin.transform
             origin_transform.location.z += 1.0

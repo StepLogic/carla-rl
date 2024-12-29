@@ -9,7 +9,7 @@ import math
 # import warnings
 import numpy as np
 from scipy.interpolate import splprep, splev
-
+from collections import deque
 def relative_compute_heading(location1, location2):
     dx = location2[0] - location1[0]
     dy = location2[1] - location1[1]
@@ -69,8 +69,11 @@ class JAXGoalExperiments(BaseExperiment):
         self.heading = None
         self.total_distance = None
         self.curriculum_step = 1
-        self.max_curriculum_steps = 5
+        self.max_curriculum_steps = 10
         self.goal_threshold=2.5
+        self.running_success_rate=deque(maxlen=100)
+        self.distance_travelled_toward_goal=0
+        self.done_goal=False
 
     def _cache_waypoints(self,world) -> None:
             env_map = world.get_map()
@@ -88,11 +91,13 @@ class JAXGoalExperiments(BaseExperiment):
         self.done_falling = False
         self.done_dist = False
         self.large_deviation = False
+        self.done_goal=False
 
         self.last_location = None
         self.last_velocity = 0
         self.distance_travelled = 0.0
         self.last_distance_to_goal = None
+        self.distance_travelled_toward_goal=0
 
         self.prev_vec_0 = None
         self.prev_vec_1 = None
@@ -219,7 +224,6 @@ class JAXGoalExperiments(BaseExperiment):
             images = np.concatenate([self.prev_image_1, images], axis=2)
         if self.frame_stack >= 4 and images is not None:
             images = np.concatenate([self.prev_image_2, images], axis=2)
-
         self.prev_image_2 = self.prev_image_1
         self.prev_image_1 = self.prev_image_0
         self.prev_image_0 = image
@@ -246,17 +250,62 @@ class JAXGoalExperiments(BaseExperiment):
         self.done_falling = hero.get_location().z < -0.5
         self.diff_lane = 'lane_invasion' in sensor_data.keys()
         self.collision = 'collision' in sensor_data.keys()
-
+        self.done_goal,_=self.check_goal_reached(hero,goal_location)
 
         done = (self.done_time_idle or self.done_falling or self.diff_lane or 
-                self.collision or distance_to_goal <=self.goal_threshold)
+                self.collision or self.done_goal)
         # done = distance_to_goal <= 1.5
         if done:
             self.info = dict(
                 is_success=distance_to_goal <= self.goal_threshold,
-                distance_completed=self.distance_travelled
+                distance_completed=self.distance_travelled,
+                slack=distance_to_goal
             )
+            self.running_success_rate.append(float(distance_to_goal <= self.goal_threshold))
+            if np.mean(self.running_success_rate)>0.5:
+                self.curriculum_step+=1
         return done
+
+    def check_goal_reached(self,hero, goal_location, distance_threshold=2.0, angle_threshold=45.0):
+            """
+            Check if vehicle has reached goal based on:
+            1. Distance to goal is within threshold
+            2. Vehicle is facing roughly the right direction
+            3. Vehicle speed is low enough (optional)
+            """
+            # Get current location and compute distance
+            hero_transform = hero.get_transform()
+            hero_location = hero_transform.location
+            distance_to_goal = np.linalg.norm(
+                goal_location[:2] - carla_location_to_np_array(hero_location)[:2]
+            )
+            
+            # Get vehicle's forward vector
+            forward_vector = hero_transform.get_forward_vector()
+            forward = np.array([forward_vector.x, forward_vector.y])
+            forward = forward / np.linalg.norm(forward)
+            
+            # Get direction to goal
+            hero_pos = carla_location_to_np_array(hero_location)[:2]
+            goal_pos = goal_location[:2]
+            to_goal = goal_pos - hero_pos
+            if np.linalg.norm(to_goal) > 0:
+                to_goal = to_goal / np.linalg.norm(to_goal)
+            
+            # Compute angle between forward vector and goal direction
+            angle = np.arccos(np.clip(np.dot(forward, to_goal), -1.0, 1.0))
+            angle_deg = np.degrees(angle)
+            
+            # Optional: Check vehicle speed
+            velocity = hero.get_velocity()
+            speed = np.linalg.norm([velocity.x, velocity.y])
+            
+            # Check all conditions
+            distance_ok = distance_to_goal < self.goal_threshold
+            angle_ok = angle_deg < angle_threshold
+            speed_ok = speed < 0.1  # Optional speed check
+            return distance_ok and angle_ok , speed_ok
+
 
     def compute_reward(self, sensor_data, core):
         hero = core.hero
@@ -274,7 +323,7 @@ class JAXGoalExperiments(BaseExperiment):
         # if self.prev_reward is None:
             # self.prev_reward=displacement
         displacement=np.dot(carla_location_to_np_array(hero_location)-carla_location_to_np_array(self.last_location),goal_loc/np.linalg.norm(goal_loc))
-
+        self.distance_travelled_toward_goal+=displacement
         delta_distance = float(np.sqrt(np.square(hero_location.x - self.last_location.x) + \
                             np.square(hero_location.y - self.last_location.y)))
         self.distance_travelled += delta_distance
@@ -313,22 +362,24 @@ class JAXGoalExperiments(BaseExperiment):
     
         # Reward for velocity
         if hero_velocity < self.target_speed:
-            reward += displacement
+            reward += displacement + delta_distance
         else:
             reward -= 0.0  # Optional penalty for exceeding target speed
         
         # Terminal rewards/penalties
         if self.done_falling or self.collision or self.done_time_idle or self.diff_lane:
+            print(f"Truncated :travelled {self.distance_travelled_toward_goal}")
             reward += -1.0
-        
         # Goal reward
-        if distance_to_goal <= self.goal_threshold:
-            reward += 1.0
+        if self.done_goal:
+            # _=self.check_goal_reached(hero,goal_loc)
+            print(f"Goal reached :travelled {self.distance_travelled_toward_goal}",self.distance_travelled_toward_goal)
+            reward += 2.0 - hero_velocity
             # Uncomment if curriculum learning is being used
             # if self.curriculum_step < self.max_curriculum_steps:
             #     self.curriculum_step += 1
-        
         # Scale the reward
+
         self.last_location = hero_location
         self.last_distance_to_goal = distance_to_goal
         return reward * 10

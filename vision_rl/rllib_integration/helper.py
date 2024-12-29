@@ -165,18 +165,33 @@ def get_curve(points):
             t = t_samples[closest_idx]
             return f_t(t),f_prime_t(t)
         return curve
-def draw_waypoints(world, waypoints, z=0.5, lifetime=1, color=(255,0,0)):
-    """
-    Draw a list of waypoints at a certain height given in z.
-
-        :param world: carla.world object
-        :param waypoints: list or iterable container with the waypoints to draw
-        :param z: height in meters
-    """
+def draw_waypoints(world, waypoints, z=0.5, lifetime=-1.0, color=(255,0,0)):
     for wpt in waypoints:
         wpt_t = wpt.transform
         begin = wpt_t.location + carla.Location(z=z)
         angle = math.radians(wpt_t.rotation.yaw)
-        end = begin + carla.Location(x=math.cos(angle), y=math.sin(angle))
-        # world.debug.draw_arrow(begin, end, color=carla.Color(*color), arrow_size=0.3,lifetime=lifetime)
-        # world.debug.draw_string(begin,f"{wpt.road_id} {wpt.lane_id} {wpt.section_id}", color=carla.Color(*color), life_time=lifetime)
+        # Increase the length of the arrow for better visibility
+        length = 1.0  # Adjust this value to change arrow length
+        end = begin + carla.Location(
+            x=length * math.cos(angle), 
+            y=length * math.sin(angle)
+        )
+        
+        # Add forward vector normalization
+        forward_vector = end - begin
+        forward_vector = forward_vector.make_unit_vector() * length
+        end = begin + forward_vector
+        
+        # Ensure arrow is visible above ground
+        begin.z += 0.5  # Adjust height offset as needed
+        end.z = begin.z  # Keep arrow parallel to ground
+        
+        # Draw the arrow with debug helper
+        world.debug.draw_arrow(
+            begin=begin,
+            end=end,
+            thickness=0.1,  # Add thickness parameter
+            arrow_size=0.3,
+            color=carla.Color(*color),
+            life_time=lifetime
+        )

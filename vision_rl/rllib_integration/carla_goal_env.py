@@ -33,7 +33,7 @@ class CarlaGoalEnv(gym.Env):
         # breakpoint()
         self.experiment.config["hero"]["is_goal_env"]=True
         if hasattr(self.experiment,"curriculum_step"):
-            self.experiment.config["hero"]["trajectory_end"]=self.experiment.curriculum_step
+            self.experiment.config["hero"]["curriculum_step"]=self.experiment.curriculum_step
         self.hero = self.core.reset_hero(self.experiment.config["hero"])
         
         # Tick once and get the observations

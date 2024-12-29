@@ -12,16 +12,14 @@ import tqdm
 import wandb
 from absl import app, flags
 from ml_collections import config_flags
-
+from flax.training import checkpoints
 import jaxrl2.extra_envs.dm_control_suite
 from jaxrl2.agents import DrQLearner
 from jaxrl2.data import ReplayBuffer
 from jaxrl2.evaluation import evaluate
 from jaxrl2.wrappers import wrap_pixels
 from flax.core.frozen_dict import freeze
-
-#!/usr/bin/env python
-
+import glob
 import os
 import argparse
 import numpy as np
@@ -36,7 +34,9 @@ from stable_baselines3.common.callbacks import CheckpointCallback,EvalCallback
 # from vision_rl.stb3.jax_experiments import JAXExperiments
 from vision_rl.rllib_integration.carla_goal_env import CarlaGoalEnv
 from vision_rl.stb3.jax_experiments_goal import JAXGoalExperiments
-
+import flax
+flax.config.update('flax_use_orbax_checkpointing', False)
+# from flax
 # config = {
 #     "framework": "torch",
 #     "num_workers": 1,
@@ -212,8 +212,8 @@ flags.DEFINE_string("save_dir", "./tmp/", "Tensorboard logging dir.")
 flags.DEFINE_integer("seed", 42, "Random seed.")
 flags.DEFINE_integer("eval_episodes", 10, "Number of episodes used for evaluation.")
 flags.DEFINE_integer("log_interval", 1000, "Logging interval.")
-flags.DEFINE_integer("eval_interval", 50000, "Eval interval.")
-flags.DEFINE_integer("batch_size", 16, "Mini batch size.")
+flags.DEFINE_integer("eval_interval", int(1e5), "Eval interval.")
+flags.DEFINE_integer("batch_size", 32, "Mini batch size.")
 flags.DEFINE_integer("max_steps", int(5e6), "Number of training steps.")
 flags.DEFINE_integer(
     "start_training", int(1e3), "Number of training steps to start training."
@@ -236,14 +236,28 @@ config_flags.DEFINE_config_file(
     lock_config=False,
 )
 
-PLANET_ACTION_REPEAT = {
-    "cartpole-swingup-v0": 8,
-    "reacher-easy-v0": 4,
-    "cheetah-run-v0": 4,
-    "finger-spi-n-0": 2,
-    "ball_in_cup-catch-v0": 4,
-    "walker-walk-v0": 2,
-}
+
+
+def save_checkpoint(agent, path, step):
+    # Create checkpoint directory if it doesn't exist
+    os.makedirs(path, exist_ok=True)
+    # Save checkpoint
+    # print(type(agent))
+    state_dict = {
+        'actor_params': agent._actor,
+        'critic_params': agent._critic,
+        'target_critic_params': agent._target_critic_params,
+        'temp': agent._temp,
+        'rng': agent._rng,
+        # Add any other numerical state you need to save
+    }
+    checkpoints.save_checkpoint(
+        ckpt_dir=os.path.abspath(path),
+        target=state_dict,
+        step=step,
+        overwrite=True,
+        keep=3  # Keep last 3 checkpoints
+    )
 
 import os
 import pickle
@@ -319,7 +333,11 @@ def main(_):
   
     # Initialize logger
     logger = Logger(log_dir="./logs")
-    
+
+    # Initialize checkpoints dir
+    policy_folder = os.path.join("checkpoints", f"model-{len(glob.glob('./logs/*'))}")
+    os.makedirs(policy_folder, exist_ok=True)
+
     # Initialize agent and replay buffer
     kwargs = dict(FLAGS.config)
     agent = DrQLearner(
@@ -405,6 +423,8 @@ def main(_):
                     distance_to_goal_history.append(distance_completed)
                     episode_info["distance_completed"] = distance_completed
                     episode_info["distance_completed"] = np.mean(distance_to_goal_history)
+                if "slack" in info:
+                    episode_info["slack"] = float(info["slack"])
                 
                 logger.log_episode(episode_info, i)
         
@@ -423,7 +443,7 @@ def main(_):
             if FLAGS.save_buffer:
                 dataset_folder = os.path.join("datasets")
                 os.makedirs(dataset_folder, exist_ok=True)
-                dataset_file = os.path.join(dataset_folder, f"{FLAGS.env_name}")
+                dataset_file = os.path.join(dataset_folder, f"img_goal_ds")
                 with open(dataset_file, "wb") as f:
                     pickle.dump(replay_buffer, f)
             
@@ -431,6 +451,7 @@ def main(_):
             eval_successes = []
             eval_rewards = []
             eval_dists = []
+            eval_slack = []
             
             for _ in range(FLAGS.eval_episodes):
                 eval_obs, eval_info = env.reset()
@@ -447,14 +468,15 @@ def main(_):
                             eval_successes.append(float(eval_info["is_success"]))
                         if "distance_completed" in eval_info:
                             eval_dists.append(float(eval_info["distance_completed"]))
+                        if "slack" in eval_info:
+                            slack.append(float(eval_info["slack"]))
                 
                 eval_rewards.append(episode_reward)
-            
+                
             # Compute evaluation metrics
             eval_info = {
                 "eval_reward_mean": np.mean(eval_rewards),
                 "eval_reward_std": np.std(eval_rewards)
-
             }
             
             if len(eval_successes)>0:
@@ -463,12 +485,14 @@ def main(_):
                 eval_info["success_rate"] = success_rate
                 eval_info["avg_success_rate"] = np.mean(eval_success_history)
                 eval_info["distance_completed"] = np.mean(eval_dists)
+                eval_info["slack"] = np.mean(eval_slack)
 
-            
+            save_checkpoint(agent,policy_folder,i)
             logger.log_eval(eval_info, i)
             logger.print_status(i, FLAGS.max_steps)
     
     # Print final training statistics
+    save_checkpoint(agent,f"checkpoints/final_drq",1)
     training_duration = time.time() - training_start_time
     print(f"\nTraining completed in {training_duration/3600:.2f} hours")
     print(f"Logs saved to: {logger.log_dir}")

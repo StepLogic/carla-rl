@@ -212,8 +212,8 @@ flags.DEFINE_string("save_dir", "./tmp/", "Tensorboard logging dir.")
 flags.DEFINE_integer("seed", 42, "Random seed.")
 flags.DEFINE_integer("eval_episodes", 10, "Number of episodes used for evaluation.")
 flags.DEFINE_integer("log_interval", 1000, "Logging interval.")
-flags.DEFINE_integer("eval_interval", int(1e5), "Eval interval.")
-flags.DEFINE_integer("batch_size", 32, "Mini batch size.")
+flags.DEFINE_integer("eval_interval", int(5e4), "Eval interval.")
+flags.DEFINE_integer("batch_size", 256, "Mini batch size.")
 flags.DEFINE_integer("max_steps", int(5e6), "Number of training steps.")
 flags.DEFINE_integer(
     "start_training", int(1e3), "Number of training steps to start training."
@@ -475,7 +475,7 @@ def main(_):
                 episode_reward = 0
                 
                 while not eval_done:
-                    eval_action = agent.sample_actions(eval_obs)  # No exploration
+                    eval_action = agent.eval_actions(eval_obs)  # No exploration
                     eval_obs, eval_reward, eval_done, eval_truncated, eval_info = env.step(eval_action)
                     episode_reward += eval_reward
                     
@@ -485,7 +485,7 @@ def main(_):
                         if "distance_completed" in eval_info:
                             eval_dists.append(float(eval_info["distance_completed"]))
                         if "slack" in eval_info:
-                            slack.append(float(eval_info["slack"]))
+                            eval_slack.append(float(eval_info["slack"]))
                 
                 eval_rewards.append(episode_reward)
                 

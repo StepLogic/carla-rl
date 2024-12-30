@@ -187,11 +187,11 @@ def draw_waypoints(world, waypoints, z=0.5, lifetime=-1.0, color=(255,0,0)):
         end.z = begin.z  # Keep arrow parallel to ground
         
         # Draw the arrow with debug helper
-        world.debug.draw_arrow(
-            begin=begin,
-            end=end,
-            thickness=0.1,  # Add thickness parameter
-            arrow_size=0.3,
-            color=carla.Color(*color),
-            life_time=lifetime
-        )
+        # world.debug.draw_arrow(
+        #     begin=begin,
+        #     end=end,
+        #     thickness=0.1,  # Add thickness parameter
+        #     arrow_size=0.3,
+        #     color=carla.Color(*color),
+        #     life_time=lifetime
+        # )

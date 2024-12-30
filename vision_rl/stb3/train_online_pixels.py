@@ -221,7 +221,7 @@ flags.DEFINE_integer(
 flags.DEFINE_integer("image_size", 64, "Image size.")
 flags.DEFINE_integer("num_stack", 3, "Stack frames.")
 flags.DEFINE_integer(
-    "replay_buffer_size", int(1e5), "Number of training steps to start training."
+    "replay_buffer_size", int(1e6), "Number of training steps to start training."
 )
 flags.DEFINE_integer(
     "action_repeat", None, "Action repeat, if None, uses 2 or PlaNet default values."

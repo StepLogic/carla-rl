@@ -339,6 +339,10 @@ class JAXGoalExperiments(BaseExperiment):
         delta_distance = float(np.sqrt(np.square(hero_location.x - self.last_location.x) + \
                             np.square(hero_location.y - self.last_location.y)))
         self.distance_travelled += delta_distance
+        imu = sensor_data['imu'][1]
+        self.heading = sensor_data['goal'][1][-1]
+
+        # print("compass",np.rad2deg(imu[-1]),np.rad2deg(self.heading))
         # vehicle_transform = hero.get_transform()
         # vehicle_yaw = vehicle_transform.rotation.yaw
 
@@ -370,11 +374,11 @@ class JAXGoalExperiments(BaseExperiment):
         #         if yaw_diff > 180:
         #             yaw_diff -= 360.0
         #         yaw_diff_rad = np.deg2rad(yaw_diff)
-        reward = -(1e-3)  # Base step penalty
+        reward = 0.0  # Base step penalty
         # Reward for velocity
         if hero_velocity < self.target_speed:
-            # print(displacement)
-            reward += -displacement
+            # if self.heading
+            reward -= displacement
         else:
             reward -= 0.0  # Optional penalty for exceeding target speed
     

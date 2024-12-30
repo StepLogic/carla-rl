@@ -14,7 +14,7 @@ from stable_baselines3.common.torch_layers import BaseFeaturesExtractor
 from stable_baselines3.common.callbacks import CheckpointCallback,EvalCallback
 from vision_rl.rllib_integration.carla_goal_env import CarlaGoalEnv
 from vision_rl.stb3.stbl3_experiments_v2 import STBL3GoalExperiment
-
+from vision_rl.stb3.jax_experiments_goal import JAXGoalExperiments
 class CarlaCNN(BaseFeaturesExtractor):
     """CNN feature extractor for CARLA images"""
     
@@ -52,7 +52,7 @@ class CarlaCNN(BaseFeaturesExtractor):
 
     def forward(self, observations: torch.Tensor) -> torch.Tensor:
         # Split observations into image and vector parts
-        image = observations['image']
+        image = observations['pixels']
         goal = observations['goal']
         vector = observations['vector']
         # breakpoint()
@@ -101,7 +101,7 @@ config = {
             "town":"Town05"
         },
         "experiment": {
-            "type":STBL3GoalExperiment,
+            "type":JAXGoalExperiments,
             "hero": {
                 "blueprint": "vehicle.mercedes.coupe_2020",
                 "sensors": {
@@ -149,7 +149,7 @@ config = {
             # "weather": "CloudySunset",
             "others": {
                 "framestack": 1,
-                "max_time_idle": 600,
+                "max_time_idle": 150,
                 "max_dist": 200,
                 "target_speed": 5.0
             }

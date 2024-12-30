@@ -212,7 +212,7 @@ flags.DEFINE_string("save_dir", "./tmp/", "Tensorboard logging dir.")
 flags.DEFINE_integer("seed", 42, "Random seed.")
 flags.DEFINE_integer("eval_episodes", 10, "Number of episodes used for evaluation.")
 flags.DEFINE_integer("log_interval", 1000, "Logging interval.")
-flags.DEFINE_integer("eval_interval", int(1e1), "Eval interval.")
+flags.DEFINE_integer("eval_interval", int(5e5), "Eval interval.")
 flags.DEFINE_integer("batch_size", 32, "Mini batch size.")
 flags.DEFINE_integer("max_steps", int(5e6), "Number of training steps.")
 flags.DEFINE_integer(
@@ -221,7 +221,7 @@ flags.DEFINE_integer(
 flags.DEFINE_integer("image_size", 64, "Image size.")
 flags.DEFINE_integer("num_stack", 3, "Stack frames.")
 flags.DEFINE_integer(
-    "replay_buffer_size", int(1e6), "Number of training steps to start training."
+    "replay_buffer_size", int(1e5), "Number of training steps to start training."
 )
 flags.DEFINE_integer(
     "action_repeat", None, "Action repeat, if None, uses 2 or PlaNet default values."
@@ -231,7 +231,7 @@ flags.DEFINE_boolean("save_video", False, "Save videos during evaluation.")
 flags.DEFINE_boolean("save_buffer", False, "Save the replay buffer.")
 config_flags.DEFINE_config_file(
     "config",
-    "/home/robotlab/scratch/carla-rl/jaxrl2/examples/configs/drq_default.py",
+    "/home/kojogyaase/Projects/Research/carla-rl/jaxrl2/examples/configs/drq_default.py",
     "File path to the training hyperparameter configuration.",
     lock_config=False,
 )

@@ -373,7 +373,8 @@ class JAXGoalExperiments(BaseExperiment):
         reward = -(1e-3)  # Base step penalty
         # Reward for velocity
         if hero_velocity < self.target_speed:
-            reward += (-displacement) + delta_distance
+            # print(displacement)
+            reward += -displacement
         else:
             reward -= 0.0  # Optional penalty for exceeding target speed
     

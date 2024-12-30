@@ -221,7 +221,7 @@ class CarlaCore:
             cm_step=hero_config.get("curriculum_step",1)        
             origin=random.choice(self.waypoints)
             destination=random.choice(origin.next(random.randint(8,cm_step*10)))
-            self.step_callbacks.append(lambda:draw_waypoints(self.world,[destination]))
+            # self.step_callbacks.append(lambda:draw_waypoints(self.world,[destination]))
             # Prepare transforms
             origin_transform = origin.transform
             origin_transform.location.z += 1.0

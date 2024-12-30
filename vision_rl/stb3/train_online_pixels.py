@@ -231,7 +231,7 @@ flags.DEFINE_boolean("save_video", False, "Save videos during evaluation.")
 flags.DEFINE_boolean("save_buffer", False, "Save the replay buffer.")
 config_flags.DEFINE_config_file(
     "config",
-    "/home/kojogyaase/Projects/Research/carla-rl/jaxrl2/examples/configs/drq_default.py",
+    "/home/robotlab/scratch/carla-rl/jaxrl2/examples/configs/drq_default.py",
     "File path to the training hyperparameter configuration.",
     lock_config=False,
 )

@@ -260,8 +260,8 @@ class JAXGoalExperiments(BaseExperiment):
                 distance_completed=self.distance_travelled,
                 slack=distance_to_goal
             )
-            self.running_success_rate.append(float(self.done_goal))
-            if np.nan_to_num(np.mean(self.running_success_rate),0)>0.5:
+            self.running_success_rate.append(float(distance_to_goal <= self.goal_threshold))
+            if np.mean(self.running_success_rate)>0.5:
                 self.running_success_rate=deque(maxlen=100)
                 self.curriculum_step+=1
         return done

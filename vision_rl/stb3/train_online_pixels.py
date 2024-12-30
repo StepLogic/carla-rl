@@ -35,7 +35,7 @@ from stable_baselines3.common.callbacks import CheckpointCallback,EvalCallback
 from vision_rl.rllib_integration.carla_goal_env import CarlaGoalEnv
 from vision_rl.stb3.jax_experiments_goal import JAXGoalExperiments
 import flax
-flax.config.update('flax_use_orbax_checkpointing', False)
+# flax.config.update('flax_use_orbax_checkpointing', False)
 # from flax
 # config = {
 #     "framework": "torch",
@@ -212,7 +212,7 @@ flags.DEFINE_string("save_dir", "./tmp/", "Tensorboard logging dir.")
 flags.DEFINE_integer("seed", 42, "Random seed.")
 flags.DEFINE_integer("eval_episodes", 10, "Number of episodes used for evaluation.")
 flags.DEFINE_integer("log_interval", 1000, "Logging interval.")
-flags.DEFINE_integer("eval_interval", int(1e5), "Eval interval.")
+flags.DEFINE_integer("eval_interval", int(1e1), "Eval interval.")
 flags.DEFINE_integer("batch_size", 32, "Mini batch size.")
 flags.DEFINE_integer("max_steps", int(5e6), "Number of training steps.")
 flags.DEFINE_integer(
@@ -475,7 +475,7 @@ def main(_):
                 episode_reward = 0
                 
                 while not eval_done:
-                    eval_action = agent.sample_actions(eval_obs)  # No exploration
+                    eval_action = agent.eval_actions(eval_obs)  # No exploration
                     eval_obs, eval_reward, eval_done, eval_truncated, eval_info = env.step(eval_action)
                     episode_reward += eval_reward
                     
@@ -485,7 +485,7 @@ def main(_):
                         if "distance_completed" in eval_info:
                             eval_dists.append(float(eval_info["distance_completed"]))
                         if "slack" in eval_info:
-                            slack.append(float(eval_info["slack"]))
+                            eval_slack.append(float(eval_info["slack"]))
                 
                 eval_rewards.append(episode_reward)
                 
@@ -502,7 +502,6 @@ def main(_):
                 eval_info["avg_success_rate"] = np.mean(eval_success_history)
                 eval_info["distance_completed"] = np.mean(eval_dists)
                 eval_info["slack"] = np.mean(eval_slack)
-
             save_checkpoint(agent,policy_folder,i)
             logger.log_eval(eval_info, i)
             logger.print_status(i, FLAGS.max_steps)

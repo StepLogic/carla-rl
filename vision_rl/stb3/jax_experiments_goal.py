@@ -268,11 +268,15 @@ class JAXGoalExperiments(BaseExperiment):
     def check_goal_reached(self,core,hero, goal_location, distance_threshold=2.0, angle_threshold=45.0):
             hero_transform = hero.get_transform()
             hero_location = hero_transform.location
+            distance_to_goal = np.linalg.norm(
+                goal_location[:2] - carla_location_to_np_array(hero_location)[:2]
+            )
+            
             goal_location=carla.Location(x=goal_location[0],y=goal_location[1],z=goal_location[2])
             hero_waypoint=core.map.get_waypoint(hero_location)
             goal_waypoint=core.map.get_waypoint(goal_location)
             if not hero_waypoint is None and not goal_waypoint is None:
-                return hero_waypoint.section_id==goal_waypoint.section_id and hero_waypoint.road_id==goal_waypoint.road_id and hero_waypoint.lane_id==goal_waypoint.lane_id
+                return (hero_waypoint.section_id==goal_waypoint.section_id and hero_waypoint.road_id==goal_waypoint.road_id and hero_waypoint.lane_id==goal_waypoint.lane_id )or distance_to_goal<self.goal_threshold
             return False
     # def check_goal_reached(self,hero, goal_location, distance_threshold=2.0, angle_threshold=45.0):
     #         """
@@ -369,7 +373,7 @@ class JAXGoalExperiments(BaseExperiment):
         reward = -(1e-3)  # Base step penalty
         # Reward for velocity
         if hero_velocity < self.target_speed:
-            reward += displacement + delta_distance
+            reward += (-displacement) + delta_distance
         else:
             reward -= 0.0  # Optional penalty for exceeding target speed
     

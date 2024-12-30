@@ -10,3 +10,4 @@ runs/*
 checkpoints/*
 logs/*
 fastrlap-release/*
+datasets/*

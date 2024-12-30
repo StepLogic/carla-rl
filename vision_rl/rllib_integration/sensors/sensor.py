@@ -114,13 +114,16 @@ class GoalImageSensor(BaseSensor):
         type_ = self.attributes.pop("type", "")
         # type_ = self.attributes.pop("type", "")
         self.sensor=None
+        # self.imu_queue
         self.transform = self.attributes.pop("transform")
+        self.heading=None
         # print(self.transform,"str")
         # if isinstance(transform, str):
         #     transform = [float(x) for x in transform.split(",")]
         # assert len(transform) == 6
 
         self.blueprint = self.world.get_blueprint_library().find("sensor.camera.rgb")
+        imu_bp=self.world.get_blueprint_library().find("sensor.other.imu")
         self.town_map= self.world.get_map()
         self.blueprint.set_attribute("role_name", name)
         for key, value in attributes.items():
@@ -133,8 +136,13 @@ class GoalImageSensor(BaseSensor):
         # self.transform.location = self.transform.location + carla.Location(x=0.0,y=0.0,z=5.0)
         self.transform.location.z += 2.0
         self.sensor = self.world.spawn_actor(self.blueprint, self.transform)
+        self.sensor_2 = self.world.spawn_actor(imu_bp, self.transform,attach_to=self.sensor)   
+        #we want just heading 
         # self.update_location(self.transform)
         self.sensor.listen(self.callback)
+        def set_heading(sensor_data):
+            self.heading=sensor_data.compass
+        self.sensor_2.listen(set_heading)
         self.loc=self.transform.location
         
     def update_location(self,transform):
@@ -154,12 +162,13 @@ class GoalImageSensor(BaseSensor):
     def parse(self, sensor_data):
         """Parses the Image into an numpy array"""
         # sensor_data: [fov, height, width, raw_data]
+        # breakpoint()
         array = np.frombuffer(sensor_data.raw_data, dtype=np.dtype("uint8"))
         array = np.reshape(array, (sensor_data.height, sensor_data.width, 4))
         array = array[:, :, :3]
         array = array[:, :, ::-1]
         # cv2.imwrite("test.jpg",array)
-        return [array,self.loc.distance(self.parent.get_location()),np.array([self.loc.x,self.loc.y,self.loc.z])]
+        return [array,self.loc.distance(self.parent.get_location()),np.array([self.loc.x,self.loc.y,self.loc.z]),self.heading]
     def destroy(self):
         if self.sensor is not None:
             self.sensor.destroy()

@@ -283,11 +283,11 @@ class Logger:
         
         print(f"\nLogging to: {self.log_dir}\n")
     
-    def log_training(self, metrics: Dict[str, Any], step: int):
+    def log_training(self, metrics: Dict[str, Any], step: int,prefix=""):
         """Log training metrics to both tensorboard and console."""
         for k, v in metrics.items():
-            self.writer.add_scalar(f"training/{k}", np.array(v), step)
-            self.train_metrics[k] = np.array(v)
+            self.writer.add_scalar(f"training{prefix}/{k}", np.array(v), step)
+            self.train_metrics[f"{k}{prefix}"] = np.array(v)
     
     def log_eval(self, metrics: Dict[str, Any], step: int):
         """Log evaluation metrics to both tensorboard and console."""
@@ -322,7 +322,8 @@ class Logger:
                 print(f"  {k:<20} {np.array(v):>10.4f}")
         
         print("="*80 + "\n")
-
+# expert_buffer="/home/kojogyaase/Projects/Research/carla-rl/datasets/basic_agent_data_20241229_093438.pkl"
+expert_buffer=None
 def main(_):
     # Create environment
     env = CarlaGoalEnv(config["env_config"])
@@ -348,6 +349,11 @@ def main(_):
     )
     
     replay_buffer_size = FLAGS.replay_buffer_size
+    if not expert_buffer is None:
+        with open(expert_buffer, 'rb') as f:
+            expert_replay_buffer = pickle.load(f)
+
+    
     replay_buffer = ReplayBuffer(
         env.observation_space, 
         env.action_space, 
@@ -358,6 +364,9 @@ def main(_):
         sample_args={"batch_size": FLAGS.batch_size}
     )
 
+    if not expert_buffer is None:
+        expert_replay_buffer_iterator = expert_replay_buffer.get_iterator(
+                sample_args={"batch_size": FLAGS.batch_size})
     # Track success metrics
     success_history = deque(maxlen=100)  # Track last 100 episodes
     eval_success_history = deque(maxlen=100)
@@ -436,7 +445,14 @@ def main(_):
             if i % FLAGS.log_interval == 0:
                 logger.log_training(update_info, i)
                 logger.print_status(i, FLAGS.max_steps)
-        
+            if not expert_buffer is None:
+                batch_expert = next(expert_replay_buffer_iterator)
+                update_info_expert = agent.update(
+                    batch_expert,
+                    enable_update_temperature=False)
+                if i % FLAGS.log_interval == 0:
+                    logger.log_training(update_info_expert, i,prefix="_expert")
+                    logger.print_status(i, FLAGS.max_steps)
         # Periodic evaluation
         if i % FLAGS.eval_interval == 0:
             # Save replay buffer if requested

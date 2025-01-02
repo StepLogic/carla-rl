@@ -36,7 +36,7 @@ from stable_baselines3.common.callbacks import CheckpointCallback,EvalCallback
 from vision_rl.rllib_integration.carla_goal_env import CarlaGoalEnv
 from vision_rl.stb3.jax_experiments_goal import JAXGoalExperiments
 import flax
-# flax.config.update('flax_use_orbax_checkpointing', False)
+flax.config.update('flax_use_orbax_checkpointing', True)
 # from flax
 # config = {
 #     "framework": "torch",
@@ -214,7 +214,7 @@ flags.DEFINE_integer("seed", 42, "Random seed.")
 flags.DEFINE_integer("eval_episodes", 5, "Number of episodes used for evaluation.")
 flags.DEFINE_integer("log_interval", 1000, "Logging interval.")
 flags.DEFINE_integer("eval_interval", int(5e4), "Eval interval.")
-flags.DEFINE_integer("batch_size", 128, "Mini batch size.")
+flags.DEFINE_integer("batch_size", 256, "Mini batch size.")
 flags.DEFINE_integer("max_steps", int(5e6), "Number of training steps.")
 flags.DEFINE_integer(
     "start_training", int(1e3), "Number of training steps to start training."
@@ -447,7 +447,7 @@ def main(_):
         observation = next_observation
         
         # Handle episode completion
-        if done or truncated:
+        if done or truncated or "TimeLimit.truncated" in info:
             observation, info, done = *env.reset(), False
             # print(info)
             if "episode" in info:

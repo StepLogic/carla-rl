@@ -34,7 +34,7 @@ def collect_basic_agent_data(max_steps=100000, replay_buffer_size=100000):
     collection_start_time = time.time()
     
     # Initialize BasicAgent
-    agent = BasicAgent(env.unwrapped.core.hero, target_speed=10)
+    agent = BasicAgent(env.unwrapped.core.hero, target_speed=1)
     agent.ignore_traffic_lights(True)
     agent.ignore_stop_signs(True)
 
@@ -43,7 +43,7 @@ def collect_basic_agent_data(max_steps=100000, replay_buffer_size=100000):
             observation, info = env.reset()
             noise.reset()
             # Reinitialize BasicAgent for new episode
-            agent = BasicAgent(env.unwrapped.core.hero, target_speed=10)
+            agent = BasicAgent(env.unwrapped.core.hero, target_speed=1)
             agent.ignore_traffic_lights(True)
             agent.ignore_stop_signs(True)
 

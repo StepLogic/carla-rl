@@ -16,6 +16,7 @@ from flax.training import checkpoints
 import jaxrl2.extra_envs.dm_control_suite
 from jaxrl2.agents import DrQLearner
 from jaxrl2.data import ReplayBuffer
+from jaxrl2.data.hindsight_replay_buffer import HindsightReplayBuffer
 from jaxrl2.evaluation import evaluate
 from jaxrl2.wrappers import wrap_pixels
 from flax.core.frozen_dict import freeze
@@ -210,10 +211,10 @@ FLAGS = flags.FLAGS
 flags.DEFINE_string("env_name", "cheetah-run-v0", "Environment name.")
 flags.DEFINE_string("save_dir", "./tmp/", "Tensorboard logging dir.")
 flags.DEFINE_integer("seed", 42, "Random seed.")
-flags.DEFINE_integer("eval_episodes", 10, "Number of episodes used for evaluation.")
+flags.DEFINE_integer("eval_episodes", 5, "Number of episodes used for evaluation.")
 flags.DEFINE_integer("log_interval", 1000, "Logging interval.")
-flags.DEFINE_integer("eval_interval", int(5e5), "Eval interval.")
-flags.DEFINE_integer("batch_size", 32, "Mini batch size.")
+flags.DEFINE_integer("eval_interval", int(5e4), "Eval interval.")
+flags.DEFINE_integer("batch_size", 128, "Mini batch size.")
 flags.DEFINE_integer("max_steps", int(5e6), "Number of training steps.")
 flags.DEFINE_integer(
     "start_training", int(1e3), "Number of training steps to start training."
@@ -324,6 +325,34 @@ class Logger:
         print("="*80 + "\n")
 # expert_buffer="/home/kojogyaase/Projects/Research/carla-rl/datasets/basic_agent_data_20241229_093438.pkl"
 expert_buffer=None
+
+def relabel_obs_fn(original_dict,virtual_dict,is_near_goal,max_len):
+    # Check current reward condition
+    current_reward = virtual_dict["rewards"]
+    
+    # If reward < 0, return without relabeling
+    if current_reward < 0:
+        return original_dict
+        
+    # Only relabel if reward > 10
+    if current_reward > 0:
+        # Change goal to some achievable observation i.e next observation
+        virtual_goal = virtual_dict["next_observations"]["pixels"]
+        virtual_goal_heading = virtual_dict["next_observations"]["vector"][-2]
+        
+        # Update goal and heading in both current and next observations
+        original_dict["next_observations"]["vector"][-1] = virtual_goal_heading
+        original_dict["next_observations"]["goal"] = virtual_goal
+        original_dict["observations"]["goal"] = virtual_goal
+        original_dict["observations"]["vector"][-1] = virtual_goal_heading    
+        
+        # Set termination signals and reward
+        original_dict["dones"] = True
+        original_dict["masks"] = 0.0 
+        original_dict["rewards"] = 10.0 if is_near_goal else original_dict["rewards"]
+    
+    return data_dict
+
 def main(_):
     # Create environment
     env = CarlaGoalEnv(config["env_config"])
@@ -359,6 +388,14 @@ def main(_):
         env.action_space, 
         replay_buffer_size
     )
+
+    # replay_buffer = HindsightReplayBuffer(
+    #     env.observation_space, 
+    #     env.action_space, 
+    #     replay_buffer_size,
+    #     relabel_obs_fn
+
+    # )
     replay_buffer.seed(FLAGS.seed)
     replay_buffer_iterator = replay_buffer.get_iterator(
         sample_args={"batch_size": FLAGS.batch_size}

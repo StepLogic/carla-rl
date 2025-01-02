@@ -13,7 +13,7 @@ from vision_rl.stb3.jax_experiments_goal import JAXGoalExperiments
 # Define flags
 FLAGS = flags.FLAGS
 flags.DEFINE_string("checkpoint_path", None, "Path to the checkpoint directory")
-flags.DEFINE_integer("n_eval_episodes", 500, "Number of evaluation episodes")
+flags.DEFINE_integer("n_eval_episodes", 100, "Number of evaluation episodes")
 flags.DEFINE_boolean("deterministic", True, "Whether to use deterministic actions")
 config_flags.DEFINE_config_file(
     "config",
@@ -38,7 +38,7 @@ def load_checkpoint(agent, checkpoint_path):
     )
 
     # Update agent parameters
-    breakpoint()
+    # breakpoint()
     agent._actor = state_dict['actor_params']
     agent._critic = state_dict['critic_params'] 
     agent._target_critic_params = state_dict['target_critic_params']
@@ -75,8 +75,9 @@ def evaluate_policy(agent, env, n_eval_episodes=10, deterministic=True):
             if done:
                 episode_rewards.append(episode_reward)
                 episode_lengths.append(episode_length)
-                
+                # print(info)
                 if "is_success" in info:
+
                     success_rate.append(float(info["is_success"]))
                 if "distance_completed" in info:
                     distance_completed.append(float(info["distance_completed"]))

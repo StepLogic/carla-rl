@@ -24,7 +24,6 @@ class CarlaGoalEnv(gym.Env):
 
         self.core = CarlaCore(self.config['carla'])
         self.core.setup_experiment(self.experiment.config)
-
         self.reset()
 
     def reset(self,*arg,**kwargs):
@@ -38,8 +37,8 @@ class CarlaGoalEnv(gym.Env):
         
         # Tick once and get the observations
         sensor_data = self.core.tick(None)
-        observation, info = self.experiment.get_observation(sensor_data, self.core)
-        return observation , info
+        observation, _ = self.experiment.get_observation(sensor_data, self.core)
+        return observation ,self.experiment.info
 
     def step(self, action):
         """Computes one tick of the environment in order to return the new observation,
@@ -49,4 +48,4 @@ class CarlaGoalEnv(gym.Env):
         observation, info = self.experiment.get_observation(sensor_data, self.core)
         done = self.experiment.get_done_status(sensor_data, self.core)
         reward = self.experiment.compute_reward(sensor_data, self.core)
-        return observation, reward, done,False, info
+        return observation, reward, done,False,self.experiment.info

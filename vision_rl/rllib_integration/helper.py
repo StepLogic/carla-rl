@@ -18,7 +18,7 @@ import carla
 from tensorboard import program
 
 
-def post_process_image(image, normalized=True, grayscale=True,crop=True):
+def post_process_image(image, normalized=True, grayscale=True,crop=True,image_size=84):
     """
     Convert image to gray scale and normalize between -1 and 1 if required
     :param image:
@@ -29,7 +29,7 @@ def post_process_image(image, normalized=True, grayscale=True,crop=True):
     # crop the sky
     if crop:
         image = image[100:, :, :]
-    image = cv2.resize(image, (84, 84))
+    image = cv2.resize(image, (image_size, image_size))
 
     if isinstance(image, list):
         image = image[0]

@@ -279,118 +279,12 @@ class JAXGoalExperiments(BaseExperiment):
         return done
     def check_goal_reached(self,image,goal_image):
             
-            # img1 = cv2.imread('Q/IMG_1192.JPG', 0)          # queryImage
-            # img2 = cv2.imread('DB/IMG_1208-1000.jpg', 0) # trainImage
-            if abs(self.distance_travelled) < self.goal_threshold*2:
-                        return False
-                        
-            # Initiate SIFT detector
-            sift = cv2.xfeatures2d.SIFT_create()
-            # find the keypoints and descriptors with SIFT
-            kp1, des1 = sift.detectAndCompute(image,None)
-            kp2, des2 = sift.detectAndCompute(goal_image,None)
-            if des1 is None or len(kp2) < 2:
-                return False
-            
-            FLANN_INDEX_KDTREE = 1
-            index_params = dict(algorithm = FLANN_INDEX_KDTREE, trees = 5)
-            search_params = dict(checks=50)   # or pass empty dictionary
-             
-            flann = cv2.FlannBasedMatcher(index_params,search_params)
-             
-            matches = flann.knnMatch(des1,des2,k=2)
-             
-            # Need to draw only good matches, so create a mask
-            matchesMask = [[0,0] for i in range(len(matches))]
-            num_good_matches=0
-
-            # ratio test as per Lowe's paper
-            # Perform matching
-            # matches = self.matcher.knnMatch(descriptors1, self.goal_descriptors, k=2)
-            
-            # Count good matches using numpy for speed
-            # Convert matches to distance ratios
-            if len(matches) < 2:
-                return False
-                
-            distances = np.array([[m.distance if m is not None else np.inf for m in match] 
-                                for match in matches])
-            good_matches = np.sum(distances[:, 0] < 0.7 * distances[:, 1])
-            
-            # draw_params = dict(matchColor = (0,255,0),
-            #                    singlePointColor = (255,0,0),
-            #                    matchesMask = matchesMask,
-            #                    flags = cv2.DrawMatchesFlags_DEFAULT)
-            match_percentage = good_matches / len(matches)
-            # print(match_percentage)
-            # if  match_percentage > 0.09:
-            #     img3 = cv2.drawMatchesKnn(image,kp1,goal_image,kp2,matches,None,**draw_params)             
-            #     cv2.imwrite("test.jpg",img3)
-            # print("num_good_matches",num_good_matches)
-            return match_percentage > 0.09
-
-
-    # def check_goal_reached(self, core, hero, goal_location, distance_to_goal, distance_threshold=2.0, angle_threshold=45.0):
-    #     """
-    #     Check if goal is reached considering spatial, temporal, and waypoint-based conditions
-        
-    #     Args:
-    #         core: CARLA core instance
-    #         hero: Hero vehicle actor
-    #         goal_location: Target location (numpy array [x,y,z])
-    #         distance_to_goal: Pre-calculated direct distance to goal
-    #         distance_threshold: Distance threshold for goal reaching
-    #         angle_threshold: Angle threshold (not used currently)
-    #     """
-    #     # Basic validation
-    #     if abs(self.distance_travelled) < self.goal_threshold*2:
-    #         return False
-            
-    #     hero_transform = hero.get_transform()
-    #     hero_location = hero_transform.location
-        
-    #     # # Calculate temporal distance (time to reach goal at current velocity)
-    #     # hero_velocity = np.dot(
-    #     #     carla_location_to_np_array(hero.get_velocity()),
-    #     #     goal_location / (np.linalg.norm(goal_location) + 1e-8)  # Avoid division by zero
-    #     # )
-    #     # temporal_distance =  (distance_to_goal)/(hero_velocity+1e-8)
-        
-    #     # Convert goal location to CARLA format
-    #     goal_location_carla = carla.Location(
-    #         x=goal_location[0],
-    #         y=goal_location[1],
-    #         z=goal_location[2]
-    #     )
-        
-    #     # # Get waypoints
-    #     # try:
-    #     hero_waypoint = core.map.get_waypoint(hero_location)
-    #     goal_waypoint = core.map.get_waypoint(goal_location_carla)
-
-        
-    #     # If waypoints are valid, do detailed checks
-    #     if hero_waypoint and goal_waypoint:
-    #         # Check if on same road segment
-    #         same_section = hero_waypoint.section_id == goal_waypoint.section_id
-    #         same_road = hero_waypoint.road_id == goal_waypoint.road_id
-    #         same_lane = hero_waypoint.lane_id == goal_waypoint.lane_id
-            
-    #         # Calculate distance along path
-    #         distance_along_path = hero_waypoint.s - goal_waypoint.s
-            
-    #         # Check various thresholds
-    #         within_path_threshold = abs(distance_along_path) < self.goal_threshold
-    #         # within_direct_threshold = distance_to_goal < self.goal_threshold
-    #         # within_temporal_threshold = temporal_distance < self.goal_threshold
-    #         same_waypoint = hero_waypoint.id == goal_waypoint.id
-            
-    #         # Combined conditions
-    #         road_condition = same_section and same_road and same_lane and within_path_threshold
-    #         return (road_condition or same_waypoint)
-    #     else:
-    #         # Fallback to simpler checks if waypoints are invalid
-    #         return (distance_to_goal < self.goal_threshold)
+            goal_location=carla.Location(x=goal_location[0],y=goal_location[1],z=goal_location[2])
+            hero_waypoint=core.map.get_waypoint(hero_location)
+            goal_waypoint=core.map.get_waypoint(goal_location)
+            if not hero_waypoint is None and not goal_waypoint is None:
+                return (hero_waypoint.section_id==goal_waypoint.section_id and hero_waypoint.road_id==goal_waypoint.road_id and hero_waypoint.lane_id==goal_waypoint.lane_id and (hero_waypoint.s -goal_waypoint.s)<self.goal_threshold )or distance_to_goal<self.goal_threshold
+            return False
     # def check_goal_reached(self,hero, goal_location, distance_threshold=2.0, angle_threshold=45.0):
     #         """
     #         Check if vehicle has reached goal based on:
@@ -487,12 +381,17 @@ class JAXGoalExperiments(BaseExperiment):
         #         if yaw_diff > 180:
         #             yaw_diff -= 360.0
         #         yaw_diff_rad = np.deg2rad(yaw_diff)
-        reward = -(1e-3)  # Base step penalty
+        # reward = -(1e-2)  # Base step penalty
         # Reward for velocity
+        delta_heading=abs(imu[-1]-self.heading)
+        # reward = - abs(min(np.cos(delta_heading),np.pi)/(np.pi*10))
+        reward=-(1e-3)
+        # print(reward)
         if hero_velocity < self.target_speed:
             # if self.heading
-            # reward += delta_distance + np.cos(imu[-1]-self.heading)*delta_distance
-            reward += delta_distance    
+            reward += delta_distance*np.cos(delta_heading)
+            # print(reward)
+            # print()
         else:
             reward -= 0.0  # Optional penalty for exceeding target speed
         # print(f"Goal {self.done_goal} Lane {self.diff_lane}")

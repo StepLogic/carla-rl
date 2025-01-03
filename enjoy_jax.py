@@ -10,6 +10,7 @@ from jaxrl2.wrappers.timelimit import TimeLimit
 from jaxrl2.wrappers.record_statistics import RecordEpisodeStatistics
 from vision_rl.rllib_integration.carla_goal_env import CarlaGoalEnv
 from vision_rl.stb3.jax_experiments_goal import JAXGoalExperiments
+os.environ['XLA_FLAGS']="--xla_gpu_enable_command_buffer="
 # Define flags
 FLAGS = flags.FLAGS
 flags.DEFINE_string("checkpoint_path", None, "Path to the checkpoint directory")

@@ -214,7 +214,7 @@ flags.DEFINE_integer("seed", 42, "Random seed.")
 flags.DEFINE_integer("eval_episodes", 5, "Number of episodes used for evaluation.")
 flags.DEFINE_integer("log_interval", 1000, "Logging interval.")
 flags.DEFINE_integer("eval_interval", int(5e4), "Eval interval.")
-flags.DEFINE_integer("batch_size", 256, "Mini batch size.")
+flags.DEFINE_integer("batch_size", 32, "Mini batch size.")
 flags.DEFINE_integer("max_steps", int(5e6), "Number of training steps.")
 flags.DEFINE_integer(
     "start_training", int(1e3), "Number of training steps to start training."
@@ -222,7 +222,7 @@ flags.DEFINE_integer(
 flags.DEFINE_integer("image_size", 64, "Image size.")
 flags.DEFINE_integer("num_stack", 3, "Stack frames.")
 flags.DEFINE_integer(
-    "replay_buffer_size", int(1e5), "Number of training steps to start training."
+    "replay_buffer_size", int(1e6), "Number of training steps to start training."
 )
 flags.DEFINE_integer(
     "action_repeat", None, "Action repeat, if None, uses 2 or PlaNet default values."
@@ -232,7 +232,7 @@ flags.DEFINE_boolean("save_video", False, "Save videos during evaluation.")
 flags.DEFINE_boolean("save_buffer", False, "Save the replay buffer.")
 config_flags.DEFINE_config_file(
     "config",
-    "/home/kojogyaase/Projects/Research/carla-rl/jaxrl2/examples/configs/drq_default.py",
+    "/home/robotlab/scratch/carla-rl/jaxrl2/examples/configs/drq_default.py",
     "File path to the training hyperparameter configuration.",
     lock_config=False,
 )
@@ -351,7 +351,7 @@ def relabel_obs_fn(original_dict,virtual_dict,is_near_goal,max_len):
         original_dict["masks"] = 0.0 
         original_dict["rewards"] = 10.0 if is_near_goal else original_dict["rewards"]
     
-    return data_dict
+    return original_dict
 
 def main(_):
     # Create environment
@@ -407,7 +407,7 @@ def main(_):
     # Track success metrics
     success_history = deque(maxlen=100)  # Track last 100 episodes
     eval_success_history = deque(maxlen=100)
-
+    slack_history = deque(maxlen=100)  # Track last 100 episode
     distance_to_goal_history = deque(maxlen=100)  # Track last 100 episodes
     eval_distance_to_goal_history = deque(maxlen=100)  # Track last 100 episodes
     # Main training loop
@@ -457,7 +457,6 @@ def main(_):
                     "length": info["episode"]["l"],
                     "time": info["episode"]["t"]
                 }
-                
                 # Track success if available
                 if "is_success" in info:
                     success = float(info["is_success"])
@@ -468,9 +467,12 @@ def main(_):
                     distance_completed = float(info["distance_completed"])
                     distance_to_goal_history.append(distance_completed)
                     episode_info["distance_completed"] = distance_completed
-                    episode_info["distance_completed"] = np.mean(distance_to_goal_history)
+                    episode_info["average_distance_completed"] = np.mean(distance_to_goal_history)
                 if "slack" in info:
-                    episode_info["slack"] = float(info["slack"])
+                    slack=float(info["slack"])
+                    episode_info["slack"] = slack
+                    slack_history.append(slack)
+                    episode_info["average_slack"] = np.mean(slack_history)
                 
                 logger.log_episode(episode_info, i)
         

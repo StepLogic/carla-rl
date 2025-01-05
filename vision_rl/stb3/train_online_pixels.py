@@ -2,6 +2,7 @@
 from collections import deque
 import os
 import pickle
+import random
 
 import gym
 import gymnasium
@@ -36,6 +37,7 @@ from stable_baselines3.common.callbacks import CheckpointCallback,EvalCallback
 from vision_rl.rllib_integration.carla_goal_env import CarlaGoalEnv
 from vision_rl.stb3.jax_experiments_goal import JAXGoalExperiments
 import flax
+from jaxrl2.noise import OrnsteinUhlenbeckActionNoise
 flax.config.update('flax_use_orbax_checkpointing', True)
 # from flax
 # config = {
@@ -200,7 +202,7 @@ config = {
                 "framestack": 1,
                 "max_time_idle": 150,
                 "max_dist": 200,
-                "target_speed": 5.0
+                "target_speed": 3.0
             }
         }
     }
@@ -213,8 +215,8 @@ flags.DEFINE_string("save_dir", "./tmp/", "Tensorboard logging dir.")
 flags.DEFINE_integer("seed", 42, "Random seed.")
 flags.DEFINE_integer("eval_episodes", 5, "Number of episodes used for evaluation.")
 flags.DEFINE_integer("log_interval", 1000, "Logging interval.")
-flags.DEFINE_integer("eval_interval", int(1e1), "Eval interval.")
-flags.DEFINE_integer("batch_size", 32, "Mini batch size.")
+flags.DEFINE_integer("eval_interval", int(5e4), "Eval interval.")
+flags.DEFINE_integer("batch_size", 256, "Mini batch size.")
 flags.DEFINE_integer("max_steps", int(5e6), "Number of training steps.")
 flags.DEFINE_integer(
     "start_training", int(1e3), "Number of training steps to start training."
@@ -348,7 +350,7 @@ def relabel_obs_fn(original_dict,virtual_dict,is_near_goal,max_len):
         
         # Set termination signals and reward
         original_dict["dones"] = True
-        original_dict["masks"] = 0.0 
+        original_dict["masks"] = 0.0  if is_near_goal else original_dict["masks"]
         original_dict["rewards"] = 10.0 if is_near_goal else original_dict["rewards"]
     
     return original_dict
@@ -360,6 +362,10 @@ def main(_):
     env = FrameStack(env=env, num_stack=1,stacking_key="goal")
     env = TimeLimit(env,max_episode_steps=2500)
     env = RecordEpisodeStatistics(env)
+    action_dim = 2
+    mean = np.zeros(action_dim)
+    sigma = 0.2 * np.ones(action_dim)
+    noise = OrnsteinUhlenbeckActionNoise(mean=mean, sigma=sigma)
   
     # Initialize logger
     logger = Logger(log_dir="./logs")
@@ -368,12 +374,16 @@ def main(_):
     policy_folder = os.path.join("checkpoints", f"model-{len(glob.glob('./logs/*'))}")
     os.makedirs(policy_folder, exist_ok=True)
 
+    np.random.seed(FLAGS.seed)
+    random.seed(FLAGS.seed)
+
     # Initialize agent and replay buffer
     kwargs = dict(FLAGS.config)
     agent = DrQLearner(
         FLAGS.seed, 
         env.observation_space.sample(), 
         env.action_space.sample(), 
+        num_qs=10,
         **kwargs
     )
     
@@ -389,13 +399,16 @@ def main(_):
         replay_buffer_size
     )
 
+    # =========================================
     # replay_buffer = HindsightReplayBuffer(
     #     env.observation_space, 
     #     env.action_space, 
     #     replay_buffer_size,
     #     relabel_obs_fn
-
     # )
+    # =========================================
+
+
     replay_buffer.seed(FLAGS.seed)
     replay_buffer_iterator = replay_buffer.get_iterator(
         sample_args={"batch_size": FLAGS.batch_size}
@@ -407,7 +420,7 @@ def main(_):
     # Track success metrics
     success_history = deque(maxlen=100)  # Track last 100 episodes
     eval_success_history = deque(maxlen=100)
-    slack_history = deque(maxlen=100)  # Track last 100 episode
+
     distance_to_goal_history = deque(maxlen=100)  # Track last 100 episodes
     eval_distance_to_goal_history = deque(maxlen=100)  # Track last 100 episodes
     # Main training loop
@@ -423,7 +436,9 @@ def main(_):
             action = env.action_space.sample()
         else:
             action = agent.sample_actions(observation)
-            
+            # if i>int(5e5):
+            action = action + noise()
+            action = np.clip(action, env.action_space.low, env.action_space.high)
         next_observation, reward, done, truncated, info = env.step(action)
         
         # Handle episode termination
@@ -449,6 +464,7 @@ def main(_):
         # Handle episode completion
         if done or truncated or "TimeLimit.truncated" in info:
             observation, info, done = *env.reset(), False
+            noise.reset()
             # print(info)
             if "episode" in info:
                 # Prepare episode metrics
@@ -457,6 +473,7 @@ def main(_):
                     "length": info["episode"]["l"],
                     "time": info["episode"]["t"]
                 }
+                
                 # Track success if available
                 if "is_success" in info:
                     success = float(info["is_success"])
@@ -467,12 +484,9 @@ def main(_):
                     distance_completed = float(info["distance_completed"])
                     distance_to_goal_history.append(distance_completed)
                     episode_info["distance_completed"] = distance_completed
-                    episode_info["average_distance_completed"] = np.mean(distance_to_goal_history)
+                    episode_info["distance_completed"] = np.mean(distance_to_goal_history)
                 if "slack" in info:
-                    slack=float(info["slack"])
-                    episode_info["slack"] = slack
-                    slack_history.append(slack)
-                    episode_info["average_slack"] = np.mean(slack_history)
+                    episode_info["slack"] = float(info["slack"])
                 
                 logger.log_episode(episode_info, i)
         

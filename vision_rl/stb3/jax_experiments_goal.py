@@ -251,11 +251,11 @@ class JAXGoalExperiments(BaseExperiment):
             self.time_idle += 1
         self.time_episode += 1
         
-        # wp=core.map.get_waypoint(hero.get_transform().location)
+        wp=core.map.get_waypoint(hero.get_transform().location)
         goal_location = sensor_data['goal'][1][-2]
         distance_to_goal = np.linalg.norm(goal_location[:2]-carla_location_to_np_array(hero.get_transform().location)[:2])
         self.done_falling = hero.get_location().z < -0.5
-        self.diff_lane = 'lane_invasion' in sensor_data.keys()
+        self.diff_lane = 'lane_invasion' in sensor_data.keys() or wp is None
         self.collision = 'collision' in sensor_data.keys()
         # self.done_goal = self.check_goal_reached(core,hero,goal_location,sensor_data['goal'][1][-3])
         # image = post_process_image(sensor_data['rgb'][1], crop=False, normalized=True, grayscale=True,image_size=self.image_size)
@@ -487,12 +487,13 @@ class JAXGoalExperiments(BaseExperiment):
         #         if yaw_diff > 180:
         #             yaw_diff -= 360.0
         #         yaw_diff_rad = np.deg2rad(yaw_diff)
-        reward = -(1e-3)  # Base step penalty
+        reward = 0  # Base step penalty
         # Reward for velocity
         if hero_velocity < self.target_speed:
             # if self.heading
-            # reward += delta_distance + np.cos(imu[-1]-self.heading)*delta_distance
-            reward += delta_distance    
+            # reward += np.cos(imu[-1]-self.heading)*delta_distance
+            reward += delta_distance 
+            # re   
         else:
             reward -= 0.0  # Optional penalty for exceeding target speed
         # print(f"Goal {self.done_goal} Lane {self.diff_lane}")

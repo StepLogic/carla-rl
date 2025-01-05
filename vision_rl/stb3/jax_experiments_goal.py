@@ -79,7 +79,7 @@ class JAXGoalExperiments(BaseExperiment):
         self.running_success_rate=deque(maxlen=100)
         self.distance_travelled_toward_goal=0
         self.done_goal=False
-        self.image_size=100
+        self.image_size=32
 
     def _cache_waypoints(self,world) -> None:
             env_map = world.get_map()

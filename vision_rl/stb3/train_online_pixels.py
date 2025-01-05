@@ -232,7 +232,7 @@ flags.DEFINE_boolean("save_video", False, "Save videos during evaluation.")
 flags.DEFINE_boolean("save_buffer", False, "Save the replay buffer.")
 config_flags.DEFINE_config_file(
     "config",
-    "/home/robotlab/scratch/carla-rl/jaxrl2/examples/configs/drq_default.py",
+    "/home/kojogyaase/Projects/Research/carla-rl/jaxrl2/examples/configs/drq_default.py",
     "File path to the training hyperparameter configuration.",
     lock_config=False,
 )
@@ -479,7 +479,7 @@ def main(_):
         # Training updates
         if i >= FLAGS.start_training:
             batch = next(replay_buffer_iterator)
-            update_info = agent.update(batch)
+            update_info = agent.update(batch,utd_ratio=8)
             
             if i % FLAGS.log_interval == 0:
                 logger.log_training(update_info, i)

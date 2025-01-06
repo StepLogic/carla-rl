@@ -224,7 +224,7 @@ flags.DEFINE_integer(
 flags.DEFINE_integer("image_size", 64, "Image size.")
 flags.DEFINE_integer("num_stack", 3, "Stack frames.")
 flags.DEFINE_integer(
-    "replay_buffer_size", int(1e6), "Number of training steps to start training."
+    "replay_buffer_size", int(3e5), "Number of training steps to start training."
 )
 flags.DEFINE_integer(
     "action_repeat", None, "Action repeat, if None, uses 2 or PlaNet default values."
@@ -379,11 +379,12 @@ def main(_):
 
     # Initialize agent and replay buffer
     kwargs = dict(FLAGS.config)
+    kwargs["target_entropy"]=-0.1*env.action_space.sample().shape[-1]
     agent = DrQLearner(
         FLAGS.seed, 
         env.observation_space.sample(), 
         env.action_space.sample(), 
-        num_qs=10,
+        # num_qs=10,
         **kwargs
     )
     

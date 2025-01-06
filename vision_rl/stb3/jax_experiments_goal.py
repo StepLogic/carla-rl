@@ -80,6 +80,8 @@ class JAXGoalExperiments(BaseExperiment):
         self.distance_travelled_toward_goal=0
         self.done_goal=False
         self.image_size=32
+        self.prev_reward=0.0
+
 
     def _cache_waypoints(self,world) -> None:
             env_map = world.get_map()
@@ -119,7 +121,8 @@ class JAXGoalExperiments(BaseExperiment):
         self.prev_throttle = 0.0
         self.heading = None
         self.total_distance = None
-        self.goal_features=None       
+        self.goal_features=None     
+        self.match_features=0.0  
         if self.trajectories is None:
             self._cache_waypoints(core.core.world)
 
@@ -173,10 +176,7 @@ class JAXGoalExperiments(BaseExperiment):
         return action
 
     def get_observation(self, sensor_data, core):
-        if self.total_distance is None:
-            hero = core.hero
-            goal_location = sensor_data['goal'][1][-2]
-            self.total_distance = np.linalg.norm(goal_location[:2]-carla_location_to_np_array(hero.get_transform().location)[:2])
+
         vecs = self.get_vec_obs(sensor_data, core)
         images, goal = self.get_img_obs(sensor_data, core)
         return {"pixels":images, "goal":goal, "vector":vecs}, self.info
@@ -251,7 +251,7 @@ class JAXGoalExperiments(BaseExperiment):
             self.time_idle += 1
         self.time_episode += 1
         
-        wp=core.map.get_waypoint(hero.get_transform().location)
+        wp=core.map.get_waypoint(hero.get_transform().location,project_to_road=False)
         goal_location = sensor_data['goal'][1][-2]
         distance_to_goal = np.linalg.norm(goal_location[:2]-carla_location_to_np_array(hero.get_transform().location)[:2])
         self.done_falling = hero.get_location().z < -0.5
@@ -277,6 +277,7 @@ class JAXGoalExperiments(BaseExperiment):
                 self.running_success_rate=deque(maxlen=100)
                 self.curriculum_step+=1
         return done
+    
     def check_goal_reached(self,image,goal_image):
             
             # img1 = cv2.imread('Q/IMG_1192.JPG', 0)          # queryImage
@@ -327,6 +328,8 @@ class JAXGoalExperiments(BaseExperiment):
             #     img3 = cv2.drawMatchesKnn(image,kp1,goal_image,kp2,matches,None,**draw_params)             
             #     cv2.imwrite("test.jpg",img3)
             # print("num_good_matches",num_good_matches)
+            self.match_features=match_percentage/0.09
+            
             return match_percentage > 0.09
 
 
@@ -437,18 +440,21 @@ class JAXGoalExperiments(BaseExperiment):
         goal_loc = sensor_data['goal'][1][-2]
         hero_location = hero.get_location()
         hero_velocity = self.get_speed(hero)
+        distance_to_goal = np.linalg.norm(goal_loc[:2]-carla_location_to_np_array(hero_location)[:2])
+        if self.total_distance is None:
+            self.total_distance = np.linalg.norm(goal_loc[:2]-carla_location_to_np_array(hero_location)[:2])
+            assert np.allclose(distance_to_goal,self.total_distance)
         # hero_velocity=np.dot(carla_location_to_np_array(hero.get_velocity()),goal_loc/np.linalg.norm(goal_loc))
-        distance_to_goal = np.linalg.norm(goal_loc-carla_location_to_np_array(hero_location))
+        
       
         # print(self.total_distance,distance_to_goal)
         # displ=np.dot(carla_location_to_np_array(hero.get_velocity()),goal_location/np.linalg.norm(goal_location))
         if self.last_location is None:
             self.last_location = hero_location
             self.last_distance_to_goal = distance_to_goal
-        # if self.prev_reward is None:
-            # self.prev_reward=displacement
+        
         displacement=np.dot(carla_location_to_np_array(hero_location)-carla_location_to_np_array(self.last_location),goal_loc/np.linalg.norm(goal_loc))
-        self.distance_travelled_toward_goal+=displacement
+        self.distance_travelled_toward_goal-=displacement
         delta_distance = float(np.sqrt(np.square(hero_location.x - self.last_location.x) + \
                             np.square(hero_location.y - self.last_location.y)))
         self.distance_travelled += delta_distance
@@ -464,7 +470,10 @@ class JAXGoalExperiments(BaseExperiment):
 
         # Dense progress reward
         # reward = min(distance_to_goal/self.total_distance,1.0)
+        # heading_diff = min(abs(self.heading - imu[-1]), 2*np.pi - abs(self.heading - imu[-1]))
+        # heading_reward = np.cos(heading_diff)  # Peaks at 1 when aligned, -1 when opposite
         
+        # reward=heading_reward + self.match_features
         # # Speed matching reward
         # speed_reward = -min(abs(self.target_speed-hero_velocity)/self.target_speed,1.0)
         # reward += speed_reward
@@ -487,8 +496,13 @@ class JAXGoalExperiments(BaseExperiment):
         #         if yaw_diff > 180:
         #             yaw_diff -= 360.0
         #         yaw_diff_rad = np.deg2rad(yaw_diff)
-        reward = 0  # Base step penalty
+        # reward = 1-(distance_to_goal/self.total_distance) # Base step penalty
+        # if self.prev_reward is None:
+        #     self.prev_reward=reward
+        # step_reward=self.prev_reward-reward
+        # self.prev_reward=reward
         # Reward for velocity
+        reward=0.0
         if hero_velocity < self.target_speed:
             # if self.heading
             # reward += np.cos(imu[-1]-self.heading)*delta_distance
@@ -498,6 +512,7 @@ class JAXGoalExperiments(BaseExperiment):
             reward -= 0.0  # Optional penalty for exceeding target speed
         # print(f"Goal {self.done_goal} Lane {self.diff_lane}")
         # Goal reward
+        # print(reward,distance_to_goal,self.total_distance)
         if self.done_goal:
             print(f"Goal reached :travelled {self.distance_travelled}")
             reward += 1.0 
@@ -507,4 +522,4 @@ class JAXGoalExperiments(BaseExperiment):
         # Scale the reward
         self.last_location = hero_location
         self.last_distance_to_goal = distance_to_goal
-        return reward
+        return reward*10

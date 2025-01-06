@@ -251,7 +251,7 @@ class JAXGoalExperiments(BaseExperiment):
             self.time_idle += 1
         self.time_episode += 1
         
-        wp=core.map.get_waypoint(hero.get_transform().location)
+        wp=core.map.get_waypoint(hero.get_transform().location,project_to_road=False)
         goal_location = sensor_data['goal'][1][-2]
         distance_to_goal = np.linalg.norm(goal_location[:2]-carla_location_to_np_array(hero.get_transform().location)[:2])
         self.done_falling = hero.get_location().z < -0.5
@@ -507,4 +507,4 @@ class JAXGoalExperiments(BaseExperiment):
         # Scale the reward
         self.last_location = hero_location
         self.last_distance_to_goal = distance_to_goal
-        return reward
+        return reward *10

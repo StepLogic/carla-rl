@@ -202,7 +202,7 @@ config = {
                 "framestack": 1,
                 "max_time_idle": 150,
                 "max_dist": 200,
-                "target_speed": 3.0
+                "target_speed": 5.0
             }
         }
     }
@@ -383,7 +383,7 @@ def main(_):
         FLAGS.seed, 
         env.observation_space.sample(), 
         env.action_space.sample(), 
-        num_qs=10,
+        # num_qs=10,
         **kwargs
     )
     

@@ -9,6 +9,10 @@
 	path = rlib-integration
 	url = https://github.com/StepLogic/rlib-integration.git
 
-[submodule "dependencies/navigation-policies"]
-	path = dependencies/navigation-policies
-	url = https://github.com/StepLogic/navigation-policies.git
+# [submodule "navigation_policies"]
+# 	path = dependencies/navigation_policies
+# 	url = https://github.com/StepLogic/navigation_policies.git
+
+# [submodule "diffusion_policy"]
+# 	path = dependencies/diffusion_policy
+# 	url = https://github.com/real-stanford/diffusion_policy.git

@@ -16,3 +16,10 @@
 # [submodule "diffusion_policy"]
 # 	path = dependencies/diffusion_policy
 # 	url = https://github.com/real-stanford/diffusion_policy.git
+[submodule "dependencies/navigation_policies"]
+	path = dependencies/navigation_policies
+	url = https://github.com/StepLogic/navigation_policies.git
+
+[submodule "dependencies/diffusion_policy"]
+	path = dependencies/diffusion_policy
+	url = https://github.com/real-stanford/diffusion_policy.git

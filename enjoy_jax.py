@@ -8,9 +8,14 @@ from jaxrl2.agents import DrQLearner
 from jaxrl2.wrappers.frame_stack import FrameStack
 from jaxrl2.wrappers.timelimit import TimeLimit
 from jaxrl2.wrappers.record_statistics import RecordEpisodeStatistics
-from vision_rl.rllib_integration.carla_goal_env import CarlaGoalEnv
-from vision_rl.stb3.jax_experiments_goal import JAXGoalExperiments
+from rlib_integration.carla_goal_env import CarlaGoalEnv
+from src.jax_experiments_goal import JAXGoalExperiments
+
+# fix
 os.environ['XLA_FLAGS']="--xla_gpu_enable_command_buffer="
+os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"]="false"
+os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"]=".20"
+os.environ["XLA_PYTHON_CLIENT_ALLOCATOR"]="platform"
 # Define flags
 FLAGS = flags.FLAGS
 flags.DEFINE_string("checkpoint_path", None, "Path to the checkpoint directory")
@@ -18,7 +23,7 @@ flags.DEFINE_integer("n_eval_episodes", 100, "Number of evaluation episodes")
 flags.DEFINE_boolean("deterministic", True, "Whether to use deterministic actions")
 config_flags.DEFINE_config_file(
     "config",
-    "/home/robotlab/scratch/carla-rl/jaxrl2/examples/configs/drq_default.py",
+    "/home/kojogyaase/Projects/Research/carla-rl/dependencies/jaxrl2/examples/configs/drq_default.py",
     "File path to the training hyperparameter configuration.",
     lock_config=False,
 )

@@ -1,3 +1,14 @@
 [submodule "jaxrl2"]
 	path = jaxrl2
 	url = https://github.com/StepLogic/jaxrl2.git
+[submodule "pyflann"]
+	path = pyflann
+	url = https://github.com/StepLogic/pyflann.git
+
+[submodule "rlib-integration"]
+	path = rlib-integration
+	url = https://github.com/StepLogic/rlib-integration.git
+
+[submodule "dependencies/navigation-policies"]
+	path = dependencies/navigation-policies
+	url = https://github.com/StepLogic/navigation-policies.git

@@ -9,7 +9,7 @@ from rlib_integration.agent import BasicAgent
 from train_online_pixels import CarlaGoalEnv,config,FrameStack,TimeLimit,RecordEpisodeStatistics,ReplayBuffer
 from jaxrl2.noise import OrnsteinUhlenbeckActionNoise
 import argparse
-def collect_basic_agent_data(town="Town05",max_steps=10010, replay_buffer_size=10000):
+def collect_basic_agent_data(town="Town05",replay_buffer_size=10000):
     # Create environment
 
     parser = argparse.ArgumentParser(description='Collect basic agent data')
@@ -27,11 +27,11 @@ def collect_basic_agent_data(town="Town05",max_steps=10010, replay_buffer_size=1
     env = RecordEpisodeStatistics(env)
 
     # Initialize replay buffer
-    # replay_buffer = ReplayBuffer(
-    #     env.observation_space, 
-    #     env.action_space, 
-    #     replay_buffer_size
-    # )
+    replay_buffer = ReplayBuffer(
+        env.observation_space, 
+        env.action_space, 
+        replay_buffer_size
+    )
 
     # Initialize noise for exploration
     action_dim = 2
@@ -44,17 +44,17 @@ def collect_basic_agent_data(town="Town05",max_steps=10010, replay_buffer_size=1
     collection_start_time = time.time()
     
     # Initialize BasicAgent
-    agent = BasicAgent(env.unwrapped.core.hero, target_speed=1)
+    agent = BasicAgent(env.unwrapped.core.hero, target_speed=0.5)
     agent.ignore_traffic_lights(True)
     agent.ignore_stop_signs(True)
-    data=[]
+    # data=[]
 
-    for i in tqdm(range(1, max_steps + 1)):
+    for i in tqdm(range(1, replay_buffer_size + 10)):
         if done:
             observation, info = env.reset()
             noise.reset()
             # Reinitialize BasicAgent for new episode
-            agent = BasicAgent(env.unwrapped.core.hero, target_speed=1)
+            agent = BasicAgent(env.unwrapped.core.hero, target_speed=0.5)
             agent.ignore_traffic_lights(True)
             agent.ignore_stop_signs(True)
 
@@ -75,7 +75,7 @@ def collect_basic_agent_data(town="Town05",max_steps=10010, replay_buffer_size=1
         mask = 1.0 if not done and not truncated else 0.0
             
         # Store transition
-        data.append(
+        replay_buffer.insert(
             dict(
                 observations=observation,
                 actions=action,
@@ -104,7 +104,7 @@ def collect_basic_agent_data(town="Town05",max_steps=10010, replay_buffer_size=1
     count=len(glob.glob(f"{dataset_folder}/*.pkl"))
     final_dataset_file = os.path.join(dataset_folder, f"basic_agent_data_{count}.pkl")
     with open(final_dataset_file, "wb") as f:
-        pickle.dump(data, f)
+        pickle.dump(replay_buffer, f)
     
     collection_duration = time.time() - collection_start_time
     print(f"\nData collection completed in {collection_duration/3600:.2f} hours")

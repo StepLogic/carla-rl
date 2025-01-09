@@ -20,7 +20,7 @@ from topological_map import TopologicalMap
 # fix
 os.environ['XLA_FLAGS']="--xla_gpu_enable_command_buffer="
 os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"]="false"
-os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"]=".20"
+os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"]=".30"
 os.environ["XLA_PYTHON_CLIENT_ALLOCATOR"]="platform"
 # Define flags
 FLAGS = flags.FLAGS
@@ -145,6 +145,8 @@ def map_environment(agent:DrQLearner, env, n_eval_episodes=10, deterministic=Tru
     moving_average=[]
     junctions=[]
     restarts=[]
+    images=[]
+    heading_ar=[]
     # filter=StreamingMovingAverage(window_size=100)
     ema_filter = RealTimeVectorEMA(window_size=100, vector_dim=2)
     # Real-time updates
@@ -174,9 +176,11 @@ def map_environment(agent:DrQLearner, env, n_eval_episodes=10, deterministic=Tru
                 #add image to map
                 obs=(observation["pixels"][...,0]*255).astype(np.uint8)
                 heading= observation["vector"][-2]
+                images.append(obs)
+                heading_ar.append(heading)
                 mapper.update(obs,heading)
-                cv2.imwrite(f"sample_map/{steps}.jpg",np.vstack([(observation["goal"][...,0]*255).astype(np.uint8)
-                                                                 ,obs]))
+                cv2.imwrite(f"sample_map/{steps}.jpg",np.vstack([(observation["pixels"][...,0]*255).astype(np.uint8),(observation["goal"][...,0]*255).astype(np.uint8)
+                                                                 ]))
                 
             
             if done:
@@ -223,6 +227,9 @@ def map_environment(agent:DrQLearner, env, n_eval_episodes=10, deterministic=Tru
     # plt.legend()
     a=dict(log_stds=log_stds,junctions=junctions)
     with open('uncertainty_profile_at_junctions.pickle', 'wb') as handle:
+        pickle.dump(a, handle, protocol=pickle.HIGHEST_PROTOCOL)
+    a=dict(images=images,heading=heading_ar)
+    with open('map.pickle', 'wb') as handle:
         pickle.dump(a, handle, protocol=pickle.HIGHEST_PROTOCOL)
     return stats,mapper
 

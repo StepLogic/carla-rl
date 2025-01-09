@@ -63,29 +63,29 @@ def collect_basic_agent_data(max_steps=100000, replay_buffer_size=100000):
         mask = 1.0 if not done and not truncated else 0.0
             
         # Store transition
-        # replay_buffer.insert(
-        #     dict(
-        #         observations=observation,
-        #         actions=action,
-        #         rewards=reward,
-        #         masks=mask,
-        #         dones=done,
-        #         next_observations=next_observation,
-        #     )
-        # )
+        replay_buffer.insert(
+            dict(
+                observations=observation,
+                actions=action,
+                rewards=reward,
+                masks=mask,
+                dones=done,
+                next_observations=next_observation,
+            )
+        )
         
         observation = next_observation
         
         # # Save buffer periodically
-        if i % 10000 == 0:
-            dataset_folder = os.path.join("datasets")
-            os.makedirs(dataset_folder, exist_ok=True)
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            dataset_file = os.path.join(dataset_folder, f"basic_agent_data_{timestamp}.pkl")
+        # if i % 10000 == 0:
+        #     dataset_folder = os.path.join("datasets")
+        #     os.makedirs(dataset_folder, exist_ok=True)
+        #     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        #     dataset_file = os.path.join(dataset_folder, f"basic_agent_data_{timestamp}.pkl")
             
-            with open(dataset_file, "wb") as f:
-                pickle.dump(replay_buffer, f)
-            print(f"\nSaved dataset to: {dataset_file}")
+        #     with open(dataset_file, "wb") as f:
+        #         pickle.dump(replay_buffer, f)
+        #     print(f"\nSaved dataset to: {dataset_file}")
     
     # Save final buffer
     dataset_folder = os.path.join("datasets")
@@ -99,4 +99,8 @@ def collect_basic_agent_data(max_steps=100000, replay_buffer_size=100000):
     print(f"Final dataset saved to: {final_dataset_file}")
 
 if __name__ == "__main__":
+    # data=[]
     collect_basic_agent_data()
+    # with open("replay_buffer.pickle", "wb") as f:
+    #     pickle.dump(replay_buffer, f)
+    

@@ -29,3 +29,6 @@
 [submodule "dependencies/pyflann"]
 	path = dependencies/pyflann
 	url = https://github.com/StepLogic/pyflann.git
+[submodule "dependencies/rlib_integration"]
+	path = dependencies/rlib_integration
+	url = https://github.com/StepLogic/rlib_integration.git

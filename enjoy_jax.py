@@ -122,7 +122,7 @@ def main(_):
                 "enable_map_assets": True,
                 "enable_rendering": True,
                 "show_display": True,
-                "town": "Town05"
+                "town": "Town01"
             },
             "experiment": {
                 "type": JAXGoalExperiments,
@@ -184,7 +184,7 @@ def main(_):
         agent,
         env,
         n_eval_episodes=FLAGS.n_eval_episodes,
-        deterministic=FLAGS.deterministic
+        deterministic=True
     )
     
     # Print results

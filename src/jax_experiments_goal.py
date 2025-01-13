@@ -1,14 +1,14 @@
-import math
-from collections import defaultdict
-from collections import deque
 import carla
 import cv2
 import gymnasium as gym
+import math
 import numpy as np
+from collections import defaultdict
+from collections import deque
 from gymnasium.spaces import Box
+from scipy.interpolate import splprep, splev
 from rlib_integration.base_experiment import BaseExperiment
 from rlib_integration.helper import post_process_image, carla_location_to_np_array
-from scipy.interpolate import splprep, splev
 
 
 # from matplotlib import pyplot as plt
@@ -55,17 +55,17 @@ def get_curve(points):
     return curve
 
 class JAXGoalExperiments(BaseExperiment):
-    def __init__(self,config={}):
+    def __init__(self,config={},is_rgb=False):
         super().__init__(config)
         self.frame_stack = self.config["others"]["framestack"]
         self.max_time_idle = self.config["others"]["max_time_idle"]
         self.max_dist = self.config["others"]["max_dist"]
         self.target_speed = self.config["others"]["target_speed"]
-        self.is_rgb=self.config["others"].get("use_rgb",False)
+        self.is_rgb=is_rgb
         self.allowed_types = [carla.LaneType.Driving, carla.LaneType.Parking]
         self.last_action = None
-        self.max_steer = 1.0
-        self.max_throttle = 1.0
+        self.max_steer = 0.5
+        self.max_throttle = 0.6
         self.prev_steer = 0.0
         self.prev_throttle = 0.0
         self.trajectories = None
@@ -81,6 +81,8 @@ class JAXGoalExperiments(BaseExperiment):
         self.done_goal=False
         self.image_size=32
         self.prev_reward=0.0
+        self.origin=None
+        self.goal_image=None
 
 
     def _cache_waypoints(self,world) -> None:
@@ -123,6 +125,7 @@ class JAXGoalExperiments(BaseExperiment):
         self.total_distance = None
         self.goal_features=None     
         self.match_features=0.0  
+        self.goal_image=None
         if self.trajectories is None:
             self._cache_waypoints(core.core.world)
 
@@ -157,11 +160,13 @@ class JAXGoalExperiments(BaseExperiment):
             dtype=np.float32
         )
 
+
     def compute_action(self, action):
         steer, throttle_brake = action
+        # print(steer,throttle_brake)
         action = carla.VehicleControl()
-        action.steer = float(np.clip(self.prev_steer + steer, -self.max_steer, self.max_steer))
-        throttle_brake= self.prev_throttle+throttle_brake
+        action.steer = float(np.clip(steer, -self.max_steer, self.max_steer))
+        # throttle_brake=self.prev_throttle+throttle_brake
         if throttle_brake >= 0:
             action.throttle = float(np.clip(throttle_brake, 0.0, self.max_throttle))
             action.brake = 0.0
@@ -177,18 +182,21 @@ class JAXGoalExperiments(BaseExperiment):
         self.prev_throttle = action.throttle
 
         return action
-
     def get_observation(self, sensor_data, core):
-
         vecs = self.get_vec_obs(sensor_data, core)
         images, goal = self.get_img_obs(sensor_data, core)
         return {"pixels":images, "goal":goal, "vector":vecs}, self.info
+    
+    def set_goal(self,goal_image,heading):
+        self.goal_image=goal_image
+        self.heading=heading
 
     def get_vec_obs(self, sensor_data, core):
         imu = sensor_data['imu'][1]
         self.heading = sensor_data['goal'][1][-1]
         # breakpoint()
-        # if self.heading is None:
+        if self.heading is None:
+            self.heading = sensor_data['goal'][1][-1]
         # self.heading =  np.deg2rad(absolute_heading(sensor_data['goal'][1][-1]))
 
         vec = np.zeros(6)
@@ -218,8 +226,7 @@ class JAXGoalExperiments(BaseExperiment):
     
     def get_img_obs(self, sensor_data, core):
         image = post_process_image(sensor_data['rgb'][1], crop=False, normalized=True, grayscale=not self.is_rgb,image_size=self.image_size)
-        goal = post_process_image(sensor_data['goal'][1][0], crop=False, normalized=True, grayscale=not self.is_rgb,image_size=self.image_size)
-     
+        goal =  post_process_image(sensor_data['goal'][1][0], crop=False, normalized=True, grayscale=not self.is_rgb,image_size=self.image_size) if self.goal_image  is None else  self.goal_image 
         if self.prev_image_0 is None:
             self.prev_image_0 = image
             self.prev_image_1 = self.prev_image_0
@@ -264,12 +271,15 @@ class JAXGoalExperiments(BaseExperiment):
         # image = post_process_image(sensor_data['rgb'][1], crop=False, normalized=True, grayscale=True,image_size=self.image_size)
         # goal = post_process_image(sensor_data['goal'][1][0], crop=False, normalized=True, grayscale=True,image_size=self.image_size)
 
-        self.done_goal = self.check_goal_reached(sensor_data['rgb'][1],sensor_data['goal'][1][0]) 
+        self.done_goal = self.check_goal_reached(sensor_data['rgb'][1],sensor_data['goal'][1][0] if self.goal_image  is None else self.goal_image ) 
 
         done = (self.done_time_idle or self.done_falling or self.diff_lane or 
                 self.collision or self.done_goal)
         # done = distance_to_goal <= 1.5
+        # if done:
         if done:
+            wp=core.map.get_waypoint(hero.get_transform().location,project_to_road=True)
+            self.origin=wp
             self.info = dict(
                 is_success=self.done_goal,
                 distance_completed=self.distance_travelled,

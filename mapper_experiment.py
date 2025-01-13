@@ -351,7 +351,7 @@ def main(_):
                 "enable_map_assets": True,
                 "enable_rendering": True,
                 "show_display": True,
-                "town": "Town05"
+                "town": "Town01"
             },
             "experiment": {
                 "type": JAXMappingExperiments,

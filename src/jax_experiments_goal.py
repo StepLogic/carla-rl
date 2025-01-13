@@ -270,9 +270,7 @@ class JAXGoalExperiments(BaseExperiment):
         # self.done_goal = self.check_goal_reached(core,hero,goal_location,sensor_data['goal'][1][-3])
         # image = post_process_image(sensor_data['rgb'][1], crop=False, normalized=True, grayscale=True,image_size=self.image_size)
         # goal = post_process_image(sensor_data['goal'][1][0], crop=False, normalized=True, grayscale=True,image_size=self.image_size)
-
         self.done_goal = self.check_goal_reached(sensor_data['rgb'][1],sensor_data['goal'][1][0] if self.goal_image  is None else self.goal_image ) 
-
         done = (self.done_time_idle or self.done_falling or self.diff_lane or 
                 self.collision or self.done_goal)
         # done = distance_to_goal <= 1.5

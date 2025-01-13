@@ -1,5 +1,6 @@
 import os
 import random
+import time
 import cv2
 import matplotlib.pyplot as plt
 import numpy as np
@@ -151,6 +152,8 @@ def map_environment(agent:DrQLearner, env, n_eval_episodes=10, deterministic=Tru
     ema_filter = RealTimeVectorEMA(window_size=100, vector_dim=2)
     # Real-time updates
     mapper=TopologicalMap()
+    # start timer for entire mapping
+    start=time.time()
     for _ in range(n_eval_episodes):
         observation, info = env.reset()
         done = False
@@ -196,12 +199,14 @@ def map_environment(agent:DrQLearner, env, n_eval_episodes=10, deterministic=Tru
                     slack_values.append(float(info["slack"]))
     
     # Compute statistics
+    end=time.time()
     stats = {
         "mean_reward": np.mean(episode_rewards),
         "std_reward": np.std(episode_rewards),
         "mean_length": np.mean(episode_lengths),
         "std_length": np.std(episode_lengths),
-        "total_map_steps":steps
+        "total_map_steps":steps,
+        "exploration_time":int(end-start)
     }
     
     if success_rate:
@@ -250,7 +255,7 @@ def navigate(agent:DrQLearner, env:CarlaEvalEnv, mapper:TopologicalMap,n_eval_ep
     ema_filter = RealTimeVectorEMA(window_size=100, vector_dim=2)
     # Real-time updates
     # mapper=TopologicalMap()
-
+    start=time.time()
     for _ in range(n_eval_episodes):
         observation, info = env.reset()
         done = False
@@ -264,8 +269,7 @@ def navigate(agent:DrQLearner, env:CarlaEvalEnv, mapper:TopologicalMap,n_eval_ep
         while not done:
             goal,done=subgoal(obs)
             if not done and not goal is None:
-                env.unwrapped.set_goal(goal[0],goal[1])
-            
+                env.unwrapped.set_goal(goal[0],goal[1]) 
             action_dist=agent.action_dist(observation)
             # if deterministic:
             action = action_dist.mode()
@@ -303,12 +307,14 @@ def navigate(agent:DrQLearner, env:CarlaEvalEnv, mapper:TopologicalMap,n_eval_ep
                     slack_values.append(float(info["slack"]))
     
     # Compute statistics
+    end=time.time()
     stats = {
         "mean_reward": np.mean(episode_rewards),
         "std_reward": np.std(episode_rewards),
         "mean_length": np.mean(episode_lengths),
         "std_length": np.std(episode_lengths),
-        "total_map_steps":steps
+        "total_map_steps":steps,
+        "navigation_time":int(end-start)
     }
     
     if success_rate:

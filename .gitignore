@@ -14,3 +14,6 @@ datasets/*
 src/logs/*
 src/checkpoints/*
 best_models/*
+src/checkpoints/*
+src/logs/*
+best_models/*

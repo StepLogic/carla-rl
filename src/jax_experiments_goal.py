@@ -516,8 +516,8 @@ class JAXGoalExperiments(BaseExperiment):
         reward=0.0
         if hero_velocity < self.target_speed:
             # if self.heading
-            # reward += np.cos(imu[-1]-self.heading)*delta_distance
-            reward += delta_distance 
+            reward += np.cos(imu[-1]-self.heading)*delta_distance
+            # reward -= d. 
             # re   
         else:
             reward -= 0.0  # Optional penalty for exceeding target speed
@@ -526,11 +526,11 @@ class JAXGoalExperiments(BaseExperiment):
         # print(reward,distance_to_goal,self.total_distance)
         if self.done_goal:
             print(f"Goal reached :travelled {self.distance_travelled}")
-            reward += 1.0 
+            # reward += 1.0 
         elif self.done_falling or self.collision or self.done_time_idle or self.diff_lane:
             print(f"Truncated :travelled {self.distance_travelled} idle:{self.done_time_idle} falling :{self.done_falling} diff {self.diff_lane} or collision {self.collision}")
-            reward += -1.0
+            # reward += -1.0
         # Scale the reward
         self.last_location = hero_location
         self.last_distance_to_goal = distance_to_goal
-        return reward*10
+        return reward

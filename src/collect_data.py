@@ -20,7 +20,7 @@ def collect_basic_agent_data(town="Town05",replay_buffer_size=10000):
     # Access the town name
     town_name = args.town
     config["env_config"]["town"]=town_name
-    env = CarlaGoalEnv(config["env_config"])
+    env = CarlaGoalEnv(config["env_config"],start_server=False)
     env = FrameStack(env=env, num_stack=1, stacking_key="pixels")
     env = FrameStack(env=env, num_stack=1, stacking_key="goal")
     env = TimeLimit(env, max_episode_steps=2500)

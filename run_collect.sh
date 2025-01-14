@@ -38,10 +38,8 @@ echo "Starting data collection across all towns..."
 # Loop through towns
 for town_num in {01..06}; do
     town="Town${town_num}"
-    
     # Run collection for current town
     collect_town_data "$town"
-    
     # Add a small delay between towns to ensure clean separation
     sleep 5
 done

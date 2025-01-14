@@ -210,6 +210,7 @@ def map_environment(agent:DrQLearner, env, n_eval_episodes=10, deterministic=Tru
         stats["mean_distance"] = np.mean(distance_completed)
     if slack_values:
         stats["mean_slack"] = np.mean(slack_values)
+        
     plt.plot(np.array(log_stds)[:,0], color='blue',linestyle = 'dotted')
     plt.plot(np.array(log_stds)[:,1], color='red',linestyle = 'dotted') 
 

@@ -359,7 +359,7 @@ def main(_):
 
     # Initialize agent and replay buffer
     kwargs = dict(FLAGS.config)
-    kwargs["target_entropy"]=-0.1*env.action_space.sample().shape[-1]
+    # kwargs["target_entropy"]=-0.1*env.action_space.sample().shape[-1]
     agent = DrQLearner(
         FLAGS.seed, 
         env.observation_space.sample(), 

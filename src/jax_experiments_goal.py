@@ -270,7 +270,9 @@ class JAXGoalExperiments(BaseExperiment):
         # self.done_goal = self.check_goal_reached(core,hero,goal_location,sensor_data['goal'][1][-3])
         # image = post_process_image(sensor_data['rgb'][1], crop=False, normalized=True, grayscale=True,image_size=self.image_size)
         # goal = post_process_image(sensor_data['goal'][1][0], crop=False, normalized=True, grayscale=True,image_size=self.image_size)
+
         self.done_goal = self.check_goal_reached(sensor_data['rgb'][1],sensor_data['goal'][1][0] if self.goal_image  is None else self.goal_image ) 
+
         done = (self.done_time_idle or self.done_falling or self.diff_lane or 
                 self.collision or self.done_goal)
         # done = distance_to_goal <= 1.5
@@ -516,8 +518,8 @@ class JAXGoalExperiments(BaseExperiment):
         reward=0.0
         if hero_velocity < self.target_speed:
             # if self.heading
-            reward += np.cos(imu[-1]-self.heading)*delta_distance
-            # reward -= d. 
+            # reward += np.cos(imu[-1]-self.heading)*delta_distance
+            reward -= delta_distance 
             # re   
         else:
             reward -= 0.0  # Optional penalty for exceeding target speed
@@ -526,11 +528,11 @@ class JAXGoalExperiments(BaseExperiment):
         # print(reward,distance_to_goal,self.total_distance)
         if self.done_goal:
             print(f"Goal reached :travelled {self.distance_travelled}")
-            # reward += 1.0 
+            reward += 1.0 
         elif self.done_falling or self.collision or self.done_time_idle or self.diff_lane:
             print(f"Truncated :travelled {self.distance_travelled} idle:{self.done_time_idle} falling :{self.done_falling} diff {self.diff_lane} or collision {self.collision}")
-            # reward += -1.0
+            reward += -1.0
         # Scale the reward
         self.last_location = hero_location
         self.last_distance_to_goal = distance_to_goal
-        return reward
+        return reward*10

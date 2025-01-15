@@ -519,7 +519,7 @@ class JAXGoalExperiments(BaseExperiment):
         if hero_velocity < self.target_speed:
             # if self.heading
             # reward += np.cos(imu[-1]-self.heading)*delta_distance
-            reward -= delta_distance 
+            reward += delta_distance 
             # re   
         else:
             reward -= 0.0  # Optional penalty for exceeding target speed

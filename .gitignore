@@ -11,3 +11,5 @@ checkpoints/*
 logs/*
 fastrlap-release/*
 datasets/*
+src/logs/*
+src/checkpoints/*

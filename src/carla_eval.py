@@ -15,17 +15,19 @@ class CarlaEvalEnv(gym.Env):
     """
     This is a carla environment, responsible of handling all the CARLA related steps of the training.
     """
-    def __init__(self, config,use_rgb=False):
+    def __init__(self, config,use_rgb=False,image_size=32):
         """Initializes the environment"""
         self.config = config
-        self.experiment = JAXMappingExperiments(self.config["experiment"],is_rgb=use_rgb)
+        self.experiment = JAXMappingExperiments(self.config["experiment"],is_rgb=use_rgb,image_size=image_size)
         self.action_space = self.experiment.get_action_space()
         self.observation_space = self.experiment.get_observation_space()
         self.core = CarlaCore(self.config['carla'],map_env=True)
         self.core.setup_experiment(self.experiment.config)
         self.reset()
-        
+    def set_start_transform(self,start):
+        self.experiment.origin=self.core.map.get_waypoint(start)
     def set_goal(self,goal_image,heading):
+        # breakpoint()
         self.experiment.set_goal(goal_image,heading)
 
     def is_agent_at_junction(self):

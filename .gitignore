@@ -11,3 +11,4 @@ checkpoints/*
 logs/*
 fastrlap-release/*
 datasets/*
+topomap/*

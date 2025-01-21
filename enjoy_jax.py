@@ -9,6 +9,7 @@ from jaxrl2.wrappers.frame_stack import FrameStack
 from jaxrl2.wrappers.timelimit import TimeLimit
 from jaxrl2.wrappers.record_statistics import RecordEpisodeStatistics
 from rlib_integration.carla_goal_env import CarlaGoalEnv
+from src.carla_eval import CarlaEvalEnv
 from src.jax_experiments_goal import JAXGoalExperiments
 
 # fix
@@ -83,7 +84,6 @@ def evaluate_policy(agent, env, n_eval_episodes=10, deterministic=True):
                 episode_lengths.append(episode_length)
                 # print(info)
                 if "is_success" in info:
-
                     success_rate.append(float(info["is_success"]))
                 if "distance_completed" in info:
                     distance_completed.append(float(info["distance_completed"]))
@@ -102,6 +102,7 @@ def evaluate_policy(agent, env, n_eval_episodes=10, deterministic=True):
         stats["success_rate"] = np.mean(success_rate)
     if distance_completed:
         stats["mean_distance"] = np.mean(distance_completed)
+        stats["std_distance"] = np.std(distance_completed)
     if slack_values:
         stats["mean_slack"] = np.mean(slack_values)
     
@@ -162,6 +163,7 @@ def main(_):
     }
     
     env = CarlaGoalEnv(config["env_config"])
+    # env = CarlaEvalEnv(config["env_config"])
     env = FrameStack(env=env, num_stack=1, stacking_key="pixels")
     env = FrameStack(env=env, num_stack=1, stacking_key="goal")
     env = TimeLimit(env, max_episode_steps=2500)

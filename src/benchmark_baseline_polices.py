@@ -1,4 +1,4 @@
-from collections import deque
+from collections import defaultdict, deque
 import os
 import pickle
 import numpy as np
@@ -13,6 +13,9 @@ from rlib_integration.helper import ndarray_to_location
 from src.carla_eval import CarlaEvalEnv
 from src.jax_experiments_goal import JAXGoalExperiments
 from navigation_policies.baseline_policies.nomad_policy import NoMaD
+from navigation_policies.baseline_policies.gnm_policy import GNM_Policy
+from navigation_policies.baseline_policies.vint_policy import ViNT_Policy
+
 from agent_wrapper import SetPointAgent
 from custom_controller import VehiclePIDController
 
@@ -28,7 +31,8 @@ os.environ["XLA_PYTHON_CLIENT_ALLOCATOR"]="platform"
 # Define flags
 FLAGS = flags.FLAGS
 # flags.DEFINE_string("checkpoint_path", None, "Path to the checkpoint directory")
-flags.DEFINE_integer("n_eval_episodes", 100, "Number of evaluation episodes")
+flags.DEFINE_enum('model', 'nomad', ['nomad', 'gnm','vint'], 'Model type')
+flags.DEFINE_integer("n_eval_episodes", 200, "Number of evaluation episodes")
 flags.DEFINE_boolean("deterministic", True, "Whether to use deterministic actions")
 flags.DEFINE_string("map_dir", None, "Whether to use deterministic actions")
 config = {
@@ -105,27 +109,47 @@ def load_checkpoint(agent, checkpoint_path):
     agent._temp = state_dict['temp']
     return agent
 
-def evaluate_policy(agent, env, n_eval_episodes=10, deterministic=True):
+def evaluate_policy(model_type,env, n_eval_episodes=10, deterministic=True):
     """Evaluate the agent for n_eval_episodes."""
     episode_rewards = []
     episode_lengths = []
     success_rate = []
     distance_completed = []
     slack_values = []
-    spAgent=SetPointAgent(env.unwrapped.core.hero)
-    # spAgent=VehiclePIDController(env.unwrapped.core.hero)
-    for _ in range(n_eval_episodes):
-        observation, info = env.reset()
+    skip_index=1
+    data=defaultdict(lambda :[])
+    models={
+        "gnm":GNM_Policy,
+        "nomad":NoMaD,
+        "vint":ViNT_Policy
+    }
+    MODEL=models[model_type]
+    for i in range(n_eval_episodes):
         done = False
         episode_reward = 0
         episode_length = 0
-        
+        if FLAGS.map_dir is None:
+            if model_type != "nomad":
+                raise ValueError("Only NoMaD can explore")
+            agent = MODEL(ckpt_path="/home/kojogyaase/Projects/Research/carla-rl/dependencies/navigation_policies/navigation_policies/pretrained_models/nomad.pth",mode="explore")
+        else:
+            agent = MODEL(ckpt_path="/home/kojogyaase/Projects/Research/carla-rl/dependencies/navigation_policies/navigation_policies/pretrained_models/nomad.pth",mode="navigate",skip_index=skip_index ,map_dir=FLAGS.map_dir)
+            # map_dir="/home/kojogyaase/Projects/Research/carla-rl/topomap"
+            with open(f'{FLAGS.map_dir}/aux.pkl', 'rb') as handle:
+                location=pickle.load(handle)
+                start_location=ndarray_to_location(location)
+                env.unwrapped.set_start_transform(start_location)
+           
+        observation, info = env.reset()
+        if not FLAGS.map_dir is None:
+            goal=np.asarray(agent.topomap[agent.goal_node])
+            env.unwrapped.set_goal(goal,0.0)
+        spAgent=SetPointAgent(env.unwrapped.core.hero)
         while not done:
             waypoints = np.array(agent.eval_action(observation["pixels"]))
             actions=spAgent.run_step(waypoints)
             # actions=spAgent.run_step(waypoints)
             # config["env_config"]["carla"]["timestep"]  
-              
             observation, reward, done, truncated, info = env.step(actions)
             episode_reward += reward
             episode_length += 1
@@ -137,10 +161,16 @@ def evaluate_policy(agent, env, n_eval_episodes=10, deterministic=True):
                 # print(info)
                 if "is_success" in info:
                     success_rate.append(float(info["is_success"]))
+                    data[skip_index].append(float(info["is_success"]))
+                else:
+                    data[skip_index].append(0)
                 if "distance_completed" in info:
                     distance_completed.append(float(info["distance_completed"]))
                 if "slack" in info:
                     slack_values.append(float(info["slack"]))
+                if i%5==0 and i!=0:
+                    skip_index+=5
+                    print("Skip Index",skip_index)
     
     # Compute statistics
     stats = {
@@ -157,33 +187,27 @@ def evaluate_policy(agent, env, n_eval_episodes=10, deterministic=True):
         stats["std_distance"] = np.std(distance_completed)
     if slack_values:
         stats["mean_slack"] = np.mean(slack_values)
+    data.update({
+        "experiment_results":stats
+    })
+    with open(f"{model_type}_results.pkl", "wb") as f:
+        pickle.dump(dict(data), f)
     return stats
 
 def main(_):
     # Create and wrap environment
     env = CarlaEvalEnv(config["env_config"],use_rgb=True,image_size=96)
-
     env = FrameStack(env=env, num_stack=1, stacking_key="pixels")
     env = FrameStack(env=env, num_stack=1, stacking_key="goal")
     env = TimeLimit(env, max_episode_steps=2500)
     env = RecordEpisodeStatistics(env)
-    
+
     # Initialize agent
     # kwargs = dict(FLAGS.config)
-    if FLAGS.map_dir is None:
-        agent = NoMaD(ckpt_path="/home/kojogyaase/Projects/Research/carla-rl/dependencies/navigation_policies/navigation_policies/pretrained_models/nomad.pth",mode="explore")
-    else:
-        agent = NoMaD(ckpt_path="/home/kojogyaase/Projects/Research/carla-rl/dependencies/navigation_policies/navigation_policies/pretrained_models/nomad.pth",mode="navigate" ,map_dir=FLAGS.map_dir)
-        # map_dir="/home/kojogyaase/Projects/Research/carla-rl/topomap"
-        with open(f'{FLAGS.map_dir}/aux.pkl', 'rb') as handle:
-            location=pickle.load(handle)
-            start_location=ndarray_to_location(location)
-            env.unwrapped.set_start_transform(start_location)
-        goal=np.asarray(agent.topomap[agent.goal_node]).astype(np.float32)/ 255
-        env.unwrapped.set_goal(goal,0.0)
+
     # Evaluate
     stats = evaluate_policy(
-        agent,
+        FLAGS.model,
         env,
         n_eval_episodes=FLAGS.n_eval_episodes,
         deterministic=FLAGS.deterministic

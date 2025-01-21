@@ -55,7 +55,7 @@ def get_curve(points):
     return curve
 
 class JAXMappingExperiments(BaseExperiment):
-    def __init__(self,config={},is_rgb=False):
+    def __init__(self,config={},is_rgb=False,image_size=32):
         super().__init__(config)
         self.frame_stack = self.config["others"]["framestack"]
         self.max_time_idle = self.config["others"]["max_time_idle"]
@@ -79,7 +79,7 @@ class JAXMappingExperiments(BaseExperiment):
         self.running_success_rate=deque(maxlen=100)
         self.distance_travelled_toward_goal=0
         self.done_goal=False
-        self.image_size=32
+        self.image_size=image_size
         self.prev_reward=0.0
         self.origin=None
         self.goal_image=None
@@ -267,14 +267,19 @@ class JAXMappingExperiments(BaseExperiment):
         self.done_falling = hero.get_location().z < -0.5
         self.diff_lane = 'lane_invasion' in sensor_data.keys() or wp is None
         self.collision = 'collision' in sensor_data.keys()
-        # self.done_goal = self.check_goal_reached(core,hero,goal_location,sensor_data['goal'][1][-3])
+        # breakpoint()
+        if not self.goal_image is None:
+            self.done_goal = self.check_goal_reached(sensor_data['rgb'][1],sensor_data['goal'][1][0] if self.goal_image  is None else self.goal_image )
+        else:
+            self.done_goal=False
+            # self.check_goal_reached(core,hero,goal_location,self.goal_image)
         # image = post_process_image(sensor_data['rgb'][1], crop=False, normalized=True, grayscale=True,image_size=self.image_size)
         # goal = post_process_image(sensor_data['goal'][1][0], crop=False, normalized=True, grayscale=True,image_size=self.image_size)
 
-        self.done_goal = self.check_goal_reached(sensor_data['rgb'][1],sensor_data['goal'][1][0] if self.goal_image  is None else self.goal_image ) 
+        # self.done_goal = self.check_goal_reached(sensor_data['rgb'][1],sensor_data['goal'][1][0] if self.goal_image  is None else self.goal_image ) 
 
-        done = (self.done_time_idle or self.done_falling or self.diff_lane or 
-                self.collision or self.done_goal)
+        done = (self.done_time_idle or self.done_goal  or self.done_falling or self.diff_lane or 
+                self.collision)
         # done = distance_to_goal <= 1.5
         # if done:
         if done:
@@ -292,7 +297,7 @@ class JAXMappingExperiments(BaseExperiment):
         return done
     
     def check_goal_reached(self,image,goal_image):
-            
+            # breakpoint()
             # img1 = cv2.imread('Q/IMG_1192.JPG', 0)          # queryImage
             # img2 = cv2.imread('DB/IMG_1208-1000.jpg', 0) # trainImage
             if abs(self.distance_travelled) < self.goal_threshold*2:

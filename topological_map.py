@@ -77,7 +77,7 @@ class TopologicalMap:
         if(goal_idx > len(self.des_nodes)-1):
             return [],[]
         features = skimage.feature.hog(obs,channel_axis=-1)
-        print("obs",goal_idx,features.shape)
+        # print("obs",goal_idx,features.shape)
         indices,distances=self.flann.nn_index(features,num_neighbors=1)
         print("Found",distances,indices)
         if len(indices)==0:

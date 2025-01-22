@@ -1,6 +1,7 @@
 from collections import defaultdict, deque
 import os
 import pickle
+import cv2
 import numpy as np
 from absl import app, flags
 from ml_collections import config_flags
@@ -123,27 +124,38 @@ def evaluate_policy(model_type,env, n_eval_episodes=10, deterministic=True):
         "nomad":NoMaD,
         "vint":ViNT_Policy
     }
+    default_checkpointts={
+        "gnm":"/home/robotlab/scratch/carla-rl/dependencies/navigation_policies/navigation_policies/pretrained_models/gnm.pth",
+        "nomad":"/home/robotlab/scratch/carla-rl/dependencies/navigation_policies/navigation_policies/pretrained_models/nomad.pth",
+        "vint":"/home/robotlab/scratch/carla-rl/dependencies/navigation_policies/navigation_policies/pretrained_models/vint.pth"
+    }
     MODEL=models[model_type]
+    checkpoint_path=default_checkpointts[model_type]
     for i in range(n_eval_episodes):
         done = False
         episode_reward = 0
         episode_length = 0
+        goal_location=None
         if FLAGS.map_dir is None:
             if model_type != "nomad":
                 raise ValueError("Only NoMaD can explore")
-            agent = MODEL(ckpt_path="/home/kojogyaase/Projects/Research/carla-rl/dependencies/navigation_policies/navigation_policies/pretrained_models/nomad.pth",mode="explore")
+            agent = MODEL(ckpt_path=checkpoint_path,mode="explore")
         else:
-            agent = MODEL(ckpt_path="/home/kojogyaase/Projects/Research/carla-rl/dependencies/navigation_policies/navigation_policies/pretrained_models/nomad.pth",mode="navigate",skip_index=skip_index ,map_dir=FLAGS.map_dir)
+            agent = MODEL(ckpt_path=checkpoint_path,mode="navigate",skip_index=skip_index ,map_dir=FLAGS.map_dir)
             # map_dir="/home/kojogyaase/Projects/Research/carla-rl/topomap"
             with open(f'{FLAGS.map_dir}/aux.pkl', 'rb') as handle:
-                location=pickle.load(handle)
-                start_location=ndarray_to_location(location)
+                dataset=pickle.load(handle)
+                # breakpoint()
+                start_location=ndarray_to_location(dataset["start"])
+                goal_location=ndarray_to_location(dataset["goal"])
                 env.unwrapped.set_start_transform(start_location)
            
         observation, info = env.reset()
         if not FLAGS.map_dir is None:
             goal=np.asarray(agent.topomap[agent.goal_node])
-            env.unwrapped.set_goal(goal,0.0)
+            # breakpoint()
+            cv2.imwrite("goal.jpg",goal)
+            env.unwrapped.set_goal(goal,0.0,goal_location)
         spAgent=SetPointAgent(env.unwrapped.core.hero)
         while not done:
             waypoints = np.array(agent.eval_action(observation["pixels"]))

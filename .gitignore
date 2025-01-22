@@ -21,3 +21,5 @@ evaluation_trajectory/*
 experiment_results/*
 *.pth
 *.zip
+topomap/*
+*.pth

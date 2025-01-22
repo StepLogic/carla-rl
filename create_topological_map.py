@@ -156,7 +156,7 @@ def collect_basic_agent_data(town="Town05",replay_buffer_size=10000):
         step+=1
     # Save final buffer
     with open(f"topomap/aux.pkl", "wb") as f:
-        pickle.dump(carla_location_to_np_array(start_location), f)
+        pickle.dump(dict(start=carla_location_to_np_array(start_location),goal=carla_location_to_np_array(env.unwrapped.core.destination.location)), f)
     collection_duration = time.time() - collection_start_time
     print(f"\nData collection completed in {collection_duration/3600:.2f} hours")
     print(f"Final dataset saved to:")

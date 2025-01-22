@@ -26,9 +26,9 @@ class CarlaEvalEnv(gym.Env):
         self.reset()
     def set_start_transform(self,start):
         self.experiment.origin=self.core.map.get_waypoint(start)
-    def set_goal(self,goal_image,heading):
+    def set_goal(self,goal_image,heading,location=None):
         # breakpoint()
-        self.experiment.set_goal(goal_image,heading)
+        self.experiment.set_goal(goal_image,heading,location=location)
 
     def is_agent_at_junction(self):
         wp =self.core.map.get_waypoint(self.hero.get_transform().location,project_to_road=True)

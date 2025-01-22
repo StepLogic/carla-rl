@@ -129,7 +129,7 @@ config = {
             "enable_map_assets": True,
             "enable_rendering": True,
             "show_display": True,
-            "town":"Town05"
+            "town":"Town01"
         },
         "experiment": {
             "type":JAXGoalExperiments,
@@ -215,7 +215,7 @@ flags.DEFINE_boolean("save_video", False, "Save videos during evaluation.")
 flags.DEFINE_boolean("save_buffer", False, "Save the replay buffer.")
 config_flags.DEFINE_config_file(
     "config",
-    "/home/kojogyaase/Projects/Research/carla-rl/dependencies/jaxrl2/examples/configs/drq_default.py",
+    "./configs/drq_default.py",
     "File path to the training hyperparameter configuration.",
     lock_config=False,
 )
@@ -359,7 +359,7 @@ def main(_):
 
     # Initialize agent and replay buffer
     kwargs = dict(FLAGS.config)
-    kwargs["target_entropy"]=-0.1*env.action_space.sample().shape[-1]
+    # kwargs["target_entropy"]=-0.1*env.action_space.sample().shape[-1]
     agent = DrQLearner(
         FLAGS.seed, 
         env.observation_space.sample(), 

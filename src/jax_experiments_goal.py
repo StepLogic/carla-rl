@@ -515,14 +515,14 @@ class JAXGoalExperiments(BaseExperiment):
         # step_reward=self.prev_reward-reward
         # self.prev_reward=reward
         # Reward for velocity
-        reward=0.0
-        if hero_velocity < self.target_speed:
+        reward=1e-3
+        # if hero_velocity < self.target_speed:
             # if self.heading
             # reward += np.cos(imu[-1]-self.heading)*delta_distance
             reward += delta_distance 
             # re   
-        else:
-            reward -= 0.0  # Optional penalty for exceeding target speed
+        # else:
+            # reward -= 0.0  # Optional penalty for exceeding target speed
         # print(f"Goal {self.done_goal} Lane {self.diff_lane}")
         # Goal reward
         # print(reward,distance_to_goal,self.total_distance)

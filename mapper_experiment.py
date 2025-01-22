@@ -1,5 +1,6 @@
 import os
 import random
+import time
 import cv2
 import matplotlib.pyplot as plt
 import numpy as np
@@ -29,7 +30,7 @@ flags.DEFINE_integer("n_eval_episodes", 100, "Number of evaluation episodes")
 flags.DEFINE_boolean("deterministic", True, "Whether to use deterministic actions")
 config_flags.DEFINE_config_file(
     "config",
-    "/home/kojogyaase/Projects/Research/carla-rl/dependencies/jaxrl2/examples/configs/drq_default.py",
+    "./src/configs/drq_default.py",
     "File path to the training hyperparameter configuration.",
     lock_config=False,
 )
@@ -150,7 +151,10 @@ def map_environment(agent:DrQLearner, env, n_eval_episodes=10, deterministic=Tru
     # filter=StreamingMovingAverage(window_size=100)
     ema_filter = RealTimeVectorEMA(window_size=100, vector_dim=2)
     # Real-time updates
+    start=time.time()
     mapper=TopologicalMap()
+    # start timer for entire mapping
+    start=time.time()
     for _ in range(n_eval_episodes):
         observation, info = env.reset()
         done = False
@@ -181,7 +185,6 @@ def map_environment(agent:DrQLearner, env, n_eval_episodes=10, deterministic=Tru
                 mapper.update(obs,heading)
                 cv2.imwrite(f"sample_map/{steps}.jpg",np.vstack([(observation["pixels"][...,0]*255).astype(np.uint8),(observation["goal"][...,0]*255).astype(np.uint8)
                                                                  ]))
-                
             
             if done:
                 restarts.append(steps)
@@ -194,14 +197,22 @@ def map_environment(agent:DrQLearner, env, n_eval_episodes=10, deterministic=Tru
                     distance_completed.append(float(info["distance_completed"]))
                 if "slack" in info:
                     slack_values.append(float(info["slack"]))
-    
+    #add the very last observation
+    # obs=(observation["pixels"][...,0]*255).astype(np.uint8)
+    # heading= observation["vector"][-2]
+    # images.append(obs)
+    # heading_ar.append(heading)
+    # mapper.update(obs,heading)
+    end=time.time()
     # Compute statistics
+    end=time.time()
     stats = {
         "mean_reward": np.mean(episode_rewards),
         "std_reward": np.std(episode_rewards),
         "mean_length": np.mean(episode_lengths),
         "std_length": np.std(episode_lengths),
-        "total_map_steps":steps
+        "total_map_steps":steps,
+        "exploration_time":int(end-start)
     }
     
     if success_rate:
@@ -250,7 +261,7 @@ def navigate(agent:DrQLearner, env:CarlaEvalEnv, mapper:TopologicalMap,n_eval_ep
     ema_filter = RealTimeVectorEMA(window_size=100, vector_dim=2)
     # Real-time updates
     # mapper=TopologicalMap()
-
+    start=time.time()
     for _ in range(n_eval_episodes):
         observation, info = env.reset()
         done = False
@@ -264,8 +275,7 @@ def navigate(agent:DrQLearner, env:CarlaEvalEnv, mapper:TopologicalMap,n_eval_ep
         while not done:
             goal,done=subgoal(obs)
             if not done and not goal is None:
-                env.unwrapped.set_goal(goal[0],goal[1])
-            
+                env.unwrapped.set_goal(goal[0],goal[1]) 
             action_dist=agent.action_dist(observation)
             # if deterministic:
             action = action_dist.mode()
@@ -281,14 +291,6 @@ def navigate(agent:DrQLearner, env:CarlaEvalEnv, mapper:TopologicalMap,n_eval_ep
             episode_length += 1
             done = done or truncated
             steps+=1
-            # if np.any((ema_filter.get_current()-std)>ema_filter.threshold()):
-            #     #add image to map
-            #     obs=(observation["pixels"][...,0]*255).astype(np.uint8)
-            #     heading= observation["vector"][-2]
-            #     mapper.update(obs,heading)
-            #     cv2.imwrite(f"sample_map/{steps}.jpg",np.vstack([(observation["goal"][...,0]*255).astype(np.uint8)
-            #                                                      ,obs]))
-                
             
             if done:
                 restarts.append(steps)
@@ -301,14 +303,16 @@ def navigate(agent:DrQLearner, env:CarlaEvalEnv, mapper:TopologicalMap,n_eval_ep
                     distance_completed.append(float(info["distance_completed"]))
                 if "slack" in info:
                     slack_values.append(float(info["slack"]))
-    
+    end=time.time()
     # Compute statistics
+    end=time.time()
     stats = {
         "mean_reward": np.mean(episode_rewards),
         "std_reward": np.std(episode_rewards),
         "mean_length": np.mean(episode_lengths),
         "std_length": np.std(episode_lengths),
-        "total_map_steps":steps
+        "total_map_steps":steps,
+        "navigation_time":int(end-start)
     }
     
     if success_rate:
@@ -317,25 +321,8 @@ def navigate(agent:DrQLearner, env:CarlaEvalEnv, mapper:TopologicalMap,n_eval_ep
         stats["mean_distance"] = np.mean(distance_completed)
     if slack_values:
         stats["mean_slack"] = np.mean(slack_values)
-    plt.plot(np.array(log_stds)[:,0], color='blue',linestyle = 'dotted')
-    plt.plot(np.array(log_stds)[:,1], color='red',linestyle = 'dotted') 
 
-    plt.plot(np.array(moving_average)[:,0], color='blue' )
-    plt.plot(np.array(moving_average)[:,1], color='red') 
-
-    # plt.plot(moving_average, color='red') 
-    for k in junctions:
-        plt.axvline(x=k, color='g',ls="--")
-    for k in restarts:
-        plt.axvline(x=k, color='m',ls="--")
-    # plt.hlines(x=junctions, ymin=np.min(log_stds), ymax=np.max(log_stds), colors='green', ls=':', lw=2, label='Junctions')
-    plt.legend(loc="upper left")
-    plt.savefig("uncertainty_profile_at_junctions.pdf")
-    # plt.legend()
-    a=dict(log_stds=log_stds,junctions=junctions)
-    with open('uncertainty_profile_at_junctions.pickle', 'wb') as handle:
-        pickle.dump(a, handle, protocol=pickle.HIGHEST_PROTOCOL)
-    return stats,mapper
+    return stats
 
 def main(_):
     # Create and wrap environment

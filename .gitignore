@@ -12,3 +12,4 @@ logs/*
 fastrlap-release/*
 datasets/*
 topomap/*
+*.pth

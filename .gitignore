@@ -13,3 +13,9 @@ fastrlap-release/*
 datasets/*
 topomap/*
 *.pth
+*.pkl
+*.jpg
+evaluation_trajectory/*
+evaluation_trajectories/*
+*.zip
+results/*

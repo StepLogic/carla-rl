@@ -470,6 +470,7 @@ class JAXGoalExperiments(BaseExperiment):
         delta_distance = float(np.sqrt(np.square(hero_location.x - self.last_location.x) + \
                             np.square(hero_location.y - self.last_location.y)))
         self.distance_travelled += delta_distance
+       
         imu = sensor_data['imu'][1]
         self.heading = sensor_data['goal'][1][-1]
 

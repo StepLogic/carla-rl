@@ -23,3 +23,9 @@ experiment_results/*
 *.zip
 topomap/*
 *.pth
+*.pkl
+*.jpg
+evaluation_trajectory/*
+evaluation_trajectories/*
+*.zip
+results/*

@@ -84,6 +84,7 @@ class JAXMappingExperiments(BaseExperiment):
         self.prev_reward=0.0
         self.origin=None
         self.goal_image=None
+        self.distances=[]
 
 
     def _cache_waypoints(self,world) -> None:
@@ -285,14 +286,17 @@ class JAXMappingExperiments(BaseExperiment):
                 self.collision)
         # done = distance_to_goal <= 1.5
         # if done:
+        self.info = dict(
+                distance_completed=self.distance_travelled,
+                slack=distance_to_goal,
+                mean_distance_per_step=np.mean(self.distances)
+            )
         if done:
             wp=core.map.get_waypoint(hero.get_transform().location,project_to_road=True)
             self.origin=wp
-            self.info = dict(
+            self.info.update(dict(
                 is_success=self.done_goal,
-                distance_completed=self.distance_travelled,
-                slack=distance_to_goal
-            )
+            ))
             self.running_success_rate.append(float(self.done_goal))
             if np.mean(self.running_success_rate)>0.5:
                 self.running_success_rate=deque(maxlen=100)
@@ -498,7 +502,8 @@ class JAXMappingExperiments(BaseExperiment):
         self.distance_travelled += delta_distance
         imu = sensor_data['imu'][1]
         self.heading = sensor_data['goal'][1][-1]
-
+        # print("delta_distance",delta_distance)
+        self.distances.append(delta_distance)
         # print("compass",np.rad2deg(imu[-1]),np.rad2deg(self.heading))
         # vehicle_transform = hero.get_transform()
         # vehicle_yaw = vehicle_transform.rotation.yaw

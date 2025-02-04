@@ -472,7 +472,7 @@ class JAXGoalExperiments(BaseExperiment):
                             np.square(hero_location.y - self.last_location.y)))
         self.distance_travelled += delta_distance
         imu = sensor_data['imu'][1]
-        self.heading = sensor_data['goal'][1][-1]
+        # self.heading = sensor_data['goal'][1][-1]
 
         # print("compass",np.rad2deg(imu[-1]),np.rad2deg(self.heading))
         # vehicle_transform = hero.get_transform()
@@ -519,7 +519,7 @@ class JAXGoalExperiments(BaseExperiment):
         # if hero_velocity < self.target_speed:
             # if self.heading
             # reward += np.cos(imu[-1]-self.heading)*delta_distance
-            reward += delta_distance 
+            # reward += delta_distance 
             # re   
         # else:
             # reward -= 0.0  # Optional penalty for exceeding target speed

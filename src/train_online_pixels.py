@@ -183,7 +183,7 @@ config = {
                 "max_time_idle": 150,
                 "max_dist": 200,
                 "target_speed": 13.0,
-                "use_rgb":True
+                "use_rgb":False
             }
         }
     }

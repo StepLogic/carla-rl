@@ -17,3 +17,4 @@ best_models/*
 src/checkpoints/*
 src/logs/*
 best_models/*
+success_rate_results/*

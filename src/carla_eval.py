@@ -15,18 +15,25 @@ class CarlaEvalEnv(gym.Env):
     """
     This is a carla environment, responsible of handling all the CARLA related steps of the training.
     """
-    def __init__(self, config,use_rgb=False):
+    def __init__(self, config,use_rgb=False,image_size=32,start_server=True):
         """Initializes the environment"""
         self.config = config
-        self.experiment = JAXMappingExperiments(self.config["experiment"],is_rgb=use_rgb)
+        self.experiment = JAXMappingExperiments(self.config["experiment"],is_rgb=use_rgb,image_size=image_size)
         self.action_space = self.experiment.get_action_space()
         self.observation_space = self.experiment.get_observation_space()
-        self.core = CarlaCore(self.config['carla'],map_env=True)
+        sim_conf=self.config['carla']
+        sim_conf.update({
+            "max_dist":self.config["experiment"]["others"].get("max_dist",200)
+        })
+        print(sim_conf,self.config["experiment"])
+        self.core = CarlaCore(sim_conf,map_env=True,start_server=start_server)
         self.core.setup_experiment(self.experiment.config)
         self.reset()
-        
-    def set_goal(self,goal_image,heading):
-        self.experiment.set_goal(goal_image,heading)
+    def set_start_transform(self,start):
+        self.experiment.origin=self.core.map.get_waypoint(start)
+    def set_goal(self,goal_image,heading,location=None):
+        # breakpoint()
+        self.experiment.set_goal(goal_image,heading,location=location)
 
     def is_agent_at_junction(self):
         wp =self.core.map.get_waypoint(self.hero.get_transform().location,project_to_road=True)

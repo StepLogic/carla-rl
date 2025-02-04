@@ -11,6 +11,7 @@ from ml_collections import config_flags
 from rlib_integration.carla_goal_env import CarlaGoalEnv
 from stable_baselines3.common.noise import OrnsteinUhlenbeckActionNoise
 from jaxrl2.agents import DrQLearner
+# from drq_with_value_function import DrQLearner
 from jaxrl2.data import ReplayBuffer
 from jaxrl2.noise import OrnsteinUhlenbeckActionNoise
 from jaxrl2.wrappers.frame_stack import FrameStack
@@ -129,7 +130,7 @@ config = {
             "enable_map_assets": True,
             "enable_rendering": True,
             "show_display": True,
-            "town":"Town01"
+            "town":"Town04"
         },
         "experiment": {
             "type":JAXGoalExperiments,

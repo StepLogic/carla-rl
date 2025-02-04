@@ -45,6 +45,7 @@ def collect_basic_agent_data(town="Town05",replay_buffer_size=10000):
     
     # Initialize BasicAgent
     agent = BasicAgent(env.unwrapped.core.hero, target_speed=0.5)
+    agent.set_destination(env.unwrapped.core.destination.location)
     agent.ignore_traffic_lights(True)
     agent.ignore_stop_signs(True)
     # data=[]
@@ -55,6 +56,7 @@ def collect_basic_agent_data(town="Town05",replay_buffer_size=10000):
             noise.reset()
             # Reinitialize BasicAgent for new episode
             agent = BasicAgent(env.unwrapped.core.hero, target_speed=0.5)
+            agent.set_destination(env.unwrapped.core.destination.location)
             agent.ignore_traffic_lights(True)
             agent.ignore_stop_signs(True)
 
@@ -63,11 +65,11 @@ def collect_basic_agent_data(town="Town05",replay_buffer_size=10000):
         action = np.array([control.steer, control.throttle])
         
         # Add noise and clip
-        action = np.clip(action + noise(), -1, 1)
-        action = np.array([
-            np.clip(action[0], -1.0, 1.0),  # steer
-            np.clip(action[1], 0.0, 1.0)    # throttle
-        ])
+        # action = np.clip(action + noise(), -1, 1)
+        # action = np.array([
+        #     np.clip(action[0], -1.0, 1.0),  # steer
+        #     np.clip(action[1], 0.0, 1.0)    # throttle
+        # ])
 
         next_observation, reward, done, truncated, info = env.step(action)
         

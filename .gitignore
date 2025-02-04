@@ -17,4 +17,19 @@ best_models/*
 src/checkpoints/*
 src/logs/*
 best_models/*
+<<<<<<< HEAD
 success_rate_results/*
+=======
+evaluation_trajectory/*
+experiment_results/*
+*.pth
+*.zip
+topomap/*
+*.pth
+*.pkl
+*.jpg
+evaluation_trajectory/*
+evaluation_trajectories/*
+*.zip
+results/*
+>>>>>>> 17c29fc4991cda098371ce92af018800de7f96a8

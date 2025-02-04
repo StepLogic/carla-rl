@@ -9,7 +9,8 @@ from gymnasium.spaces import Box
 from scipy.interpolate import splprep, splev
 from rlib_integration.base_experiment import BaseExperiment
 from rlib_integration.helper import post_process_image, carla_location_to_np_array
-
+import skimage
+from scipy.spatial.distance import euclidean
 
 # from matplotlib import pyplot as plt
 # MIN_MATCH_COUNT = 10
@@ -55,7 +56,7 @@ def get_curve(points):
     return curve
 
 class JAXMappingExperiments(BaseExperiment):
-    def __init__(self,config={},is_rgb=False):
+    def __init__(self,config={},is_rgb=False,image_size=32):
         super().__init__(config)
         self.frame_stack = self.config["others"]["framestack"]
         self.max_time_idle = self.config["others"]["max_time_idle"]
@@ -79,10 +80,11 @@ class JAXMappingExperiments(BaseExperiment):
         self.running_success_rate=deque(maxlen=100)
         self.distance_travelled_toward_goal=0
         self.done_goal=False
-        self.image_size=32
+        self.image_size=image_size
         self.prev_reward=0.0
         self.origin=None
         self.goal_image=None
+        self.distances=[]
 
 
     def _cache_waypoints(self,world) -> None:
@@ -126,6 +128,7 @@ class JAXMappingExperiments(BaseExperiment):
         self.goal_features=None     
         self.match_features=0.0  
         self.goal_image=None
+        self.user_defined_location=None
         if self.trajectories is None:
             self._cache_waypoints(core.core.world)
 
@@ -187,9 +190,10 @@ class JAXMappingExperiments(BaseExperiment):
         images, goal = self.get_img_obs(sensor_data, core)
         return {"pixels":images, "goal":goal, "vector":vecs}, self.info
     
-    def set_goal(self,goal_image,heading):
+    def set_goal(self,goal_image,heading,location=None):
         self.goal_image=goal_image
         self.heading=heading
+        self.user_defined_location=location
 
     def get_vec_obs(self, sensor_data, core):
         imu = sensor_data['imu'][1]
@@ -207,7 +211,8 @@ class JAXMappingExperiments(BaseExperiment):
         vec[3] = self.time_idle / self.max_time_idle
         vec[4] = imu[-1]/np.pi
         vec[5] = self.heading/np.pi
-        # print("compass",np.rad2deg(imu[-1]),np.rad2deg(self.heading))
+
+        print("compass",np.rad2deg(imu[-1]),np.rad2deg(self.heading))
         if self.prev_vec_0 is None:
             self.prev_vec_0 = vec
             self.prev_vec_1 = self.prev_vec_0
@@ -267,40 +272,64 @@ class JAXMappingExperiments(BaseExperiment):
         self.done_falling = hero.get_location().z < -0.5
         self.diff_lane = 'lane_invasion' in sensor_data.keys() or wp is None
         self.collision = 'collision' in sensor_data.keys()
-        # self.done_goal = self.check_goal_reached(core,hero,goal_location,sensor_data['goal'][1][-3])
+        # breakpoint()
+        if not self.goal_image is None:
+            self.done_goal = self.check_goal_reached(sensor_data['rgb'][1],sensor_data['goal'][1][0] if self.goal_image  is None else self.goal_image,carla_location_to_np_array(self.user_defined_location),carla_location_to_np_array(hero.get_transform().location))
+        else:
+            self.done_goal=False
+            # self.check_goal_reached(core,hero,goal_location,self.goal_image)
         # image = post_process_image(sensor_data['rgb'][1], crop=False, normalized=True, grayscale=True,image_size=self.image_size)
         # goal = post_process_image(sensor_data['goal'][1][0], crop=False, normalized=True, grayscale=True,image_size=self.image_size)
 
-        self.done_goal = self.check_goal_reached(sensor_data['rgb'][1],sensor_data['goal'][1][0] if self.goal_image  is None else self.goal_image ) 
+        # self.done_goal = self.check_goal_reached(sensor_data['rgb'][1],sensor_data['goal'][1][0] if self.goal_image  is None else self.goal_image ) 
 
-        done = (self.done_time_idle or self.done_falling or self.diff_lane or 
-                self.collision or self.done_goal)
+        done = (self.done_time_idle or self.done_goal  or self.done_falling or self.diff_lane or 
+                self.collision)
         # done = distance_to_goal <= 1.5
         # if done:
+        self.info = dict(
+                distance_completed=self.distance_travelled,
+                slack=distance_to_goal,
+                mean_distance_per_step=np.mean(self.distances)
+            )
         if done:
             wp=core.map.get_waypoint(hero.get_transform().location,project_to_road=True)
             self.origin=wp
-            self.info = dict(
+            self.info.update(dict(
                 is_success=self.done_goal,
-                distance_completed=self.distance_travelled,
-                slack=distance_to_goal
-            )
+            ))
             self.running_success_rate.append(float(self.done_goal))
             if np.mean(self.running_success_rate)>0.5:
                 self.running_success_rate=deque(maxlen=100)
                 self.curriculum_step+=1
         return done
-    
-    def check_goal_reached(self,image,goal_image):
-            
+    # def check_goal_reached(self,image,goal_image):
+    #     image=post_process_image(image, crop=False, normalized=False, grayscale=False,image_size=self.image_size)
+    #     # h, w,c = image.shape
+    #     # breakpoint()
+    #     image=skimage.feature.hog(image,channel_axis=-1)
+    #     goal_image=skimage.feature.hog(goal_image,channel_axis=-1)
+    #     # diff = cv2.subtract(image, goal_image)
+    #     # err = np.sum(diff**2)
+    #     # mse = err/(float(h*w*c))
+    #     # print("mse",mse)
+    #     # breakpoint()
+
+    #     dist=euclidean(image,goal_image)
+    #     # print("mse",dist)e
+    #     return dist<6.1
+    def check_goal_reached(self,image,goal_image,goal_location=None,hero_location=None):
+            # breakpoint()
             # img1 = cv2.imread('Q/IMG_1192.JPG', 0)          # queryImage
             # img2 = cv2.imread('DB/IMG_1208-1000.jpg', 0) # trainImage
             if abs(self.distance_travelled) < self.goal_threshold*2:
                         return False
-                        
+            dist=np.linalg.norm(goal_location[:2]-hero_location[:2])     
             # Initiate SIFT detector
+            image=post_process_image(image, crop=False, normalized=False, grayscale=False,image_size=self.image_size)
             sift = cv2.xfeatures2d.SIFT_create()
             # find the keypoints and descriptors with SIFT
+            
             kp1, des1 = sift.detectAndCompute(image,None)
             kp2, des2 = sift.detectAndCompute(goal_image,None)
             if des1 is None or len(kp2) < 2:
@@ -313,7 +342,7 @@ class JAXMappingExperiments(BaseExperiment):
             flann = cv2.FlannBasedMatcher(index_params,search_params)
              
             matches = flann.knnMatch(des1,des2,k=2)
-             
+            # print("matches",len(matches))
             # Need to draw only good matches, so create a mask
             matchesMask = [[0,0] for i in range(len(matches))]
             num_good_matches=0
@@ -324,12 +353,13 @@ class JAXMappingExperiments(BaseExperiment):
             
             # Count good matches using numpy for speed
             # Convert matches to distance ratios
+            # print("dist",dist)
             if len(matches) < 2:
                 return False
                 
             distances = np.array([[m.distance if m is not None else np.inf for m in match] 
                                 for match in matches])
-            good_matches = np.sum(distances[:, 0] < 0.7 * distances[:, 1])
+            good_matches = np.sum(distances[:, 0] < 0.001 * distances[:, 1])
             
             # draw_params = dict(matchColor = (0,255,0),
             #                    singlePointColor = (255,0,0),
@@ -338,12 +368,12 @@ class JAXMappingExperiments(BaseExperiment):
             match_percentage = good_matches / len(matches)
             # print(match_percentage)
             # if  match_percentage > 0.09:
-            #     img3 = cv2.drawMatchesKnn(image,kp1,goal_image,kp2,matches,None,**draw_params)             
-            #     cv2.imwrite("test.jpg",img3)
-            # print("num_good_matches",num_good_matches)
+            # img3 = cv2.drawMatchesKnn(image,kp1,goal_image,kp2,matches,None,**draw_params)             
+            # cv2.imwrite("test.jpg",img3)
+            # print("num_good_matches",match_percentage)
             self.match_features=match_percentage/0.09
-            
-            return match_percentage > 0.09
+            # print(match_percentage,dist)
+            return match_percentage > 0.9 or dist<5.0
 
 
     # def check_goal_reached(self, core, hero, goal_location, distance_to_goal, distance_threshold=2.0, angle_threshold=45.0):
@@ -362,8 +392,8 @@ class JAXMappingExperiments(BaseExperiment):
     #     if abs(self.distance_travelled) < self.goal_threshold*2:
     #         return False
             
-    #     hero_transform = hero.get_transform()
-    #     hero_location = hero_transform.location
+        # hero_transform = hero.get_transform()
+        # hero_location = hero_transform.location
         
     #     # # Calculate temporal distance (time to reach goal at current velocity)
     #     # hero_velocity = np.dot(
@@ -381,8 +411,8 @@ class JAXMappingExperiments(BaseExperiment):
         
     #     # # Get waypoints
     #     # try:
-    #     hero_waypoint = core.map.get_waypoint(hero_location)
-    #     goal_waypoint = core.map.get_waypoint(goal_location_carla)
+        # hero_waypoint = core.map.get_waypoint(hero_location)
+        # goal_waypoint = core.map.get_waypoint(goal_location_carla)
 
         
     #     # If waypoints are valid, do detailed checks
@@ -473,7 +503,8 @@ class JAXMappingExperiments(BaseExperiment):
         self.distance_travelled += delta_distance
         imu = sensor_data['imu'][1]
         self.heading = sensor_data['goal'][1][-1]
-
+        # print("delta_distance",delta_distance)
+        self.distances.append(delta_distance)
         # print("compass",np.rad2deg(imu[-1]),np.rad2deg(self.heading))
         # vehicle_transform = hero.get_transform()
         # vehicle_yaw = vehicle_transform.rotation.yaw
@@ -519,10 +550,10 @@ class JAXMappingExperiments(BaseExperiment):
         if hero_velocity < self.target_speed:
             # if self.heading
             # reward += np.cos(imu[-1]-self.heading)*delta_distance
-            reward += delta_distance 
+            reward -= displacement 
             # re   
-        else:
-            reward -= 0.0  # Optional penalty for exceeding target speed
+        # else:
+            # reward -= 0.0  # Optional penalty for exceeding target speed
         # print(f"Goal {self.done_goal} Lane {self.diff_lane}")
         # Goal reward
         # print(reward,distance_to_goal,self.total_distance)

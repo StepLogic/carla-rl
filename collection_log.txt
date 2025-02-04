@@ -1,263 +1,0 @@
-Data Collection Started at Thu Jan  9 06:12:53 PM EST 2025
-Starting collection for Town01 at Thu Jan  9 06:12:53 PM EST 2025
-WARNING:absl:Type handler registry overriding type "<class 'float'>" collision on scalar
-WARNING:absl:Type handler registry overriding type "<class 'bytes'>" collision on scalar
-WARNING:absl:Type handler registry overriding type "<class 'numpy.number'>" collision on scalar
-WARNING:absl:Tensorflow library not found, tensorflow.io.gfile operations will use native shim calls. GCS paths (i.e. 'gs://...') cannot be accessed.
-2025-01-09 18:12:55.469643: W external/xla/xla/service/gpu/nvptx_compiler.cc:765] The NVIDIA driver's CUDA version is 12.2 which is older than the ptxas CUDA version (12.6.85). Because the driver is older than the ptxas version, XLA is disabling parallel compilation, which may slow down compilation. You should update your NVIDIA driver or use the NVIDIA-provided CUDA forward compatibility packages.
-/home/kojogyaase/Projects/Research/carla-rl/.conda/lib/python3.9/site-packages/gymnasium/spaces/box.py:235: UserWarning: [33mWARN: Box low's precision lowered by casting to float32, current low.dtype=float64[0m
-  gym.logger.warn(
-/home/kojogyaase/Projects/Research/carla-rl/.conda/lib/python3.9/site-packages/gymnasium/spaces/box.py:305: UserWarning: [33mWARN: Box high's precision lowered by casting to float32, current high.dtype=float64[0m
-  gym.logger.warn(
-/home/kojogyaase/Projects/Research/carla-rl/.conda/lib/python3.9/subprocess.py:1770: RuntimeWarning: os.fork() was called. os.fork() is incompatible with multithreaded code, and JAX is multithreaded, so this will likely lead to a deadlock.
-  self.pid = _posixsubprocess.fork_exec(
-/home/kojogyaase/Apps/CARLA_0.9.15/CarlaUE4.sh -windowed -prefernvidia -ResX=600 -ResY=600  --carla-rpc-port=21744 -quality-level=Low
- Waiting for server to be ready: time-out of 5000ms while waiting for the simulator, make sure the simulator is ready and connected to localhost:21744, attempt 1 of 25
-Hero spawned!
-  0%|          | 0/10010 [00:00<?, ?it/s]  0%|          | 4/10010 [00:00<04:39, 35.82it/s]  0%|          | 8/10010 [00:00<05:20, 31.23it/s]  0%|          | 12/10010 [00:00<05:30, 30.28it/s]  0%|          | 16/10010 [00:00<05:31, 30.17it/s]  0%|          | 20/10010 [00:00<05:18, 31.38it/s]  0%|          | 24/10010 [00:00<05:03, 32.92it/s][ WARN:0@19.892] global shadow_sift.hpp:13 SIFT_create DEPRECATED: cv.xfeatures2d.SIFT_create() is deprecated due SIFT tranfer to the main repository. https://github.com/opencv/opencv/issues/16736
-  0%|          | 28/10010 [00:00<05:25, 30.68it/s]  0%|          | 32/10010 [00:01<14:15, 11.66it/s]  0%|          | 36/10010 [00:01<11:20, 14.66it/s]  0%|          | 40/10010 [00:01<09:22, 17.71it/s]  0%|          | 43/10010 [00:02<10:33, 15.73it/s]  0%|          | 48/10010 [00:02<08:09, 20.36it/s]  1%|          | 52/10010 [00:02<07:04, 23.44it/s]  1%|          | 56/10010 [00:02<07:40, 21.60it/s]  1%|          | 62/10010 [00:02<05:48, 28.55it/s]  1%|          | 68/10010 [00:02<04:49, 34.31it/s]  1%|          | 74/10010 [00:02<04:13, 39.15it/s]  1%|          | 79/10010 [00:03<05:49, 28.44it/s]  1%|          | 83/10010 [00:03<05:48, 28.49it/s]  1%|          | 87/10010 [00:03<05:48, 28.44it/s]  1%|          | 91/10010 [00:03<05:50, 28.31it/s]  1%|          | 95/10010 [00:03<05:49, 28.34it/s]  1%|          | 99/10010 [00:03<05:48, 28.46it/s]  1%|          | 102/10010 [00:04<06:05, 27.09it/s]  1%|          | 105/10010 [00:04<06:06, 27.01it/s]  1%|          | 108/10010 [00:04<06:05, 27.12it/s]  1%|          | 111/10010 [00:04<06:04, 27.19it/s]  1%|          | 114/10010 [00:04<06:02, 27.33it/s]  1%|          | 117/10010 [00:04<05:58, 27.60it/s]  1%|          | 120/10010 [00:04<06:54, 23.85it/s]  1%|          | 125/10010 [00:04<05:27, 30.21it/s]  1%|▏         | 130/10010 [00:05<04:41, 35.13it/s]  1%|▏         | 136/10010 [00:05<04:07, 39.82it/s]Signal 11 caught.
-Malloc Size=65538 LargeMemoryPoolOffset=65554 
-Segmentation fault (core dumped)
-  1%|▏         | 136/10010 [00:19<04:07, 39.82it/s]  1%|▏         | 136/10010 [00:25<30:27,  5.40it/s]
-Goal reached :travelled 11.151526093729395
-Truncated :travelled 0.9526106505911256 idle:False falling :False diff True or collision False
-Truncated :travelled 0.7346964454678007 idle:False falling :False diff True or collision False
-Truncated :travelled 6.515963954188453 idle:False falling :False diff True or collision False
-Truncated :travelled 28.921284292919527 idle:False falling :False diff True or collision False
-Truncated :travelled 3.4203860552881933 idle:False falling :False diff True or collision False
-Traceback (most recent call last):
-  File "/home/kojogyaase/Projects/Research/carla-rl/src/collect_data.py", line 114, in <module>
-    collect_basic_agent_data()
-  File "/home/kojogyaase/Projects/Research/carla-rl/src/collect_data.py", line 54, in collect_basic_agent_data
-    observation, info = env.reset()
-  File "/home/kojogyaase/Projects/Research/carla-rl/dependencies/jaxrl2/jaxrl2/wrappers/record_statistics.py", line 120, in reset
-    obs, info = super().reset(seed=seed, options=options)
-  File "/home/kojogyaase/Projects/Research/carla-rl/.conda/lib/python3.9/site-packages/gymnasium/core.py", line 328, in reset
-    return self.env.reset(seed=seed, options=options)
-  File "/home/kojogyaase/Projects/Research/carla-rl/dependencies/jaxrl2/jaxrl2/wrappers/timelimit.py", line 77, in reset
-    return self.env.reset(**kwargs)
-  File "/home/kojogyaase/Projects/Research/carla-rl/dependencies/jaxrl2/jaxrl2/wrappers/frame_stack.py", line 36, in reset
-    obs,info= self.env.reset(**kwargs)
-  File "/home/kojogyaase/Projects/Research/carla-rl/dependencies/jaxrl2/jaxrl2/wrappers/frame_stack.py", line 36, in reset
-    obs,info= self.env.reset(**kwargs)
-  File "/home/kojogyaase/Projects/Research/carla-rl/dependencies/rlib_integration/rlib_integration/carla_goal_env.py", line 38, in reset
-    sensor_data = self.core.tick(None)
-  File "/home/kojogyaase/Projects/Research/carla-rl/dependencies/rlib_integration/rlib_integration/carla_core.py", line 436, in tick
-    self.set_spectator_camera_view()
-  File "/home/kojogyaase/Projects/Research/carla-rl/dependencies/rlib_integration/rlib_integration/carla_core.py", line 456, in set_spectator_camera_view
-    self.spectator = self.world.get_spectator()
-RuntimeError: time-out of 20000ms while waiting for the simulator, make sure the simulator is ready and connected to localhost:21744
-Successfully collected data for Town01
-Starting collection for Town02 at Thu Jan  9 06:13:43 PM EST 2025
-WARNING:absl:Type handler registry overriding type "<class 'float'>" collision on scalar
-WARNING:absl:Type handler registry overriding type "<class 'bytes'>" collision on scalar
-WARNING:absl:Type handler registry overriding type "<class 'numpy.number'>" collision on scalar
-WARNING:absl:Tensorflow library not found, tensorflow.io.gfile operations will use native shim calls. GCS paths (i.e. 'gs://...') cannot be accessed.
-2025-01-09 18:13:45.626069: W external/xla/xla/service/gpu/nvptx_compiler.cc:765] The NVIDIA driver's CUDA version is 12.2 which is older than the ptxas CUDA version (12.6.85). Because the driver is older than the ptxas version, XLA is disabling parallel compilation, which may slow down compilation. You should update your NVIDIA driver or use the NVIDIA-provided CUDA forward compatibility packages.
-/home/kojogyaase/Projects/Research/carla-rl/.conda/lib/python3.9/site-packages/gymnasium/spaces/box.py:235: UserWarning: [33mWARN: Box low's precision lowered by casting to float32, current low.dtype=float64[0m
-  gym.logger.warn(
-/home/kojogyaase/Projects/Research/carla-rl/.conda/lib/python3.9/site-packages/gymnasium/spaces/box.py:305: UserWarning: [33mWARN: Box high's precision lowered by casting to float32, current high.dtype=float64[0m
-  gym.logger.warn(
-/home/kojogyaase/Projects/Research/carla-rl/.conda/lib/python3.9/subprocess.py:1770: RuntimeWarning: os.fork() was called. os.fork() is incompatible with multithreaded code, and JAX is multithreaded, so this will likely lead to a deadlock.
-  self.pid = _posixsubprocess.fork_exec(
-/home/kojogyaase/Apps/CARLA_0.9.15/CarlaUE4.sh -windowed -prefernvidia -ResX=600 -ResY=600  --carla-rpc-port=15490 -quality-level=Low
- Waiting for server to be ready: time-out of 5000ms while waiting for the simulator, make sure the simulator is ready and connected to localhost:15490, attempt 1 of 25
-Hero spawned!
-  0%|          | 0/10010 [00:00<?, ?it/s]  0%|          | 5/10010 [00:00<03:21, 49.53it/s]  0%|          | 10/10010 [00:00<03:49, 43.66it/s]  0%|          | 15/10010 [00:00<03:53, 42.81it/s]Signal 11 caught.
-Malloc Size=65538 LargeMemoryPoolOffset=65554 
-Malloc Size=131160 LargeMemoryPoolOffset=196744 
-Malloc Size=131160 LargeMemoryPoolOffset=327928 
-Segmentation fault (core dumped)
-Error collecting data for Town02
-Starting collection for Town03 at Thu Jan  9 06:14:29 PM EST 2025
-WARNING:absl:Type handler registry overriding type "<class 'float'>" collision on scalar
-WARNING:absl:Type handler registry overriding type "<class 'bytes'>" collision on scalar
-WARNING:absl:Type handler registry overriding type "<class 'numpy.number'>" collision on scalar
-WARNING:absl:Tensorflow library not found, tensorflow.io.gfile operations will use native shim calls. GCS paths (i.e. 'gs://...') cannot be accessed.
-2025-01-09 18:14:31.475073: W external/xla/xla/service/gpu/nvptx_compiler.cc:765] The NVIDIA driver's CUDA version is 12.2 which is older than the ptxas CUDA version (12.6.85). Because the driver is older than the ptxas version, XLA is disabling parallel compilation, which may slow down compilation. You should update your NVIDIA driver or use the NVIDIA-provided CUDA forward compatibility packages.
-/home/kojogyaase/Projects/Research/carla-rl/.conda/lib/python3.9/site-packages/gymnasium/spaces/box.py:235: UserWarning: [33mWARN: Box low's precision lowered by casting to float32, current low.dtype=float64[0m
-  gym.logger.warn(
-/home/kojogyaase/Projects/Research/carla-rl/.conda/lib/python3.9/site-packages/gymnasium/spaces/box.py:305: UserWarning: [33mWARN: Box high's precision lowered by casting to float32, current high.dtype=float64[0m
-  gym.logger.warn(
-/home/kojogyaase/Projects/Research/carla-rl/.conda/lib/python3.9/subprocess.py:1770: RuntimeWarning: os.fork() was called. os.fork() is incompatible with multithreaded code, and JAX is multithreaded, so this will likely lead to a deadlock.
-  self.pid = _posixsubprocess.fork_exec(
-/home/kojogyaase/Apps/CARLA_0.9.15/CarlaUE4.sh -windowed -prefernvidia -ResX=600 -ResY=600  --carla-rpc-port=31639 -quality-level=Low
- Waiting for server to be ready: time-out of 5000ms while waiting for the simulator, make sure the simulator is ready and connected to localhost:31639, attempt 1 of 25
-Hero spawned!
-  0%|          | 0/10010 [00:00<?, ?it/s]  0%|          | 6/10010 [00:00<03:14, 51.42it/s]  0%|          | 12/10010 [00:00<03:31, 47.34it/s]  0%|          | 17/10010 [00:00<03:35, 46.48it/s]  0%|          | 22/10010 [00:00<03:38, 45.79it/s][ WARN:0@19.457] global shadow_sift.hpp:13 SIFT_create DEPRECATED: cv.xfeatures2d.SIFT_create() is deprecated due SIFT tranfer to the main repository. https://github.com/opencv/opencv/issues/16736
-  0%|          | 27/10010 [00:00<04:10, 39.85it/s]  0%|          | 32/10010 [00:00<04:14, 39.21it/s]  0%|          | 36/10010 [00:00<04:17, 38.77it/s]  0%|          | 40/10010 [00:00<04:18, 38.54it/s]  0%|          | 44/10010 [00:01<04:19, 38.43it/s]  0%|          | 49/10010 [00:01<04:17, 38.65it/s]  1%|          | 53/10010 [00:01<06:26, 25.78it/s]  1%|          | 57/10010 [00:01<05:56, 27.96it/s]  1%|          | 62/10010 [00:01<05:05, 32.52it/s]  1%|          | 68/10010 [00:01<04:23, 37.66it/s]  1%|          | 73/10010 [00:02<04:51, 34.08it/s]  1%|          | 78/10010 [00:02<04:28, 36.94it/s]  1%|          | 82/10010 [00:02<04:35, 36.09it/s]  1%|          | 87/10010 [00:02<04:56, 33.43it/s]  1%|          | 96/10010 [00:02<03:38, 45.29it/s]  1%|          | 101/10010 [00:02<04:01, 40.98it/s]  1%|          | 107/10010 [00:02<03:42, 44.47it/s]  1%|          | 113/10010 [00:02<03:28, 47.40it/s]  1%|          | 119/10010 [00:02<03:18, 49.74it/s]  1%|          | 125/10010 [00:03<03:39, 44.96it/s]  1%|▏         | 130/10010 [00:03<04:04, 40.37it/s]  1%|▏         | 135/10010 [00:03<04:17, 38.39it/s]  1%|▏         | 139/10010 [00:03<04:18, 38.17it/s]  1%|▏         | 143/10010 [00:03<04:26, 37.02it/s]Signal 11 caught.
-Malloc Size=65538 LargeMemoryPoolOffset=65554 
-Segmentation fault (core dumped)
-  1%|▏         | 143/10010 [00:20<04:26, 37.02it/s]  1%|▏         | 145/10010 [00:23<26:56,  6.10it/s]
-Truncated :travelled 48.350690279197146 idle:False falling :False diff True or collision False
-Truncated :travelled 2.971169334980006 idle:False falling :False diff True or collision False
-Truncated :travelled 2.659710431789903 idle:False falling :False diff True or collision False
-Truncated :travelled 0.6100732221829827 idle:False falling :False diff True or collision False
-Traceback (most recent call last):
-  File "/home/kojogyaase/Projects/Research/carla-rl/src/collect_data.py", line 114, in <module>
-    collect_basic_agent_data()
-  File "/home/kojogyaase/Projects/Research/carla-rl/src/collect_data.py", line 72, in collect_basic_agent_data
-    next_observation, reward, done, truncated, info = env.step(action)
-  File "/home/kojogyaase/Projects/Research/carla-rl/dependencies/jaxrl2/jaxrl2/wrappers/record_statistics.py", line 89, in step
-    obs, reward, terminated, truncated, info = super().step(action)
-  File "/home/kojogyaase/Projects/Research/carla-rl/.conda/lib/python3.9/site-packages/gymnasium/core.py", line 322, in step
-    return self.env.step(action)
-  File "/home/kojogyaase/Projects/Research/carla-rl/dependencies/jaxrl2/jaxrl2/wrappers/timelimit.py", line 57, in step
-    observation, reward, terminated, truncated, info = self.env.step(action)
-  File "/home/kojogyaase/Projects/Research/carla-rl/dependencies/jaxrl2/jaxrl2/wrappers/frame_stack.py", line 50, in step
-    obs, reward, done,terminate, info = self.env.step(action)
-  File "/home/kojogyaase/Projects/Research/carla-rl/dependencies/jaxrl2/jaxrl2/wrappers/frame_stack.py", line 50, in step
-    obs, reward, done,terminate, info = self.env.step(action)
-  File "/home/kojogyaase/Projects/Research/carla-rl/dependencies/rlib_integration/rlib_integration/carla_goal_env.py", line 46, in step
-    sensor_data = self.core.tick(control)
-  File "/home/kojogyaase/Projects/Research/carla-rl/dependencies/rlib_integration/rlib_integration/carla_core.py", line 432, in tick
-    self.world.tick()
-RuntimeError: time-out of 20000ms while waiting for the simulator, make sure the simulator is ready and connected to localhost:31639
-Successfully collected data for Town03
-Starting collection for Town04 at Thu Jan  9 06:15:17 PM EST 2025
-WARNING:absl:Type handler registry overriding type "<class 'float'>" collision on scalar
-WARNING:absl:Type handler registry overriding type "<class 'bytes'>" collision on scalar
-WARNING:absl:Type handler registry overriding type "<class 'numpy.number'>" collision on scalar
-WARNING:absl:Tensorflow library not found, tensorflow.io.gfile operations will use native shim calls. GCS paths (i.e. 'gs://...') cannot be accessed.
-2025-01-09 18:15:20.317433: W external/xla/xla/service/platform_util.cc:199] unable to create StreamExecutor for CUDA:0: failed initializing StreamExecutor for CUDA device ordinal 0: INTERNAL: failed call to cuDevicePrimaryCtxRetain: CUDA_ERROR_OUT_OF_MEMORY: out of memory; total memory reported: 6192234496
-Traceback (most recent call last):
-  File "/home/kojogyaase/Projects/Research/carla-rl/.conda/lib/python3.9/site-packages/jax/_src/xla_bridge.py", line 879, in backends
-    backend = _init_backend(platform)
-  File "/home/kojogyaase/Projects/Research/carla-rl/.conda/lib/python3.9/site-packages/jax/_src/xla_bridge.py", line 970, in _init_backend
-    backend = registration.factory()
-  File "/home/kojogyaase/Projects/Research/carla-rl/.conda/lib/python3.9/site-packages/jax/_src/xla_bridge.py", line 668, in factory
-    return xla_client.make_c_api_client(plugin_name, updated_options, None)
-  File "/home/kojogyaase/Projects/Research/carla-rl/.conda/lib/python3.9/site-packages/jaxlib/xla_client.py", line 200, in make_c_api_client
-    return _xla.get_c_api_client(plugin_name, options, distributed_client)
-jaxlib.xla_extension.XlaRuntimeError: INTERNAL: no supported devices found for platform CUDA
-
-During handling of the above exception, another exception occurred:
-
-jax.errors.SimplifiedTraceback: For simplicity, JAX has removed its internal frames from the traceback of the following exception. Set JAX_TRACEBACK_FILTERING=off to include these.
-
-The above exception was the direct cause of the following exception:
-
-Traceback (most recent call last):
-  File "/home/kojogyaase/Projects/Research/carla-rl/src/collect_data.py", line 9, in <module>
-    from train_online_pixels import CarlaGoalEnv,config,FrameStack,TimeLimit,RecordEpisodeStatistics,ReplayBuffer
-  File "/home/kojogyaase/Projects/Research/carla-rl/src/train_online_pixels.py", line 13, in <module>
-    from jaxrl2.agents import DrQLearner
-  File "/home/kojogyaase/Projects/Research/carla-rl/dependencies/jaxrl2/jaxrl2/agents/__init__.py", line 1, in <module>
-    from jaxrl2.agents.bc import BCLearner
-  File "/home/kojogyaase/Projects/Research/carla-rl/dependencies/jaxrl2/jaxrl2/agents/bc/__init__.py", line 1, in <module>
-    from jaxrl2.agents.bc.bc_learner import BCLearner
-  File "/home/kojogyaase/Projects/Research/carla-rl/dependencies/jaxrl2/jaxrl2/agents/bc/bc_learner.py", line 11, in <module>
-    from jaxrl2 import networks
-  File "/home/kojogyaase/Projects/Research/carla-rl/dependencies/jaxrl2/jaxrl2/networks/__init__.py", line 1, in <module>
-    from jaxrl2.networks.autoregressive_policy import ARPolicy
-  File "/home/kojogyaase/Projects/Research/carla-rl/dependencies/jaxrl2/jaxrl2/networks/autoregressive_policy.py", line 8, in <module>
-    from jaxrl2.networks.mlp import MLP
-  File "/home/kojogyaase/Projects/Research/carla-rl/dependencies/jaxrl2/jaxrl2/networks/mlp.py", line 7, in <module>
-    from jaxrl2.networks.constants import default_init
-  File "/home/kojogyaase/Projects/Research/carla-rl/dependencies/jaxrl2/jaxrl2/networks/constants.py", line 5, in <module>
-    def default_init(scale: float = jnp.sqrt(2)):
-RuntimeError: Unable to initialize backend 'cuda': INTERNAL: no supported devices found for platform CUDA (you may need to uninstall the failing plugin package, or set JAX_PLATFORMS=cpu to skip this backend.)
-Successfully collected data for Town04
-Starting collection for Town05 at Thu Jan  9 06:15:26 PM EST 2025
-WARNING:absl:Type handler registry overriding type "<class 'float'>" collision on scalar
-WARNING:absl:Type handler registry overriding type "<class 'bytes'>" collision on scalar
-WARNING:absl:Type handler registry overriding type "<class 'numpy.number'>" collision on scalar
-WARNING:absl:Tensorflow library not found, tensorflow.io.gfile operations will use native shim calls. GCS paths (i.e. 'gs://...') cannot be accessed.
-2025-01-09 18:15:28.597015: W external/xla/xla/service/platform_util.cc:199] unable to create StreamExecutor for CUDA:0: failed initializing StreamExecutor for CUDA device ordinal 0: INTERNAL: failed call to cuDevicePrimaryCtxRetain: CUDA_ERROR_OUT_OF_MEMORY: out of memory; total memory reported: 6192234496
-Traceback (most recent call last):
-  File "/home/kojogyaase/Projects/Research/carla-rl/.conda/lib/python3.9/site-packages/jax/_src/xla_bridge.py", line 879, in backends
-    backend = _init_backend(platform)
-  File "/home/kojogyaase/Projects/Research/carla-rl/.conda/lib/python3.9/site-packages/jax/_src/xla_bridge.py", line 970, in _init_backend
-    backend = registration.factory()
-  File "/home/kojogyaase/Projects/Research/carla-rl/.conda/lib/python3.9/site-packages/jax/_src/xla_bridge.py", line 668, in factory
-    return xla_client.make_c_api_client(plugin_name, updated_options, None)
-  File "/home/kojogyaase/Projects/Research/carla-rl/.conda/lib/python3.9/site-packages/jaxlib/xla_client.py", line 200, in make_c_api_client
-    return _xla.get_c_api_client(plugin_name, options, distributed_client)
-jaxlib.xla_extension.XlaRuntimeError: INTERNAL: no supported devices found for platform CUDA
-
-During handling of the above exception, another exception occurred:
-
-jax.errors.SimplifiedTraceback: For simplicity, JAX has removed its internal frames from the traceback of the following exception. Set JAX_TRACEBACK_FILTERING=off to include these.
-
-The above exception was the direct cause of the following exception:
-
-Traceback (most recent call last):
-  File "/home/kojogyaase/Projects/Research/carla-rl/src/collect_data.py", line 9, in <module>
-    from train_online_pixels import CarlaGoalEnv,config,FrameStack,TimeLimit,RecordEpisodeStatistics,ReplayBuffer
-  File "/home/kojogyaase/Projects/Research/carla-rl/src/train_online_pixels.py", line 13, in <module>
-    from jaxrl2.agents import DrQLearner
-  File "/home/kojogyaase/Projects/Research/carla-rl/dependencies/jaxrl2/jaxrl2/agents/__init__.py", line 1, in <module>
-    from jaxrl2.agents.bc import BCLearner
-  File "/home/kojogyaase/Projects/Research/carla-rl/dependencies/jaxrl2/jaxrl2/agents/bc/__init__.py", line 1, in <module>
-    from jaxrl2.agents.bc.bc_learner import BCLearner
-  File "/home/kojogyaase/Projects/Research/carla-rl/dependencies/jaxrl2/jaxrl2/agents/bc/bc_learner.py", line 11, in <module>
-    from jaxrl2 import networks
-  File "/home/kojogyaase/Projects/Research/carla-rl/dependencies/jaxrl2/jaxrl2/networks/__init__.py", line 1, in <module>
-    from jaxrl2.networks.autoregressive_policy import ARPolicy
-  File "/home/kojogyaase/Projects/Research/carla-rl/dependencies/jaxrl2/jaxrl2/networks/autoregressive_policy.py", line 8, in <module>
-    from jaxrl2.networks.mlp import MLP
-  File "/home/kojogyaase/Projects/Research/carla-rl/dependencies/jaxrl2/jaxrl2/networks/mlp.py", line 7, in <module>
-    from jaxrl2.networks.constants import default_init
-  File "/home/kojogyaase/Projects/Research/carla-rl/dependencies/jaxrl2/jaxrl2/networks/constants.py", line 5, in <module>
-    def default_init(scale: float = jnp.sqrt(2)):
-RuntimeError: Unable to initialize backend 'cuda': INTERNAL: no supported devices found for platform CUDA (you may need to uninstall the failing plugin package, or set JAX_PLATFORMS=cpu to skip this backend.)
-Successfully collected data for Town05
-Starting collection for Town06 at Thu Jan  9 06:15:34 PM EST 2025
-WARNING:absl:Type handler registry overriding type "<class 'float'>" collision on scalar
-WARNING:absl:Type handler registry overriding type "<class 'bytes'>" collision on scalar
-WARNING:absl:Type handler registry overriding type "<class 'numpy.number'>" collision on scalar
-WARNING:absl:Tensorflow library not found, tensorflow.io.gfile operations will use native shim calls. GCS paths (i.e. 'gs://...') cannot be accessed.
-2025-01-09 18:15:36.285120: W external/xla/xla/service/gpu/nvptx_compiler.cc:765] The NVIDIA driver's CUDA version is 12.2 which is older than the ptxas CUDA version (12.6.85). Because the driver is older than the ptxas version, XLA is disabling parallel compilation, which may slow down compilation. You should update your NVIDIA driver or use the NVIDIA-provided CUDA forward compatibility packages.
-/home/kojogyaase/Projects/Research/carla-rl/.conda/lib/python3.9/site-packages/gymnasium/spaces/box.py:235: UserWarning: [33mWARN: Box low's precision lowered by casting to float32, current low.dtype=float64[0m
-  gym.logger.warn(
-/home/kojogyaase/Projects/Research/carla-rl/.conda/lib/python3.9/site-packages/gymnasium/spaces/box.py:305: UserWarning: [33mWARN: Box high's precision lowered by casting to float32, current high.dtype=float64[0m
-  gym.logger.warn(
-/home/kojogyaase/Projects/Research/carla-rl/.conda/lib/python3.9/subprocess.py:1770: RuntimeWarning: os.fork() was called. os.fork() is incompatible with multithreaded code, and JAX is multithreaded, so this will likely lead to a deadlock.
-  self.pid = _posixsubprocess.fork_exec(
-/home/kojogyaase/Apps/CARLA_0.9.15/CarlaUE4.sh -windowed -prefernvidia -ResX=600 -ResY=600  --carla-rpc-port=24418 -quality-level=Low
- Waiting for server to be ready: time-out of 5000ms while waiting for the simulator, make sure the simulator is ready and connected to localhost:24418, attempt 1 of 25
-Hero spawned!
-  0%|          | 0/10010 [00:00<?, ?it/s]  0%|          | 5/10010 [00:00<04:02, 41.27it/s]  0%|          | 10/10010 [00:00<04:30, 36.98it/s]  0%|          | 14/10010 [00:00<04:38, 35.88it/s]  0%|          | 18/10010 [00:00<04:42, 35.37it/s]  0%|          | 22/10010 [00:00<04:42, 35.35it/s][ WARN:0@19.441] global shadow_sift.hpp:13 SIFT_create DEPRECATED: cv.xfeatures2d.SIFT_create() is deprecated due SIFT tranfer to the main repository. https://github.com/opencv/opencv/issues/16736
-  0%|          | 26/10010 [00:00<05:20, 31.11it/s]  0%|          | 30/10010 [00:00<06:07, 27.15it/s]  0%|          | 34/10010 [00:01<05:34, 29.83it/s]  0%|          | 38/10010 [00:01<05:11, 31.97it/s]  0%|          | 42/10010 [00:01<04:54, 33.88it/s]  0%|          | 46/10010 [00:01<04:42, 35.22it/s]  0%|          | 50/10010 [00:01<04:34, 36.30it/s]  1%|          | 54/10010 [00:01<08:12, 20.21it/s]  1%|          | 57/10010 [00:02<08:27, 19.62it/s]  1%|          | 60/10010 [00:02<08:07, 20.43it/s]  1%|          | 63/10010 [00:02<07:48, 21.24it/s]  1%|          | 66/10010 [00:02<07:35, 21.81it/s]  1%|          | 69/10010 [00:02<10:34, 15.68it/s]  1%|          | 71/10010 [00:02<10:10, 16.28it/s]  1%|          | 73/10010 [00:02<09:46, 16.94it/s]  1%|          | 75/10010 [00:03<09:25, 17.55it/s]  1%|          | 77/10010 [00:03<09:57, 16.62it/s]  1%|          | 79/10010 [00:03<10:42, 15.46it/s]  1%|          | 81/10010 [00:03<10:17, 16.08it/s]Signal 11 caught.
-Malloc Size=65538 LargeMemoryPoolOffset=65554 
-Segmentation fault (core dumped)
-  1%|          | 81/10010 [00:20<10:17, 16.08it/s]  1%|          | 81/10010 [00:23<48:03,  3.44it/s]
-Goal reached :travelled 8.034375530911106
-Goal reached :travelled 8.48596719878623
-Truncated :travelled 0.964450556021503 idle:False falling :False diff True or collision False
-Truncated :travelled 0.9140153306628573 idle:False falling :False diff True or collision False
-Traceback (most recent call last):
-  File "/home/kojogyaase/Projects/Research/carla-rl/src/collect_data.py", line 114, in <module>
-    collect_basic_agent_data()
-  File "/home/kojogyaase/Projects/Research/carla-rl/src/collect_data.py", line 54, in collect_basic_agent_data
-    observation, info = env.reset()
-  File "/home/kojogyaase/Projects/Research/carla-rl/dependencies/jaxrl2/jaxrl2/wrappers/record_statistics.py", line 120, in reset
-    obs, info = super().reset(seed=seed, options=options)
-  File "/home/kojogyaase/Projects/Research/carla-rl/.conda/lib/python3.9/site-packages/gymnasium/core.py", line 328, in reset
-    return self.env.reset(seed=seed, options=options)
-  File "/home/kojogyaase/Projects/Research/carla-rl/dependencies/jaxrl2/jaxrl2/wrappers/timelimit.py", line 77, in reset
-    return self.env.reset(**kwargs)
-  File "/home/kojogyaase/Projects/Research/carla-rl/dependencies/jaxrl2/jaxrl2/wrappers/frame_stack.py", line 36, in reset
-    obs,info= self.env.reset(**kwargs)
-  File "/home/kojogyaase/Projects/Research/carla-rl/dependencies/jaxrl2/jaxrl2/wrappers/frame_stack.py", line 36, in reset
-    obs,info= self.env.reset(**kwargs)
-  File "/home/kojogyaase/Projects/Research/carla-rl/dependencies/rlib_integration/rlib_integration/carla_goal_env.py", line 35, in reset
-    self.hero = self.core.reset_hero(self.experiment.config["hero"])
-  File "/home/kojogyaase/Projects/Research/carla-rl/dependencies/rlib_integration/rlib_integration/carla_core.py", line 337, in reset_hero
-    self.world.tick()
-RuntimeError: time-out of 20000ms while waiting for the simulator, make sure the simulator is ready and connected to localhost:24418
-Successfully collected data for Town06
-Town01: No data collected
-Town02: No data collected
-Town03: 0 files collected
-Town04: 0 files collected
-Town05: 0 files collected
-Town06: 0 files collected
-
-Data collection completed at Thu Jan  9 06:16:22 PM EST 2025
-WARNING: No data collected for Town01
-WARNING: No data collected for Town02
-WARNING: No data collected for Town03
-WARNING: No data collected for Town04
-WARNING: No data collected for Town05
-WARNING: No data collected for Town06

@@ -9,8 +9,17 @@ from collections import deque
 import math
 import numpy as np
 import carla
-from rlib_integration.helper import get_speed
+# from rlib_integration.helper import get_speed
+def get_speed(vehicle):
+    """
+    Compute speed of a vehicle in m/s.
 
+        :param vehicle: the vehicle for which speed is calculated
+        :return: speed as a float in Km/h
+    """
+    vel = vehicle.get_velocity()
+
+    return  math.sqrt(vel.x ** 2 + vel.y ** 2 + vel.z ** 2)
 
 class VehiclePIDController:
     """
@@ -26,44 +35,26 @@ class VehiclePIDController:
         # args_longitudinal,
         offset=0,
         max_throttle=0.75,
-        max_brake=0.3,
-        max_steering=0.8,
+        max_brake=0.8,
+        max_steering=1.0,
     ):
-        """
-        Constructor method.
-
-        :param vehicle: actor to apply to local planner logic onto
-        :param args_lateral: dictionary of arguments to set the lateral PID controller
-        using the following semantics:
-            K_P -- Proportional term
-            K_D -- Differential term
-            K_I -- Integral term
-        :param args_longitudinal: dictionary of arguments to set the longitudinal
-        PID controller using the following semantics:
-            K_P -- Proportional term
-            K_D -- Differential term
-            K_I -- Integral term
-        :param offset: If different than zero, the vehicle will drive displaced from the center line.
-        Positive values imply a right offset while negative ones mean a left one. Numbers high enough
-        to cause the vehicle to drive through other lanes might break the controller.
-        """
+     
         args_lateral={
-            'K_P': 1.0,
-            'K_D': 0.01,
-            'K_I': 1.4,
+            'K_P': 10.0,
+            'K_D': 0.0,
+            'K_I': 0.0,
             'dt': 0.1,
         }
         args_longitudinal={
-                'K_P': 0.1,
-                'K_D': 0,
-                'K_I': 1.0,
+                'K_P': 1.0,
+                'K_D': 0.0,
+                'K_I': 0.0,
                 'dt': 0.1,
             }
 
         self.max_brake = max_brake
         self.max_throt = max_throttle
         self.max_steer = max_steering
-
         self._vehicle = vehicle
         self._world = self._vehicle.get_world()
         self.past_steering = self._vehicle.get_control().steer
@@ -73,6 +64,7 @@ class VehiclePIDController:
         self._lat_controller = PIDLateralController(
             self._vehicle, offset, **args_lateral
         )
+        # self.replan_steps=
 
     def run_step(self,actions):
         """
@@ -95,7 +87,6 @@ class VehiclePIDController:
             control.brake = min(abs(acceleration), self.max_brake)
 
         # Steering regulation: changes cannot happen abruptly, can't steer too much.
-
         if current_steering > self.past_steering + 0.1:
             current_steering = self.past_steering + 0.1
         elif current_steering < self.past_steering - 0.1:
@@ -158,7 +149,6 @@ class PIDLongitudinalController:
             :return: throttle control
         """
         # current_speed = get_speed(self._vehicle)
-
         # if debug:
             # print("Current speed = {}".format(current_speed))
 
@@ -167,18 +157,17 @@ class PIDLongitudinalController:
     def _pid_control(self, actions):
         """
         Estimate the throttle/brake of the vehicle based on the PID equations
-
             :param target_speed:  target speed in Km/h
             :param current_speed: current speed of the vehicle in Km/h
             :return: throttle/brake control
         """
-        project_distance = get_speed(self._vehicle)/3.6
-        error = np.linalg.norm(actions) - project_distance  
-        # print("error",error,project_distance,project_distance*self._dt,np.linalg.norm(actions))
+        # speed = get_speed(self._vehicle)
+        error = min(np.linalg.norm(actions)/self._dt,5.0)
+
+        # print("error",error)
         # error = new_error - self._prev_error
         # self._prev_error=new_error
         self._error_buffer.append(error)
-
         if len(self._error_buffer) >= 2:
             _de = (self._error_buffer[-1] - self._error_buffer[-2]) / self._dt
             _ie = sum(self._error_buffer) * self._dt
@@ -248,7 +237,7 @@ class PIDLateralController:
             :return: steering control in the range [-1, 1]
         """
         # Get the ego's location and forward vector
-        # ego_loc = vehicle_transform.location
+        ego_loc = self._vehicle.get_transform().location
         # v_vec = vehicle_transform.get_forward_vector()
         # v_vec = np.array([v_vec.x, v_vec.y, 0.0])
 
@@ -264,7 +253,7 @@ class PIDLateralController:
         #     w_loc = waypoint.transform.location
 
         # w_vec = np.array([w_loc.x - ego_loc.x, w_loc.y - ego_loc.y, 0.0])
-
+        _dot= np.arctan(actions[1]/actions[0])
         # wv_linalg = np.linalg.norm(w_vec) * np.linalg.norm(v_vec)
         # if wv_linalg == 0:
         #     _dot = 1
@@ -274,7 +263,14 @@ class PIDLateralController:
         # if _cross[2] < 0:
         #     _dot *= -1.0
         # z = self._vehicle.get_transform().rotation.pitch
-        _dot= -np.arctan2(actions[1],actions[0])
+
+        
+        print("_dot",_dot,actions)
+       
+        end = ego_loc + carla.Location(x=float(actions[0]), y=float(-actions[1]),z=1.0)
+        ego_loc=ego_loc+carla.Location(x=0, y=0,z=1.0)
+        self._vehicle.get_world().debug.draw_arrow(ego_loc, end, arrow_size=0.3, life_time=1.0)
+        # draw_way
         # print("_dot",_dot,z,np.arctan2(actions[1],actions[0]),self._vehicle.get_transform().rotation)
         self._e_buffer.append(_dot)
         if len(self._e_buffer) >= 2:

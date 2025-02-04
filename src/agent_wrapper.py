@@ -11,7 +11,7 @@ import math
 from typing import Optional
 import numpy as np
 import carla
-from rlib_integration.helper import get_speed,local2world,ndarray_to_location,carla_location_to_np_array,carla_rotation_to_np_array
+from rlib_integration.helper import get_speed,local2world,ndarray_to_location,carla_location_to_np_array,carla_rotation_to_np_array,draw_waypoints
 
 
 class VehiclePIDController:
@@ -272,7 +272,7 @@ class PIDLateralController:
         _cross = np.cross(v_vec, w_vec)
         if _cross[2] < 0:
             _dot *= -1.0
-        print("dot",_dot)
+        # print("dot",_dot)
         self._e_buffer.append(_dot)
         if len(self._e_buffer) >= 2:
             _de = (self._e_buffer[-1] - self._e_buffer[-2]) / self._dt
@@ -334,7 +334,7 @@ class SetPointAgent():
         self._steps_counter = 0
 
 
-    def act(self,waypoints):
+    def run_step(self,waypoints):
 
         # Current measurements used for local2world2local transformations.
         waypoints=np.array([*waypoints.tolist(),0.0])
@@ -377,7 +377,8 @@ class SetPointAgent():
         # Converts plan to PID controller setpoint.
         # breakpoint()
         setpoint = self._map.get_waypoint(ndarray_to_location(self._setpoints_buffer),project_to_road=False)
-        print("waypoint",np.arctan2(waypoints[1],waypoints[0]))
+        # draw_waypoints( self._world,[setpoint])
+        # print("waypoint",np.arctan2(waypoints[1],waypoints[0]))
         # Avoids getting stuck when spawned.
         # if self._steps_counter <= 100:
         #     target_speed = 20.0 / 3.6

@@ -17,3 +17,5 @@ best_models/*
 src/checkpoints/*
 src/logs/*
 best_models/*
+evaluation_trajectory/*
+experiment_results/*

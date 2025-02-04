@@ -506,21 +506,7 @@ class JAXGoalExperiments(BaseExperiment):
         # # Update distance traveled
         # delta_distance = float(np.sqrt(np.square(hero_location.x - self.last_location.x) + \
         #                     np.square(hero_location.y - self.last_location.y)))
-        # self.distance_travelled += delta_distance
-        # reward=displacement
-        # yaw_diff_rad=0.0
-        # if not waypoint is None:
-        #         waypoint_yaw = waypoint.transform.rotation.yaw
-        #         yaw_diff = (vehicle_yaw - waypoint_yaw) % 360.0
-        #         if yaw_diff > 180:
-        #             yaw_diff -= 360.0
-        #         yaw_diff_rad = np.deg2rad(yaw_diff)
-        # reward = 1-(distance_to_goal/self.total_distance) # Base step penalty
-        # if self.prev_reward is None:
-        #     self.prev_reward=reward
-        # step_reward=self.prev_reward-reward
-        # self.prev_reward=reward
-        # Reward for velocity
+  
         reward=-1e-2
         if hero_velocity < self.target_speed:
             # if self.heading

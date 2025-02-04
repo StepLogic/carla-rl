@@ -211,7 +211,8 @@ class JAXMappingExperiments(BaseExperiment):
         vec[3] = self.time_idle / self.max_time_idle
         vec[4] = imu[-1]/np.pi
         vec[5] = self.heading/np.pi
-        # print("compass",np.rad2deg(imu[-1]),np.rad2deg(self.heading))
+
+        print("compass",np.rad2deg(imu[-1]),np.rad2deg(self.heading))
         if self.prev_vec_0 is None:
             self.prev_vec_0 = vec
             self.prev_vec_1 = self.prev_vec_0
@@ -549,10 +550,10 @@ class JAXMappingExperiments(BaseExperiment):
         if hero_velocity < self.target_speed:
             # if self.heading
             # reward += np.cos(imu[-1]-self.heading)*delta_distance
-            reward += delta_distance 
+            reward -= displacement 
             # re   
-        else:
-            reward -= 0.0  # Optional penalty for exceeding target speed
+        # else:
+            # reward -= 0.0  # Optional penalty for exceeding target speed
         # print(f"Goal {self.done_goal} Lane {self.diff_lane}")
         # Goal reward
         # print(reward,distance_to_goal,self.total_distance)

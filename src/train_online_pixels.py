@@ -17,6 +17,8 @@ from jaxrl2.noise import OrnsteinUhlenbeckActionNoise
 from jaxrl2.wrappers.frame_stack import FrameStack
 from jaxrl2.wrappers.record_statistics import RecordEpisodeStatistics
 from jaxrl2.wrappers.timelimit import TimeLimit
+
+# from jax_experiments_goal import JAXGoalExperiments
 from src.jax_experiments_goal import JAXGoalExperiments
 
 flax.config.update('flax_use_orbax_checkpointing', True)
@@ -216,7 +218,7 @@ flags.DEFINE_boolean("save_video", False, "Save videos during evaluation.")
 flags.DEFINE_boolean("save_buffer", False, "Save the replay buffer.")
 config_flags.DEFINE_config_file(
     "config",
-    "./configs/drq_default.py",
+    "./src/configs/drq_default.py",
     "File path to the training hyperparameter configuration.",
     lock_config=False,
 )
@@ -340,7 +342,7 @@ def main(_):
     # Create environment
     env = CarlaGoalEnv(config["env_config"])
     env = FrameStack(env=env, num_stack=1,stacking_key="pixels")
-    env = FrameStack(env=env, num_stack=1,stacking_key="goal")
+    # env = FrameStack(env=env, num_stack=1,stacking_key="goal")
     env = TimeLimit(env,max_episode_steps=2500)
     env = RecordEpisodeStatistics(env)
     action_dim = 2

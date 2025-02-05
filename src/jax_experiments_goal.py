@@ -55,7 +55,7 @@ def get_curve(points):
     return curve
 
 class JAXGoalExperiments(BaseExperiment):
-    def __init__(self,config={},is_rgb=False):
+    def __init__(self,config={},is_rgb=True):
         super().__init__(config)
         self.frame_stack = self.config["others"]["framestack"]
         self.max_time_idle = self.config["others"]["max_time_idle"]
@@ -64,8 +64,8 @@ class JAXGoalExperiments(BaseExperiment):
         self.is_rgb=is_rgb
         self.allowed_types = [carla.LaneType.Driving, carla.LaneType.Parking]
         self.last_action = None
-        self.max_steer = 0.5
-        self.max_throttle = 0.6
+        self.max_steer = 1.0
+        self.max_throttle = 1.0
         self.prev_steer = 0.0
         self.prev_throttle = 0.0
         self.trajectories = None
@@ -139,19 +139,19 @@ class JAXGoalExperiments(BaseExperiment):
             shape=(self.image_size, self.image_size,channel,),
             dtype=np.float32,
         )
-        goal_image_space = Box(
-            low=-1.0,
-            high=1.0,
-            shape=(self.image_size, self.image_size,channel),
-            dtype=np.float32,
-        )
+        # goal_image_space = Box(
+        #     low=-1.0,
+        #     high=1.0,
+        #     shape=(self.image_size, self.image_size,channel),
+        #     dtype=np.float32,
+        # )
         vec_space = Box(
             low=-5.1,
             high=5.1,
             shape=(6 * self.frame_stack,),
             dtype=np.float32,
         )
-        return gym.spaces.Dict({"pixels":image_space,"goal":goal_image_space, "vector":vec_space})
+        return gym.spaces.Dict({"pixels":image_space, "vector":vec_space})
 
     def get_action_space(self):
         return Box(
@@ -185,8 +185,8 @@ class JAXGoalExperiments(BaseExperiment):
         return action
     def get_observation(self, sensor_data, core):
         vecs = self.get_vec_obs(sensor_data, core)
-        images, goal = self.get_img_obs(sensor_data, core)
-        return {"pixels":images, "goal":goal, "vector":vecs}, self.info
+        images = self.get_img_obs(sensor_data, core)
+        return {"pixels":images, "vector":vecs}, self.info
     
     def set_goal(self,goal_image,heading):
         self.goal_image=goal_image
@@ -204,7 +204,7 @@ class JAXGoalExperiments(BaseExperiment):
         vec[0] = self.prev_steer / self.max_steer
         vec[1] = self.prev_throttle / self.max_throttle
         hero = core.hero
-        vec[2] = np.clip(self.get_speed(hero)/self.target_speed, 0.0, 1.0)
+        vec[2] = self.get_speed(hero)
         vec[3] = self.time_idle / self.max_time_idle
         vec[4] = imu[-1]/np.pi
         vec[5] = self.heading/np.pi
@@ -227,7 +227,7 @@ class JAXGoalExperiments(BaseExperiment):
     
     def get_img_obs(self, sensor_data, core):
         image = post_process_image(sensor_data['rgb'][1], crop=False, normalized=True, grayscale=not self.is_rgb,image_size=self.image_size)
-        goal =  post_process_image(sensor_data['goal'][1][0], crop=False, normalized=True, grayscale=not self.is_rgb,image_size=self.image_size) if self.goal_image  is None else  self.goal_image 
+        # goal =  post_process_image(sensor_data['goal'][1][0], crop=False, normalized=True, grayscale=not self.is_rgb,image_size=self.image_size) if self.goal_image  is None else  self.goal_image 
         if self.prev_image_0 is None:
             self.prev_image_0 = image
             self.prev_image_1 = self.prev_image_0
@@ -244,7 +244,7 @@ class JAXGoalExperiments(BaseExperiment):
         self.prev_image_1 = self.prev_image_0
         self.prev_image_0 = image
 
-        return images, goal
+        return images
     
     def get_speed(self, hero):
         vel = hero.get_velocity()
@@ -268,15 +268,16 @@ class JAXGoalExperiments(BaseExperiment):
         self.done_falling = hero.get_location().z < -0.5
         self.diff_lane = 'lane_invasion' in sensor_data.keys() or wp is None
         self.collision = 'collision' in sensor_data.keys()
+        current_heading = sensor_data['imu'][1][-1]
         # self.done_goal = self.check_goal_reached(core,hero,goal_location,sensor_data['goal'][1][-3])
         # image = post_process_image(sensor_data['rgb'][1], crop=False, normalized=True, grayscale=True,image_size=self.image_size)
         # goal = post_process_image(sensor_data['goal'][1][0], crop=False, normalized=True, grayscale=True,image_size=self.image_size)
         # self.done_goal = self.check_goal_reached(sensor_data['rgb'][1],sensor_data['goal'][1][0] if self.goal_image  is None else self.goal_image ) 
-        self.done_goal = self.check_goal_reached(sensor_data['rgb'][1],sensor_data['goal'][1][0],goal_location ,carla_location_to_np_array(hero.get_transform().location))
- 
+        # self.done_goal = self.check_goal_reached(sensor_data['rgb'][1],sensor_data['goal'][1][0],goal_location ,carla_location_to_np_array(hero.get_transform().location))
+        self.done_dist = self.distance_travelled > self.max_dist
 
         done = (self.done_time_idle or self.done_falling or self.diff_lane or 
-                self.collision or self.done_goal)
+                self.collision or self.done_dist)
         # done = distance_to_goal <= 1.5
         # if done:
         self.info = dict(
@@ -295,62 +296,62 @@ class JAXGoalExperiments(BaseExperiment):
                     self.running_success_rate=deque(maxlen=100)
                     self.curriculum_step+=1
         return done
-    def check_goal_reached(self,image,goal_image,goal_location=None,hero_location=None):
-            # breakpoint()
-            # img1 = cv2.imread('Q/IMG_1192.JPG', 0)          # queryImage
-            # img2 = cv2.imread('DB/IMG_1208-1000.jpg', 0) # trainImage
-            if abs(self.distance_travelled) < self.goal_threshold*2:
-                        return False
-            dist=np.linalg.norm(goal_location[:2]-hero_location[:2])     
-            # Initiate SIFT detector
-            image=post_process_image(image, crop=False, normalized=False, grayscale=False,image_size=self.image_size)
-            sift = cv2.xfeatures2d.SIFT_create()
-            # find the keypoints and descriptors with SIFT
+    # def check_goal_reached(self,image,goal_image,goal_location=None,hero_location=None):
+    #         # breakpoint()
+    #         # img1 = cv2.imread('Q/IMG_1192.JPG', 0)          # queryImage
+    #         # img2 = cv2.imread('DB/IMG_1208-1000.jpg', 0) # trainImage
+    #         if abs(self.distance_travelled) < self.goal_threshold*2:
+    #                     return False
+    #         dist=np.linalg.norm(goal_location[:2]-hero_location[:2])     
+    #         # Initiate SIFT detector
+    #         image=post_process_image(image, crop=False, normalized=False, grayscale=False,image_size=self.image_size)
+    #         sift = cv2.xfeatures2d.SIFT_create()
+    #         # find the keypoints and descriptors with SIFT
             
-            kp1, des1 = sift.detectAndCompute(image,None)
-            kp2, des2 = sift.detectAndCompute(goal_image,None)
-            if des1 is None or len(kp2) < 2:
-                return False
+    #         kp1, des1 = sift.detectAndCompute(image,None)
+    #         kp2, des2 = sift.detectAndCompute(goal_image,None)
+    #         if des1 is None or len(kp2) < 2:
+    #             return False
             
-            FLANN_INDEX_KDTREE = 1
-            index_params = dict(algorithm = FLANN_INDEX_KDTREE, trees = 5)
-            search_params = dict(checks=50)   # or pass empty dictionary
+    #         FLANN_INDEX_KDTREE = 1
+    #         index_params = dict(algorithm = FLANN_INDEX_KDTREE, trees = 5)
+    #         search_params = dict(checks=50)   # or pass empty dictionary
              
-            flann = cv2.FlannBasedMatcher(index_params,search_params)
+    #         flann = cv2.FlannBasedMatcher(index_params,search_params)
              
-            matches = flann.knnMatch(des1,des2,k=2)
-            # print("matches",len(matches))
-            # Need to draw only good matches, so create a mask
-            matchesMask = [[0,0] for i in range(len(matches))]
-            num_good_matches=0
+    #         matches = flann.knnMatch(des1,des2,k=2)
+    #         # print("matches",len(matches))
+    #         # Need to draw only good matches, so create a mask
+    #         matchesMask = [[0,0] for i in range(len(matches))]
+    #         num_good_matches=0
 
-            # ratio test as per Lowe's paper
-            # Perform matching
-            # matches = self.matcher.knnMatch(descriptors1, self.goal_descriptors, k=2)
+    #         # ratio test as per Lowe's paper
+    #         # Perform matching
+    #         # matches = self.matcher.knnMatch(descriptors1, self.goal_descriptors, k=2)
             
-            # Count good matches using numpy for speed
-            # Convert matches to distance ratios
-            # print("dist",dist)
-            if len(matches) < 2:
-                return False
+    #         # Count good matches using numpy for speed
+    #         # Convert matches to distance ratios
+    #         # print("dist",dist)
+    #         if len(matches) < 2:
+    #             return False
                 
-            distances = np.array([[m.distance if m is not None else np.inf for m in match] 
-                                for match in matches])
-            good_matches = np.sum(distances[:, 0] < 0.001 * distances[:, 1])
+    #         distances = np.array([[m.distance if m is not None else np.inf for m in match] 
+    #                             for match in matches])
+    #         good_matches = np.sum(distances[:, 0] < 0.001 * distances[:, 1])
             
-            # draw_params = dict(matchColor = (0,255,0),
-            #                    singlePointColor = (255,0,0),
-            #                    matchesMask = matchesMask,
-            #                    flags = cv2.DrawMatchesFlags_DEFAULT)
-            match_percentage = good_matches / len(matches)
-            # print(match_percentage)
-            # if  match_percentage > 0.09:
-            # img3 = cv2.drawMatchesKnn(image,kp1,goal_image,kp2,matches,None,**draw_params)             
-            # cv2.imwrite("test.jpg",img3)
-            # print("num_good_matches",match_percentage)
-            self.match_features=match_percentage/0.09
-            # print(match_percentage,dist)
-            return match_percentage > 0.9 or dist<5.0
+    #         # draw_params = dict(matchColor = (0,255,0),
+    #         #                    singlePointColor = (255,0,0),
+    #         #                    matchesMask = matchesMask,
+    #         #                    flags = cv2.DrawMatchesFlags_DEFAULT)
+    #         match_percentage = good_matches / len(matches)
+    #         # print(match_percentage)
+    #         # if  match_percentage > 0.09:
+    #         # img3 = cv2.drawMatchesKnn(image,kp1,goal_image,kp2,matches,None,**draw_params)             
+    #         # cv2.imwrite("test.jpg",img3)
+    #         # print("num_good_matches",match_percentage)
+    #         self.match_features=match_percentage/0.09
+    #         # print(match_percentage,dist)
+    #         return match_percentage > 0.9 or dist<5.0
 
     # def check_goal_reached(self, core, hero, goal_location, distance_to_goal, distance_threshold=2.0, angle_threshold=45.0):
     #     """
@@ -473,10 +474,10 @@ class JAXGoalExperiments(BaseExperiment):
             self.last_distance_to_goal = distance_to_goal
         
         displacement=np.dot(carla_location_to_np_array(hero_location)-carla_location_to_np_array(self.last_location),goal_loc/np.linalg.norm(goal_loc))
-        self.distance_travelled_toward_goal-=displacement
+        self.distance_travelled_toward_goal = 0.0
         delta_distance = float(np.sqrt(np.square(hero_location.x - self.last_location.x) + \
                             np.square(hero_location.y - self.last_location.y)))
-        self.distance_travelled += delta_distance
+        # self.distance_travelled += delta_distance
         imu = sensor_data['imu'][1]
         # self.heading = sensor_data['goal'][1][-1]
 
@@ -506,20 +507,25 @@ class JAXGoalExperiments(BaseExperiment):
         # # Update distance traveled
         # delta_distance = float(np.sqrt(np.square(hero_location.x - self.last_location.x) + \
         #                     np.square(hero_location.y - self.last_location.y)))
-  
-        reward=-1e-2
-        if hero_velocity < self.target_speed:
+        delta_heading=abs(imu[-1]-self.heading)
+        goal_direction=np.array([np.cos(delta_heading),np.sin(delta_heading)])
+        delta_pos=carla_location_to_np_array(hero_location)-carla_location_to_np_array(self.last_location)
+        displacement=np.dot(delta_pos,goal_direction)
+        self.distance_travelled += displacement
+        reward=0.0
+        # if hero_velocity < self.target_speed:
             # if self.heading
             # reward += np.cos(imu[-1]-self.heading)*delta_distance
-            reward += delta_distance*np.cos(imu[-1]-self.heading)
+        reward += displacement
+            # print(np.cos(imu[-1]-self.heading),self.heading,imu[-1],delta_distance)
             # re   
-        else:
-            reward -= 0.0  # Optional penalty for exceeding target speed
+        # else:
+        # reward -= 0.0  # Optional penalty for exceeding target speed
         # print(f"Goal {self.done_goal} Lane {self.diff_lane}")
         # Goal reward
         # print(reward,distance_to_goal,self.total_distance)
-        if self.done_goal:
-            print(f"Goal reached :travelled {self.distance_travelled}")
+        if self.done_dist:
+            print(f"Max dist :travelled {self.distance_travelled}")
             reward += 1.0 
         elif self.done_falling or self.collision or self.done_time_idle or self.diff_lane:
             print(f"Truncated :travelled {self.distance_travelled} idle:{self.done_time_idle} falling :{self.done_falling} diff {self.diff_lane} or collision {self.collision}")
@@ -527,4 +533,4 @@ class JAXGoalExperiments(BaseExperiment):
         # Scale the reward
         self.last_location = hero_location
         self.last_distance_to_goal = distance_to_goal
-        return reward*10
+        return reward

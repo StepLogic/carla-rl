@@ -27,7 +27,7 @@ here = os.path.abspath(os.path.dirname(__file__))
 # version = _metadata.__version__
 
 setup(
-    name="vision_rl",
+    name="carla-rl",
     # version=version,
     description=
     "This a tool for RL develpment and Testin in CARLA",

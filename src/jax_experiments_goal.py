@@ -1,3 +1,4 @@
+import random
 import carla
 import cv2
 import gymnasium as gym
@@ -197,7 +198,9 @@ class JAXGoalExperiments(BaseExperiment):
         # self.heading = sensor_data['goal'][1][-1]
         # breakpoint()
         if self.heading is None:
-            self.heading = sensor_data['goal'][1][-1]
+            # self.heading = sensor_data['goal'][1][-1]
+            # self.heading=random.random(-np.pi/2,np.pi/np.pi)
+            self.heading = random.uniform(-np.pi/2, np.pi/2)
         # self.heading =  np.deg2rad(absolute_heading(sensor_data['goal'][1][-1]))
 
         vec = np.zeros(5)
@@ -206,8 +209,7 @@ class JAXGoalExperiments(BaseExperiment):
         hero = core.hero
         vec[2] = self.get_speed(hero)/self.target_speed
         vec[3] = self.time_idle / self.max_time_idle
-        vec[4] = np.clip((imu[-1]-self.heading),np.pi/2,-np.pi/2)
-        
+        vec[4] =(imu[-1]-self.heading)/np.pi
         # print("compass",np.rad2deg(imu[-1]),np.rad2deg(self.heading))
         if self.prev_vec_0 is None:
             self.prev_vec_0 = vec
@@ -477,7 +479,7 @@ class JAXGoalExperiments(BaseExperiment):
         self.distance_travelled_toward_goal = 0.0
         delta_distance = float(np.sqrt(np.square(hero_location.x - self.last_location.x) + \
                             np.square(hero_location.y - self.last_location.y)))
-        self.distance_travelled += delta_distance
+        # self.distance_travelled += delta_distance
         imu = sensor_data['imu'][1]
         # self.heading = sensor_data['goal'][1][-1]
 
@@ -507,16 +509,22 @@ class JAXGoalExperiments(BaseExperiment):
         # # Update distance traveled
         # delta_distance = float(np.sqrt(np.square(hero_location.x - self.last_location.x) + \
         #                     np.square(hero_location.y - self.last_location.y)))
-        delta_heading=np.clip((imu[-1]-self.heading),np.pi/2,-np.pi/2)
+        delta_heading=imu[-1]-self.heading
         # goal_direction=np.array([np.cos(delta_heading),np.sin(delta_heading)])
         # delta_pos=carla_location_to_np_array(hero_location)-carla_location_to_np_array(self.last_location)
         # displacement=np.dot(delta_pos[:2],goal_direction)
-        # self.distance_travelled += displacement
+        self.distance_travelled += np.cos(delta_heading)*delta_distance
+        # print(displacement)
+        deg=np.pi/2
+        heading=1-abs(delta_heading)/deg
         reward=0.0
+        
+        # print(heading,delta_heading,imu[-1],self.heading)
         if hero_velocity < self.target_speed:
             # if self.heading
-            # reward += np.cos(imu[-1]-self.heading)*delta_distance
-            reward += delta_distance - 2*(delta_heading)/np.pi
+            reward += delta_distance + delta_distance * heading
+            # reward += (np.clip(hero_velocity/self.target_speed,0,1.0) + heading + delta_distance)/3
+            # reward+=displacement
             # print(np.cos(imu[-1]-self.heading),self.heading,imu[-1],delta_distance)
             # re   
         # else:

@@ -167,7 +167,7 @@ class JAXGoalExperiments(BaseExperiment):
         # print(steer,throttle_brake)
         action = carla.VehicleControl()
         # steer=steer+self.prev_steer
-        action.steer = float(np.clip(steer, -self.max_steer, self.max_steer))
+        action.steer = float(np.clip(steer+self.prev_steer, -self.max_steer, self.max_steer))
         # throttle_brake=self.prev_throttle+throttle_brake
         if throttle_brake >= 0:
             action.throttle = float(np.clip(throttle_brake, 0.0, self.max_throttle))
@@ -207,7 +207,7 @@ class JAXGoalExperiments(BaseExperiment):
         vec[0] = self.prev_steer / self.max_steer
         vec[1] = self.prev_throttle / self.max_throttle
         hero = core.hero
-        vec[2] = self.get_speed(hero)/self.target_speed
+        vec[2] = np.clip(self.get_speed(hero)/self.target_speed,0,1.0)
         vec[3] = self.time_idle / self.max_time_idle
         # vec[4] =(imu[-1]-self.heading)/np.pi
         # print("compass",np.rad2deg(imu[-1]),np.rad2deg(self.heading))
@@ -268,7 +268,7 @@ class JAXGoalExperiments(BaseExperiment):
         goal_location = sensor_data['goal'][1][-2]
         distance_to_goal = np.linalg.norm(goal_location[:2]-carla_location_to_np_array(hero.get_transform().location)[:2])
         self.done_falling = hero.get_location().z < -0.5
-        self.diff_lane = 'lane_invasion' in sensor_data.keys() or wp is None
+        self.diff_lane = 'lane_invasion' in sensor_data.keys()
         self.collision = 'collision' in sensor_data.keys()
         current_heading = sensor_data['imu'][1][-1]
         # self.done_goal = self.check_goal_reached(core,hero,goal_location,sensor_data['goal'][1][-3])
@@ -504,10 +504,11 @@ class JAXGoalExperiments(BaseExperiment):
         
         # Calculate reward components
         reward = 0.0
-        reward += min(delta_distance, 5e-2)  # Reward for moving forward
+        if hero_velocity<self.target_speed:
+            reward += delta_distance  # Reward for moving forward
         
-        # Add heading alignment reward
-        reward += heading_factor * 1e-2  # Scale heading factor
+        # # Add heading alignment reward
+        # reward += heading_factor * 1e-2  # Scale heading factor
         
         # Penalize if the episode is truncated due to failure conditions
         if self.done_dist:

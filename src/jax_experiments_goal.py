@@ -455,95 +455,75 @@ class JAXGoalExperiments(BaseExperiment):
     #         angle_ok = angle_deg < angle_threshold
     #         speed_ok = speed < 0.1  # Optional speed check
     #         return distance_ok and angle_ok , speed_ok
-
-
     def compute_reward(self, sensor_data, core):
         hero = core.hero
         goal_loc = sensor_data['goal'][1][-2]
         hero_location = hero.get_location()
         hero_velocity = self.get_speed(hero)
-        distance_to_goal = np.linalg.norm(goal_loc[:2]-carla_location_to_np_array(hero_location)[:2])
-        if self.total_distance is None:
-            self.total_distance = np.linalg.norm(goal_loc[:2]-carla_location_to_np_array(hero_location)[:2])
-            assert np.allclose(distance_to_goal,self.total_distance)
-        # hero_velocity=np.dot(carla_location_to_np_array(hero.get_velocity()),goal_loc/np.linalg.norm(goal_loc))
         
-      
-        # print(self.total_distance,distance_to_goal)
-        # displ=np.dot(carla_location_to_np_array(hero.get_velocity()),goal_location/np.linalg.norm(goal_location))
+        # Calculate distance to goal
+        distance_to_goal = np.linalg.norm(goal_loc[:2] - carla_location_to_np_array(hero_location)[:2])
+        
+        # Initialize total distance if not already set
+        if self.total_distance is None:
+            self.total_distance = distance_to_goal
+        
+        # Ensure distance_to_goal is not NaN
+        if np.isnan(distance_to_goal):
+            distance_to_goal = self.total_distance  # Fallback to total distance if NaN
+        
+        # Calculate delta distance from last location
         if self.last_location is None:
             self.last_location = hero_location
             self.last_distance_to_goal = distance_to_goal
         
-        # displacement=np.dot(carla_location_to_np_array(hero_location)-carla_location_to_np_array(self.last_location),goal_loc/np.linalg.norm(goal_loc))
-        self.distance_travelled_toward_goal = 0.0
-        delta_distance = float(np.sqrt(np.square(hero_location.x - self.last_location.x) + \
-                            np.square(hero_location.y - self.last_location.y)))
-        # self.distance_travelled += delta_distance
+        delta_distance = float(np.sqrt(np.square(hero_location.x - self.last_location.x) + 
+                                    np.square(hero_location.y - self.last_location.y)))
+        
+        # Ensure delta_distance is not NaN
+        if np.isnan(delta_distance):
+            delta_distance = 0.0
+        
+        # Update distance travelled
+        self.distance_travelled += delta_distance
+        
+        # Get IMU data for heading
         imu = sensor_data['imu'][1]
-        # self.heading = sensor_data['goal'][1][-1]
-
-        # print("compass",np.rad2deg(imu[-1]),np.rad2deg(self.heading))
-        # vehicle_transform = hero.get_transform()
-        # vehicle_yaw = vehicle_transform.rotation.yaw
-
-        # Get waypoint's yaw
-        # waypoint = core.map.get_waypoint(hero_location)
-
-        # Dense progress reward
-        # reward = min(distance_to_goal/self.total_distance,1.0)
-        # heading_diff = min(abs(self.heading - imu[-1]), 2*np.pi - abs(self.heading - imu[-1]))
-        # heading_reward = np.cos(heading_diff)  # Peaks at 1 when aligned, -1 when opposite
+        delta_heading = imu[-1] - self.heading
         
-        # reward=heading_reward + self.match_features
-        # # Speed matching reward
-        # speed_reward = -min(abs(self.target_speed-hero_velocity)/self.target_speed,1.0)
-        # reward += speed_reward
+        # Ensure delta_heading is within [-pi, pi]
+        delta_heading = (delta_heading + np.pi) % (2 * np.pi) - np.pi
         
-        # Heading alignment reward
-        # heading = sensor_data['imu'][1][-1]
-        # heading_diff = abs(self.heading - heading)
-        # heading_reward = -heading_diff/(2*np.pi)
-        # reward += 0.1 * heading_reward
-
-        # # Update distance traveled
-        # delta_distance = float(np.sqrt(np.square(hero_location.x - self.last_location.x) + \
-        #                     np.square(hero_location.y - self.last_location.y)))
-        delta_heading=imu[-1]-self.heading
-        # goal_direction=np.array([np.cos(delta_heading),np.sin(delta_heading)])
-        # delta_pos=carla_location_to_np_array(hero_location)-carla_location_to_np_array(self.last_location)
-        # displacement=np.dot(delta_pos[:2],goal_direction)
-
-        # print(displacement)
-        deg=np.pi/2
-        heading=1-abs(delta_heading)/deg
-        reward=0.0
-        distance_travelled = self.distance_travelled + delta_distance
-        # print(heading,delta_heading,imu[-1],self.heading)
-        # if hero_velocity < self.target_speed:
-            # if self.heading
-            # reward += distance_travelled - self.distance_travelled 
-        heading_factor=np.cos(np.clip(heading,-deg,deg))
-        reward += min(delta_distance,5e-2)
-            
-            # reward += (delta_heading<deg/2 and hero_velocity>1.0)*1.0
-            # reward += (np.clip(hero_velocity/self.target_speed,0,1.0) + heading + delta_distance)/3
-            # reward+=displacement
-            # print(np.cos(imu[-1]-self.heading),self.heading,imu[-1],delta_distance)
-            # re   
-        # else:
-        # reward -= 0.0  # Optional penalty for exceeding target speed
-        # print(f"Goal {self.done_goal} Lane {self.diff_lane}")
-        # Goal reward
-        self.distance_travelled=max(distance_travelled,0)
-        # print(reward,distance_to_goal,self.total_distance)
+        # Calculate heading factor
+        deg = np.pi / 2
+        heading_factor = np.cos(np.clip(delta_heading, -deg, deg))
+        
+        # Ensure heading_factor is not NaN
+        if np.isnan(heading_factor):
+            heading_factor = 0.0
+        
+        # Calculate reward components
+        reward = 0.0
+        reward += min(delta_distance, 5e-2)  # Reward for moving forward
+        
+        # Add heading alignment reward
+        reward += heading_factor * 1e-2  # Scale heading factor
+        
+        # Penalize if the episode is truncated due to failure conditions
         if self.done_dist:
-            print(f"Max dist :travelled {self.distance_travelled}")
-            reward += 1.0 
+            print(f"Max dist: travelled {self.distance_travelled}")
+            reward += 1.0  # Reward for reaching max distance
         elif self.done_falling or self.collision or self.done_time_idle or self.diff_lane:
-            # print(f"Truncated :travelled {self.distance_travelled} idle:{self.done_time_idle} falling :{self.done_falling} diff {self.diff_lane} or collision {self.collision}")
-            reward += -1.0
-        # Scale the reward
+            print(f"Truncated: travelled {self.distance_travelled}, idle: {self.done_time_idle}, "
+                f"falling: {self.done_falling}, diff lane: {self.diff_lane}, collision: {self.collision}")
+            reward -= 1.0  # Penalty for failure conditions
+        
+        # Ensure reward is not NaN
+        if np.isnan(reward):
+            reward = 0.0
+        
+        # Update last location and distance to goal
         self.last_location = hero_location
         self.last_distance_to_goal = distance_to_goal
-        return reward*10
+        
+        return reward * 10  # Scale the reward

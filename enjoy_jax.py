@@ -123,7 +123,7 @@ def main(_):
                 "enable_map_assets": True,
                 "enable_rendering": True,
                 "show_display": True,
-                "town": "Town01"
+                "town": "Town04"
             },
             "experiment": {
                 "type": JAXGoalExperiments,
@@ -165,7 +165,7 @@ def main(_):
     env = CarlaGoalEnv(config["env_config"])
     # env = CarlaEvalEnv(config["env_config"])
     env = FrameStack(env=env, num_stack=1, stacking_key="pixels")
-    env = FrameStack(env=env, num_stack=1, stacking_key="goal")
+    # env = FrameStack(env=env, num_stack=1, stacking_key="goal")
     env = TimeLimit(env, max_episode_steps=2500)
     env = RecordEpisodeStatistics(env)
     

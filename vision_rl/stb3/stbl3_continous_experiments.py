@@ -72,7 +72,7 @@ class STBL3Experiment(BaseExperiment):
         vec_space = Box(
             low=-5.1,
             high=5.1,
-            shape=(4 * self.frame_stack,),
+            shape=(5 * self.frame_stack,),
             dtype=np.float32,
         )
 
@@ -127,15 +127,15 @@ class STBL3Experiment(BaseExperiment):
 
     def get_vec_obs(self, sensor_data, core):
         # breakpoint()
-        vec = np.zeros(4)
+        heading=sensor_data["goal_heading"][-1][-1]
+        imu=sensor_data["imu"][-1][-1]
+        vec = np.zeros(5)
         vec[0] = self.prev_steer / self.max_steer
         vec[1] = self.prev_throttle / self.max_throttle
-        
         hero = core.hero
         vec[2] = np.clip(self.get_speed(hero)/self.target_speed, 0.0, 1.0)
-
         vec[3] = self.time_idle / self.max_time_idle
-
+        vec[4]= np.clip(abs(imu-heading),-np.pi/2,np.pi/2) 
         if self.prev_vec_0 is None:
             self.prev_vec_0 = vec
             self.prev_vec_1 = self.prev_vec_0
@@ -206,7 +206,9 @@ class STBL3Experiment(BaseExperiment):
 
     def compute_reward(self, sensor_data, core):
         hero = core.hero
-
+        heading=sensor_data["goal_heading"][-1][-1]
+        imu=sensor_data["imu"][-1][-1]
+        delta_heading=np.clip(abs(imu-heading),0,np.pi/2)
         # Hero-related variables
         hero_location = hero.get_location()
         hero_velocity = self.get_speed(hero)
@@ -219,7 +221,7 @@ class STBL3Experiment(BaseExperiment):
         delta_distance = float(np.sqrt(np.square(hero_location.x - self.last_location.x) + \
                             np.square(hero_location.y - self.last_location.y)))
         
-        distance_travelled=self.distance_travelled+delta_distance
+        distance_travelled=self.distance_travelled+delta_distance+np.cos(delta_heading)
         # Update variables
         self.last_location = hero_location
         self.last_velocity = hero_velocity

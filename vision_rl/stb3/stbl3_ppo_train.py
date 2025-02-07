@@ -34,7 +34,7 @@ class CarlaCNN(BaseFeaturesExtractor):
             n_flatten = self.cnn(torch.zeros(1, 1, 84, 84)).shape[1]
         
         self.linear = nn.Sequential(
-            nn.Linear(n_flatten + 4, features_dim),  # +4 for the vector observations
+            nn.Linear(n_flatten + 5, features_dim),  # +4 for the vector observations
             nn.ReLU()
         )
 

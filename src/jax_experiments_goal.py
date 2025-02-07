@@ -56,7 +56,7 @@ def get_curve(points):
     return curve
 
 class JAXGoalExperiments(BaseExperiment):
-    def __init__(self,config={},is_rgb=True):
+    def __init__(self,config={},is_rgb=False):
         super().__init__(config)
         self.frame_stack = self.config["others"]["framestack"]
         self.max_time_idle = self.config["others"]["max_time_idle"]
@@ -149,7 +149,7 @@ class JAXGoalExperiments(BaseExperiment):
         vec_space = Box(
             low=-5.1,
             high=5.1,
-            shape=(5 * self.frame_stack,),
+            shape=(4 * self.frame_stack,),
             dtype=np.float32,
         )
         return gym.spaces.Dict({"pixels":image_space, "vector":vec_space})
@@ -166,9 +166,9 @@ class JAXGoalExperiments(BaseExperiment):
         steer, throttle_brake = action
         # print(steer,throttle_brake)
         action = carla.VehicleControl()
-        steer=steer+self.prev_steer
+        # steer=steer+self.prev_steer
         action.steer = float(np.clip(steer, -self.max_steer, self.max_steer))
-        throttle_brake=self.prev_throttle+throttle_brake
+        # throttle_brake=self.prev_throttle+throttle_brake
         if throttle_brake >= 0:
             action.throttle = float(np.clip(throttle_brake, 0.0, self.max_throttle))
             action.brake = 0.0
@@ -198,18 +198,18 @@ class JAXGoalExperiments(BaseExperiment):
         # self.heading = sensor_data['goal'][1][-1]
         # breakpoint()
         if self.heading is None:
-            # self.heading = sensor_data['goal'][1][-1]
+            self.heading = sensor_data['goal'][1][-1]
             # self.heading=random.random(-np.pi/2,np.pi/np.pi)
-            self.heading = random.uniform(-np.pi/2, np.pi/2)
+            # self.heading = random.uniform(-np.pi/2, np.pi/2)
         # self.heading =  np.deg2rad(absolute_heading(sensor_data['goal'][1][-1]))
 
-        vec = np.zeros(5)
+        vec = np.zeros(4)
         vec[0] = self.prev_steer / self.max_steer
         vec[1] = self.prev_throttle / self.max_throttle
         hero = core.hero
         vec[2] = self.get_speed(hero)/self.target_speed
         vec[3] = self.time_idle / self.max_time_idle
-        vec[4] =(imu[-1]-self.heading)/np.pi
+        # vec[4] =(imu[-1]-self.heading)/np.pi
         # print("compass",np.rad2deg(imu[-1]),np.rad2deg(self.heading))
         if self.prev_vec_0 is None:
             self.prev_vec_0 = vec
@@ -513,16 +513,20 @@ class JAXGoalExperiments(BaseExperiment):
         # goal_direction=np.array([np.cos(delta_heading),np.sin(delta_heading)])
         # delta_pos=carla_location_to_np_array(hero_location)-carla_location_to_np_array(self.last_location)
         # displacement=np.dot(delta_pos[:2],goal_direction)
-        self.distance_travelled += np.cos(delta_heading)*delta_distance
+
         # print(displacement)
         deg=np.pi/2
         heading=1-abs(delta_heading)/deg
         reward=0.0
-        
+        distance_travelled = self.distance_travelled + delta_distance
         # print(heading,delta_heading,imu[-1],self.heading)
-        if hero_velocity < self.target_speed:
+        # if hero_velocity < self.target_speed:
             # if self.heading
-            reward += delta_distance
+            # reward += distance_travelled - self.distance_travelled 
+        heading_factor=np.cos(np.clip(heading,-deg,deg))
+        reward += min(delta_distance,5e-2)
+            
+            # reward += (delta_heading<deg/2 and hero_velocity>1.0)*1.0
             # reward += (np.clip(hero_velocity/self.target_speed,0,1.0) + heading + delta_distance)/3
             # reward+=displacement
             # print(np.cos(imu[-1]-self.heading),self.heading,imu[-1],delta_distance)
@@ -531,12 +535,13 @@ class JAXGoalExperiments(BaseExperiment):
         # reward -= 0.0  # Optional penalty for exceeding target speed
         # print(f"Goal {self.done_goal} Lane {self.diff_lane}")
         # Goal reward
+        self.distance_travelled=max(distance_travelled,0)
         # print(reward,distance_to_goal,self.total_distance)
         if self.done_dist:
             print(f"Max dist :travelled {self.distance_travelled}")
             reward += 1.0 
         elif self.done_falling or self.collision or self.done_time_idle or self.diff_lane:
-            print(f"Truncated :travelled {self.distance_travelled} idle:{self.done_time_idle} falling :{self.done_falling} diff {self.diff_lane} or collision {self.collision}")
+            # print(f"Truncated :travelled {self.distance_travelled} idle:{self.done_time_idle} falling :{self.done_falling} diff {self.diff_lane} or collision {self.collision}")
             reward += -1.0
         # Scale the reward
         self.last_location = hero_location

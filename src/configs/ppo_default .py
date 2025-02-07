@@ -14,4 +14,6 @@ def get_config():
     config.encoder = "d4pg"
     config.discount = 0.98
     config.critic_reduction = "mean"
+    config.clip_ratio = 0.2  # Add clip ratio
+    config.gae_lambda = 0.95  # Add GAE lambda
     return config

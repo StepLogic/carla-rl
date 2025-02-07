@@ -217,7 +217,7 @@ flags.DEFINE_boolean("save_video", False, "Save videos during evaluation.")
 flags.DEFINE_boolean("save_buffer", False, "Save the replay buffer.")
 config_flags.DEFINE_config_file(
     "config",
-    "./src/configs/drq_default.py",
+    "./src/configs/ppo_default.py",
     "File path to the training hyperparameter configuration.",
     lock_config=False,
 )
@@ -366,7 +366,6 @@ def main(_):
         FLAGS.seed, 
         env.observation_space.sample(), 
         env.action_space.sample(), 
-        # num_qs=10,
         **kwargs
     )
     
@@ -405,7 +404,7 @@ def main(_):
     eval_success_history = deque(maxlen=100)
 
     distance_to_goal_history = deque(maxlen=100)  # Track last 100 episodes
-    eval_distance_to_goal_history = deque(maxlen=100)  # Track last 100 episodes
+    # eval_distance_to_goal_history = deque(maxlen=100)  # Track last 100 episodes
     # Main training loop
     observation, info, done = *env.reset(), False
     training_start_time = time.time()

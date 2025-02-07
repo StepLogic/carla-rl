@@ -522,7 +522,7 @@ class JAXGoalExperiments(BaseExperiment):
         # print(heading,delta_heading,imu[-1],self.heading)
         if hero_velocity < self.target_speed:
             # if self.heading
-            reward += delta_distance + delta_distance * heading
+            reward += delta_distance
             # reward += (np.clip(hero_velocity/self.target_speed,0,1.0) + heading + delta_distance)/3
             # reward+=displacement
             # print(np.cos(imu[-1]-self.heading),self.heading,imu[-1],delta_distance)

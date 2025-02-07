@@ -140,8 +140,9 @@ def main():
 
     for step in tqdm.tqdm(range(1, MAX_STEPS + 1,LOCAL_STEPS), smoothing=0.1):
        
-        for  _ in range(LOCAL_STEPS):
+        for  _ in range(LOCAL_STEPS-1):
             action, logp, value = agent.sample_actions(observation)
+            action = np.clip(action, env.action_space.low, env.action_space.high)
             next_observation, reward, terminated, truncated, info = env.step(action)
             done = terminated or truncated
             timeout = "TimeLimit.truncated" in info
@@ -172,7 +173,7 @@ def main():
             "length": episode_length,
         }
         logger.log_episode(episode_info, step)
-        if mask==1.0 or epoch_ended:
+        if mask==1.0 or epoch_ended or timeout:
             _,_,last_value = agent.sample_actions(observation)
         else:
             last_value=0.0
@@ -181,14 +182,14 @@ def main():
         episode_return = 0
         episode_length = 0
 
-        print(replay_buffer.can_sample(),len(replay_buffer),replay_buffer._path_start_idx)
-        if len(replay_buffer) >= BATCH_SIZE:
-                for _ in range(BATCH_SIZE):
+        # print(replay_buffer.can_sample(),len(replay_buffer),replay_buffer._path_start_idx)
+        if len(replay_buffer) >= BATCH_SIZE and replay_buffer.can_sample():
+                for _ in range(6):
                     batch = next(replay_buffer_iterator)
                     update_info = agent.update(batch, utd_ratio=1)  # Perform 3 updates per batch
                     logger.log_training(update_info, step)
                 # if step % LOG_INTERVAL==0:
-                logger.print_status(step, MAX_STEPS)
+                    logger.print_status(step+_, MAX_STEPS)
 
             # Periodic evaluation
         if step % EVAL_INTERVAL == 0:

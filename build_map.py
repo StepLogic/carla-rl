@@ -166,7 +166,7 @@ def map_environment(agent:DrQLearner, env, n_eval_episodes=10, deterministic=Tru
             observation, reward, done, truncated, info = env.step(action)
             if env.unwrapped.is_agent_at_junction():
                 junctions.append(steps)
-            std=np.array(action_dist.log_std())
+            std=np.array(np.log(action_dist.log_std()))
             log_stds.append(std)
             # moving_average.append(filter.process(np.array(action_dist.log_std())))
             filtered_vector = ema_filter.update(std)

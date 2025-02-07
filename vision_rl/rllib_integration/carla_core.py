@@ -118,7 +118,7 @@ class CarlaCore:
         for i in range(self.config["retries_on_error"]):
             try:
                 self.client = carla.Client(self.config["host"], self.server_port)
-                self.world = self.client.load_world("Town01")
+                self.world = self.client.load_world("Town04")
                 self.client.set_timeout(self.config["timeout"])
                 # print(self.config["town"])
 
@@ -252,13 +252,14 @@ class CarlaCore:
             if len(self.sensors)==0:
                 # Part 3: Spawn the new sensors
                 for name, attributes in hero_config["sensors"].items():
-                    if name =="goal":
+                    if "goal" in name:
                         attributes["transform"]=self.destination
+                    if "goal_heading" in name:
+                        attributes["world"]=self.world
                     self.sensors.append(SensorFactory.spawn(name, attributes, self.sensor_interface, self.hero))
             else:
                 for sensor in self.sensors:
                     if hasattr(sensor,"update_location"):
-                        # breakpoint()
                         sensor.update_location(self.destination)
                 
                   
@@ -319,9 +320,18 @@ class CarlaCore:
 
                 # Part 3: Spawn the new sensors
                 for name, attributes in hero_config["sensors"].items():
+                    if "goal" in name:
+                        destination=self.map.get_waypoint(next_spawn_point.location)
+                        destination=destination.next(200)
+                        if len(destination) > 0:
+                            destination=random.choice(destination)
+                            destination=destination.transform
+                        else:
+                            destination=random.choice(spawn_points)
+                        attributes["transform"]=destination
+                    if "goal_heading" in name:
+                        attributes["world"]=self.world
                     self.sensors.append(SensorFactory.spawn(name, attributes, self.sensor_interface, self.hero))
-
-
 
 
             # Not needed anymore. This tick will happen when calling CarlaCore.tick()

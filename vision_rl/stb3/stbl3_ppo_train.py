@@ -99,7 +99,13 @@ config = {
                     },
                     "lane_invasion": {
                         "type": "sensor.other.lane_invasion"
-                    }
+                    },
+                    "imu":{
+                        "type":"sensor.other.imu"
+                    },
+                    "goal_heading":{
+                        "type":"sensor.goal.heading"
+                    },
                 },
                 # "spawn_points": [
                 #     "-115.60, -207.60, 11.02, -0.00, -0.01, -179.92",  # tl_l

@@ -2,7 +2,7 @@
 
 import math
 import numpy as np
-from gym.spaces import Box, Dict
+from gymnasium.spaces import Box, Dict
 
 import carla
 
@@ -126,6 +126,7 @@ class STBL3Experiment(BaseExperiment):
         return {"image":images, "vector":vecs}, self.info
 
     def get_vec_obs(self, sensor_data, core):
+        # breakpoint()
         vec = np.zeros(4)
         vec[0] = self.prev_steer / self.max_steer
         vec[1] = self.prev_throttle / self.max_throttle
@@ -217,18 +218,18 @@ class STBL3Experiment(BaseExperiment):
         # Compute deltas
         delta_distance = float(np.sqrt(np.square(hero_location.x - self.last_location.x) + \
                             np.square(hero_location.y - self.last_location.y)))
-        self.distance_travelled += delta_distance
-
+        
+        distance_travelled=self.distance_travelled+delta_distance
         # Update variables
         self.last_location = hero_location
         self.last_velocity = hero_velocity
 
         # Reward if going forward
         if hero_velocity < self.target_speed:
-            reward = delta_distance
+            reward = distance_travelled - self.distance_travelled
         else:
             reward = 0.0
-
+        self.distance_travelled += delta_distance
         if self.done_falling:
             reward += -1.0
         if self.done_dist:

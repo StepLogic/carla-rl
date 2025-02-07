@@ -7,7 +7,7 @@
 # For a copy, see <https://opensource.org/licenses/MIT>.
 
 from vision_rl.rllib_integration.sensors.bird_view_manager import BirdviewManager
-from vision_rl.rllib_integration.sensors.sensor import CameraRGB,CameraDepth,CameraSemanticSegmentation,CameraDVS,Lidar,SemanticLidar,Radar,Gnss,Imu,GoalImageSensor,LaneInvasion,Collision,Obstacle
+from vision_rl.rllib_integration.sensors.sensor import CameraRGB,CameraDepth,CameraSemanticSegmentation,CameraDVS, GoalHeadingSensor,Lidar,SemanticLidar,Radar,Gnss,Imu,GoalImageSensor,LaneInvasion,Collision,Obstacle
 
 class SensorFactory(object):
     """
@@ -46,6 +46,8 @@ class SensorFactory(object):
             sensor = BirdviewManager(name, attributes, interface, parent)
         elif type_ == "sensor.goal":  # Pseudosensor
             sensor = GoalImageSensor(name, attributes, interface, parent)
+        elif type_ == "sensor.goal.heading":  # Pseudosensor
+            sensor = GoalHeadingSensor(name, attributes, interface, parent)
         else:
             raise RuntimeError("Sensor of type {} not supported".format(type_))
         return sensor

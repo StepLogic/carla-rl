@@ -173,6 +173,47 @@ class GoalImageSensor(BaseSensor):
         if self.sensor is not None:
             self.sensor.destroy()
             self.sensor = None
+
+
+
+class GoalHeadingSensor(BaseSensor):
+    def __init__(self, name, attributes, interface,parent):
+        self.attributes=attributes
+        self.transform = self.attributes.pop("transform")
+        self.world = self.attributes.pop("world")
+        self.heading=None
+        prop_blueprint = self.world.get_blueprint_library().find("static.prop.trafficwarning")
+        imu_bp=self.world.get_blueprint_library().find("sensor.other.imu")
+        self.prop = self.world.spawn_actor(prop_blueprint, self.transform)
+        super().__init__(name, attributes, interface, self.prop)
+        type_ = self.attributes.pop("type", "")
+        self.sensor=None 
+        self.town_map= self.world.get_map()
+        imu_bp.set_attribute("role_name", name)
+        for key, value in attributes.items():
+            imu_bp.set_attribute(str(key), str(value))
+        self.transform.location.z += 2.0
+        self.sensor = self.world.spawn_actor(imu_bp,carla.Transform(),attach_to=self.prop)
+
+        #we want just heading 
+        self.sensor.listen(self.callback)
+        self.loc=self.transform.location
+  
+        
+    def update_location(self,transform):
+        transform.location.z += 2.0
+        self.sensor.set_transform(transform)
+        self.loc=transform.location
+ 
+
+    def parse(self, sensor_data):
+        return [sensor_data.compass]
+    
+    def destroy(self):
+        if self.sensor is not None:
+            self.sensor.destroy()
+            self.sensor = None
+
 class CameraRGB(BaseCamera):
 
     def __init__(self, name, attributes, interface, parent):

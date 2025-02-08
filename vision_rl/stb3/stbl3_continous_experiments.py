@@ -23,6 +23,7 @@ class STBL3Experiment(BaseExperiment):
         # control variables
         self.max_steer = 0.5
         self.max_throttle = 0.6
+        self.max_angle_deviation=np.pi
         self.prev_steer = 0.0
         self.prev_throttle = 0.0
         self.info=dict()
@@ -41,6 +42,7 @@ class STBL3Experiment(BaseExperiment):
         self.last_location = None
         self.last_velocity = 0
         self.distance_travelled = 0.0
+        self.last_heading = None
 
         # Sensor stack
         self.prev_vec_0 = None
@@ -135,7 +137,7 @@ class STBL3Experiment(BaseExperiment):
         hero = core.hero
         vec[2] = np.clip(self.get_speed(hero)/self.target_speed, 0.0, 1.0)
         vec[3] = self.time_idle / self.max_time_idle
-        vec[4]= np.clip(abs(imu-heading),-np.pi/2,np.pi/2) 
+        vec[4]= np.clip(abs(imu-heading)/self.max_angle_deviation,0,1.0) 
         if self.prev_vec_0 is None:
             self.prev_vec_0 = vec
             self.prev_vec_1 = self.prev_vec_0
@@ -208,7 +210,9 @@ class STBL3Experiment(BaseExperiment):
         hero = core.hero
         heading=sensor_data["goal_heading"][-1][-1]
         imu=sensor_data["imu"][-1][-1]
-        delta_heading=np.clip(abs(imu-heading),0,np.pi/2)
+        delta_heading=np.clip(abs(imu-heading),0,np.pi)
+        angle_factor=min(delta_heading/self.max_angle_deviation,1.0)
+        heading=np.nan_to_num(math.cos(delta_heading),0)
         # Hero-related variables
         hero_location = hero.get_location()
         hero_velocity = self.get_speed(hero)
@@ -216,24 +220,33 @@ class STBL3Experiment(BaseExperiment):
         # Initialize last location
         if self.last_location == None:
             self.last_location = hero_location
-
+        if self.last_heading == None:
+            self.last_heading = heading
         # Compute deltas
         delta_distance = float(np.sqrt(np.square(hero_location.x - self.last_location.x) + \
                             np.square(hero_location.y - self.last_location.y)))
         
-        distance_travelled=self.distance_travelled+delta_distance+np.cos(delta_heading)
+
+        distance_travelled=self.distance_travelled+delta_distance
         # Update variables
+
         self.last_location = hero_location
         self.last_velocity = hero_velocity
 
         # Reward if going forward
         if hero_velocity < self.target_speed:
-            reward = distance_travelled - self.distance_travelled
+            reward = (distance_travelled - self.distance_travelled)*angle_factor 
+            
         else:
             reward = 0.0
-        self.distance_travelled += delta_distance
+        # if hero_velocity < self.target_speed and hero_velocity < self.target_speed:
+        #     # print(heading/5)
+        #     reward += heading*1e-3
+        self.distance_travelled = distance_travelled    
+
         if self.done_falling:
             reward += -1.0
+        
         if self.done_dist:
             print("Max dist travelled")
             reward += 1.0

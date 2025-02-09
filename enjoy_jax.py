@@ -78,7 +78,6 @@ def evaluate_policy(agent, env, n_eval_episodes=10, deterministic=True):
                 episode_lengths.append(episode_length)
                 # print(info)
                 if "is_success" in info:
-
                     success_rate.append(float(info["is_success"]))
                 if "distance_completed" in info:
                     distance_completed.append(float(info["distance_completed"]))

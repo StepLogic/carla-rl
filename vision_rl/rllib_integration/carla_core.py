@@ -322,7 +322,7 @@ class CarlaCore:
                 for name, attributes in hero_config["sensors"].items():
                     if "goal" in name:
                         destination=self.map.get_waypoint(next_spawn_point.location)
-                        destination=destination.next(200)
+                        destination=destination.next(50)
                         if len(destination) > 0:
                             destination=random.choice(destination)
                             destination=destination.transform

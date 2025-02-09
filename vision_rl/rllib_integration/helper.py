@@ -38,7 +38,7 @@ def post_process_image(image, normalized=True, grayscale=True,crop=True,image_si
         image = image[:, :, np.newaxis]
 
     if normalized:
-        return (image.astype(np.float32) - 128) / 128
+        return (image.astype(np.float32))/255
     else:
         return image.astype(np.uint8)
 

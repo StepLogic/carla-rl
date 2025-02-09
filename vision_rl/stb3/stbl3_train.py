@@ -11,7 +11,7 @@ from stable_baselines3 import SAC
 from stable_baselines3.common.torch_layers import BaseFeaturesExtractor
 from stable_baselines3.common.callbacks import CheckpointCallback,EvalCallback
 from vision_rl.rllib_integration.carla_env import CarlaEnv
-from stbl3_continous_experiments import STBL3Experiment
+from vision_rl.stb3.stbl3_continous_experiments import STBL3Experiment
 
 class CarlaCNN(BaseFeaturesExtractor):
     """CNN feature extractor for CARLA images"""
@@ -34,7 +34,7 @@ class CarlaCNN(BaseFeaturesExtractor):
             n_flatten = self.cnn(torch.zeros(1, 1, 84, 84)).shape[1]
         
         self.linear = nn.Sequential(
-            nn.Linear(n_flatten + 6, features_dim),  # +4 for the vector observations
+            nn.Linear(n_flatten + 5, features_dim),  # +4 for the vector observations
             nn.ReLU()
         )
 
@@ -101,9 +101,12 @@ config = {
                     "imu":{
                         "type":"sensor.other.imu"
                     },
-                    "lane_invasion": {
-                        "type": "sensor.other.lane_invasion"
-                    }
+                    "imu":{
+                        "type":"sensor.other.imu"
+                    },
+                    "goal_heading":{
+                        "type":"sensor.goal.heading"
+                    },
                 },
                 # "spawn_points": [
                 #     "-115.60, -207.60, 11.02, -0.00, -0.01, -179.92",  # tl_l

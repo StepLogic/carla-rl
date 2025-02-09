@@ -196,6 +196,7 @@ class STBL3Experiment(BaseExperiment):
         else:
             self.time_idle += 1
         self.time_episode += 1
+        wp=core.map.get_waypoint(hero.get_transform().location,project_to_road=False)
         self.done_dist = self.distance_travelled > self.max_dist
         self.done_falling = hero.get_location().z < -0.5
         self.diff_lane = 'lane_invasion' in sensor_data.keys()
@@ -227,7 +228,7 @@ class STBL3Experiment(BaseExperiment):
                             np.square(hero_location.y - self.last_location.y)))
         
 
-        distance_travelled=self.distance_travelled+delta_distance
+        distance_travelled=self.distance_travelled+(delta_distance * angle_factor)
         # Update variables
 
         self.last_location = hero_location
@@ -235,10 +236,10 @@ class STBL3Experiment(BaseExperiment):
 
         # Reward if going forward
         if hero_velocity < self.target_speed:
-            reward = (distance_travelled - self.distance_travelled)*angle_factor 
-            
+            reward = distance_travelled - self.distance_travelled
         else:
             reward = 0.0
+        # print(reward)
         # if hero_velocity < self.target_speed and hero_velocity < self.target_speed:
         #     # print(heading/5)
         #     reward += heading*1e-3

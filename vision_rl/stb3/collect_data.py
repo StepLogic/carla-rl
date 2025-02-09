@@ -6,7 +6,7 @@ from datetime import datetime
 import os
 import pickle
 from vision_rl.rllib_integration.agent import BasicAgent
-from train_online_pixels import CarlaGoalEnv,config,FrameStack,TimeLimit,RecordEpisodeStatistics,ReplayBuffer
+from sac_lane_following import CarlaGoalEnv,config,FrameStack,TimeLimit,RecordEpisodeStatistics,ReplayBuffer
 from jaxrl2.noise import OrnsteinUhlenbeckActionNoise
 def collect_basic_agent_data(max_steps=100000, replay_buffer_size=100000):
     # Create environment

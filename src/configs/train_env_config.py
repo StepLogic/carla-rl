@@ -198,10 +198,10 @@ class STBL3Experiment(BaseExperiment):
         else:
             self.time_idle += 1
         self.time_episode += 1
-        wp=core.map.get_waypoint(hero.get_transform().location,project_to_road=False)
+        wp=core.map.get_waypoint(hero.get_transform().location,project_to_road=False) 
         self.done_dist = self.distance_travelled > self.max_dist
         self.done_falling = hero.get_location().z < -0.5
-        self.diff_lane = 'lane_invasion' in sensor_data.keys()
+        self.diff_lane = 'lane_invasion' in sensor_data.keys() or wp is None
         self.collision = 'collision' in sensor_data.keys()
         done=self.done_time_idle or self.done_falling or self.done_dist or self.diff_lane or self.collision
         if done:
@@ -214,7 +214,7 @@ class STBL3Experiment(BaseExperiment):
         heading=sensor_data["goal_heading"][-1][-1]
         imu=sensor_data["imu"][-1][-1]
         delta_heading=np.clip(abs(imu-heading),0,np.pi)
-        angle_factor=min(delta_heading/self.max_angle_deviation,1.0)
+        angle_factor=max(1-min(delta_heading/self.max_angle_deviation,1.0),1e-3)
         heading=np.nan_to_num(math.cos(delta_heading),0)
         # Hero-related variables
         hero_location = hero.get_location()
@@ -238,7 +238,7 @@ class STBL3Experiment(BaseExperiment):
 
         # Reward if going forward
         if hero_velocity < self.target_speed:
-            reward = delta_distance
+            reward = delta_distance*angle_factor
         else:
             reward = 0.0
         # print(reward)
@@ -249,20 +249,19 @@ class STBL3Experiment(BaseExperiment):
 
         if self.done_falling:
             reward += -1.0
-        
         if self.done_dist:
-            print("Max dist travelled")
+            # print("Max dist travelled")
             reward += 1.0
         if self.done_time_idle:
-            print("Done idle")
+            # print("Done idle")
             reward += -1.0
         if self.collision:
-            print('collision')
+            # print('collision')
             reward += -1.0
         if self.diff_lane:
             reward += -1.0
 
-        return reward
+        return reward*10
 
 config = {
     "framework": "torch",

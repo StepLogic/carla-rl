@@ -33,7 +33,7 @@ def save_checkpoint(agent, path, step):
 def main():
     # Training parameters
     MAX_STEPS = int(1e6)
-    EVAL_INTERVAL = 500000
+    EVAL_INTERVAL = int(1e5)
     EVAL_EPISODES = 5
     BATCH_SIZE = 64
     SEED = 42

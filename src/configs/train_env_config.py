@@ -58,6 +58,7 @@ class STBL3Experiment(BaseExperiment):
         self.max_throttle = 0.6
         self.prev_steer = 0.0
         self.prev_throttle = 0.0
+        self.target_speed = self.config["others"]["target_speed"]
         self.info=dict()
 
     # def get_action_space(self):
@@ -75,7 +76,7 @@ class STBL3Experiment(BaseExperiment):
         vec_space = Box(
             low=-5.1,
             high=5.1,
-            shape=(5 * self.frame_stack,),
+            shape=(4 * self.frame_stack,),
             dtype=np.float32,
         )
 
@@ -95,7 +96,7 @@ class STBL3Experiment(BaseExperiment):
 
         action = carla.VehicleControl()
         # Smooth steering using previous value
-        action.steer = float(np.clip(self.prev_steer + steer, -self.max_steer, self.max_steer))
+        action.steer = float(np.clip(steer, -self.max_steer, self.max_steer))
         
         # Handle throttle and brake separately
         
@@ -133,13 +134,13 @@ class STBL3Experiment(BaseExperiment):
         # breakpoint()
         heading=sensor_data["goal_heading"][-1][-1]
         imu=sensor_data["imu"][-1][-1]
-        vec = np.zeros(5)
+        vec = np.zeros(4)
         vec[0] = self.prev_steer / self.max_steer
         vec[1] = self.prev_throttle / self.max_throttle
         hero = core.hero
-        vec[2] = np.clip(self.get_speed(hero)/self.target_speed, 0.0, 1.0)
-        vec[3] = self.time_idle / self.max_time_idle
-        vec[4]= np.clip(abs(imu-heading)/self.max_angle_deviation,0,1.0) 
+        vec[2] = np.clip(self.get_speed(hero)/(self.target_speed+1e-8), 0.0, 1.0)
+        # vec[3] = self.time_idle / self.max_time_idle
+        vec[3]= np.clip(imu/(heading+1e-8),0,1.0) 
         if self.prev_vec_0 is None:
             self.prev_vec_0 = vec
             self.prev_vec_1 = self.prev_vec_0
@@ -203,7 +204,7 @@ class STBL3Experiment(BaseExperiment):
         self.done_falling = hero.get_location().z < -0.5
         self.diff_lane = 'lane_invasion' in sensor_data.keys() or wp is None
         self.collision = 'collision' in sensor_data.keys()
-        done=self.done_time_idle or self.done_falling or self.done_dist or self.diff_lane or self.collision
+        done=self.done_falling or self.done_dist or self.diff_lane or self.collision
         if done:
             self.info.update(is_success=self.done_dist)
             # print(self.distance_travelled)
@@ -213,9 +214,9 @@ class STBL3Experiment(BaseExperiment):
         hero = core.hero
         heading=sensor_data["goal_heading"][-1][-1]
         imu=sensor_data["imu"][-1][-1]
-        delta_heading=np.clip(abs(imu-heading),0,np.pi)
-        angle_factor=max(1-min(delta_heading/self.max_angle_deviation,1.0),1e-3)
-        heading=np.nan_to_num(math.cos(delta_heading),0)
+        # delta_heading=np.clip(abs(imu-heading),0,np.pi)
+        # angle_factor=max(1-min(delta_heading/self.max_angle_deviation,1.0),1e-3)
+        # heading=np.nan_to_num(math.cos(delta_heading),0)
         # Hero-related variables
         hero_location = hero.get_location()
         hero_velocity = self.get_speed(hero)
@@ -230,31 +231,31 @@ class STBL3Experiment(BaseExperiment):
                             np.square(hero_location.y - self.last_location.y)))
         
 
-        distance_travelled=self.distance_travelled+(delta_distance)
+        # distance_travelled=self.distance_travelled+(delta_distance)
         # Update variables
 
         self.last_location = hero_location
         self.last_velocity = hero_velocity
 
         # Reward if going forward
-        if hero_velocity < self.target_speed:
-            reward = delta_distance*angle_factor
+        if hero_velocity < self.target_speed  and hero_velocity > 1.0:
+            reward = np.exp(-abs(hero_velocity-self.target_speed)*10) + np.exp(-abs(imu-heading))*0.5
         else:
-            reward = 0.0
+            reward = -1e-2
         # print(reward)
         # if hero_velocity < self.target_speed and hero_velocity < self.target_speed:
         #     # print(heading/5)
         #     reward += heading*1e-3
-        self.distance_travelled = distance_travelled    
+        self.distance_travelled += delta_distance    
 
         if self.done_falling:
             reward += -1.0
         if self.done_dist:
             # print("Max dist travelled")
             reward += 1.0
-        if self.done_time_idle:
-            # print("Done idle")
-            reward += -1.0
+        # if self.done_time_idle:
+        #     # print("Done idle")
+        #     reward += -1.0
         if self.collision:
             # print('collision')
             reward += -1.0

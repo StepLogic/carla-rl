@@ -8,6 +8,7 @@ from jaxrl2.wrappers.record_statistics import RecordEpisodeStatistics
 from jaxrl2.wrappers.timelimit import TimeLimit
 import ml_collections
 import numpy as np
+import tqdm
 from src.configs.train_env_config import config as carla_config
 from rlib_integration.carla_goal_env import CarlaGoalEnv
 from flax.training import checkpoints
@@ -33,7 +34,7 @@ def save_checkpoint(agent, path, step):
 def main():
     # Training parameters
     MAX_STEPS = int(1e6)
-    EVAL_INTERVAL = int(1e5)
+    EVAL_INTERVAL = int(5e4)
     EVAL_EPISODES = 5
     BATCH_SIZE = 64
     SEED = 42
@@ -101,6 +102,10 @@ def main():
 
     for step in range(1, MAX_STEPS + 1,LOCAL_STEPS):
         n_step=0
+        p_bar = tqdm.tqdm(range(MAX_STEPS))
+        p_bar.update(5)
+        p_bar.refresh()
+
         while n_step < LOCAL_STEPS:
             action, logp, value = agent.sample_actions(observation)
             # print(value)
@@ -143,6 +148,8 @@ def main():
                 episode_return = 0
                 episode_length = 0
             n_step+=1
+            p_bar.n = n_step+step
+            p_bar.refresh()
 
 
         _,_,last_value = agent.sample_actions(next_observation)
@@ -211,7 +218,6 @@ def main():
     training_duration = time.time() - training_start_time
     print(f"\nTraining completed in {training_duration/3600:.2f} hours")
     print(f"Logs saved to: {logger.log_dir}")
-
     # Close environments
     env.close()
 

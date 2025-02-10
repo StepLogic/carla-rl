@@ -1,21 +1,13 @@
 import glob
 import os
 import time
-from datetime import datetime
-from collections import defaultdict, deque
-import gymnasium as gym
-from gymnasium.envs.box2d.car_racing import CarRacing
+from collections import defaultdict
 from jaxrl2.utils.misc import Logger
 from jaxrl2.wrappers.frame_stack import FrameStack
 from jaxrl2.wrappers.record_statistics import RecordEpisodeStatistics
-from jaxrl2.wrappers.single_obs_to_dict import SingleObsToDict
 from jaxrl2.wrappers.timelimit import TimeLimit
 import ml_collections
 import numpy as np
-import tqdm
-import jax
-from torch.utils.tensorboard import SummaryWriter
-from typing import Dict, Any
 from src.configs.train_env_config import config as carla_config
 from rlib_integration.carla_goal_env import CarlaGoalEnv
 from flax.training import checkpoints

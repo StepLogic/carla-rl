@@ -2,6 +2,7 @@
 # Modified from https://github.com/carla-simulator/rllib-integration/blob/main/dqn_example/dqn_experiment.py
 
 import math
+import random
 import numpy as np
 from gymnasium.spaces import Box, Dict
 
@@ -58,7 +59,7 @@ class STBL3Experiment(BaseExperiment):
         self.max_throttle = 0.6
         self.prev_steer = 0.0
         self.prev_throttle = 0.0
-        self.target_speed = self.config["others"]["target_speed"]
+        self.target_speed = random.randint(1,self.config["others"]["target_speed"]+5)
         self.info=dict()
 
     # def get_action_space(self):
@@ -238,14 +239,18 @@ class STBL3Experiment(BaseExperiment):
         self.last_velocity = hero_velocity
 
         # Reward if going forward
-        if hero_velocity < self.target_speed  and hero_velocity > 1.0:
-            reward = np.exp(-abs(hero_velocity-self.target_speed)*10) + np.exp(-abs(imu-heading))*0.5
-        else:
-            reward = -1e-2
+        # if hero_velocity < self.target_speed  and hero_velocity > 1.0:
+        #     reward = delta_distance
+        # # print(np.rad2deg(imu -heading),np.rad2deg(heading),np.rad2deg(imu),np.exp(-abs(imu-heading))*0.5 )
+        
+        # # reward = min(abs(self.target_speed-hero_velocity))
+        # else:
+        #     reward = -1e-2
         # print(reward)
         # if hero_velocity < self.target_speed and hero_velocity < self.target_speed:
         #     # print(heading/5)
         #     reward += heading*1e-3
+        reward = -1e-3*((self.target_speed-hero_velocity)**2 + 1e-1*(imu-heading)**2)
         self.distance_travelled += delta_distance    
 
         if self.done_falling:

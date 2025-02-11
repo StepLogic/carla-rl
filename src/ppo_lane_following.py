@@ -99,13 +99,11 @@ def main():
     training_start_time = time.time()
     # n_steps=int(ROLLOUT_CAPACITY/2)  #rollout steps
     n_updates=0
-
+    p_bar = tqdm.tqdm(range(MAX_STEPS))
+    p_bar.update(5)
+    p_bar.refresh()
     for step in range(1, MAX_STEPS + 1,LOCAL_STEPS):
         n_step=0
-        p_bar = tqdm.tqdm(range(MAX_STEPS))
-        p_bar.update(5)
-        p_bar.refresh()
-
         while n_step < LOCAL_STEPS:
             action, logp, value = agent.sample_actions(observation)
             # print(value)

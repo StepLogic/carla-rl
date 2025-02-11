@@ -60,6 +60,8 @@ class STBL3Experiment(BaseExperiment):
         self.max_throttle = 0.6
         self.prev_steer = 0.0
         self.prev_throttle = 0.0
+        self.steer = 0.0
+        self.throttle = 0.0
         self.target_speed = random.uniform(3.0,10.0)
         # self.target_speed = random.uniform(1.0,self.config["others"]["target_speed"])
         self.info=dict()
@@ -100,7 +102,8 @@ class STBL3Experiment(BaseExperiment):
         action = carla.VehicleControl()
         # Smooth steering using previous value
         action.steer = float(np.clip(steer, -self.max_steer, self.max_steer))
-        
+        self.steer=action.steer
+        self.throttle=action.throttle
         # Handle throttle and brake separately
         
         if throttle_brake >= 0:
@@ -109,14 +112,11 @@ class STBL3Experiment(BaseExperiment):
         else:
             action.throttle = 0.0
             action.brake = float(np.clip(-throttle_brake, 0.0, 1.0))
-
+        self.last_action = action
         action.reverse = False
         action.hand_brake = False
-
-        self.last_action = action
-        self.prev_steer = action.steer
-        self.prev_throttle = action.throttle
-
+        self.steer=action.steer
+        self.throttle=action.throttle
         return action
 
     # Remove the get_actions method since we're using continuous actions
@@ -202,8 +202,9 @@ class STBL3Experiment(BaseExperiment):
         else:
             self.time_idle += 1
         self.time_episode += 1
+        marker_location=sensor_data["goal_heading"][-1][0]
         wp=core.map.get_waypoint(hero.get_transform().location,project_to_road=False) 
-        self.done_dist = self.distance_travelled > self.max_dist
+        self.done_dist = self.distance_travelled > self.max_dist or marker_location.distance(hero.get_transform().location)<4.0
         self.done_falling = hero.get_location().z < -0.5
         self.diff_lane = 'lane_invasion' in sensor_data.keys() or wp is None
         self.collision = 'collision' in sensor_data.keys()
@@ -263,13 +264,14 @@ class STBL3Experiment(BaseExperiment):
         # if hero_velocity < self.target_speed and hero_velocity < self.target_speed:
         #     # print(heading/5)
         #     reward += heading*1e-3
-        reward = 1e-2*((self.target_speed-hero_velocity)**2 + 1e-1*(imu-heading)**2)
+        reward = 1e-2*((self.target_speed-hero_velocity)**2 + 1e-1*(imu-heading)**2 +1e-1(np.array([self.prev_steer,self.prev_throttle]-[self.steer,self.throttle]))**2)
 
         max_speed_error = self.target_speed**2
         max_heading_error = heading**2
+        max_action_error = (self.get_action_space().low-self.get_action_space().high)**2
         
 
-        min_reward = 1e-2 * (max_speed_error + 1e-1*max_heading_error)
+        min_reward = 1e-2 * (max_speed_error + 1e-1*max_heading_error+1e-1*max_action_error)
         max_reward = 0
         
         # Normalize to [0,1]
@@ -292,6 +294,9 @@ class STBL3Experiment(BaseExperiment):
         if self.diff_lane:
             reward += -1.0
         self.rewards.append(reward)
+
+        self.prev_steer = self.steer
+        self.prev_throttle = self.throttle
         return reward
 
 config = {

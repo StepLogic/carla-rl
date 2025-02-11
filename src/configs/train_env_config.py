@@ -60,7 +60,8 @@ class STBL3Experiment(BaseExperiment):
         self.max_throttle = 0.6
         self.prev_steer = 0.0
         self.prev_throttle = 0.0
-        self.target_speed = random.uniform(1.0,self.config["others"]["target_speed"])
+        self.target_speed = random.uniform(3.0,10.0)
+        # self.target_speed = random.uniform(1.0,self.config["others"]["target_speed"])
         self.info=dict()
 
     # def get_action_space(self):
@@ -142,13 +143,13 @@ class STBL3Experiment(BaseExperiment):
         hero = core.hero
         vec[2] = np.clip(self.get_speed(hero)/(self.target_speed+1e-8), 0.0, 1.0)
         # vec[3] = self.time_idle / self.max_time_idle
-        vec[3]= np.clip(imu/(heading+1e-8),0,1.0) 
+        vec[3]= np.clip(imu/(heading+1e-8),-1.0,1.0) 
         if self.prev_vec_0 is None:
             self.prev_vec_0 = vec
             self.prev_vec_1 = self.prev_vec_0
             self.prev_vec_2 = self.prev_vec_1
 
-        vecs = vec+np.random.normal(0,1,4) #add gaussian noise
+        vecs = vec  #add gaussian noise
 
         if self.frame_stack >= 2:
             vecs = np.concatenate([self.prev_vec_0, vecs], axis=0)

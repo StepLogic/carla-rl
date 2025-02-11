@@ -1,5 +1,6 @@
 from collections import deque
 import os
+import random
 import ml_collections
 import numpy as np
 from absl import app, flags
@@ -11,18 +12,13 @@ from jaxrl2.wrappers.timelimit import TimeLimit
 from jaxrl2.wrappers.record_statistics import RecordEpisodeStatistics
 from rlib_integration.carla_goal_env import CarlaGoalEnv
 from src.configs.train_env_config import config as carla_config
+from src.sac_lane_following import sac_config
 os.environ['XLA_FLAGS']="--xla_gpu_enable_command_buffer="
 # Define flags
 FLAGS = flags.FLAGS
 flags.DEFINE_string("checkpoint_path", None, "Path to the checkpoint directory")
 flags.DEFINE_integer("n_eval_episodes", 100, "Number of evaluation episodes")
 flags.DEFINE_boolean("deterministic", True, "Whether to use deterministic actions")
-config_flags.DEFINE_config_file(
-    "config",
-    "./src/configs/drq_default.py",
-    "File path to the training hyperparameter configuration.",
-    lock_config=False,
-)
 
 def load_checkpoint(agent, checkpoint_path):
     """Load agent parameters from checkpoint."""
@@ -64,6 +60,14 @@ def evaluate_policy(agent, env, n_eval_episodes=10, deterministic=True):
         episode_length = 0
         
         while not done:
+            target=3.0
+            heading=np.pi
+            vecs=observation["vector"]
+            current_velocity=env.unwrapped.experiment.velocity
+            current_heading=env.unwrapped.experiment.current_heading
+            vecs[2] = np.clip(current_velocity/(target+1e-8), 0.0, 1.0)
+            vecs[3]= np.clip(current_heading/(heading+1e-8),-1.0,1.0) 
+            
             if deterministic:
                 action = agent.eval_actions(observation)
             else:
@@ -130,10 +134,11 @@ def main(_):
     config.gae_lambda = 0.95  # Add GAE lambda
     config = config.to_dict()
 
-    agent = PPOLearner(
+    agent = DrQLearner(
+        0,
         env.observation_space.sample(),
         env.action_space.sample(),
-        **config
+        **sac_config
     )
     
     # Load checkpoint

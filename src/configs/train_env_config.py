@@ -28,6 +28,8 @@ class STBL3Experiment(BaseExperiment):
         self.max_angle_deviation=np.pi
         self.prev_steer = 0.0
         self.prev_throttle = 0.0
+        self.current_heading=0.0
+        self.velocity=0.0
         self.info=dict()
         self.rewards=[]
 
@@ -63,6 +65,8 @@ class STBL3Experiment(BaseExperiment):
         self.steer = 0.0
         self.throttle = 0.0
         self.target_speed = random.uniform(3.0,10.0)
+        self.velocity=0.0
+        self.current_heading=0.0
         # self.target_speed = random.uniform(1.0,self.config["others"]["target_speed"])
         self.info=dict()
 
@@ -161,7 +165,8 @@ class STBL3Experiment(BaseExperiment):
         self.prev_vec_2 = self.prev_vec_1
         self.prev_vec_1 = self.prev_vec_0
         self.prev_vec_0 = vec
-
+        self.velocity=self.get_speed(hero)
+        self.current_heading=imu
         return vecs
 
     def get_img_obs(self, sensor_data, core):
@@ -248,7 +253,6 @@ class STBL3Experiment(BaseExperiment):
 
         # distance_travelled=self.distance_travelled+(delta_distance)
         # Update variables
-
         self.last_location = hero_location
         self.last_velocity = hero_velocity
 
@@ -281,18 +285,18 @@ class STBL3Experiment(BaseExperiment):
         self.distance_travelled += delta_distance    
 
         if self.done_falling:
-            reward += -10.0
+            reward += -5.0
         if self.done_dist:
             # print("Max dist travelled")
-            reward += 10.0
+            reward += 5.0
         # if self.done_time_idle:
         #     # print("Done idle")
         #     reward += -1.0
         if self.collision:
             # print('collision')
-            reward += -10.0
+            reward += -5.0
         if self.diff_lane:
-            reward += -10.0
+            reward += -5.0
         self.rewards.append(reward)
 
         self.prev_steer = self.steer

@@ -10,6 +10,7 @@ from jaxrl2.utils.misc import Logger
 from jaxrl2.wrappers.frame_stack import FrameStack
 from jaxrl2.wrappers.timelimit import TimeLimit
 from jaxrl2.wrappers.record_statistics import RecordEpisodeStatistics
+import ml_collections
 import tqdm
 import wandb
 from absl import app, flags
@@ -40,6 +41,27 @@ from src.configs.train_env_config import config as carla_config
 import flax
 from jaxrl2.noise import OrnsteinUhlenbeckActionNoise
 flax.config.update('flax_use_orbax_checkpointing', True)
+    # ML config
+config = ml_collections.ConfigDict()
+config.actor_lr = 3e-4
+config.critic_lr = 3e-4
+config.temp_lr = 3e-4
+config.hidden_dims = (256, 256)
+config.cnn_features = (32, 64, 128, 256)
+config.cnn_filters = (3, 3, 3, 3)
+config.cnn_strides = (2, 2, 2, 2)
+config.cnn_padding = "VALID"
+config.latent_dim = 50
+config.encoder = "d4pg"
+config.discount = 0.98
+config.tau = 0.005
+config.init_temperature = 1.0
+config.target_entropy = None
+config.backup_entropy = True
+config.critic_reduction = "mean"
+sac_config = config.to_dict()
+
+
 
 FLAGS = flags.FLAGS
 
@@ -65,12 +87,6 @@ flags.DEFINE_integer(
 flags.DEFINE_boolean("tqdm", True, "Use tqdm progress bar.")
 flags.DEFINE_boolean("save_video", False, "Save videos during evaluation.")
 flags.DEFINE_boolean("save_buffer", False, "Save the replay buffer.")
-config_flags.DEFINE_config_file(
-    "config",
-    "./src/configs/drq_default.py",
-    "File path to the training hyperparameter configuration.",
-    lock_config=False,
-)
 
 
 
@@ -107,6 +123,7 @@ expert_buffer=None
 
 
 def main(_):
+
     # Create environment
     env = CarlaGoalEnv(carla_config["env_config"])
     env = FrameStack(env=env, num_stack=1,stacking_key="pixels")
@@ -121,20 +138,19 @@ def main(_):
     logger = Logger(log_dir="./logs",prefix="SAC")
 
     # Initialize checkpoints dir
-    policy_folder = os.path.join("checkpoints", f"model-{len(glob.glob('./logs/*'))}")
+    policy_folder = os.path.join("checkpoints", f"model-sac-{len(glob.glob('./logs/*'))}")
     os.makedirs(policy_folder, exist_ok=True)
 
     np.random.seed(FLAGS.seed)
     random.seed(FLAGS.seed)
 
     # Initialize agent and replay buffer
-    kwargs = dict(FLAGS.config)
     agent = DrQLearner(
-        FLAGS.seed, 
+        0, 
         env.observation_space.sample(), 
         env.action_space.sample(), 
         # num_qs=10,
-        **kwargs
+        **sac_config
     )
     
     replay_buffer_size = FLAGS.replay_buffer_size

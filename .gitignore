@@ -32,3 +32,5 @@ evaluation_trajectories/*
 *.zip
 results/*
 logs_car_racing/*
+*.pickle
+*.pdf

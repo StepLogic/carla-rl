@@ -8,8 +8,7 @@ from absl import app, flags
 from flax.training import checkpoints
 from ml_collections import config_flags
 from src.carla_eval import CarlaEvalEnv
-from src.jax_experiments_goal import JAXGoalExperiments
-from src.jax_mapping_experiment import JAXMappingExperiments
+from src.sac_lane_following import sac_config
 from jaxrl2.agents import DrQLearner
 from jaxrl2.wrappers.frame_stack import FrameStack
 from jaxrl2.wrappers.record_statistics import RecordEpisodeStatistics
@@ -28,21 +27,16 @@ FLAGS = flags.FLAGS
 flags.DEFINE_string("checkpoint_path", None, "Path to the checkpoint directory")
 flags.DEFINE_integer("n_eval_episodes", 100, "Number of evaluation episodes")
 flags.DEFINE_boolean("deterministic", True, "Whether to use deterministic actions")
-config_flags.DEFINE_config_file(
-    "config",
-    "./src/configs/drq_default.py",
-    "File path to the training hyperparameter configuration.",
-    lock_config=False,
-)
+
 
 def load_checkpoint(agent, checkpoint_path):
     """Load agent parameters from checkpoint."""
     state_dict = {
         'actor_params': agent._actor,
         'critic_params': agent._critic,
-        'target_critic_params': agent._target_critic_params,
-        'temp': agent._temp,
-        'rng': agent._rng,
+        # 'target_critic_params': agent._target_critic_params,
+        # 'temp': agent._temp,
+        # 'rng': agent._rng,
         # Add any other numerical state you need to save
     }
     state_dict = checkpoints.restore_checkpoint(
@@ -54,8 +48,8 @@ def load_checkpoint(agent, checkpoint_path):
     # breakpoint()
     agent._actor = state_dict['actor_params']
     agent._critic = state_dict['critic_params'] 
-    agent._target_critic_params = state_dict['target_critic_params']
-    agent._temp = state_dict['temp']
+    # agent._target_critic_params = state_dict['target_critic_params']
+    # agent._temp = state_dict['temp']
     # agent._rng = state_dict['rng']
     
     return agent
@@ -143,11 +137,14 @@ def map_environment(agent:DrQLearner, env, n_eval_episodes=10, deterministic=Tru
     slack_values = []
     steps=0
     log_stds=[]
+    trace_log_stds=[]
     moving_average=[]
     junctions=[]
     restarts=[]
     images=[]
     heading_ar=[]
+    locations=[]
+    unit_vectors=[]
     # filter=StreamingMovingAverage(window_size=100)
     ema_filter = RealTimeVectorEMA(window_size=100, vector_dim=2)
     # Real-time updates
@@ -155,20 +152,33 @@ def map_environment(agent:DrQLearner, env, n_eval_episodes=10, deterministic=Tru
     mapper=TopologicalMap()
     # start timer for entire mapping
     start=time.time()
+    # log_stds.append(std)
     for _ in range(n_eval_episodes):
         observation, info = env.reset()
         done = False
         episode_reward = 0
         episode_length = 0
         while not done:
+            target=3.0
+            # heading=np.pi
+            vecs=observation["vector"]
+            current_velocity=env.unwrapped.experiment.velocity
+            current_heading=env.unwrapped.experiment.current_heading
+            vecs[2] = np.clip(current_velocity/(target+1e-8), 0.0, 1.0)
+            # vecs[3]= np.clip(current_heading/(heading+1e-8),-1.0,1.0) 
+            observation["vector"]=vecs
             action_dist=agent.action_dist(observation)
             # if deterministic:
             action = action_dist.mode()
             observation, reward, done, truncated, info = env.step(action)
-            if env.unwrapped.is_agent_at_junction():
+            is_at_junction,unit_vector,location=env.unwrapped.is_agent_at_junction()
+            if is_at_junction:
                 junctions.append(steps)
-            std=np.array(action_dist.log_std())
+            locations.append(location)
+            unit_vectors.append(unit_vectors)
+            std=np.array(action_dist.stddev())
             log_stds.append(std)
+            trace_log_stds.append(np.sum(std))
             # moving_average.append(filter.process(np.array(action_dist.log_std())))
             filtered_vector = ema_filter.update(std)
             moving_average.append(filtered_vector)
@@ -183,8 +193,7 @@ def map_environment(agent:DrQLearner, env, n_eval_episodes=10, deterministic=Tru
                 images.append(obs)
                 heading_ar.append(heading)
                 mapper.update(obs,heading)
-                cv2.imwrite(f"sample_map/{steps}.jpg",np.vstack([(observation["pixels"][...,0]*255).astype(np.uint8),(observation["goal"][...,0]*255).astype(np.uint8)
-                                                                 ]))
+                cv2.imwrite(f"sample_map/{steps}.jpg",(observation["pixels"][...,0]*255).astype(np.uint8))
             
             if done:
                 restarts.append(steps)
@@ -212,6 +221,7 @@ def map_environment(agent:DrQLearner, env, n_eval_episodes=10, deterministic=Tru
         "mean_length": np.mean(episode_lengths),
         "std_length": np.std(episode_lengths),
         "total_map_steps":steps,
+        "number_of_restarts":len(restarts),
         "exploration_time":int(end-start)
     }
     
@@ -224,7 +234,6 @@ def map_environment(agent:DrQLearner, env, n_eval_episodes=10, deterministic=Tru
         
     plt.plot(np.array(log_stds)[:,0], color='blue',linestyle = 'dotted')
     plt.plot(np.array(log_stds)[:,1], color='red',linestyle = 'dotted') 
-
     plt.plot(np.array(moving_average)[:,0], color='blue' )
     plt.plot(np.array(moving_average)[:,1], color='red') 
 
@@ -243,6 +252,10 @@ def map_environment(agent:DrQLearner, env, n_eval_episodes=10, deterministic=Tru
     a=dict(images=images,heading=heading_ar)
     with open('map.pickle', 'wb') as handle:
         pickle.dump(a, handle, protocol=pickle.HIGHEST_PROTOCOL)
+    with open('plot_data.pickle', 'wb') as handle:
+        pickle.dump(dict(log_stds=log_stds,trace_log_stds=trace_log_stds,
+                         locations=locations,
+                         unit_vectors=unit_vectors), handle, protocol=pickle.HIGHEST_PROTOCOL)
     return stats,mapper
 
 def navigate(agent:DrQLearner, env:CarlaEvalEnv, mapper:TopologicalMap,n_eval_episodes=10):
@@ -259,6 +272,7 @@ def navigate(agent:DrQLearner, env:CarlaEvalEnv, mapper:TopologicalMap,n_eval_ep
     restarts=[]
     # filter=StreamingMovingAverage(window_size=100)
     ema_filter = RealTimeVectorEMA(window_size=100, vector_dim=2)
+    
     # Real-time updates
     # mapper=TopologicalMap()
     start=time.time()
@@ -272,6 +286,7 @@ def navigate(agent:DrQLearner, env:CarlaEvalEnv, mapper:TopologicalMap,n_eval_ep
         goal_idx=random.randint(0,len(mapper.image_node)-1)
         obs=(observation["pixels"][...,0]*255).astype(np.uint8)
         subgoal=mapper.create_navigation_guide(obs,goal_idx)
+
         while not done:
             goal,done=subgoal(obs)
             if not done and not goal is None:
@@ -325,77 +340,26 @@ def navigate(agent:DrQLearner, env:CarlaEvalEnv, mapper:TopologicalMap,n_eval_ep
     return stats
 
 def main(_):
-    # Create and wrap environment
-    config = {
-        "env_config": {
-            "carla": {
-                "host": "localhost",
-                "timeout": 20.0,
-                "timestep": 0.1,
-                "retries_on_error": 25,
-                "resolution_x": 600,
-                "resolution_y": 600,
-                "quality_level": "Low",
-                "enable_map_assets": True,
-                "enable_rendering": True,
-                "show_display": True,
-                "town": "Town01"
-            },
-            "experiment": {
-                "type": JAXMappingExperiments,
-                "hero": {
-                    "blueprint": "vehicle.mercedes.coupe_2020",
-                    "sensors": {
-                        "collision": {"type": "sensor.other.collision"},
-                        "rgb": {
-                            "type": "sensor.camera.rgb",
-                            "image_size_x": 300,
-                            "image_size_y": 300,
-                            "transform": "1.9, 0.0, 1.7, 0.0, -15.0, 0.0"
-                        },
-                        "goal": {
-                            "type": "sensor.goal",
-                            "image_size_x": 300,
-                            "image_size_y": 300,
-                        },
-                        "imu": {"type": "sensor.other.imu"},
-                        "lane_invasion": {"type": "sensor.other.lane_invasion"}
-                    }
-                },
-                "background_activity": {
-                    "n_vehicles": 0,
-                    "n_walkers": 0,
-                    "tm_hybrid_mode": True
-                },
-                "town": "Town02",
-                "others": {
-                    "framestack": 1,
-                    "max_time_idle": 150,
-                    "max_dist": 200,
-                    "target_speed": 5.0
-                }
-            }
-        }
-    }
+   
     
-    env = CarlaEvalEnv(config["env_config"])
+    env = CarlaEvalEnv()
     env = FrameStack(env=env, num_stack=1, stacking_key="pixels")
-    env = FrameStack(env=env, num_stack=1, stacking_key="goal")
+    # env = FrameStack(env=env, num_stack=1, stacking_key="goal")
     env = TimeLimit(env, max_episode_steps=2500)
     env = RecordEpisodeStatistics(env)
     
     # Initialize agent
-    kwargs = dict(FLAGS.config)
+    # kwargs = dict(FLAGS.config)
     agent = DrQLearner(
-        42,  # seed
+        0,  # seed
         env.observation_space.sample(),
         env.action_space.sample(),
-        **kwargs
+        **sac_config
     )
     
     # Load checkpoint
     agent = load_checkpoint(agent, FLAGS.checkpoint_path)
-    
+
     # Evaluate
     stats,mapper = map_environment(
         agent,
@@ -403,13 +367,13 @@ def main(_):
         n_eval_episodes=FLAGS.n_eval_episodes,
         deterministic=FLAGS.deterministic
     )
-    stats = navigate(
-        agent,
-        env,
-        mapper,
-        n_eval_episodes=FLAGS.n_eval_episodes,
-        # deterministic=FLAGS.deterministic
-    )
+    # stats = navigate(
+    #     agent,
+    #     env,
+    #     mapper,
+    #     n_eval_episodes=FLAGS.n_eval_episodes,
+    #     # deterministic=FLAGS.deterministic
+    # )
     
     # Print results
     print("\nEvaluation Results:")

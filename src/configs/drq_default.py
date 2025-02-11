@@ -20,5 +20,4 @@ def get_config():
     config.target_entropy = None
     config.backup_entropy = True
     config.critic_reduction = "mean"
-
     return config

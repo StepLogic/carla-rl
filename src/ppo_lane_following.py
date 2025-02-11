@@ -14,6 +14,22 @@ from rlib_integration.carla_goal_env import CarlaGoalEnv
 from flax.training import checkpoints
 import flax
 flax.config.update('flax_use_orbax_checkpointing', True)
+from jaxrl2.agents import PPOLearner
+config = ml_collections.ConfigDict()
+config.actor_lr = 3e-4
+config.critic_lr = 3e-4
+config.hidden_dims = (256, 256)
+config.cnn_features = (32, 64, 128, 256)
+config.cnn_filters = (3, 3, 3, 3)
+config.cnn_strides = (2, 2, 2, 2)
+config.cnn_padding = "VALID"
+config.latent_dim = 50
+config.encoder = "d4pg"
+config.discount = 0.98
+config.critic_reduction = "mean"
+config.clip_ratio = 0.2  # Add clip ratio
+config.gae_lambda = 0.95  # Add GAE lambda
+ppo_config = config.to_dict()
 
 
 def save_checkpoint(agent, path, step):
@@ -59,27 +75,10 @@ def main():
 
 
     # Initialize PPO agent
-    from jaxrl2.agents import PPOLearner
-    config = ml_collections.ConfigDict()
-    config.actor_lr = 3e-4
-    config.critic_lr = 3e-4
-    config.hidden_dims = (256, 256)
-    config.cnn_features = (32, 64, 128, 256)
-    config.cnn_filters = (3, 3, 3, 3)
-    config.cnn_strides = (2, 2, 2, 2)
-    config.cnn_padding = "VALID"
-    config.latent_dim = 50
-    config.encoder = "d4pg"
-    config.discount = 0.98
-    config.critic_reduction = "mean"
-    config.clip_ratio = 0.2  # Add clip ratio
-    config.gae_lambda = 0.95  # Add GAE lambda
-    config = config.to_dict()
-
     agent = PPOLearner(
         observations=env.observation_space.sample(),
         actions=env.action_space.sample(),
-        **config
+        **ppo_config
     )
 
     # Initialize replay buffer

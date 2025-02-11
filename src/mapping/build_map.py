@@ -8,7 +8,6 @@ from absl import app, flags
 from flax.training import checkpoints
 from ml_collections import config_flags
 from src.carla_eval import CarlaEvalEnv
-from src.jax_experiments_goal import JAXGoalExperiments
 from src.jax_mapping_experiment import JAXMappingExperiments
 from jaxrl2.agents import DrQLearner
 from jaxrl2.wrappers.frame_stack import FrameStack

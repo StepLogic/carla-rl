@@ -118,7 +118,7 @@ def main(_):
     noise = OrnsteinUhlenbeckActionNoise(mean=mean, sigma=sigma)
   
     # Initialize logger
-    logger = Logger(log_dir="./logs")
+    logger = Logger(log_dir="./logs",prefix="SAC")
 
     # Initialize checkpoints dir
     policy_folder = os.path.join("checkpoints", f"model-{len(glob.glob('./logs/*'))}")
@@ -204,8 +204,6 @@ def main(_):
         
         # Handle episode completion
         if done or truncated or "TimeLimit.truncated" in info:
-            observation, info, done = *env.reset(), False
-            noise.reset()
             # print(info)
             if "episode" in info:
                 # Prepare episode metrics
@@ -228,8 +226,14 @@ def main(_):
                     episode_info["distance_completed"] = np.mean(distance_to_goal_history)
                 if "slack" in info:
                     episode_info["slack"] = float(info["slack"])
-                
+                episode_info.update({
+                    "mean_reward":info.get("mean_reward",0),
+                    "max_reward":info.get("max_reward",0),
+                    "min_reward":info.get("min_reward",0)
+                })
                 logger.log_episode(episode_info, i)
+            observation, info, done = *env.reset(), False
+            noise.reset()
         
         # Training updates
         if i >= FLAGS.start_training:
@@ -302,6 +306,12 @@ def main(_):
     
     # Print final training statistics
     save_checkpoint(agent,f"checkpoints/final_drq",1)
+    # if FLAGS.save_buffer:
+    dataset_folder ="datasets"
+    os.makedirs(dataset_folder, exist_ok=True)
+    dataset_file = os.path.join(dataset_folder, f"img_goal_ds")
+    with open(dataset_file, "wb") as f:
+        pickle.dump(replay_buffer, f)
     training_duration = time.time() - training_start_time
     print(f"\nTraining completed in {training_duration/3600:.2f} hours")
     print(f"Logs saved to: {logger.log_dir}")

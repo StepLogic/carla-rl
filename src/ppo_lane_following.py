@@ -1,7 +1,7 @@
 import glob
 import os
 import time
-from collections import defaultdict
+from collections import defaultdict, deque
 from jaxrl2.utils.misc import Logger
 from jaxrl2.wrappers.frame_stack import FrameStack
 from jaxrl2.wrappers.record_statistics import RecordEpisodeStatistics
@@ -51,7 +51,7 @@ def main():
     np.random.seed(SEED)
 
     # Initialize logger
-    logger = Logger(log_dir="./logs")
+    logger = Logger(log_dir="./logs",prefix="PPO")
 
     # Initialize checkpoint-directory 
     policy_folder = os.path.join("checkpoints", f"model-ppo-{len(glob.glob('./logs/*'))}")
@@ -91,7 +91,11 @@ def main():
     )
     # replay_buffer.seed(SEED)
 
+    success_history = deque(maxlen=100)  # Track last 100 episodes
+    eval_success_history = deque(maxlen=100)
 
+    distance_to_goal_history = deque(maxlen=100)  # Track last 100 episodes
+    eval_distance_to_goal_history = deque(maxlen=100)  # Track last 100 episodes
     # Training loop
     observation, info = env.reset()
     episode_return = 0
@@ -136,11 +140,29 @@ def main():
             observation = next_observation
             episode_return += reward
             episode_length += 1
-            if done:
-                episode_info = {
+            episode_info = {
                     "return": episode_return,
                     "length": episode_length,
                 }
+            if done:
+                if "is_success" in info:
+                    success = float(info["is_success"])
+                    success_history.append(success)
+                    episode_info["is_success"] = success
+                    episode_info["success_rate"] = np.mean(success_history)
+                if "distance_completed" in info:
+                    distance_completed = float(info["distance_completed"])
+                    distance_to_goal_history.append(distance_completed)
+                    episode_info["distance_completed"] = distance_completed
+                    episode_info["distance_completed"] = np.mean(distance_to_goal_history)
+                episode_info = {
+                    "return": episode_return,
+                    "length": episode_length,
+                    "mean_reward":info.get("mean_reward",None),
+                    "max_reward":info.get("max_reward",None),
+                    "min_reward":info.get("min_reward",None)
+                }
+
                 logger.log_episode(episode_info, step)
                 observation, info = env.reset()
                 episode_return = 0
@@ -184,7 +206,11 @@ def main():
         if step % EVAL_INTERVAL == 0:
                 eval_returns = []
                 eval_lengths = []
-
+                eval_successes = []
+                eval_dists = []
+                eval_mean_reward = []
+                eval_min_reward = []
+                eval_max_reward = []
                 for _ in range(EVAL_EPISODES):
                     eval_obs, _ = env.reset()
                     eval_done = False
@@ -193,19 +219,33 @@ def main():
 
                     while not eval_done:
                         eval_action = agent.eval_actions(eval_obs)
-                        eval_obs, eval_reward, eval_terminated, eval_truncated, _ = env.step(eval_action)
+                        eval_obs, eval_reward, eval_terminated, eval_truncated, eval_info = env.step(eval_action)
                         eval_done = eval_terminated or eval_truncated
                         eval_return += eval_reward
                         eval_length += 1
 
                     eval_returns.append(eval_return)
                     eval_lengths.append(eval_length)
+                    if "is_success" in eval_info:
+                        eval_successes.append(float(eval_info["is_success"]))
+                    if "distance_completed" in eval_info:
+                        eval_dists.append(float(eval_info["distance_completed"]))
+
+
+                    eval_mean_reward.append(info.get("mean_reward",0))
+                    eval_max_reward.append(info.get("max_reward",0))
+                    eval_min_reward.append(info.get("min_reward",0))
+                
 
                 eval_info = {
                     "eval_return_mean": np.mean(eval_returns),
                     "eval_return_std": np.std(eval_returns),
                     "eval_length_mean": np.mean(eval_lengths),
                     "eval_length_std": np.std(eval_lengths),
+                    "eval_mean_reward_per_step":np.mean(eval_mean_reward),
+                    "eval_max_reward_per_step":np.mean(eval_max_reward),
+                    "eval_min_reward_per_step":np.mean(eval_min_reward)
+
                 }
                 save_checkpoint(agent,policy_folder,i)
                 logger.log_eval(eval_info, step)

@@ -29,6 +29,7 @@ class STBL3Experiment(BaseExperiment):
         self.prev_steer = 0.0
         self.prev_throttle = 0.0
         self.info=dict()
+        self.rewards=[]
 
     def reset(self,*arg,**kwargs):
         """Called at the beginning and each time the simulation is reset"""
@@ -59,7 +60,7 @@ class STBL3Experiment(BaseExperiment):
         self.max_throttle = 0.6
         self.prev_steer = 0.0
         self.prev_throttle = 0.0
-        self.target_speed = random.randint(1,self.config["others"]["target_speed"]+5)
+        self.target_speed = random.uniform(1.0,self.config["others"]["target_speed"])
         self.info=dict()
 
     # def get_action_space(self):
@@ -147,7 +148,7 @@ class STBL3Experiment(BaseExperiment):
             self.prev_vec_1 = self.prev_vec_0
             self.prev_vec_2 = self.prev_vec_1
 
-        vecs = vec
+        vecs = vec+np.random.normal(0,1,4) #add gaussian noise
 
         if self.frame_stack >= 2:
             vecs = np.concatenate([self.prev_vec_0, vecs], axis=0)
@@ -206,8 +207,19 @@ class STBL3Experiment(BaseExperiment):
         self.diff_lane = 'lane_invasion' in sensor_data.keys() or wp is None
         self.collision = 'collision' in sensor_data.keys()
         done=self.done_falling or self.done_dist or self.diff_lane or self.collision
-        if done:
-            self.info.update(is_success=self.done_dist)
+        self.info.update(dict(is_success=self.done_dist,
+                             distance_completed=self.distance_travelled))
+        if len(self.rewards)>0:
+                    self.info.update(dict(
+                             max_reward=np.max(self.rewards),
+                             min_reward=np.min(self.rewards),
+                             mean_reward=np.mean(self.rewards)))
+        # if done:
+        #     self.info.update(is_success=self.done_dist,
+        #                      distance_completed=self.distance_travelled,
+        #                      max_reward=np.max(self.rewards),
+        #                      min_reward=np.min(self.rewards),
+        #                      mean_reward=np.mean(self.rewards))
             # print(self.distance_travelled)
         return done
 
@@ -250,7 +262,7 @@ class STBL3Experiment(BaseExperiment):
         # if hero_velocity < self.target_speed and hero_velocity < self.target_speed:
         #     # print(heading/5)
         #     reward += heading*1e-3
-        reward = -1e-3*((self.target_speed-hero_velocity)**2 + 1e-1*(imu-heading)**2)
+        reward = -1e-2*((self.target_speed-hero_velocity)**2 + 1e-1*(imu-heading)**2)
         self.distance_travelled += delta_distance    
 
         if self.done_falling:
@@ -266,8 +278,8 @@ class STBL3Experiment(BaseExperiment):
             reward += -1.0
         if self.diff_lane:
             reward += -1.0
-
-        return reward*10
+        self.rewards.append(reward)
+        return reward
 
 config = {
     "framework": "torch",
@@ -297,7 +309,8 @@ config = {
             "quality_level": "Low",
             "enable_map_assets": True,
             "enable_rendering": True,
-            "show_display": True
+            "show_display": True,
+            "town":"Town01"
         },
         "experiment": {
             "type":STBL3Experiment,

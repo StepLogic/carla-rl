@@ -281,18 +281,18 @@ class STBL3Experiment(BaseExperiment):
         self.distance_travelled += delta_distance    
 
         if self.done_falling:
-            reward += -10.0
+            reward += -10
         if self.done_dist:
             # print("Max dist travelled")
-            reward += 10.0
+            reward += 10
         # if self.done_time_idle:
         #     # print("Done idle")
         #     reward += -1.0
         if self.collision:
             # print('collision')
-            reward += -10.0
+            reward += -10
         if self.diff_lane:
-            reward += -10.0
+            reward += -10
         self.rewards.append(reward)
 
         self.prev_steer = self.steer

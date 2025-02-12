@@ -282,28 +282,33 @@ class STBL3Experiment(BaseExperiment):
         # reward = (reward - min_reward) / (max_reward - min_reward) #scale
         # or 
         # reward = -reward/min_reward
-        reward=-1.0 + np.exp(-(imu-heading)**2) + .4*np.exp(-(self.target_speed-hero_velocity)**2)+0.1*np.exp(-np.sum(np.array([self.prev_steer,self.prev_throttle]-np.array([self.steer,self.throttle])))**2)
-
+        # reward=-1.0 + np.exp(-(imu-heading)**2) + .4*np.exp(-(self.target_speed-hero_velocity)**2)+0.1*np.exp(-np.sum(np.array([self.prev_steer,self.prev_throttle]-np.array([self.steer,self.throttle])))**2)
+        reward=0.0
+        # target_speed_error=np.exp(-(self.target_speed-hero_velocity)**2)-1.0
+        # heading_error=np.exp(-(imu-heading)**2) -1.0
+        # reward=0.2*(target_speed_error+heading_error)
+        if hero_velocity<self.target_speed:
+            reward+=delta_distance*np.cos(imu-heading)
         self.distance_travelled += delta_distance    
 
         if self.done_falling:
-            reward += -5.0
+            reward += -1.0
         if self.done_dist:
             # print("Max dist travelled")
-            reward += 5.0
+            reward += 1.0
         # if self.done_time_idle:
         #     # print("Done idle")
         #     reward += -1.0
         if self.collision:
             # print('collision')
-            reward += -5.0
+            reward += -1.0
         if self.diff_lane:
-            reward += -5.0
+            reward += -1.0
         self.rewards.append(reward)
 
         self.prev_steer = self.steer
         self.prev_throttle = self.throttle
-        return reward
+        return reward*10
 
 config = {
     "framework": "torch",

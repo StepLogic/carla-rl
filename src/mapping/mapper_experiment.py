@@ -25,7 +25,7 @@ os.environ["XLA_PYTHON_CLIENT_ALLOCATOR"]="platform"
 # Define flags
 FLAGS = flags.FLAGS
 flags.DEFINE_string("checkpoint_path", None, "Path to the checkpoint directory")
-flags.DEFINE_integer("n_eval_episodes", 100, "Number of evaluation episodes")
+flags.DEFINE_integer("n_eval_episodes", 500, "Number of evaluation episodes")
 flags.DEFINE_boolean("deterministic", True, "Whether to use deterministic actions")
 
 
@@ -160,12 +160,12 @@ def map_environment(agent:DrQLearner, env, n_eval_episodes=10, deterministic=Tru
         episode_length = 0
         while not done:
             target=3.0
-            # heading=np.pi
+            heading=2*np.pi
             vecs=observation["vector"]
             current_velocity=env.unwrapped.experiment.velocity
             current_heading=env.unwrapped.experiment.current_heading
             vecs[2] = np.clip(current_velocity/(target+1e-8), 0.0, 1.0)
-            # vecs[3]= np.clip(current_heading/(heading+1e-8),-1.0,1.0) 
+            vecs[3]= np.clip(current_heading/(heading+1e-8),-1.0,1.0) 
             observation["vector"]=vecs
             action_dist=agent.action_dist(observation)
             # if deterministic:
@@ -175,7 +175,7 @@ def map_environment(agent:DrQLearner, env, n_eval_episodes=10, deterministic=Tru
             if is_at_junction:
                 junctions.append(steps)
             locations.append(location)
-            unit_vectors.append(unit_vectors)
+            unit_vectors.append(unit_vector)
             std=np.array(action_dist.stddev())
             log_stds.append(std)
             trace_log_stds.append(np.sum(std))

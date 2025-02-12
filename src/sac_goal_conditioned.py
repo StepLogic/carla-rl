@@ -53,13 +53,13 @@ config.cnn_strides = (2, 2, 2, 2)
 config.cnn_padding = "VALID"
 config.latent_dim = 50
 config.encoder = "d4pg"
-config.discount = 0.98
+config.discount = 1.0
 config.tau = 0.005
 config.init_temperature = 1.0
 config.target_entropy = None
 config.backup_entropy = True
 config.critic_reduction = "mean"
-sac_config = config.to_dict()
+goal_config = config.to_dict()
 
 
 
@@ -150,7 +150,7 @@ def main(_):
         env.observation_space.sample(), 
         env.action_space.sample(), 
         # num_qs=10,
-        **sac_config
+        **goal_config
     )
     
     replay_buffer_size = FLAGS.replay_buffer_size
@@ -325,7 +325,7 @@ def main(_):
     # if FLAGS.save_buffer:
     dataset_folder ="datasets"
     os.makedirs(dataset_folder, exist_ok=True)
-    dataset_file = os.path.join(dataset_folder, f"lane_following_buffer")
+    dataset_file = os.path.join(dataset_folder, f"goal_conditioned_buffer")
     with open(dataset_file, "wb") as f:
         pickle.dump(replay_buffer, f)
     training_duration = time.time() - training_start_time

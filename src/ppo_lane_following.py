@@ -109,8 +109,9 @@ def main():
         n_step=0
         while n_step < LOCAL_STEPS:
             action, logp, value = agent.sample_actions(observation)
-            # print(value)
-            # action = np.clip(action, env.action_space.low, env.action_space.high)
+            # print(action)
+            action = np.clip(action, env.action_space.low, env.action_space.high)
+            # print(action)
             next_observation, reward, terminated, truncated, info = env.step(action)
             done = terminated or truncated
             timeout = "TimeLimit.truncated" in info

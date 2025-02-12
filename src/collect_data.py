@@ -1,12 +1,18 @@
 from datetime import datetime
 import glob
 import time
+from jaxrl2.data.replay_buffer import ReplayBuffer
+from jaxrl2.wrappers.frame_stack import FrameStack
+from jaxrl2.wrappers.record_statistics import RecordEpisodeStatistics
+from jaxrl2.wrappers.timelimit import TimeLimit
 import numpy as np
+from rlib_integration.carla_goal_env import CarlaGoalEnv
 from tqdm import tqdm
 import os
 import pickle
 from rlib_integration.agent import BasicAgent
-from train_online_pixels import CarlaGoalEnv,config,FrameStack,TimeLimit,RecordEpisodeStatistics,ReplayBuffer
+# from train_online_pixels import CarlaGoalEnv,config,FrameStack,TimeLimit,RecordEpisodeStatistics,ReplayBuffer
+from src.configs.goal_conditioned_env_config import config
 from jaxrl2.noise import OrnsteinUhlenbeckActionNoise
 import argparse
 def collect_basic_agent_data(town="Town05",replay_buffer_size=10000):
@@ -19,8 +25,10 @@ def collect_basic_agent_data(town="Town05",replay_buffer_size=10000):
     args = parser.parse_args()
     # Access the town name
     town_name = args.town
-    config["env_config"]["town"]=town_name
-    env = CarlaGoalEnv(config["env_config"],start_server=False)
+    #do not use 01,02,05
+    config["env_config"]["carla"]["town"]='Town03'
+    config["env_config"]["carla"]["start_server"]=False
+    env = CarlaGoalEnv(config["env_config"])
     env = FrameStack(env=env, num_stack=1, stacking_key="pixels")
     env = FrameStack(env=env, num_stack=1, stacking_key="goal")
     env = TimeLimit(env, max_episode_steps=2500)
@@ -44,8 +52,8 @@ def collect_basic_agent_data(town="Town05",replay_buffer_size=10000):
     collection_start_time = time.time()
     
     # Initialize BasicAgent
-    agent = BasicAgent(env.unwrapped.core.hero, target_speed=0.5)
-    agent.set_destination(env.unwrapped.core.destination.location)
+    agent = BasicAgent(env.unwrapped.core.hero, target_speed=10.0)
+    agent.set_destination(env.unwrapped.core.destination.transform.location)
     agent.ignore_traffic_lights(True)
     agent.ignore_stop_signs(True)
     # data=[]
@@ -55,8 +63,8 @@ def collect_basic_agent_data(town="Town05",replay_buffer_size=10000):
             observation, info = env.reset()
             noise.reset()
             # Reinitialize BasicAgent for new episode
-            agent = BasicAgent(env.unwrapped.core.hero, target_speed=0.5)
-            agent.set_destination(env.unwrapped.core.destination.location)
+            agent = BasicAgent(env.unwrapped.core.hero, target_speed=10.0)
+            agent.set_destination(env.unwrapped.core.destination.transform.location)
             agent.ignore_traffic_lights(True)
             agent.ignore_stop_signs(True)
 
@@ -104,7 +112,7 @@ def collect_basic_agent_data(town="Town05",replay_buffer_size=10000):
     dataset_folder = os.path.join("datasets")
     os.makedirs(dataset_folder, exist_ok=True)
     count=len(glob.glob(f"{dataset_folder}/*.pkl"))
-    final_dataset_file = os.path.join(dataset_folder, f"basic_agent_data_{count}.pkl")
+    final_dataset_file = os.path.join(dataset_folder, f"goal_condition_{town}_data_{count}.pkl")
     with open(final_dataset_file, "wb") as f:
         pickle.dump(replay_buffer, f)
     

@@ -23,8 +23,8 @@ class STBL3Experiment(BaseExperiment):
         self.allowed_types = [carla.LaneType.Driving, carla.LaneType.Parking]
         self.last_action = None
         # control variables
-        self.max_steer = 0.5
-        self.max_throttle = 0.6
+        self.max_steer = 1.0
+        self.max_throttle = 1.0
         self.max_angle_deviation=np.pi
         self.prev_steer = 0.0
         self.prev_throttle = 0.0
@@ -58,8 +58,8 @@ class STBL3Experiment(BaseExperiment):
         self.prev_image_2 = None
 
         # control variables
-        self.max_steer = 0.5
-        self.max_throttle = 0.6
+        # self.max_steer = 0.5
+        # self.max_throttle = 0.6
         self.prev_steer = 0.0
         self.prev_throttle = 0.0
         self.steer = 0.0
@@ -268,20 +268,22 @@ class STBL3Experiment(BaseExperiment):
         # if hero_velocity < self.target_speed and hero_velocity < self.target_speed:
         #     # print(heading/5)
         #     reward += heading*1e-3
-        reward = 1e-2*((self.target_speed-hero_velocity)**2 + 1e-1*(imu-heading)**2 + 1e-1*np.sum(np.array([self.prev_steer,self.prev_throttle]-np.array([self.steer,self.throttle])))**2)
+        # reward = 1e-2*((self.target_speed-hero_velocity)**2 + (imu-heading)**2 + 1e-1*np.sum(np.array([self.prev_steer,self.prev_throttle]-np.array([self.steer,self.throttle])))**2)
 
-        max_speed_error = self.target_speed**2
-        max_heading_error = heading**2
-        max_action_error = np.sum(self.get_action_space().low-self.get_action_space().high)**2
+        # max_speed_error = self.target_speed**2
+        # max_heading_error = heading**2
+        # max_action_error = np.sum(self.get_action_space().low-self.get_action_space().high)**2
         
 
-        min_reward = 1e-2 * (max_speed_error + 1e-1*max_heading_error+1e-1*max_action_error)
-        max_reward = 0
+        # min_reward = 1e-2 * ((max_speed_error+1e-8) + (max_heading_error+1e-8)+1e-1*max_action_error)
+        # max_reward = 0
         
         # Normalize to [0,1]
         # reward = (reward - min_reward) / (max_reward - min_reward) #scale
         # or 
-        reward = -reward/min_reward
+        # reward = -reward/min_reward
+        reward=-1.0 + np.exp(-(imu-heading)**2) + .4*np.exp(-(self.target_speed-hero_velocity)**2)+0.1*np.exp(-np.sum(np.array([self.prev_steer,self.prev_throttle]-np.array([self.steer,self.throttle])))**2)
+
         self.distance_travelled += delta_distance    
 
         if self.done_falling:

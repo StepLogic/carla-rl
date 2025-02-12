@@ -660,7 +660,7 @@ from rlib_integration.base_experiment import BaseExperiment
 from rlib_integration.helper import post_process_image, carla_location_to_np_array
 
 
-class JAXMappingExperiments(BaseExperiment):
+class JaxGoalConditionedExperiment(BaseExperiment):
     def __init__(self, config={},is_rgb=False,image_size=()):
         super().__init__(config)  # Creates a self.config with the experiment configuration
 
@@ -690,7 +690,7 @@ class JAXMappingExperiments(BaseExperiment):
         self.time_episode = 0
         self.done_time_idle = False
         self.done_falling = False
-        self.done_dist = False
+        self.done_goal = False
 
         # hero variables
         self.last_location = None
@@ -707,8 +707,8 @@ class JAXMappingExperiments(BaseExperiment):
         self.prev_image_2 = None
 
         # control variables
-        self.max_steer = 0.5
-        self.max_throttle = 0.6
+        self.max_steer = 1.0
+        self.max_throttle = 1.0
         self.prev_steer = 0.0
         self.prev_throttle = 0.0
         self.steer = 0.0
@@ -738,7 +738,7 @@ class JAXMappingExperiments(BaseExperiment):
             dtype=np.float32,
         )
 
-        return Dict({"pixels":image_space, "vector":vec_space})
+        return Dict({"pixels":image_space,"goal":image_space, "vector":vec_space})
 
     def get_action_space(self):
         """Returns the continuous action space for steering and throttle"""
@@ -755,8 +755,8 @@ class JAXMappingExperiments(BaseExperiment):
         action = carla.VehicleControl()
         # Smooth steering using previous value
         action.steer = float(np.clip(steer, -self.max_steer, self.max_steer))
-        self.steer=action.steer
-        self.throttle=action.throttle
+        # self.steer=action.steer
+        # self.throttle=action.throttle
         # Handle throttle and brake separately
         
         if throttle_brake >= 0:
@@ -783,15 +783,17 @@ class JAXMappingExperiments(BaseExperiment):
         The information variable can be empty
         """
         vecs = self.get_vec_obs(sensor_data, core)
-        images = self.get_img_obs(sensor_data, core)
-        return {"pixels":images, "vector":vecs}, self.info
+        images,goal = self.get_img_obs(sensor_data, core)
+        return {"pixels":images, "vector":vecs,"goal":goal}, self.info
 
     def get_vec_obs(self, sensor_data, core):
         # breakpoint()
-        heading=sensor_data["goal_heading"][-1][-1]
+        heading=sensor_data["goal"][-1][-1]
         imu=sensor_data["imu"][-1][-1]
         vec = np.zeros(4)
+        # breakpoint()
         vec[0] = self.prev_steer / self.max_steer
+
         vec[1] = self.prev_throttle / self.max_throttle
         hero = core.hero
         vec[2] = np.clip(self.get_speed(hero)/(self.target_speed+1e-8), 0.0, 1.0)
@@ -820,6 +822,7 @@ class JAXMappingExperiments(BaseExperiment):
 
     def get_img_obs(self, sensor_data, core):
         image = post_process_image(sensor_data['rgb'][1], normalized = True,crop=False, grayscale = True)
+        goal = post_process_image(sensor_data['goal'][1][0], normalized = True,crop=False, grayscale = True)
 
         if self.prev_image_0 is None:
             self.prev_image_0 = image
@@ -839,7 +842,7 @@ class JAXMappingExperiments(BaseExperiment):
         self.prev_image_1 = self.prev_image_0
         self.prev_image_0 = image
 
-        return images
+        return images,goal
     
     def get_speed(self, hero):
         """Computes the speed of the hero vehicle in Km/h"""
@@ -856,14 +859,16 @@ class JAXMappingExperiments(BaseExperiment):
         else:
             self.time_idle += 1
         self.time_episode += 1
-        marker_location=sensor_data["goal_heading"][-1][0]
+        # marker_location=sensor_data["goal_heading"][-1][0]
+        goal_location = sensor_data['goal'][1][-2]
+        distance_to_goal = np.linalg.norm(goal_location[:2]-carla_location_to_np_array(hero.get_transform().location)[:2])
         wp=core.map.get_waypoint(hero.get_transform().location,project_to_road=False) 
-        self.done_dist = self.distance_travelled > self.max_dist or marker_location.distance(hero.get_transform().location)<4.0
+        self.done_goal = distance_to_goal<4.0
         self.done_falling = hero.get_location().z < -0.5
         self.diff_lane = 'lane_invasion' in sensor_data.keys() or wp is None
         self.collision = 'collision' in sensor_data.keys()
-        done=self.done_falling or self.done_dist or self.diff_lane or self.collision
-        self.info.update(dict(is_success=self.done_dist,
+        done=self.done_falling or self.done_goal or self.diff_lane or self.collision
+        self.info.update(dict(is_success=self.done_goal,
                              distance_completed=self.distance_travelled))
         if len(self.rewards)>0:
                     self.info.update(dict(
@@ -881,8 +886,8 @@ class JAXMappingExperiments(BaseExperiment):
 
     def compute_reward(self, sensor_data, core):
         hero = core.hero
-        heading=sensor_data["goal_heading"][-1][-1]
-        imu=sensor_data["imu"][-1][-1]
+        # heading=sensor_data["goal_heading"][-1][-1]
+        # imu=sensor_data["imu"][-1][-1]
         # delta_heading=np.clip(abs(imu-heading),0,np.pi)
         # angle_factor=max(1-min(delta_heading/self.max_angle_deviation,1.0),1e-3)
         # heading=np.nan_to_num(math.cos(delta_heading),0)
@@ -893,8 +898,8 @@ class JAXMappingExperiments(BaseExperiment):
         # Initialize last location
         if self.last_location == None:
             self.last_location = hero_location
-        if self.last_heading == None:
-            self.last_heading = heading
+        # if self.last_heading == None:
+        #     self.last_heading = heading
         # Compute deltas
         delta_distance = float(np.sqrt(np.square(hero_location.x - self.last_location.x) + \
                             np.square(hero_location.y - self.last_location.y)))
@@ -917,25 +922,25 @@ class JAXMappingExperiments(BaseExperiment):
         # if hero_velocity < self.target_speed and hero_velocity < self.target_speed:
         #     # print(heading/5)
         #     reward += heading*1e-3
-        reward = 1e-2*((self.target_speed-hero_velocity)**2 + 1e-1*(imu-heading)**2 + 1e-1*np.sum(np.array([self.prev_steer,self.prev_throttle]-np.array([self.steer,self.throttle])))**2)
+        # reward = 1e-2*((self.target_speed-hero_velocity)**2 + 1e-1*(imu-heading)**2 + 1e-1*np.sum(np.array([self.prev_steer,self.prev_throttle]-np.array([self.steer,self.throttle])))**2)
 
-        max_speed_error = self.target_speed**2
-        max_heading_error = heading**2
-        max_action_error = np.sum(self.get_action_space().low-self.get_action_space().high)**2
+        # max_speed_error = self.target_speed**2
+        # max_heading_error = heading**2
+        # max_action_error = np.sum(self.get_action_space().low-self.get_action_space().high)**2
         
 
-        min_reward = 1e-2 * (max_speed_error + 1e-1*max_heading_error+1e-1*max_action_error)
-        max_reward = 0
+        # min_reward = 1e-2 * (max_speed_error + 1e-1*max_heading_error+1e-1*max_action_error)
+        # max_reward = 0
         
         # Normalize to [0,1]
         # reward = (reward - min_reward) / (max_reward - min_reward) #scale
         # or 
-        reward = -reward/min_reward
+        reward = -0.01
         self.distance_travelled += delta_distance    
 
         if self.done_falling:
             reward += -10.0
-        if self.done_dist:
+        if self.done_goal:
             print("Max dist travelled")
             reward += 10.0
         # if self.done_time_idle:
@@ -985,7 +990,7 @@ config = {
             "town":"Town01"
         },
         "experiment": {
-            "type":JAXMappingExperiments,
+            "type":JaxGoalConditionedExperiment,
             "hero": {
                 "blueprint": "vehicle.mercedes.coupe_2020",
                 "sensors": {
@@ -1004,9 +1009,9 @@ config = {
                     "imu":{
                         "type":"sensor.other.imu"
                     },
-                    "goal_heading":{
-                        "type":"sensor.goal.heading"
-                    },
+                    # "goal_heading":{
+                    #     "type":"sensor.goal.heading"
+                    # },
                     "goal":{
                         "type":"sensor.goal"
                     },

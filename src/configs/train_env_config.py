@@ -286,9 +286,9 @@ class STBL3Experiment(BaseExperiment):
         reward=0.0
         # target_speed_error=np.exp(-(self.target_speed-hero_velocity)**2)-1.0
         # heading_error=np.exp(-(imu-heading)**2) -1.0
-        # reward=0.2*(target_speed_error+heading_error)
+        # reward=target_speed_error
         if hero_velocity<self.target_speed:
-            reward+=delta_distance*np.cos(imu-heading)
+            reward+=delta_distance*np.cos(imu-heading)+delta_distance
         self.distance_travelled += delta_distance    
 
         if self.done_falling:

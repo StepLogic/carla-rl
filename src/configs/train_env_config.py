@@ -32,6 +32,7 @@ class STBL3Experiment(BaseExperiment):
         self.velocity=0.0
         self.info=dict()
         self.rewards=[]
+        self.image_size=64
 
     def reset(self,*arg,**kwargs):
         """Called at the beginning and each time the simulation is reset"""
@@ -78,7 +79,7 @@ class STBL3Experiment(BaseExperiment):
         image_space = Box(
             low=-1.0,
             high=1.0,
-            shape=(84, 84, self.frame_stack,),
+            shape=(self.image_size, self.image_size, self.frame_stack,),
             dtype=np.float32,
         )
         
@@ -145,9 +146,9 @@ class STBL3Experiment(BaseExperiment):
         vec[0] = self.prev_steer / self.max_steer
         vec[1] = self.prev_throttle / self.max_throttle
         hero = core.hero
-        vec[2] = np.clip(self.get_speed(hero)/(self.target_speed+1e-8), 0.0, 1.0)
+        vec[2] = np.clip(self.get_speed(hero)/(self.target_speed+1e-8), 0.0, 5.1)
         # vec[3] = self.time_idle / self.max_time_idle
-        vec[3]= np.clip(imu/(heading+1e-8),-1.0,1.0) 
+        vec[3]= np.clip(imu/(heading+1e-8),-5.1,5.1) 
         if self.prev_vec_0 is None:
             self.prev_vec_0 = vec
             self.prev_vec_1 = self.prev_vec_0
@@ -170,7 +171,7 @@ class STBL3Experiment(BaseExperiment):
         return vecs
 
     def get_img_obs(self, sensor_data, core):
-        image = post_process_image(sensor_data['rgb'][1], normalized = True,crop=False, grayscale = True)
+        image = post_process_image(sensor_data['rgb'][1], normalized = True,crop=False, grayscale = True,image_size=self.image_size)
 
         if self.prev_image_0 is None:
             self.prev_image_0 = image
@@ -209,7 +210,7 @@ class STBL3Experiment(BaseExperiment):
         self.time_episode += 1
         marker_location=sensor_data["goal_heading"][-1][0]
         wp=core.map.get_waypoint(hero.get_transform().location,project_to_road=False) 
-        self.done_dist = self.distance_travelled > self.max_dist or marker_location.distance(hero.get_transform().location)<4.0
+        self.done_dist = marker_location.distance(hero.get_transform().location)<4.0
         self.done_falling = hero.get_location().z < -0.5
         self.diff_lane = 'lane_invasion' in sensor_data.keys() or wp is None
         self.collision = 'collision' in sensor_data.keys()
@@ -283,26 +284,34 @@ class STBL3Experiment(BaseExperiment):
         # or 
         # reward = -reward/min_reward
         # reward=-1.0 + np.exp(-(imu-heading)**2) + .4*np.exp(-(self.target_speed-hero_velocity)**2)+0.1*np.exp(-np.sum(np.array([self.prev_steer,self.prev_throttle]-np.array([self.steer,self.throttle])))**2)
-        reward=0.0
-        # target_speed_error=np.exp(-(self.target_speed-hero_velocity)**2)-1.0
-        # heading_error=np.exp(-(imu-heading)**2) -1.0
-        # reward=target_speed_error
-        if hero_velocity<self.target_speed:
-            reward+=delta_distance*np.cos(imu-heading)+delta_distance
-        self.distance_travelled += delta_distance    
+        # reward=-1e-3
+        target_speed_error=np.clip(hero_velocity/self.target_speed,0.1,1.0)
+        heading_error=(imu)/(heading+1e-8)
+        heading_error=np.clip(heading_error,-0.1,1.0)
+        # progress=
+        # smooth_action=np.exp(-np.sum(np.array([self.prev_steer,self.prev_throttle]-np.array([self.steer,self.throttle])))**2)
+        reward= target_speed_error * heading_error - 0.5
+        # if hero_velocity<self.target_speed:
+        # reward+=delta_distance
+        # self.distance_travelled += delta_distance    
 
         if self.done_falling:
             reward += -1.0
         if self.done_dist:
-            # print("Max dist travelled")
+            print(f'Done Dist Target_S={self.target_speed:.4f} Vel={hero_velocity:.4f} R={reward:.4f} Err={target_speed_error:.4f} H_Err={heading_error:.4f}')
             reward += 1.0
         # if self.done_time_idle:
         #     # print("Done idle")
         #     reward += -1.0
         if self.collision:
-            # print('collision')
+            print(f'Collision Target_S={self.target_speed:.4f} Vel={hero_velocity:.4f} R={reward:.4f} Err={target_speed_error:.4f} H_Err={heading_error:.4f}')
             reward += -1.0
         if self.diff_lane:
+            print(f'Lane Invasion Target_S={self.target_speed:.4f} Vel={hero_velocity:.4f} R={reward:.4f} Err={target_speed_error:.4f} H_Err={heading_error:.4f}')
+            reward += -1.0
+        if hero_velocity>self.target_speed+1e-8:
+            print(f'Too fast Ratio={hero_velocity/self.target_speed:.3f} Target_S={self.target_speed:.3f} Vel={hero_velocity:.3f} R={reward:.4f} Err={target_speed_error:.4f} H_Err={heading_error:.4f}')
+          
             reward += -1.0
         self.rewards.append(reward)
 

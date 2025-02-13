@@ -105,8 +105,10 @@ def main():
     p_bar = tqdm.tqdm(range(MAX_STEPS))
     p_bar.update(5)
     p_bar.refresh()
+    
     for step in range(1, MAX_STEPS + 1,LOCAL_STEPS):
         n_step=0
+        run_eval=False
         while n_step < LOCAL_STEPS:
             action, logp, value = agent.sample_actions(observation)
             # print(action)
@@ -170,6 +172,10 @@ def main():
             n_step+=1
             p_bar.n = n_step+step
             p_bar.refresh()
+            if not run_eval:
+                run_eval=(n_step+step)%EVAL_INTERVAL
+            else:
+                run_eval=False
 
 
         _,_,last_value = agent.sample_actions(next_observation)
@@ -203,7 +209,7 @@ def main():
 
 
             # Periodic evaluation
-        if step % EVAL_INTERVAL == 0:
+        if run_eval:
                 eval_returns = []
                 eval_lengths = []
                 eval_successes = []
@@ -247,7 +253,7 @@ def main():
                     "eval_min_reward_per_step":np.mean(eval_min_reward)
 
                 }
-                save_checkpoint(agent,policy_folder,i)
+                save_checkpoint(agent,policy_folder,p_bar.n)
                 logger.log_eval(eval_info, step)
                 logger.print_status(step, MAX_STEPS)
 

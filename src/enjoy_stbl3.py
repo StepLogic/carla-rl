@@ -1,8 +1,11 @@
-from stable_baselines3 import SAC
+import time
+from stable_baselines3 import PPO
 # from stable_baselines3.common.evaluation import evaluate_policy
 from stable_baselines3.sac.policies import MlpPolicy
 # from vision_rl.stb3.stbl3_her_goal import config ,CarlaGoalEnv
-from vision_rl.stb3.stbl3_train import CarlaEnv,config
+from rlib_integration.carla_goal_env import CarlaGoalEnv
+from src.configs.train_env_config import config as carla_config
+from src.sac_lane_following import sac_config
 # Create the model and the training environment
 # from vision_rl.rllib_integration.carla_goal_env import CarlaGoalEnv
 # from vision_rl.stb3.stbl3_train import CarlaGoalEnv,config
@@ -93,6 +96,7 @@ def evaluate_policy(
     observations = env.reset()
     states = None
     episode_starts = np.ones((env.num_envs,), dtype=bool)
+    
     while (episode_counts < episode_count_targets).any():
         actions, states = model.predict(
             observations,  # type: ignore[arg-type]
@@ -150,7 +154,8 @@ def evaluate_policy(
         return episode_rewards, episode_lengths
     return mean_reward, std_reward
 
-env = CarlaEnv(config["env_config"])
-loaded_model = SAC.load("/home/robotlab/scratch/carla-rl/results/final_model",env)
+env = CarlaGoalEnv(carla_config["env_config"])
+loaded_model = PPO.load("/home/robotlab/scratch/carla-rl/results/sac_carla_640000_steps",env)
+time.sleep(2.0)
 mean_reward, std_reward = evaluate_policy(loaded_model, env, n_eval_episodes=100, deterministic=True)
 print(f"mean_reward={mean_reward:.2f} +/- {std_reward}")

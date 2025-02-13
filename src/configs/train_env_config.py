@@ -275,13 +275,11 @@ class STBL3Experiment(BaseExperiment):
         # max_heading_error = heading**2
         # max_action_error = np.sum(self.get_action_space().low-self.get_action_space().high)**2
         
-
         # min_reward = 1e-2 * ((max_speed_error+1e-8) + (max_heading_error+1e-8)+1e-1*max_action_error)
         # max_reward = 0
-        
+
         # Normalize to [0,1]
-        # reward = (reward - min_reward) / (max_reward - min_reward) #scale
-        # or 
+        # reward = (reward - min_reward) / (max_reward - min_reward) #scale # or 
         # reward = -reward/min_reward
         # reward=-1.0 + np.exp(-(imu-heading)**2) + .4*np.exp(-(self.target_speed-hero_velocity)**2)+0.1*np.exp(-np.sum(np.array([self.prev_steer,self.prev_throttle]-np.array([self.steer,self.throttle])))**2)
         # reward=-1e-3

@@ -105,6 +105,7 @@ def main():
     p_bar = tqdm.tqdm(range(MAX_STEPS))
     p_bar.update(5)
     p_bar.refresh()
+
     for step in range(1, MAX_STEPS + 1,LOCAL_STEPS):
         n_step=0
         while n_step < LOCAL_STEPS:
@@ -203,7 +204,7 @@ def main():
 
 
             # Periodic evaluation
-        if step % EVAL_INTERVAL == 0:
+        if p_bar.n % EVAL_INTERVAL == 0:
                 eval_returns = []
                 eval_lengths = []
                 eval_successes = []

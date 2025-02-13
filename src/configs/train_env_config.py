@@ -256,7 +256,7 @@ class STBL3Experiment(BaseExperiment):
         # Update variables
         self.last_location = hero_location
         self.last_velocity = hero_velocity
-        self.distance_travelled+=delta_distance
+        self.distance_travelled+=delta_distance*np.cos(abs(imu-heading))
 
         # Reward if going forward
         # if hero_velocity < self.target_speed  and hero_velocity > 1.0:
@@ -285,7 +285,7 @@ class STBL3Experiment(BaseExperiment):
         # reward=-1.0 + np.exp(-(imu-heading)**2) + .4*np.exp(-(self.target_speed-hero_velocity)**2)+0.1*np.exp(-np.sum(np.array([self.prev_steer,self.prev_throttle]-np.array([self.steer,self.throttle])))**2)
         # reward=-1e-3
         # Normalize target speed error to [0.2, 1.0] to avoid being too lenient
-        target_speed_error = np.clip(hero_velocity / self.target_speed, 0.2, 1.0)
+        target_speed_error = np.clip(hero_velocity / self.target_speed, -0.1, 1.0)
 
         # Normalize heading error to [-1.0, 1.0] to allow for larger corrections
         heading_error = (imu) / (heading + 1e-8)

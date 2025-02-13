@@ -210,7 +210,7 @@ class STBL3Experiment(BaseExperiment):
         self.time_episode += 1
                
         hero_velocity = self.get_speed(hero)
-        marker_location=sensor_data["goal_heading"][-1][0]
+        # marker_location=sensor_data["goal_heading"][-1][0]
         wp=core.map.get_waypoint(hero.get_transform().location,project_to_road=False) 
         self.done_dist = self.distance_travelled>200
         self.done_falling = hero.get_location().z < -0.5
@@ -316,7 +316,7 @@ class STBL3Experiment(BaseExperiment):
             reward += -1.0
         # Reward for reaching the target distance
         if self.done_dist:
-            print("Max Dist Smooth={smooth_action:3f} Dist={self.distance_travelled:3f}")
+            print(f"Max Dist Smooth={smooth_action:3f} Dist={self.distance_travelled:3f}")
             reward += 1.0
 
         # Scale the reward to a reasonable range (no need for *10)

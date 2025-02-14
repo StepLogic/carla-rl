@@ -10,7 +10,9 @@ import carla
 
 from rlib_integration.base_experiment import BaseExperiment
 from rlib_integration.helper import post_process_image, carla_location_to_np_array
-
+def normalize_angle(angle):
+    """Normalize angle to [-π, π]"""
+    return ((angle + np.pi) % (2 * np.pi)) - np.pi
 
 class STBL3Experiment(BaseExperiment):
     def __init__(self, config={}):
@@ -146,9 +148,9 @@ class STBL3Experiment(BaseExperiment):
         vec[0] = self.prev_steer / self.max_steer
         vec[1] = self.prev_throttle / self.max_throttle
         hero = core.hero
-        vec[2] = np.clip(self.get_speed(hero)/(self.target_speed+1e-8), 0.0, 5.1)
+        vec[2] = np.clip(self.get_speed(hero)/(self.target_speed+1e-8), 0.0, 2.0) - 1.0
         # vec[3] = self.time_idle / self.max_time_idle
-        vec[3]= np.clip(imu/(heading+1e-8),-5.1,5.1) 
+        vec[3] = np.clip(normalize_angle(imu - heading), -1.0, 1.0)
         if self.prev_vec_0 is None:
             self.prev_vec_0 = vec
             self.prev_vec_1 = self.prev_vec_0
@@ -304,8 +306,10 @@ class STBL3Experiment(BaseExperiment):
         # Base reward combines speed error, heading error, and smooth action
         # reward = target_speed_error * (heading_error + smooth_action)
         # reward = target_speed_error*(0.8+heading_error+0.2*smooth_action) + self.distance_travelled/200
-        
-        reward= delta_distance*target_speed_error*heading_error
+        if hero_velocity<self.target_speed:
+            reward = delta_distance
+        else:
+            reward=0.0
 
         # Penalize falling, collisions, lane invasions, and excessive speed
         if self.collision:

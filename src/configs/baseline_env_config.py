@@ -681,6 +681,7 @@ class JAXMappingExperiments(BaseExperiment):
         self.info=dict()
         self.rewards=[]
         self.origin=None
+        self.destination=None
 
     def reset(self,*arg,**kwargs):
         """Called at the beginning and each time the simulation is reset"""

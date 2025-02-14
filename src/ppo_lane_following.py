@@ -52,9 +52,9 @@ def main():
     MAX_STEPS = int(5e6)
     EVAL_INTERVAL = int(5e4)
     EVAL_EPISODES = 5
-    BATCH_SIZE = 64
+    BATCH_SIZE = 1024
     SEED = 42
-    LOCAL_STEPS=2048
+    LOCAL_STEPS = 2048*2
 
     # Create environment
     # carla_config["env_config"]["carla"]["town"]='Town07'

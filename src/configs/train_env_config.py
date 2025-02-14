@@ -305,26 +305,26 @@ class STBL3Experiment(BaseExperiment):
         # reward = target_speed_error * (heading_error + smooth_action)
         # reward = target_speed_error*(0.8+heading_error+0.2*smooth_action) + self.distance_travelled/200
         
-        reward= delta_distance*target_speed_error*heading_error
+        reward= target_speed_error*heading_error-1e-3
 
         # Penalize falling, collisions, lane invasions, and excessive speed
         if self.collision:
             print(f'Collision Smooth={smooth_action:3f} Dist={self.distance_travelled:3f} Target_S={self.target_speed:.4f} Vel={hero_velocity:.4f} R={reward:.4f} Err={target_speed_error:.4f} H_Err={heading_error:.4f}')
-            reward += -1.0
+            reward += -10
         if self.diff_lane:
             print(f'Lane Invasion  Smooth={smooth_action:3f} Dist={self.distance_travelled:3f} Target_S={self.target_speed:.4f} Vel={hero_velocity:.4f} R={reward:.4f} Err={target_speed_error:.4f} H_Err={heading_error:.4f}')
-            reward += -1.0
+            reward += -10
         if self.done_speed:
             print(f'Too fast Smooth={smooth_action:3f} Dist={self.distance_travelled:3f} Ratio={hero_velocity/self.target_speed:.3f} Target_S={self.target_speed:.3f} Vel={hero_velocity:.3f} R={reward:.4f} Err={target_speed_error:.4f} H_Err={heading_error:.4f}')
-            reward += -1.0
+            reward += -10
         # Reward for reaching the target distance
         if self.done_dist:
             print(f"Max Dist Smooth={smooth_action:3f} Dist={self.distance_travelled:3f}")
-            reward += 1.0
+            reward += 10
 
         # Scale the reward to a reasonable range (no need for *10)
         # reward = np.clip(reward, -2.0, 2.0)
-        reward*=10
+        # reward*=10
 
         # Store the reward for logging or analysis
         self.rewards.append(reward)

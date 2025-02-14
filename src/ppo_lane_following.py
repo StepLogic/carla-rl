@@ -57,6 +57,7 @@ def main():
     LOCAL_STEPS=2048
 
     # Create environment
+    # carla_config["env_config"]["carla"]["town"]='Town07'
     env = CarlaGoalEnv(carla_config["env_config"])
     env = FrameStack(env=env, num_stack=1,stacking_key="pixels")
     env = TimeLimit(env,max_episode_steps=2500)

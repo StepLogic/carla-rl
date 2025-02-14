@@ -1,7 +1,7 @@
 from datetime import datetime
 import glob
 import time
-from jaxrl2.data.replay_buffer import ReplayBuffer
+from jaxrl2.data.replay_buffer import ReplayBuffer,VariableCapacityBuffer
 from jaxrl2.wrappers.frame_stack import FrameStack
 from jaxrl2.wrappers.record_statistics import RecordEpisodeStatistics
 from jaxrl2.wrappers.timelimit import TimeLimit
@@ -12,7 +12,7 @@ import os
 import pickle
 from rlib_integration.agent import BasicAgent
 # from train_online_pixels import CarlaGoalEnv,config,FrameStack,TimeLimit,RecordEpisodeStatistics,ReplayBuffer
-from src.configs.goal_conditioned_env_config import config
+from src.configs.train_env_config import config
 from jaxrl2.noise import OrnsteinUhlenbeckActionNoise
 import argparse
 def collect_basic_agent_data(town="Town05",replay_buffer_size=10000):
@@ -26,19 +26,18 @@ def collect_basic_agent_data(town="Town05",replay_buffer_size=10000):
     # Access the town name
     town_name = args.town
     #do not use 01,02,05
-    config["env_config"]["carla"]["town"]='Town03'
+    config["env_config"]["carla"]["town"]=town_name
     config["env_config"]["carla"]["start_server"]=False
     env = CarlaGoalEnv(config["env_config"])
     env = FrameStack(env=env, num_stack=1, stacking_key="pixels")
-    env = FrameStack(env=env, num_stack=1, stacking_key="goal")
+    # env = FrameStack(env=env, num_stack=1, stacking_key="goal")
     env = TimeLimit(env, max_episode_steps=2500)
     env = RecordEpisodeStatistics(env)
 
     # Initialize replay buffer
-    replay_buffer = ReplayBuffer(
+    replay_buffer = VariableCapacityBuffer(
         env.observation_space, 
-        env.action_space, 
-        replay_buffer_size
+        env.action_space
     )
 
     # Initialize noise for exploration
@@ -52,8 +51,8 @@ def collect_basic_agent_data(town="Town05",replay_buffer_size=10000):
     collection_start_time = time.time()
     
     # Initialize BasicAgent
-    agent = BasicAgent(env.unwrapped.core.hero, target_speed=10.0)
-    agent.set_destination(env.unwrapped.core.destination.transform.location)
+    agent = BasicAgent(env.unwrapped.core.hero, target_speed=env.unwrapped.experiment.target_speed)
+    # agent.set_destination(env.unwrapped.core.destination.transform.location)
     agent.ignore_traffic_lights(True)
     agent.ignore_stop_signs(True)
     # data=[]
@@ -63,8 +62,8 @@ def collect_basic_agent_data(town="Town05",replay_buffer_size=10000):
             observation, info = env.reset()
             noise.reset()
             # Reinitialize BasicAgent for new episode
-            agent = BasicAgent(env.unwrapped.core.hero, target_speed=10.0)
-            agent.set_destination(env.unwrapped.core.destination.transform.location)
+            agent = BasicAgent(env.unwrapped.core.hero, target_speed=env.unwrapped.experiment.target_speed)
+            # agent.set_destination(env.unwrapped.core.destination.transform.location)
             agent.ignore_traffic_lights(True)
             agent.ignore_stop_signs(True)
 
@@ -118,7 +117,7 @@ def collect_basic_agent_data(town="Town05",replay_buffer_size=10000):
     
     collection_duration = time.time() - collection_start_time
     print(f"\nData collection completed in {collection_duration/3600:.2f} hours")
-    print(f"Final dataset saved to: {final_dataset_file}")
+    print(f"Final dataset saved to: {final_dataset_file} Size: {replay_buffer._size}")
 
 if __name__ == "__main__":
     collect_basic_agent_data()

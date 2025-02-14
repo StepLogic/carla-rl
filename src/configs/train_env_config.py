@@ -218,7 +218,7 @@ class STBL3Experiment(BaseExperiment):
         self.collision = 'collision' in sensor_data.keys()
         # print(hero_velocity,self.target_speed)
         self.done_speed=(hero_velocity/(self.target_speed+1e-8)) > 1.5
-        done=self.done_falling or self.done_dist or self.diff_lane or self.collision or self.done_speed
+        done=self.done_falling or self.done_dist or self.diff_lane or self.collision
         self.info.update(dict(is_success=self.done_dist,
                              distance_completed=self.distance_travelled,
                              max_reward=0,
@@ -302,9 +302,24 @@ class STBL3Experiment(BaseExperiment):
         # Calculate smooth action penalty to encourage smoother control inputs
         smooth_action = np.exp(-np.sum(np.array([self.prev_steer, self.prev_throttle] - np.array([self.steer, self.throttle]))**2))
 
-        # Base reward combines speed error, heading error, and smooth action
-        reward = target_speed_error * (smooth_action + heading_error) + self.distance_travelled/200
+        # # Base reward combines speed error, heading error, and smooth action
+        # reward = target_speed_error * (smooth_action + heading_error)
+        target_speed_error = np.clip(-np.abs(hero_velocity - self.target_speed) / self.target_speed, -1.0, 1.0)
 
+        # Normalize heading error to [-1.0, 1.0]
+        heading_error = np.clip(-abs(heading - imu) / np.pi, -1.0, 1.0)
+
+        # Calculate smooth action penalty
+        steer_diff = self.steer - self.prev_steer
+        throttle_diff = self.throttle - self.prev_throttle
+        smooth_action = np.exp(-0.5 * (steer_diff**2 + throttle_diff**2))
+
+        # Progress-based reward (to prevent idling)
+        progress_reward = self.distance_travelled / 200
+
+        # w1, w2, w3, w4 = 0.5, 1.0, 0.2, 0.3  # Tune these weights
+        # reward = w1 * target_speed_error + w2 * heading_error + w3 * smooth_action + w4 * progress_reward
+        # if 
         # Penalize falling, collisions, lane invasions, and excessive speed
         if self.collision:
             print(f'Collision Smooth={smooth_action:3f} Dist={self.distance_travelled:3f} Target_S={self.target_speed:.4f} Vel={hero_velocity:.4f} R={reward:.4f} Err={target_speed_error:.4f} H_Err={heading_error:.4f}')
@@ -312,7 +327,7 @@ class STBL3Experiment(BaseExperiment):
         if self.diff_lane:
             print(f'Lane Invasion  Smooth={smooth_action:3f} Dist={self.distance_travelled:3f} Target_S={self.target_speed:.4f} Vel={hero_velocity:.4f} R={reward:.4f} Err={target_speed_error:.4f} H_Err={heading_error:.4f}')
             reward += -1.0
-        if self.done_speed:
+        if self.done_falling:
             print(f'Too fast Smooth={smooth_action:3f} Dist={self.distance_travelled:3f} Ratio={hero_velocity/self.target_speed:.3f} Target_S={self.target_speed:.3f} Vel={hero_velocity:.3f} R={reward:.4f} Err={target_speed_error:.4f} H_Err={heading_error:.4f}')
             reward += -1.0
         # Reward for reaching the target distance
@@ -320,8 +335,34 @@ class STBL3Experiment(BaseExperiment):
             print(f"Max Dist Smooth={smooth_action:3f} Dist={self.distance_travelled:3f}")
             reward += 1.0
 
-        # Scale the reward to a reasonable range (no need for *10)
-        reward = np.clip(reward, -2.0, 2.0)
+        # # Additional Penalties
+        # if hero_velocity < 0.1:  # Idling penalty
+        #     reward += -0.5
+        #     print(f'Idling Penalty: Vel={hero_velocity:.4f}')
+        # if abs(heading_error) > 0.5:  # Large heading error penalty
+        #     reward += -0.5 * abs(heading_error)
+        #     print(f'Large Heading Error Penalty: H_Err={heading_error:.4f}')
+        # if hero_velocity > self.target_speed:  # Overspeeding penalty
+        #     overspeed_ratio = (hero_velocity - self.target_speed) / self.target_speed
+        #     reward += -1.0 * overspeed_ratio
+        #     print(f'Overspeeding Penalty: Ratio={overspeed_ratio:.3f}')
+        # if abs(self.steer - self.prev_steer) > 0.5:  # Steering oscillation penalty
+        #     reward += -0.2 * abs(self.steer - self.prev_steer)
+        #     print(f'Steering Oscillation Penalty: Oscillation={abs(self.steer - self.prev_steer):.3f}')
+        # if self.done_dist:  # Off-road penalty
+        #     reward += -2.0
+        #     print(f'Off-Road Penalty: Dist={self.distance_travelled:3f}')
+        # if self.collision:  # Off-road penalty
+        #     reward += -2.0
+        #     print(f'Off-Road Penalty: Dist={self.distance_travelled:3f}')
+    
+        # # Reward for reaching the target distance
+        # if self.done_dist:
+        #     print(f"Max Dist Smooth={smooth_action:3f} Dist={self.distance_travelled:3f}")
+        #     reward += 1.0
+
+        # Scale the reward to a reasonable range
+        # reward = np.clip(reward, -2.0, 2.0)
 
         # Store the reward for logging or analysis
         self.rewards.append(reward)

@@ -31,7 +31,7 @@ class CarlaCNN(BaseFeaturesExtractor):
         
         # Compute shape by doing one forward pass
         with torch.no_grad():
-            n_flatten = self.cnn(torch.zeros(1, 1, 84, 84)).shape[1]
+            n_flatten = self.cnn(torch.zeros(1, 1, 64, 64)).shape[1]
         
         self.linear = nn.Sequential(
             nn.Linear(n_flatten + 4, features_dim),  # +4 for the vector observations

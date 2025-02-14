@@ -15,7 +15,7 @@ from rlib_integration.agent import BasicAgent
 from src.configs.train_env_config import config
 from jaxrl2.noise import OrnsteinUhlenbeckActionNoise
 import argparse
-def collect_basic_agent_data(town="Town05",replay_buffer_size=10000):
+def collect_basic_agent_data(town="Town05",replay_buffer_size=int(1e6)):
     # Create environment
 
     parser = argparse.ArgumentParser(description='Collect basic agent data')

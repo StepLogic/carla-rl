@@ -218,7 +218,7 @@ class STBL3Experiment(BaseExperiment):
         self.collision = 'collision' in sensor_data.keys()
         # print(hero_velocity,self.target_speed)
         self.done_speed=(hero_velocity/(self.target_speed+1e-8)) > 1.5
-        done=self.done_falling or self.done_dist or self.diff_lane or self.collision or self.done_speed
+        done=self.done_falling or self.done_dist or self.diff_lane or self.collision
         self.info.update(dict(is_success=self.done_dist,
                              distance_completed=self.distance_travelled,
                              max_reward=0,
@@ -305,10 +305,10 @@ class STBL3Experiment(BaseExperiment):
 
         # # Base reward combines speed error, heading error, and smooth action
         # reward = target_speed_error * (smooth_action + heading_error)
-        target_speed_error = 1.0 - np.clip(np.abs(hero_velocity - self.target_speed) / self.target_speed, 0.0, 1.0)
+        target_speed_error = np.clip(-np.abs(hero_velocity - self.target_speed) / self.target_speed, -1.0, 1.0)
 
         # Normalize heading error to [-1.0, 1.0]
-        heading_error = np.clip((heading - imu) / np.pi, -1.0, 1.0)
+        heading_error = np.clip(-abs(heading - imu) / np.pi, -1.0, 1.0)
 
         # Calculate smooth action penalty
         steer_diff = self.steer - self.prev_steer
@@ -318,7 +318,7 @@ class STBL3Experiment(BaseExperiment):
         # Progress-based reward (to prevent idling)
         progress_reward = self.distance_travelled / 200
 
-        w1, w2, w3, w4 = 1.0, 0.5, 0.2, 0.3  # Tune these weights
+        w1, w2, w3, w4 = 0.5, 1.0, 0.2, 0.3  # Tune these weights
         reward = w1 * target_speed_error + w2 * heading_error + w3 * smooth_action + w4 * progress_reward
 
         # Penalize falling, collisions, lane invasions, and excessive speed
@@ -328,13 +328,13 @@ class STBL3Experiment(BaseExperiment):
         if self.diff_lane:
             print(f'Lane Invasion  Smooth={smooth_action:3f} Dist={self.distance_travelled:3f} Target_S={self.target_speed:.4f} Vel={hero_velocity:.4f} R={reward:.4f} Err={target_speed_error:.4f} H_Err={heading_error:.4f}')
             reward += -1.0
-        if self.done_speed:
+        if self.done_falling:
             print(f'Too fast Smooth={smooth_action:3f} Dist={self.distance_travelled:3f} Ratio={hero_velocity/self.target_speed:.3f} Target_S={self.target_speed:.3f} Vel={hero_velocity:.3f} R={reward:.4f} Err={target_speed_error:.4f} H_Err={heading_error:.4f}')
             reward += -1.0
 
         # # Additional Penalties
-        if hero_velocity < 0.1:  # Idling penalty
-            reward += -0.5
+        # if hero_velocity < 0.1:  # Idling penalty
+        #     reward += -0.5
         #     print(f'Idling Penalty: Vel={hero_velocity:.4f}')
         # if abs(heading_error) > 0.5:  # Large heading error penalty
         #     reward += -0.5 * abs(heading_error)

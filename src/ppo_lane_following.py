@@ -54,7 +54,7 @@ def main():
     EVAL_EPISODES = 5
     BATCH_SIZE = 1024
     SEED = 42
-    LOCAL_STEPS = 2048*2
+    LOCAL_STEPS = 2048
 
     # Create environment
     # carla_config["env_config"]["carla"]["town"]='Town07'
@@ -193,6 +193,8 @@ def main():
                     for key, value in update_info.items():
                         total_metrics[key].append(float(value))
                     num_updates += 1
+                    # if update_info["kl"]>1.5*agent.target_kl:
+                    #     break
             n_updates += 10
             # Calculate averages for each metric
             average_metrics = {

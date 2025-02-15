@@ -159,7 +159,7 @@ def main():
         learning_rate=3e-4,
         # buffer_size=100000,
         # learning_starts=5000,
-        n_steps= 4096,
+        n_steps= 2048,
         batch_size = 1024,
         # tau=0.005,              # Target network update rate
         gamma=0.99,

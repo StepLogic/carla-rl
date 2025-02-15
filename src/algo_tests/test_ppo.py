@@ -82,20 +82,11 @@ def main():
     # env = gym.make("CarRacing-v3", render_mode="human", lap_complete_percent=0.95, domain_randomize=False, max_episode_steps=2048, continuous=True)
     env=CarRacing(render_mode="human")
     env = TimeLimit(env,max_episode_steps=2500)
-    env=gym.wrappers.NormalizeObservation(env)
+    # env = gym.wrappers.NormalizeObservation(env)
     env = RecordEpisodeStatistics(env)
     eval_env = gym.make("CarRacing-v3", render_mode="human", lap_complete_percent=0.95, domain_randomize=False, continuous=True)
     env = SingleObsToDict(env,num_stack=1)
     eval_env = SingleObsToDict(eval_env,num_stack=1)
-    # env = FrameStack(env=env, num_stack=3,stacking_key="pixels")
-    # env = gym.make("Pendulum-v1", render_mode="human")  # default goal_velocity=0
-    # eval_env = gym.make("Pendulum-v1", render_mode="rgb_array")  # default goal_velocity=0
-
-    # env
-    # Set seeds
-    # env.reset(seed=SEED)
-    # eval_env.reset(seed=SEED + 1)
-    # np.random.seed(SEED)
     env.reset(seed=SEED)
     eval_env.reset(seed=SEED + 1)
     np.random.seed(SEED)
@@ -206,7 +197,7 @@ def main():
                     update_info = agent.update(batch, utd_ratio=1)
                     # if ix==0:
                     #     print(update_info["ratio"])
-                    # breakpoint()
+                    breakpoint()
                     for key, value in update_info.items():
                         total_metrics[key].append(float(value))
                     num_updates += 1

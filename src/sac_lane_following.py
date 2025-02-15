@@ -118,8 +118,8 @@ from absl import app, flags
 
 from typing import Dict, Any
 
-# expert_buffer="/home/kojogyaase/Projects/Research/carla-rl/datasets/basic_agent_data_20241229_093438.pkl"
-expert_buffer=None
+expert_buffer="/home/kojogyaase/Projects/Research/carla-rl/datasets/goal_condition_Town05_data_1.pkl"
+# expert_buffer=None
 
 
 def main(_):
@@ -255,7 +255,6 @@ def main(_):
         if i >= FLAGS.start_training:
             batch = next(replay_buffer_iterator)
             update_info = agent.update(batch)
-            
             if i % FLAGS.log_interval == 0:
                 logger.log_training(update_info, i)
                 logger.print_status(i, FLAGS.max_steps)

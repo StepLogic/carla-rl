@@ -16,7 +16,7 @@ from rlib_integration.agent import BasicAgent
 from src.configs.train_env_config import config
 from jaxrl2.noise import OrnsteinUhlenbeckActionNoise
 import argparse
-def collect_basic_agent_data(town="Town05",replay_buffer_size=int(1e5)):
+def collect_basic_agent_data(town="Town05",replay_buffer_size=int(1e4)):
     # Create environment
 
     parser = argparse.ArgumentParser(description='Collect basic agent data')
@@ -27,7 +27,7 @@ def collect_basic_agent_data(town="Town05",replay_buffer_size=int(1e5)):
     # Access the town name
     town_name = args.town
     #do not use 01,02,05
-    towns=['Town04',"Town03","Town06","Town07","Town08"]
+    towns=['Town04',"Town03","Town06","Town07"]
     def reset_env():
         config["env_config"]["carla"]["town"]=random.choice(towns)
         config["env_config"]["carla"]["start_server"]=False
@@ -65,12 +65,14 @@ def collect_basic_agent_data(town="Town05",replay_buffer_size=int(1e5)):
     agent=reset_agent(env=env)
 
     epidsodes_per_env=int(replay_buffer_size/len(towns))
-
+    switch_env=False
     for i in tqdm(range(1, replay_buffer_size + 10)):
-        
+        if not switch_env:
+            switch_env=i%epidsodes_per_env
         if done:
-            if i%epidsodes_per_env==0:
+            if switch_env:
                  env=reset_env()
+                 switch_env=False
             observation, info = env.reset()
             noise.reset()
             agent=reset_agent(env=env)

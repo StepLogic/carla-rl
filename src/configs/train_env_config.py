@@ -14,6 +14,7 @@ def normalize_angle(angle):
     """Normalize angle to [-π, π]"""
     return ((angle + np.pi) % (2 * np.pi)) - np.pi
 
+
 class STBL3Experiment(BaseExperiment):
     def __init__(self, config={}):
         super().__init__(config)  # Creates a self.config with the experiment configuration
@@ -88,7 +89,7 @@ class STBL3Experiment(BaseExperiment):
         vec_space = Box(
             low=-5.1,
             high=5.1,
-            shape=(4 * self.frame_stack,),
+            shape=(5 * self.frame_stack,),
             dtype=np.float32,
         )
 
@@ -144,13 +145,14 @@ class STBL3Experiment(BaseExperiment):
         # breakpoint()
         heading=sensor_data["goal_heading"][-1][-1]
         imu=sensor_data["imu"][-1][-1]
-        vec = np.zeros(4)
+        vec = np.zeros(5)
         vec[0] = self.prev_steer / self.max_steer
         vec[1] = self.prev_throttle / self.max_throttle
         hero = core.hero
         vec[2] = np.clip(self.get_speed(hero)/(self.target_speed+1e-8), 0.0, 5.1)
         # vec[3] = self.time_idle / self.max_time_idle
-        vec[3]= np.clip(imu/(heading+1e-8),-5.1,5.1) 
+        vec[3]= np.clip(imu/np.pi,-5.1,5.1) 
+        vec[4]= np.clip(heading/np.pi,-5.1,5.1) 
         if self.prev_vec_0 is None:
             self.prev_vec_0 = vec
             self.prev_vec_1 = self.prev_vec_0
@@ -197,7 +199,7 @@ class STBL3Experiment(BaseExperiment):
     def get_speed(self, hero):
         """Computes the speed of the hero vehicle in Km/h"""
         vel = hero.get_velocity()
-        return 3.6 * math.sqrt(vel.x ** 2 + vel.y ** 2 + vel.z ** 2)
+        return 3.6 * math.sqrt(vel.x ** 2 + vel.y ** 2)
 
     def get_done_status(self, sensor_data, core):
         """Returns whether or not the experiment has to end"""
@@ -294,43 +296,44 @@ class STBL3Experiment(BaseExperiment):
         # reward=-1e-3
         # Normalize target speed error to [0.2, 1.0] to avoid being too lenient
         # target_speed_error = np.clip( / self.target_speed, -1.0, 1.0)
-        target_speed_error=np.exp(-(hero_velocity-self.target_speed))
+        speed_factor=np.exp(-(hero_velocity-self.target_speed)**2)
 
         # Normalize heading error to [-1.0, 1.0] to allow for larger corrections
-        heading_error = np.exp(-(imu-heading))
+        heading_factor = np.exp(-(imu-heading)**2)
         # heading_error = np.clip(heading_error, -1.0, 1.0)
 
         # Calculate smooth action penalty to encourage smoother control inputs
-        smooth_action = np.exp(-np.sum((self.prev_steer - self.steer) + (self.prev_throttle - self.throttle)))
+        action_factor = np.exp(-np.sum((self.prev_steer - self.steer)**2 + (self.prev_throttle - self.throttle)**2))
 
         # Base reward combines speed error, heading error, and smooth action
         # reward = target_speed_error * (heading_error + smooth_action)
         # reward = target_speed_error*(0.8+heading_error+0.2*smooth_action) + self.distance_travelled/200
-        reward=-1e-3 + heading_error + target_speed_error +smooth_action
-        if hero_velocity<self.target_speed:
-            reward+=delta_distance
-        else:
-            reward+=0
+        reward= delta_distance + heading_factor + speed_factor + 0.1*action_factor - 1e-3
+        # reward=-1e-3
+        # if hero_velocity<self.target_speed:
+        #     reward+=delta_distance
+        # else:
+        #     reward+=0
         # reward=  target_speed_error*0.5 + heading_error + smooth_action*0.1
         # print(reward,target_speed_error,heading_error)
         # Penalize falling, collisions, lane invasions, and excessive speed
         if self.collision:
             # print(f'Collision Smooth={smooth_action:3f} Dist={self.distance_travelled:3f} Target_S={self.target_speed:.4f} Vel={hero_velocity:.4f} R={reward:.4f} Err={target_speed_error:.4f} H_Err={heading_error:.4f}')
-            reward += -10
+            reward += -1.0
         if self.diff_lane:
             # print(f'Lane Invasion  Smooth={smooth_action:3f} Dist={self.distance_travelled:3f} Target_S={self.target_speed:.4f} Vel={hero_velocity:.4f} R={reward:.4f} Err={target_speed_error:.4f} H_Err={heading_error:.4f}')
-            reward += -10
+            reward += -1.0
         if self.done_speed:
             # print(f'Too fast Smooth={smooth_action:3f} Dist={self.distance_travelled:3f} Ratio={hero_velocity/self.target_speed:.3f} Target_S={self.target_speed:.3f} Vel={hero_velocity:.3f} R={reward:.4f} Err={target_speed_error:.4f} H_Err={heading_error:.4f}')
-            reward += -10
+            reward += -1.0
         # Reward for reaching the target distance
         if self.done_dist:
             # print(f"Max Dist Smooth={smooth_action:3f} Dist={self.distance_travelled:3f}")
-            reward += 10
+            reward += 1.0
 
         # Scale the reward to a reasonable range (no need for *10)
         # reward = np.clip(reward, -2.0, 2.0)
-        # reward*=10
+        reward*=10
 
         # Store the reward for logging or analysis
         self.rewards.append(reward)

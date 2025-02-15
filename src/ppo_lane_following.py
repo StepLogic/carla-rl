@@ -2,6 +2,7 @@ import glob
 import os
 import time
 from collections import defaultdict, deque
+import gymnasium
 from jaxrl2.utils.misc import Logger
 from jaxrl2.wrappers.frame_stack import FrameStack
 from jaxrl2.wrappers.record_statistics import RecordEpisodeStatistics
@@ -62,7 +63,7 @@ def main():
     env = FrameStack(env=env, num_stack=1,stacking_key="pixels")
     env = TimeLimit(env,max_episode_steps=2500)
     env = RecordEpisodeStatistics(env)
-
+    env = gymnasium.wrappers.NormalizeReward(env)
 
     env.reset(seed=SEED)
     np.random.seed(SEED)
@@ -113,7 +114,7 @@ def main():
         while n_step < LOCAL_STEPS:
             action, logp, value = agent.sample_actions(observation)
             # print(action)
-            action = np.clip(action, env.action_space.low, env.action_space.high)
+            # action = np.clip(action, env.action_space.low, env.action_space.high) #dont do this
             # print(action)
             next_observation, reward, terminated, truncated, info = env.step(action)
             done = terminated or truncated
@@ -124,7 +125,7 @@ def main():
             if done:
                 if timeout:
                     _,_,last_value = agent.sample_actions(next_observation)
-                    reward = reward + config.get("discount",0.99) * last_value
+                    reward = reward + config.get("discount",0.98) * last_value
                 # else:
             #     #     last_value = 0.0  # Terminal state has value of 0
             # # print(n_step)
@@ -180,7 +181,7 @@ def main():
 
 
         _,_,last_value = agent.sample_actions(next_observation)
-        replay_buffer.compute_advantage(last_value=last_value,done=done,gae_lambda=0.95,discount=config.get("discount",0.99))
+        replay_buffer.compute_advantage(last_value=last_value,done=done,gae_lambda=0.95,discount=config.get("discount",0.98))
         
         # print(replay_buffer.can_sample(),len(replay_buffer),replay_buffer._path_start_idx)
         if len(replay_buffer) >= BATCH_SIZE:
@@ -193,6 +194,7 @@ def main():
                     for key, value in update_info.items():
                         total_metrics[key].append(float(value))
                     num_updates += 1
+                    # breakpoint()
                     # if update_info["kl"]>1.5*agent.target_kl:
                     #     break
             n_updates += 10

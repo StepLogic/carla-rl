@@ -299,7 +299,7 @@ class STBL3Experiment(BaseExperiment):
         speed_factor=np.exp(-abs(hero_velocity-self.target_speed))
 
         # Normalize heading error to [-1.0, 1.0] to allow for larger corrections
-        heading_factor = np.exp(-abs(imu-heading))
+        heading_factor = np.exp(-(imu-heading)**2) 
         # heading_error = np.clip(heading_error, -1.0, 1.0)
 
         # Calculate smooth action penalty to encourage smoother control inputs
@@ -310,13 +310,13 @@ class STBL3Experiment(BaseExperiment):
         # reward = target_speed_error*(0.8+heading_error+0.2*smooth_action) + self.distance_travelled/200
         wp=core.map.get_waypoint(hero.get_transform().location,project_to_road=False) 
         # Only penalize heading when it's significantly off or at intersections
-        heading_factor = np.exp(-((imu-heading)**2)) 
+        # heading_factor = np.exp(-((imu-heading)**2)) 
         # heading_weight = 1.0 if  wp.is_junction else 0.0
         reward=  2.0*speed_factor + 0.1*action_factor + heading_factor*0.1
         # print(speed_factor,self.target_speed)
         # reward=-1e-3
         # if hero_velocity<self.target_speed:
-        #     reward+=delta_distance
+        #     reward += delta_distance
         # else:
         #     reward+=0
         # reward=  target_speed_error*0.5 + heading_error + smooth_action*0.1
@@ -339,7 +339,7 @@ class STBL3Experiment(BaseExperiment):
         # Scale the reward to a reasonable range (no need for *10)
         # reward = np.clip(reward, -2.0, 2.0)
         # reward*=10
-
+# 
         # Store the reward for logging or analysis
         self.rewards.append(reward)
 

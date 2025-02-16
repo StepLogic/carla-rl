@@ -68,10 +68,10 @@ class STBL3Experiment(BaseExperiment):
         self.prev_throttle = 0.0
         self.steer = 0.0
         self.throttle = 0.0
-        self.target_speed = 6.0
+        # self.target_speed = 10.0
         self.velocity=0.0
         self.current_heading=0.0
-        self.target_speed = random.uniform(5.0,20.0)
+        self.target_speed = random.uniform(5.0,10.0)
         self.info=dict()
 
     # def get_action_space(self):
@@ -146,8 +146,8 @@ class STBL3Experiment(BaseExperiment):
         heading=sensor_data["goal_heading"][-1][-1]
         imu=sensor_data["imu"][-1][-1]
         vec = np.zeros(5)
-        vec[0] = self.prev_steer / self.max_steer
-        vec[1] = self.prev_throttle / self.max_throttle
+        vec[0] = self.steer / self.max_steer
+        vec[1] = self.throttle / self.max_throttle
         hero = core.hero
         vec[2] = np.clip(self.get_speed(hero)/(self.target_speed+1e-8), 0.0, 5.1)
         # vec[3] = self.time_idle / self.max_time_idle
@@ -215,7 +215,7 @@ class STBL3Experiment(BaseExperiment):
         hero_velocity = self.get_speed(hero)
         # marker_location=sensor_data["goal_heading"][-1][0]
         wp=core.map.get_waypoint(hero.get_transform().location,project_to_road=False) 
-        self.done_dist = self.distance_travelled>200
+        self.done_dist = self.distance_travelled>random.uniform(15,200)
         self.done_falling = hero.get_location().z < -0.5
         self.diff_lane = 'lane_invasion' in sensor_data.keys() or wp is None
         self.collision = 'collision' in sensor_data.keys()
@@ -296,14 +296,14 @@ class STBL3Experiment(BaseExperiment):
         # reward=-1e-3
         # Normalize target speed error to [0.2, 1.0] to avoid being too lenient
         # target_speed_error = np.clip( / self.target_speed, -1.0, 1.0)
-        speed_factor=np.exp(-(hero_velocity-self.target_speed)**2)
+        speed_factor=np.exp(-abs(hero_velocity-self.target_speed))
 
         # Normalize heading error to [-1.0, 1.0] to allow for larger corrections
-        heading_factor = np.exp(-(imu-heading)**2)
+        heading_factor = np.exp(-abs(imu-heading))
         # heading_error = np.clip(heading_error, -1.0, 1.0)
 
         # Calculate smooth action penalty to encourage smoother control inputs
-        action_factor = np.exp(-np.sum((self.prev_steer - self.steer)**2 + (self.prev_throttle - self.throttle)**2))
+        action_factor = np.exp(-np.sum(abs(self.prev_steer - self.steer) + abs(self.prev_throttle - self.throttle)))
 
         # Base reward combines speed error, heading error, and smooth action
         # reward = target_speed_error * (heading_error + smooth_action)
@@ -313,6 +313,7 @@ class STBL3Experiment(BaseExperiment):
         heading_factor = np.exp(-((imu-heading)**2)) 
         # heading_weight = 1.0 if  wp.is_junction else 0.0
         reward=  2.0*speed_factor + 0.1*action_factor + heading_factor*0.1
+        # print(speed_factor,self.target_speed)
         # reward=-1e-3
         # if hero_velocity<self.target_speed:
         #     reward+=delta_distance

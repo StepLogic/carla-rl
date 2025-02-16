@@ -296,10 +296,10 @@ class STBL3Experiment(BaseExperiment):
         # reward=-1e-3
         # Normalize target speed error to [0.2, 1.0] to avoid being too lenient
         # target_speed_error = np.clip( / self.target_speed, -1.0, 1.0)
-        speed_factor=np.exp(-abs(hero_velocity-self.target_speed))
+        speed_factor=np.exp(-(hero_velocity-self.target_speed)**2)
 
         # Normalize heading error to [-1.0, 1.0] to allow for larger corrections
-        heading_factor = np.exp(-abs(imu-heading))
+        heading_factor = np.exp(-(imu-heading)**2)
         # heading_error = np.clip(heading_error, -1.0, 1.0)
 
         # Calculate smooth action penalty to encourage smoother control inputs

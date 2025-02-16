@@ -26,12 +26,14 @@ class TopologicalMap:
         # self._build_graph()
     def update(self, image_obs,heading_obs):
         # breakpoint()
-        features = skimage.feature.hog(image_obs,channel_axis=-1)
+        # features = skimage.feature.hog(image_obs,channel_axis=-1)
+        image_obs=np.ravel(image_obs)
         self.image_node.append(image_obs)
-        self.des_nodes.append(features)
+        self.des_nodes.append(image_obs)
         self.heading_nodes.append(heading_obs)
         # breakpoint()
         # print(np.shape(self.des_nodes))
+        # print(image_obs.shape)
         self.flann.build_index(np.array(self.des_nodes), algorithm='kdtree', trees=4)
         
     def _build_graph(self):
@@ -48,14 +50,14 @@ class TopologicalMap:
                 if i != j:
                     self.graph[i].append((j, np.sqrt(dist)))
     
-    def create_navigation_guide(self,obs,goal_idx):
-        path,_= self.find_path_to_goal(obs,goal_idx)
+    def create_navigation_guide(self,image_obs,goal_idx):
+        path,_= self.find_path_to_goal(image_obs,goal_idx)
         # print("Path",path)
-        def subgoal(obs):
+        def subgoal(image_obs):
             # _, des1 = self.sift.detectAndCompute(obs,None)
-            features = skimage.feature.hog(obs,channel_axis=-1)
+            # features = skimage.feature.hog(image_obs,channel_axis=-1)
+            features=image_obs
             indices,distances=self.flann.nn_index(features,num_neighbors=1)
-            # print("Distances",len(indices),indices)
             if path is None or len(path)==0:
                 return None ,True
             if len(indices)==0 or indices is None or path is None:
@@ -66,8 +68,8 @@ class TopologicalMap:
                 print(f"passed {k}")
                 if len(path)==0:
                     return None ,True
-                return (self.image_node[path[0]],self.heading_nodes[path[0]]),False
-            return (self.image_node[path[0]],self.heading_nodes[path[0]]),False
+                return (self.des_nodes[path[0]],self.heading_nodes[path[0]]),False
+            return (self.des_nodes[path[0]],self.heading_nodes[path[0]]),False
         return subgoal
             
             

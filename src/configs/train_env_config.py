@@ -215,7 +215,7 @@ class STBL3Experiment(BaseExperiment):
         hero_velocity = self.get_speed(hero)
         # marker_location=sensor_data["goal_heading"][-1][0]
         wp=core.map.get_waypoint(hero.get_transform().location,project_to_road=False) 
-        self.done_dist = self.distance_travelled>random.uniform(15,200)
+        self.done_dist = self.distance_travelled>200
         self.done_falling = hero.get_location().z < -0.5
         self.diff_lane = 'lane_invasion' in sensor_data.keys() or wp is None
         self.collision = 'collision' in sensor_data.keys()

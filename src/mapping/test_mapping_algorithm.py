@@ -10,19 +10,19 @@ mapper=TopologicalMap()
 with open('map.pickle', 'rb') as handle:
     dataset=pickle.load(handle)
 # cv2.imwrite("j.jpg",)
-images=dataset["images"]
+features=dataset["features"]
 heading=dataset["heading"]
 
-for image,heading in zip(images,heading):
-    mapper.update(image,heading)
-goal=random.randint(0,len(images)-1)
+for image,heading in zip(features,heading):
+    mapper.update(image,features)
+goal=random.randint(0,len(features)-1)
 print("Goal",goal)
-subgoal=mapper.create_navigation_guide(images[0],goal)
+subgoal=mapper.create_navigation_guide(features[0],goal)
 # breakpoint()
 terminate=False
 idx=0
 while not terminate:
-    obs,terminate=subgoal(images[idx])
+    obs,terminate=subgoal(features[idx])
     idx+=1
-    if idx>len(images)-1:
+    if idx>len(features)-1:
         break

@@ -682,7 +682,7 @@ class JAXMappingExperiments(BaseExperiment):
         self.rewards=[]
         self.origin=None
         self.destination=None
-
+        self.image_size=64
     def reset(self,*arg,**kwargs):
         """Called at the beginning and each time the simulation is reset"""
 
@@ -728,14 +728,14 @@ class JAXMappingExperiments(BaseExperiment):
         image_space = Box(
             low=-1.0,
             high=1.0,
-            shape=(84, 84, self.frame_stack,),
+            shape=(self.image_size, self.image_size, self.frame_stack,),
             dtype=np.float32,
         )
         
         vec_space = Box(
             low=-5.1,
             high=5.1,
-            shape=(4 * self.frame_stack,),
+            shape=(5 * self.frame_stack,),
             dtype=np.float32,
         )
 
@@ -791,13 +791,14 @@ class JAXMappingExperiments(BaseExperiment):
         # breakpoint()
         heading=sensor_data["goal_heading"][-1][-1]
         imu=sensor_data["imu"][-1][-1]
-        vec = np.zeros(4)
-        vec[0] = self.prev_steer / self.max_steer
-        vec[1] = self.prev_throttle / self.max_throttle
+        vec = np.zeros(5)
+        vec[0] = self.steer / self.max_steer
+        vec[1] = self.throttle / self.max_throttle
         hero = core.hero
-        vec[2] = np.clip(self.get_speed(hero)/(self.target_speed+1e-8), 0.0, 1.0)
+        vec[2] = np.clip(self.get_speed(hero)/(self.target_speed+1e-8), 0.0, 5.1)
         # vec[3] = self.time_idle / self.max_time_idle
-        vec[3]= np.clip(imu/(heading+1e-8),-1.0,1.0) 
+        vec[3]= np.clip(imu/np.pi,-5.1,5.1) 
+        vec[4]= np.clip(heading/np.pi,-5.1,5.1) 
         if self.prev_vec_0 is None:
             self.prev_vec_0 = vec
             self.prev_vec_1 = self.prev_vec_0
@@ -818,9 +819,8 @@ class JAXMappingExperiments(BaseExperiment):
         self.velocity=self.get_speed(hero)
         self.current_heading=imu
         return vecs
-
     def get_img_obs(self, sensor_data, core):
-        image = post_process_image(sensor_data['rgb'][1], normalized = True,crop=False, grayscale = True)
+        image = post_process_image(sensor_data['rgb'][1], normalized = True,crop=False, grayscale = True,image_size=self.image_size)
 
         if self.prev_image_0 is None:
             self.prev_image_0 = image
@@ -841,11 +841,11 @@ class JAXMappingExperiments(BaseExperiment):
         self.prev_image_0 = image
 
         return images
-    
+        
     def get_speed(self, hero):
         """Computes the speed of the hero vehicle in Km/h"""
         vel = hero.get_velocity()
-        return 3.6 * math.sqrt(vel.x ** 2 + vel.y ** 2 + vel.z ** 2)
+        return 3.6 * math.sqrt(vel.x ** 2 + vel.y ** 2)
 
     def get_done_status(self, sensor_data, core):
         """Returns whether or not the experiment has to end"""
@@ -859,7 +859,7 @@ class JAXMappingExperiments(BaseExperiment):
         self.time_episode += 1
         marker_location=sensor_data["goal_heading"][-1][0]
         wp=core.map.get_waypoint(hero.get_transform().location,project_to_road=False) 
-        self.done_dist = self.distance_travelled > self.max_dist or marker_location.distance(hero.get_transform().location)<4.0
+        self.done_dist = self.distance_travelled > 200
         self.done_falling = hero.get_location().z < -0.5
         self.diff_lane = 'lane_invasion' in sensor_data.keys() or wp is None
         self.collision = 'collision' in sensor_data.keys()
@@ -1006,7 +1006,7 @@ config = {
                         "type":"sensor.other.imu"
                     },
                     "goal_heading":{
-                        "type":"sensor.goal.heading"
+                        "type":"sensor.goal.heading.prop"
                     },
                     "goal":{
                         "type":"sensor.goal"

@@ -25,7 +25,7 @@ os.environ["XLA_PYTHON_CLIENT_ALLOCATOR"]="platform"
 # Define flags
 FLAGS = flags.FLAGS
 flags.DEFINE_string("checkpoint_path", None, "Path to the checkpoint directory")
-flags.DEFINE_integer("n_eval_episodes", 500, "Number of evaluation episodes")
+flags.DEFINE_integer("n_eval_episodes", 50, "Number of evaluation episodes")
 flags.DEFINE_boolean("deterministic", True, "Whether to use deterministic actions")
 
 
@@ -142,6 +142,7 @@ def map_environment(agent:DrQLearner, env, n_eval_episodes=10, deterministic=Tru
     junctions=[]
     restarts=[]
     images=[]
+    features=[]
     heading_ar=[]
     locations=[]
     unit_vectors=[]
@@ -158,16 +159,20 @@ def map_environment(agent:DrQLearner, env, n_eval_episodes=10, deterministic=Tru
         done = False
         episode_reward = 0
         episode_length = 0
+        heading=np.random.uniform(0,2*np.pi)
         while not done:
-            target=3.0
-            heading=2*np.pi
+            target=4.0
             vecs=observation["vector"]
             current_velocity=env.unwrapped.experiment.velocity
             current_heading=env.unwrapped.experiment.current_heading
-            vecs[2] = np.clip(current_velocity/(target+1e-8), 0.0, 1.0)
-            vecs[3]= np.clip(current_heading/(heading+1e-8),-1.0,1.0) 
+            # breakpoint()
+            vecs[2] = np.clip(current_velocity/(target+1e-8), 0.0, 5.1)
+            vecs[3]= np.clip(current_heading/np.pi,-5.1,5.1) 
+            vecs[4]= np.clip(heading/np.pi,-5.1,5.1) 
             observation["vector"]=vecs
             action_dist=agent.action_dist(observation)
+            feature=agent.extract_features(observation)
+            # breakpoint()
             # if deterministic:
             action = action_dist.mode()
             observation, reward, done, truncated, info = env.step(action)
@@ -193,6 +198,7 @@ def map_environment(agent:DrQLearner, env, n_eval_episodes=10, deterministic=Tru
                 images.append(obs)
                 heading_ar.append(heading)
                 mapper.update(obs,heading)
+                features.append(feature)
                 cv2.imwrite(f"sample_map/{steps}.jpg",(observation["pixels"][...,0]*255).astype(np.uint8))
             
             if done:
@@ -249,7 +255,7 @@ def map_environment(agent:DrQLearner, env, n_eval_episodes=10, deterministic=Tru
     a=dict(log_stds=log_stds,junctions=junctions)
     with open('uncertainty_profile_at_junctions.pickle', 'wb') as handle:
         pickle.dump(a, handle, protocol=pickle.HIGHEST_PROTOCOL)
-    a=dict(images=images,heading=heading_ar)
+    a=dict(images=images,heading=heading_ar,features=features)
     with open('map.pickle', 'wb') as handle:
         pickle.dump(a, handle, protocol=pickle.HIGHEST_PROTOCOL)
     with open('plot_data.pickle', 'wb') as handle:

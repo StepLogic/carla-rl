@@ -308,7 +308,7 @@ class STBL3Experiment(BaseExperiment):
         # Base reward combines speed error, heading error, and smooth action
         # reward = target_speed_error * (heading_error + smooth_action)
         # reward = target_speed_error*(0.8+heading_error+0.2*smooth_action) + self.distance_travelled/200
-        reward= delta_distance + heading_factor + speed_factor + 0.1*action_factor - 1e-3
+        reward= delta_distance + speed_factor + 0.1*action_factor - 1e-3
         # reward=-1e-3
         # if hero_velocity<self.target_speed:
         #     reward+=delta_distance

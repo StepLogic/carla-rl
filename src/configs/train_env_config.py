@@ -68,10 +68,10 @@ class STBL3Experiment(BaseExperiment):
         self.prev_throttle = 0.0
         self.steer = 0.0
         self.throttle = 0.0
-        # self.target_speed = 10.0
+        self.target_speed = 6.0
         self.velocity=0.0
         self.current_heading=0.0
-        self.target_speed = random.uniform(5.0,10.0)
+        # self.target_speed = random.uniform(5.0,10.0)
         self.info=dict()
 
     # def get_action_space(self):
@@ -89,7 +89,7 @@ class STBL3Experiment(BaseExperiment):
         vec_space = Box(
             low=-5.1,
             high=5.1,
-            shape=(5 * self.frame_stack,),
+            shape=(4 * self.frame_stack,),
             dtype=np.float32,
         )
 
@@ -145,14 +145,14 @@ class STBL3Experiment(BaseExperiment):
         # breakpoint()
         heading=sensor_data["goal_heading"][-1][-1]
         imu=sensor_data["imu"][-1][-1]
-        vec = np.zeros(5)
+        vec = np.zeros(4)
         vec[0] = self.steer / self.max_steer
         vec[1] = self.throttle / self.max_throttle
         hero = core.hero
         vec[2] = np.clip(self.get_speed(hero)/(self.target_speed+1e-8), 0.0, 5.1)
         # vec[3] = self.time_idle / self.max_time_idle
-        vec[3]= np.clip(imu/np.pi,-5.1,5.1) 
-        vec[4]= np.clip(heading/np.pi,-5.1,5.1) 
+        vec[3]= np.clip(imu/(heading+1e-8),-5.1,5.1) 
+        # vec[4]= np.clip(heading/np.pi,-5.1,5.1) 
         if self.prev_vec_0 is None:
             self.prev_vec_0 = vec
             self.prev_vec_1 = self.prev_vec_0
@@ -310,13 +310,13 @@ class STBL3Experiment(BaseExperiment):
         # reward = target_speed_error*(0.8+heading_error+0.2*smooth_action) + self.distance_travelled/200
         wp=core.map.get_waypoint(hero.get_transform().location,project_to_road=False) 
         # Only penalize heading when it's significantly off or at intersections
-        heading_factor = np.exp(-((imu-heading)**2)) 
+        # heading_factor = np.exp(-((imu-heading)**2)) 
         # heading_weight = 1.0 if  wp.is_junction else 0.0
-        reward=  2.0*speed_factor + 0.1*action_factor + heading_factor*0.1
+        reward=  2.0*speed_factor + 0.1*action_factor + heading_factor
         # print(speed_factor,self.target_speed)
         # reward=-1e-3
         # if hero_velocity<self.target_speed:
-        #     reward+=delta_distance
+        #     reward += delta_distance
         # else:
         #     reward+=0
         # reward=  target_speed_error*0.5 + heading_error + smooth_action*0.1
@@ -339,7 +339,7 @@ class STBL3Experiment(BaseExperiment):
         # Scale the reward to a reasonable range (no need for *10)
         # reward = np.clip(reward, -2.0, 2.0)
         # reward*=10
-
+# 
         # Store the reward for logging or analysis
         self.rewards.append(reward)
 

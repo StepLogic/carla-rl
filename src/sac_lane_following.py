@@ -118,7 +118,7 @@ from absl import app, flags
 
 from typing import Dict, Any
 
-# expert_buffer="/home/kojogyaase/Projects/Research/carla-rl/datasets/goal_condition_Town05_data_0.pkl"
+expert_buffer="/home/kojogyaase/Projects/Research/carla-rl/datasets/goal_condition_Town05_data_0.pkl"
 expert_buffer=None
 
 

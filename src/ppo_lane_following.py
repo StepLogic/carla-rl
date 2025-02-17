@@ -1,3 +1,4 @@
+import argparse
 import glob
 import os
 import time
@@ -56,9 +57,15 @@ def main():
     BATCH_SIZE = 1024
     SEED = 42
     LOCAL_STEPS = 2048
-
+    parser = argparse.ArgumentParser(description='Train PPO agent for a specific town')
+    parser.add_argument('town', help='Name of the town', default="Town01", nargs='?')
+    parser.add_argument('port', help='carla port', default=2000, nargs='?')
+    args = parser.parse_args()
     # Create environment
-    # carla_config["env_config"]["carla"]["town"]='Town07'
+    town_name = args.town
+    carla_config["env_config"]["carla"]["town"]=town_name
+    carla_config["env_config"]["carla"]["start_server"]=False
+    carla_config["env_config"]["carla"]["port"]=args.port
     env = CarlaGoalEnv(carla_config["env_config"])
     env = FrameStack(env=env, num_stack=1,stacking_key="pixels")
     env = TimeLimit(env,max_episode_steps=2500)

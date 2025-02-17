@@ -221,7 +221,7 @@ def main(_):
             logger.print_status(i, FLAGS.max_steps)
     
     # Print final training statistics
-    save_checkpoint(agent,f"checkpoints/final_drq",1)
+    save_checkpoint(agent,f"checkpoints/final_bc",1)
     # if FLAGS.save_buffer:
     dataset_folder ="datasets"
     os.makedirs(dataset_folder, exist_ok=True)

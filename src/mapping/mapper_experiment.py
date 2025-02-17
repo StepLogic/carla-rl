@@ -159,7 +159,7 @@ def map_environment(agent:DrQLearner, env, n_eval_episodes=10, deterministic=Tru
         done = False
         episode_reward = 0
         episode_length = 0
-        heading=np.random.uniform(0,2*np.pi)
+        heading=random.choice([0,np.pi/2,np.pi,2/3*np.pi,2*np.pi])
         while not done:
             target=4.0
             vecs=observation["vector"]

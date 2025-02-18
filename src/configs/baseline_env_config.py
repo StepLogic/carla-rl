@@ -714,7 +714,8 @@ class JAXMappingExperiments(BaseExperiment):
         self.prev_throttle = 0.0
         self.steer = 0.0
         self.throttle = 0.0
-        self.target_speed = random.uniform(3.0,10.0)
+        # self.target_speed = random.uniform(3.0,10.0)
+        self.target_speed = 6.0
         self.velocity=0.0
         self.current_heading=0.0
         # self.target_speed = random.uniform(1.0,self.config["others"]["target_speed"])
@@ -723,19 +724,18 @@ class JAXMappingExperiments(BaseExperiment):
     # def get_action_space(self):
     #     """Returns the action space, in this case, a discrete space"""
     #     return Discrete(len(self.get_actions()))
-
     def get_observation_space(self):
         image_space = Box(
             low=-1.0,
             high=1.0,
-            shape=(self.image_size, self.image_size, self.frame_stack,),
+            shape=(self.image_size, self.image_size, 1,),
             dtype=np.float32,
         )
         
         vec_space = Box(
             low=-5.1,
             high=5.1,
-            shape=(5 * self.frame_stack,),
+            shape=(4 * self.frame_stack,),
             dtype=np.float32,
         )
 
@@ -791,14 +791,14 @@ class JAXMappingExperiments(BaseExperiment):
         # breakpoint()
         heading=sensor_data["goal_heading"][-1][-1]
         imu=sensor_data["imu"][-1][-1]
-        vec = np.zeros(5)
+        vec = np.zeros(4)
         vec[0] = self.steer / self.max_steer
         vec[1] = self.throttle / self.max_throttle
         hero = core.hero
         vec[2] = np.clip(self.get_speed(hero)/(self.target_speed+1e-8), 0.0, 5.1)
         # vec[3] = self.time_idle / self.max_time_idle
-        vec[3]= np.clip(imu/np.pi,-5.1,5.1) 
-        vec[4]= np.clip(heading/np.pi,-5.1,5.1) 
+        vec[3]= np.clip(imu/(heading+1e-8),-5.1,5.1) 
+        # vec[4]= np.clip(heading/np.pi,-5.1,5.1) 
         if self.prev_vec_0 is None:
             self.prev_vec_0 = vec
             self.prev_vec_1 = self.prev_vec_0
@@ -841,7 +841,7 @@ class JAXMappingExperiments(BaseExperiment):
         self.prev_image_0 = image
 
         return images
-        
+    
     def get_speed(self, hero):
         """Computes the speed of the hero vehicle in Km/h"""
         vel = hero.get_velocity()
@@ -863,7 +863,8 @@ class JAXMappingExperiments(BaseExperiment):
         self.done_falling = hero.get_location().z < -0.5
         self.diff_lane = 'lane_invasion' in sensor_data.keys() or wp is None
         self.collision = 'collision' in sensor_data.keys()
-        done=self.done_falling or self.done_dist or self.diff_lane or self.collision
+        done=self.done_falling or self.collision
+        # done=False
         self.info.update(dict(is_success=self.done_dist,
                              distance_completed=self.distance_travelled))
         if len(self.rewards)>0:
@@ -1006,7 +1007,7 @@ config = {
                         "type":"sensor.other.imu"
                     },
                     "goal_heading":{
-                        "type":"sensor.goal.heading.prop"
+                        "type":"sensor.goal.heading"
                     },
                     "goal":{
                         "type":"sensor.goal"

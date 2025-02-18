@@ -56,5 +56,5 @@ class CarlaEvalEnv(gym.Env):
         observation, info = self.experiment.get_observation(sensor_data, self.core)
         done = self.experiment.get_done_status(sensor_data, self.core)
         reward = self.experiment.compute_reward(sensor_data, self.core)
-        self.last_position=self.core.hero.get_transform()
+        self.last_position=self.core.map.get_waypoint(self.core.hero.get_transform().location).transform
         return observation, reward, done,False,self.experiment.info

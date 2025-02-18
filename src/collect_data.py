@@ -16,11 +16,11 @@ from rlib_integration.agent import BasicAgent
 from src.configs.train_env_config import config
 from jaxrl2.noise import OrnsteinUhlenbeckActionNoise
 import argparse
-def collect_basic_agent_data(town="Town05",replay_buffer_size=int(1e6)):
+def collect_basic_agent_data(town="Town05",replay_buffer_size=int(1e4)):
     # Create environment
 
     parser = argparse.ArgumentParser(description='Collect basic agent data')
-    parser.add_argument('town', help='Name of the town')
+    parser.add_argument('town', help='Name of the town', default="Town01")
     # parser.add_argument('--agent-id', help='Agent ID (optional)')
     # Parse arguments
     args = parser.parse_args()
@@ -40,7 +40,7 @@ def collect_basic_agent_data(town="Town05",replay_buffer_size=int(1e6)):
     def reset_agent(env):
             # Initialize BasicAgent
             agent = BasicAgent(env.unwrapped.core.hero, target_speed=env.unwrapped.experiment.target_speed)
-            # agent.set_destination(env.unwrapped.core.destination.transform.location)
+            agent.set_destination(env.unwrapped.core.destination.location)
             agent.ignore_traffic_lights(True)
             agent.ignore_stop_signs(True)
             # data=[]
@@ -91,7 +91,9 @@ def collect_basic_agent_data(town="Town05",replay_buffer_size=int(1e6)):
         
         # Handle episode termination
         mask = 1.0 if not done and not truncated else 0.0
-            
+        done = done or agent.done()
+        if  agent.done():
+             reward+=10
         # Store transition
         replay_buffer.insert(
             dict(
@@ -111,11 +113,9 @@ def collect_basic_agent_data(town="Town05",replay_buffer_size=int(1e6)):
         #     os.makedirs(dataset_folder, exist_ok=True)
         #     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         #     dataset_file = os.path.join(dataset_folder, f"basic_agent_data_{timestamp}.pkl")
-            
         #     with open(dataset_file, "wb") as f:
         #         pickle.dump(replay_buffer, f)
         #     print(f"\nSaved dataset to: {dataset_file}")
-    
     # Save final buffer
     dataset_folder = os.path.join("datasets")
     os.makedirs(dataset_folder, exist_ok=True)

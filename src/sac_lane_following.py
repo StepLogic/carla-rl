@@ -12,7 +12,7 @@ from jaxrl2.wrappers.timelimit import TimeLimit
 from jaxrl2.wrappers.record_statistics import RecordEpisodeStatistics
 import ml_collections
 import tqdm
-import wandb
+# import wandb
 from absl import app, flags
 from ml_collections import config_flags
 from flax.training import checkpoints
@@ -36,12 +36,15 @@ from stable_baselines3.common.torch_layers import BaseFeaturesExtractor
 from stable_baselines3.common.callbacks import CheckpointCallback,EvalCallback
 # from vision_rl.rllib_integration.carla_env import CarlaEnv
 # from vision_rl.stb3.jax_experiments import JAXExperiments
+
 from rlib_integration.carla_goal_env import CarlaGoalEnv
 from src.configs.train_env_config import config as carla_config
 import flax
 from jaxrl2.noise import OrnsteinUhlenbeckActionNoise
 flax.config.update('flax_use_orbax_checkpointing', True)
     # ML config
+import jax
+jax.config.update("jax_debug_nans", True)
 config = ml_collections.ConfigDict()
 config.actor_lr = 3e-4
 config.critic_lr = 3e-4
@@ -79,7 +82,7 @@ flags.DEFINE_integer(
 flags.DEFINE_integer("image_size", 64, "Image size.")
 flags.DEFINE_integer("num_stack", 3, "Stack frames.")
 flags.DEFINE_integer(
-    "replay_buffer_size", int(1e6), "Number of training steps to start training."
+    "replay_buffer_size", int(1e3), "Number of training steps to start training."
 )
 flags.DEFINE_integer(
     "action_repeat", None, "Action repeat, if None, uses 2 or PlaNet default values."
@@ -118,13 +121,17 @@ from absl import app, flags
 
 from typing import Dict, Any
 
-expert_buffer="/home/kojogyaase/Projects/Research/carla-rl/datasets/goal_condition_Town05_data_0.pkl"
-expert_buffer=None
+# expert_buffer="/home/kojogyaase/Projects/Research/carla-rl/datasets/goal_condition_Town05_data_0.pkl"
+expert_buffers=[
+                "/home/kojogyaase/Projects/Research/carla-rl/datasets/goal_condition_Town05_data_1.pkl",
+                # "/home/kojogyaase/Projects/Research/carla-rl/datasets/real_robot_data_0.pkl"
+                ]
 
 
 def main(_):
 
     # Create environment
+    carla_config["env_config"]["carla"]["town"]="Town07"
     env = CarlaGoalEnv(carla_config["env_config"])
     env = FrameStack(env=env, num_stack=1,stacking_key="pixels")
     env = TimeLimit(env,max_episode_steps=2500)
@@ -154,10 +161,12 @@ def main(_):
     )
     
     replay_buffer_size = FLAGS.replay_buffer_size
-    if not expert_buffer is None:
-        with open(expert_buffer, 'rb') as f:
-            expert_replay_buffer = pickle.load(f)
-
+    expert_replay_buffers=[]
+    if not expert_buffers is None:
+        for path in expert_buffers:
+            with open(path, 'rb') as f:
+                expert_replay_buffer = pickle.load(f)
+            expert_replay_buffers.append(expert_replay_buffer)
     
     replay_buffer = ReplayBuffer(
         env.observation_space, 
@@ -170,10 +179,11 @@ def main(_):
     replay_buffer_iterator = replay_buffer.get_iterator(
         sample_args={"batch_size": FLAGS.batch_size}
     )
-
-    if not expert_buffer is None:
-        expert_replay_buffer_iterator = expert_replay_buffer.get_iterator(
-                sample_args={"batch_size": FLAGS.batch_size})
+    expert_replay_buffer_iterators=[]
+    if not expert_buffers is None:
+        for expert_replay_buffer in expert_replay_buffers:
+            expert_replay_buffer_iterators.append(expert_replay_buffer.get_iterator(
+                    sample_args={"batch_size": FLAGS.batch_size}))
     # Track success metrics
     success_history = deque(maxlen=100)  # Track last 100 episodes
     eval_success_history = deque(maxlen=100)
@@ -258,11 +268,12 @@ def main(_):
             if i % FLAGS.log_interval == 0:
                 logger.log_training(update_info, i)
                 logger.print_status(i, FLAGS.max_steps)
-            if not expert_buffer is None:
-                batch_expert = next(expert_replay_buffer_iterator)
-                update_info_expert = agent.update(
-                    batch_expert,
-                    enable_update_temperature=False)
+            if not expert_buffers is None:
+                for expert_replay_buffer_iterator in expert_replay_buffer_iterators:
+                    batch_expert = next(expert_replay_buffer_iterator)
+                    update_info_expert = agent.update(
+                        batch_expert,
+                        enable_update_temperature=False)
                 if i % FLAGS.log_interval == 0:
                     logger.log_training(update_info_expert, i,prefix="_expert")
                     logger.print_status(i, FLAGS.max_steps)

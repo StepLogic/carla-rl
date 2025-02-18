@@ -25,7 +25,7 @@ os.environ["XLA_PYTHON_CLIENT_ALLOCATOR"]="platform"
 # Define flags
 FLAGS = flags.FLAGS
 flags.DEFINE_string("checkpoint_path", None, "Path to the checkpoint directory")
-flags.DEFINE_integer("n_eval_episodes", 50, "Number of evaluation episodes")
+flags.DEFINE_integer("n_eval_episodes", 10, "Number of evaluation episodes")
 flags.DEFINE_boolean("deterministic", True, "Whether to use deterministic actions")
 
 
@@ -159,16 +159,20 @@ def map_environment(agent:DrQLearner, env, n_eval_episodes=10, deterministic=Tru
         done = False
         episode_reward = 0
         episode_length = 0
-        heading=random.choice([0,np.pi/2,np.pi,2/3*np.pi,2*np.pi])
+        # heading=random.choice([0,np.pi/2,np.pi,2/3*np.pi,2*np.pi])
+        heading=np.pi
         while not done:
-            target=4.0
+            target=4.5
             vecs=observation["vector"]
             current_velocity=env.unwrapped.experiment.velocity
             current_heading=env.unwrapped.experiment.current_heading
             # breakpoint()
+            if (current_heading - heading)<np.deg2rad(10):
+                        heading=random.choice([np.pi/2,np.pi,2/3*np.pi,2*np.pi])
+            # print(np.rad2deg(current_heading),np.rad2deg(heading))
             vecs[2] = np.clip(current_velocity/(target+1e-8), 0.0, 5.1)
-            vecs[3]= np.clip(current_heading/np.pi,-5.1,5.1) 
-            vecs[4]= np.clip(heading/np.pi,-5.1,5.1) 
+            vecs[3]= np.clip(current_heading/(heading+1e-8),-5.1,5.1) 
+            # vecs[4]= np.clip(heading/np.pi,-5.1,5.1) 
             observation["vector"]=vecs
             action_dist=agent.action_dist(observation)
             feature=agent.extract_features(observation)
@@ -183,7 +187,7 @@ def map_environment(agent:DrQLearner, env, n_eval_episodes=10, deterministic=Tru
             unit_vectors.append(unit_vector)
             std=np.array(action_dist.stddev())
             log_stds.append(std)
-            trace_log_stds.append(np.sum(std))
+            trace_log_stds.append(np.sum(std**2))
             # moving_average.append(filter.process(np.array(action_dist.log_std())))
             filtered_vector = ema_filter.update(std)
             moving_average.append(filtered_vector)
@@ -194,10 +198,10 @@ def map_environment(agent:DrQLearner, env, n_eval_episodes=10, deterministic=Tru
             if np.any((ema_filter.get_current()-std)>ema_filter.threshold()):
                 #add image to map
                 obs=(observation["pixels"][...,0]*255).astype(np.uint8)
-                heading= observation["vector"][-2]
+                heading_obs= observation["vector"][-2]
                 images.append(obs)
-                heading_ar.append(heading)
-                mapper.update(obs,heading)
+                heading_ar.append(heading_obs)
+                mapper.update(obs,heading_obs)
                 features.append(feature)
                 cv2.imwrite(f"sample_map/{steps}.jpg",(observation["pixels"][...,0]*255).astype(np.uint8))
             
@@ -276,6 +280,7 @@ def navigate(agent:DrQLearner, env:CarlaEvalEnv, mapper:TopologicalMap,n_eval_ep
     moving_average=[]
     junctions=[]
     restarts=[]
+    env = TimeLimit(env, max_episode_steps=2500)
     # filter=StreamingMovingAverage(window_size=100)
     ema_filter = RealTimeVectorEMA(window_size=100, vector_dim=2)
     
@@ -351,7 +356,7 @@ def main(_):
     env = CarlaEvalEnv()
     env = FrameStack(env=env, num_stack=1, stacking_key="pixels")
     # env = FrameStack(env=env, num_stack=1, stacking_key="goal")
-    env = TimeLimit(env, max_episode_steps=2500)
+
     env = RecordEpisodeStatistics(env)
     
     # Initialize agent

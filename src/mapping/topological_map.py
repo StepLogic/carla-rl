@@ -7,7 +7,7 @@ import matplotlib.pyplot as plt
 import skimage
 import skimage.feature
 class TopologicalMap:
-    def __init__(self,radius=100.0):
+    def __init__(self,radius=1.0):
         """
         Initialize the path finder with a set of points and connection radius.
         
@@ -36,102 +36,109 @@ class TopologicalMap:
         # print(image_obs.shape)
         self.flann.build_index(np.array(self.des_nodes), algorithm='kdtree', trees=4)
         
-    def _build_graph(self):
-        """
-        Builds an adjacency list representation of the graph using FLANN radius search.
-        Each node is connected to all other nodes within the specified radius.
-        """
-        self.graph = defaultdict(list)
-        for i, point in enumerate(self.des_nodes):
-            # Find all neighbors within radius
-            indices, distances = self.flann.nn_radius(point, self.radius**2)
-            # Add edges to graph (excluding self-loops)
-            for j, dist in zip(indices, distances):
-                if i != j:
-                    self.graph[i].append((j, np.sqrt(dist)))
-    
+    # def _build_graph(self):
+    #     """
+    #     Builds an adjacency list representation of the graph using FLANN radius search.
+    #     Each node is connected to all other nodes within the specified radius.
+    #     """
+    #     self.graph = defaultdict(list)  # Initialize adjacency list
+    #     for i, point in enumerate(self.des_nodes):
+    #         # Find all neighbors within radius using FLANN
+    #         indices, distances = self.flann.nn_index(point)
+    #         # print(distances)
+    #         breakpoint()
+    #         # Add edges to graph (excluding self-loops)
+    #         for j, dist in zip(indices, distances):
+    #             if i != j:  # Avoid self-loops
+    #                 self.graph[i].append((j, np.sqrt(dist)))  # Store edge with Euclidean distance
+
+    #     # Optional: Convert defaultdict to a regular dict for consistency
+    #     self.graph = dict(self.graph)
+
     def create_navigation_guide(self,image_obs,goal_idx):
-        path,_= self.find_path_to_goal(image_obs,goal_idx)
-        # print("Path",path)
+        # path,_= self.find_path_to_goal(image_obs,goal_idx)
+        # print("Path",path,len(self.des_nodes))
         def subgoal(image_obs):
-            # _, des1 = self.sift.detectAndCompute(obs,None)
-            # features = skimage.feature.hog(image_obs,channel_axis=-1)
             features=image_obs
             indices,distances=self.flann.nn_index(features,num_neighbors=1)
-            if path is None or len(path)==0:
-                return None ,True
-            if len(indices)==0 or indices is None or path is None:
-                print("None")
-                return None,not indices is None and len(indices)==0
-            if indices[0] == path[0]:
-                k=path.pop(0)
-                print(f"passed {k}")
-                if len(path)==0:
-                    return None ,True
-                return (self.des_nodes[path[0]],self.heading_nodes[path[0]]),False
-            return (self.des_nodes[path[0]],self.heading_nodes[path[0]]),False
+            # print(distances,indices,goal_idx)
+            # if path is None or len(path)==0:
+            #     return None ,True
+            # if len(indices)==0 or indices is None or path is None:
+            #     print("None")
+            #     return None,not indices is None and len(indices)==0
+            # if indices[0] == path[0]:
+            #     k=path.pop(0)
+            #     print(f"passed {k}")
+            #     if len(path)==0:
+            #         return None ,True
+            # return (self.des_nodes[path[0]],self.heading_nodes[path[0]]),False
+            return (self.des_nodes[indices[0]],self.heading_nodes[indices[0]]),indices[0]==goal_idx
         return subgoal
             
             
 
-    def find_path_to_goal(self,obs,goal_idx):
-        print("obs",goal_idx<len(self.des_nodes)-1)
-        if(goal_idx > len(self.des_nodes)-1):
-            return [],[]
-        features = skimage.feature.hog(obs,channel_axis=-1)
-        # print("obs",goal_idx,features.shape)
-        indices,distances=self.flann.nn_index(features,num_neighbors=1)
-        print("Found",distances,indices)
-        if len(indices)==0:
-            return [],[]
-        return self.find_shortest_path(indices[0],goal_idx)
+    # def find_path_to_goal(self,features,goal_idx):
+    #     print("obs",goal_idx<len(self.des_nodes)-1)
+    #     if(goal_idx > len(self.des_nodes)-1):
+    #         return [],[]
+    #     # features = skimage.feature.hog(obs,channel_axis=-1)
+    #     # print("obs",goal_idx,features.shape)
+    #     indices,distances=self.flann.nn_index(features,num_neighbors=1)
+    #     print("Found",distances,indices)
+    #     if len(indices)==0:
+    #         return [],[]
+    #     return self.find_shortest_path(indices[0],goal_idx)
         
 
-    def find_shortest_path(self, start_idx, end_idx):
-        if self.flann._FLANN__curindex is None:
-            print("No nodes in graph")
-            return [],[]
-        if self.graph is None:
-            self._build_graph()
-        if start_idx >= len(self.des_nodes) or end_idx >= len(self.des_nodes):
-            raise ValueError("Start or end index out of range")
-        # Initialize distances and predecessors
-        distances = {i: float('infinity') for i in range(len(self.des_nodes))}
-        distances[start_idx] = 0
-        predecessors = {i: None for i in range(len(self.des_nodes))}
-        # Priority queue for Dijkstra's algorithm
-        pq = [(0, start_idx)]
-        while pq:
-            current_distance, current_node = heapq.heappop(pq)
-            # If we've reached the target
-            if current_node == end_idx:
-                break
- 
-            # If we've found a longer path
-            if current_distance > distances[current_node]:
-                continue
-            
-            # Check all neighbors
-            for neighbor, weight in self.graph[current_node]:
-                distance = current_distance + weight
-                if distance < distances[neighbor]:
-                    distances[neighbor] = distance
-                    predecessors[neighbor] = current_node
-                    heapq.heappush(pq, (distance, neighbor))
-        # print(predecessors,distances)
-        # Reconstruct path
-        if distances[end_idx] == float('infinity'):
-            return None, float('infinity')  # No path exists
-  
-        path = []
-        current_node = end_idx
-        while current_node is not None:
-            path.append(current_node)
-            current_node = predecessors[current_node]
-        path.reverse()
-        # breakpoint()
-        return path, distances[end_idx]
-    
+    # def find_shortest_path(self, start_idx, end_idx):
+    #     print("No nodes in graph", start_idx, end_idx)
+    #     if self.flann._FLANN__curindex is None:
+    #         print("No nodes in graph")
+    #         return [], []
+    #     if self.graph is None:
+    #         self._build_graph()
+    #     if start_idx >= len(self.des_nodes) or end_idx >= len(self.des_nodes):
+    #         raise ValueError("Start or end index out of range")
+
+    #     # Initialize distances and predecessors
+    #     distances = {i: float('infinity') for i in range(len(self.des_nodes))}
+    #     distances[start_idx] = 0
+    #     predecessors = {i: None for i in range(len(self.des_nodes))}
+
+    #     # Priority queue for Dijkstra's algorithm
+    #     pq = [(0, start_idx)]
+    #     while pq:
+    #         current_distance, current_node = heapq.heappop(pq)
+
+    #         # If we've reached the target
+    #         if current_node == end_idx:
+    #             break
+
+    #         # If we've found a longer path
+    #         if current_distance > distances[current_node]:
+    #             continue
+
+    #         # Check all neighbors
+    #         for neighbor, weight in self.graph.get(current_node, []):
+    #             distance = current_distance + weight
+    #             if distance < distances[neighbor]:
+    #                 distances[neighbor] = distance
+    #                 predecessors[neighbor] = current_node
+    #                 heapq.heappush(pq, (distance, neighbor))
+
+    #     # Reconstruct path
+    #     if distances[end_idx] == float('infinity'):
+    #         return None, float('infinity')  # No path exists
+
+    #     path = []
+    #     current_node = end_idx
+    #     while current_node is not None:
+    #         path.append(current_node)
+    #         current_node = predecessors[current_node]
+    #     path.reverse()
+
+    #     return path, distances[end_idx]
     # def visualize_path(self, path, title="Shortest Path"):
     #     """
     #     Visualize the points and the found path.

@@ -35,3 +35,6 @@
 [submodule "dependencies/open_x_embodiment"]
 	path = dependencies/open_x_embodiment
 	url = https://github.com/StepLogic/open_x_embodiment.git
+[submodule "dependencies/ros1"]
+	path = dependencies/ros1
+	url = https://github.com/ijnek/dev_containers_ros1.git

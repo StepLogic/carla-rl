@@ -16,7 +16,7 @@ from rlib_integration.agent import BasicAgent
 from src.configs.train_env_config import config
 from jaxrl2.noise import OrnsteinUhlenbeckActionNoise
 import argparse
-def collect_basic_agent_data(town="Town05",replay_buffer_size=int(1e4)):
+def collect_basic_agent_data(replay_buffer_size=int(1e4)):
     # Create environment
 
     parser = argparse.ArgumentParser(description='Collect basic agent data')
@@ -27,9 +27,13 @@ def collect_basic_agent_data(town="Town05",replay_buffer_size=int(1e4)):
     # Access the town name
     town_name = args.town
     #do not use 01,02,05
-    towns=['Town04',"Town03","Town06","Town07"]
+    env=None
+    # towns=['Town04',"Town03",""]
     def reset_env():
-        config["env_config"]["carla"]["town"]=random.choice(towns)
+        nonlocal env
+        if not env is None:
+             env.close()
+        config["env_config"]["carla"]["town"]=town_name
         config["env_config"]["carla"]["start_server"]=False
         env = CarlaGoalEnv(config["env_config"])
         env = FrameStack(env=env, num_stack=1, stacking_key="pixels")
@@ -40,7 +44,7 @@ def collect_basic_agent_data(town="Town05",replay_buffer_size=int(1e4)):
     def reset_agent(env):
             # Initialize BasicAgent
             agent = BasicAgent(env.unwrapped.core.hero, target_speed=env.unwrapped.experiment.target_speed)
-            agent.set_destination(env.unwrapped.core.destination.location)
+            agent.set_destination(env.unwrapped.core.destination.transform.location)
             agent.ignore_traffic_lights(True)
             agent.ignore_stop_signs(True)
             # data=[]
@@ -64,11 +68,11 @@ def collect_basic_agent_data(town="Town05",replay_buffer_size=int(1e4)):
     collection_start_time = time.time()
     agent=reset_agent(env=env)
 
-    epidsodes_per_env=int(replay_buffer_size/len(towns))
+    # epidsodes_per_env=int(replay_buffer_size/len(towns))
     switch_env=False
     for i in tqdm(range(1, replay_buffer_size + 10)):
-        if not switch_env:
-            switch_env=i%epidsodes_per_env
+        # if not switch_env:
+        #     switch_env=i%epidsodes_per_env
         if done:
             if switch_env:
                  env=reset_env()
@@ -120,7 +124,7 @@ def collect_basic_agent_data(town="Town05",replay_buffer_size=int(1e4)):
     dataset_folder = os.path.join("datasets")
     os.makedirs(dataset_folder, exist_ok=True)
     count=len(glob.glob(f"{dataset_folder}/*.pkl"))
-    final_dataset_file = os.path.join(dataset_folder, f"goal_condition_{town}_data_{count}.pkl")
+    final_dataset_file = os.path.join(dataset_folder, f"goal_condition_{town_name}_data_{count}.pkl")
     with open(final_dataset_file, "wb") as f:
         pickle.dump(replay_buffer, f)
     

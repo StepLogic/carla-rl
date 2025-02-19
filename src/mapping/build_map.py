@@ -8,7 +8,7 @@ from absl import app, flags
 from flax.training import checkpoints
 from ml_collections import config_flags
 from src.carla_eval import CarlaEvalEnv
-from src.jax_mapping_experiment import JAXMappingExperiments
+from src.sac_lane_following import sac_config
 from jaxrl2.agents import DrQLearner
 from jaxrl2.wrappers.frame_stack import FrameStack
 from jaxrl2.wrappers.record_statistics import RecordEpisodeStatistics
@@ -25,23 +25,18 @@ os.environ["XLA_PYTHON_CLIENT_ALLOCATOR"]="platform"
 # Define flags
 FLAGS = flags.FLAGS
 flags.DEFINE_string("checkpoint_path", None, "Path to the checkpoint directory")
-flags.DEFINE_integer("n_eval_episodes", 100, "Number of evaluation episodes")
+flags.DEFINE_integer("n_eval_episodes", 10, "Number of evaluation episodes")
 flags.DEFINE_boolean("deterministic", True, "Whether to use deterministic actions")
-config_flags.DEFINE_config_file(
-    "config",
-    "/home/kojogyaase/Projects/Research/carla-rl/dependencies/jaxrl2/examples/configs/drq_default.py",
-    "File path to the training hyperparameter configuration.",
-    lock_config=False,
-)
+
 
 def load_checkpoint(agent, checkpoint_path):
     """Load agent parameters from checkpoint."""
     state_dict = {
         'actor_params': agent._actor,
         'critic_params': agent._critic,
-        'target_critic_params': agent._target_critic_params,
-        'temp': agent._temp,
-        'rng': agent._rng,
+        # 'target_critic_params': agent._target_critic_params,
+        # 'temp': agent._temp,
+        # 'rng': agent._rng,
         # Add any other numerical state you need to save
     }
     state_dict = checkpoints.restore_checkpoint(
@@ -53,8 +48,8 @@ def load_checkpoint(agent, checkpoint_path):
     # breakpoint()
     agent._actor = state_dict['actor_params']
     agent._critic = state_dict['critic_params'] 
-    agent._target_critic_params = state_dict['target_critic_params']
-    agent._temp = state_dict['temp']
+    # agent._target_critic_params = state_dict['target_critic_params']
+    # agent._temp = state_dict['temp']
     # agent._rng = state_dict['rng']
     
     return agent
@@ -142,48 +137,78 @@ def map_environment(agent:DrQLearner, env, n_eval_episodes=10, deterministic=Tru
     slack_values = []
     steps=0
     log_stds=[]
+    trace_log_stds=[]
     moving_average=[]
     junctions=[]
     restarts=[]
     images=[]
+    features=[]
     heading_ar=[]
+    locations=[]
+    unit_vectors=[]
     # filter=StreamingMovingAverage(window_size=100)
     ema_filter = RealTimeVectorEMA(window_size=100, vector_dim=2)
     # Real-time updates
+    start=time.time()
     mapper=TopologicalMap()
     # start timer for entire mapping
     start=time.time()
+    # log_stds.append(std)
+    truncate_steps=0
     for _ in range(n_eval_episodes):
         observation, info = env.reset()
         done = False
         episode_reward = 0
         episode_length = 0
+        # heading=random.choice([0,np.pi/2,np.pi,2/3*np.pi,2*np.pi])
+        heading=0+1e-8
         while not done:
+            truncate_steps+=1
+            target=4.5
+            vecs=observation["vector"]
+            current_velocity=env.unwrapped.experiment.velocity
+            current_heading=env.unwrapped.experiment.current_heading
+            # breakpoint()
+            if (current_heading - heading)<np.deg2rad(10):
+                    # heading+=np.pi/4
+                    # heading=heading%np.pi
+                    truncate_steps=int(1e5) #break loop
+
+                    print(np.rad2deg(current_heading),np.rad2deg(heading))
+            vecs[2] = np.clip(current_velocity/(target+1e-8), 0.0, 5.1)
+            vecs[3]= np.clip(current_heading/(heading+1e-8),-5.1,5.1) 
+            # vecs[4]= np.clip(heading/np.pi,-5.1,5.1) 
+            observation["vector"]=vecs
             action_dist=agent.action_dist(observation)
+            feature=agent.extract_features(observation)
+            # breakpoint()
             # if deterministic:
             action = action_dist.mode()
             observation, reward, done, truncated, info = env.step(action)
-            if env.unwrapped.is_agent_at_junction():
+            is_at_junction,unit_vector,location=env.unwrapped.is_agent_at_junction()
+            if is_at_junction:
                 junctions.append(steps)
-            std=np.array(np.log(action_dist.log_std()))
+            locations.append(location)
+            unit_vectors.append(unit_vector)
+            std=np.array(action_dist.stddev())
             log_stds.append(std)
+            trace_log_stds.append(np.sum(std**2))
             # moving_average.append(filter.process(np.array(action_dist.log_std())))
-            filtered_vector = ema_filter.update(std)
+            filtered_vector = ema_filter.update(np.sum(std**2))
             moving_average.append(filtered_vector)
             episode_reward += reward
             episode_length += 1
             done = done or truncated
             steps+=1
-            if np.any((ema_filter.get_current()-std)>ema_filter.threshold()):
+            if np.any((ema_filter.get_current()-np.sum(std**2))>ema_filter.threshold()):
                 #add image to map
                 obs=(observation["pixels"][...,0]*255).astype(np.uint8)
-                heading= observation["vector"][-2]
+                heading_obs= ((observation["vector"][-2]))*(1/heading)
                 images.append(obs)
-                heading_ar.append(heading)
-                mapper.update(obs,heading)
-                cv2.imwrite(f"sample_map/{steps}.jpg",np.vstack([(observation["pixels"][...,0]*255).astype(np.uint8),(observation["goal"][...,0]*255).astype(np.uint8)
-                                                                 ]))
-                
+                heading_ar.append(heading_obs)
+                mapper.update(feature,heading_obs)
+                features.append(feature)
+                cv2.imwrite(f"sample_map/{steps}.jpg",(observation["pixels"][...,0]*255).astype(np.uint8))
             
             if done:
                 restarts.append(steps)
@@ -196,7 +221,17 @@ def map_environment(agent:DrQLearner, env, n_eval_episodes=10, deterministic=Tru
                     distance_completed.append(float(info["distance_completed"]))
                 if "slack" in info:
                     slack_values.append(float(info["slack"]))
-    
+            if truncate_steps>int(5e4):
+                break
+        if truncate_steps>int(5e4):
+                break
+    #add the very last observation
+    # obs=(observation["pixels"][...,0]*255).astype(np.uint8)
+    # heading= observation["vector"][-2]
+    # images.append(obs)
+    # heading_ar.append(heading)
+    # mapper.update(obs,heading)
+    end=time.time()
     # Compute statistics
     end=time.time()
     stats = {
@@ -205,6 +240,7 @@ def map_environment(agent:DrQLearner, env, n_eval_episodes=10, deterministic=Tru
         "mean_length": np.mean(episode_lengths),
         "std_length": np.std(episode_lengths),
         "total_map_steps":steps,
+        "number_of_restarts":len(restarts),
         "exploration_time":int(end-start)
     }
     
@@ -212,208 +248,139 @@ def map_environment(agent:DrQLearner, env, n_eval_episodes=10, deterministic=Tru
         stats["success_rate"] = np.mean(success_rate)
     if distance_completed:
         stats["mean_distance"] = np.mean(distance_completed)
-        stats["std_distance"] = np.std(distance_completed)
     if slack_values:
         stats["mean_slack"] = np.mean(slack_values)
-    # plt.plot(np.array(log_stds)[:,0], color='blue',linestyle = 'dotted')
-    # plt.plot(np.array(log_stds)[:,1], color='red',linestyle = 'dotted') 
+        
+    plt.plot(np.array(log_stds)[:,0], color='blue',linestyle = 'dotted')
+    plt.plot(np.array(log_stds)[:,1], color='red',linestyle = 'dotted') 
+    plt.plot(np.array(moving_average)[:,0], color='blue' )
+    plt.plot(np.array(moving_average)[:,1], color='red') 
 
-    # plt.plot(np.array(moving_average)[:,0], color='blue' )
-    # plt.plot(np.array(moving_average)[:,1], color='red') 
-
-    # # plt.plot(moving_average, color='red') 
-    # for k in junctions:
-    #     plt.axvline(x=k, color='g',ls="--")
-    # for k in restarts:
-    #     plt.axvline(x=k, color='m',ls="--")
+    # plt.plot(moving_average, color='red') 
+    for k in junctions:
+        plt.axvline(x=k, color='g',ls="--")
+    for k in restarts:
+        plt.axvline(x=k, color='m',ls="--")
     # plt.hlines(x=junctions, ymin=np.min(log_stds), ymax=np.max(log_stds), colors='green', ls=':', lw=2, label='Junctions')
-    # plt.legend(loc="upper left")
-    # plt.savefig("uncertainty_profile_at_junctions.pdf")
-    # # plt.legend()
-    # a=dict(log_stds=log_stds,junctions=junctions)
-    # with open('uncertainty_profile_at_junctions.pickle', 'wb') as handle:
-    #     pickle.dump(a, handle, protocol=pickle.HIGHEST_PROTOCOL)
-    # a=dict(images=images,heading=heading_ar)
-    # with open('map.pickle', 'wb') as handle:
-    #     pickle.dump(a, handle, protocol=pickle.HIGHEST_PROTOCOL)
+    plt.legend(loc="upper left")
+    plt.savefig("uncertainty_profile_at_junctions.pdf")
+    # plt.legend()
+    a=dict(log_stds=log_stds,junctions=junctions)
+    with open('uncertainty_profile_at_junctions.pickle', 'wb') as handle:
+        pickle.dump(a, handle, protocol=pickle.HIGHEST_PROTOCOL)
+    a=dict(images=images,heading=heading_ar,features=features)
+    with open('map.pickle', 'wb') as handle:
+        pickle.dump(a, handle, protocol=pickle.HIGHEST_PROTOCOL)
+    with open('plot_data.pickle', 'wb') as handle:
+        pickle.dump(dict(log_stds=log_stds,trace_log_stds=trace_log_stds,
+                         locations=locations,
+                         unit_vectors=unit_vectors), handle, protocol=pickle.HIGHEST_PROTOCOL)
     return stats,mapper
 
-# def navigate(agent:DrQLearner, env:CarlaEvalEnv, mapper:TopologicalMap,n_eval_episodes=10):
-#     """Evaluate the agent for n_eval_episodes."""
-#     episode_rewards = []
-#     episode_lengths = []
-#     success_rate = []
-#     distance_completed = []
-#     slack_values = []
-#     steps=0
-#     log_stds=[]
-#     moving_average=[]
-#     junctions=[]
-#     restarts=[]
-#     # filter=StreamingMovingAverage(window_size=100)
-#     ema_filter = RealTimeVectorEMA(window_size=100, vector_dim=2)
-#     # Real-time updates
-#     # mapper=TopologicalMap()
-#     start=time.time()
-#     for _ in range(n_eval_episodes):
-#         observation, info = env.reset()
-#         done = False
-#         episode_reward = 0
-#         episode_length = 0
-#         #select goal
-#         # breakpoint()
-#         goal_idx=random.randint(0,len(mapper.image_node)-1)
-#         obs=(observation["pixels"][...,0]*255).astype(np.uint8)
-#         subgoal=mapper.create_navigation_guide(obs,goal_idx)
-#         while not done:
-#             goal,done=subgoal(obs)
-#             if not done and not goal is None:
-#                 env.unwrapped.set_goal(goal[0],goal[1]) 
-#             action_dist=agent.action_dist(observation)
-#             # if deterministic:
-#             action = action_dist.mode()
-#             observation, reward, done, truncated, info = env.step(action)
-#             if env.unwrapped.is_agent_at_junction():
-#                 junctions.append(steps)
-#             std=np.array(action_dist.log_std())
-#             log_stds.append(std)
-#             # moving_average.append(filter.process(np.array(action_dist.log_std())))
-#             filtered_vector = ema_filter.update(std)
-#             moving_average.append(filtered_vector)
-#             episode_reward += reward
-#             episode_length += 1
-#             done = done or truncated
-#             steps+=1
-#             # if np.any((ema_filter.get_current()-std)>ema_filter.threshold()):
-#             #     #add image to map
-#             #     obs=(observation["pixels"][...,0]*255).astype(np.uint8)
-#             #     heading= observation["vector"][-2]
-#             #     mapper.update(obs,heading)
-#             #     cv2.imwrite(f"sample_map/{steps}.jpg",np.vstack([(observation["goal"][...,0]*255).astype(np.uint8)
-#             #                                                      ,obs]))
-                
+
+def navigate(agent:DrQLearner, env:CarlaEvalEnv, mapper:TopologicalMap,n_eval_episodes=10):
+    """Evaluate the agent for n_eval_episodes."""
+    episode_rewards = []
+    episode_lengths = []
+    success_rate = []
+    distance_completed = []
+    slack_values = []
+    steps=0
+    log_stds=[]
+    moving_average=[]
+    junctions=[]
+    restarts=[]
+    env = TimeLimit(env, max_episode_steps=2500)
+    # filter=StreamingMovingAverage(window_size=100)
+    ema_filter = RealTimeVectorEMA(window_size=100, vector_dim=2)
+    
+    # Real-time updates
+    # mapper=TopologicalMap()
+    start=time.time()
+    for _ in range(n_eval_episodes):
+        observation, info = env.reset()
+        done = False
+        episode_reward = 0
+        episode_length = 0
+        #select goal
+        # breakpoint()
+        goal_idx=random.randint(0,len(mapper.image_node)-1)
+        obs=(observation["pixels"][...,0]*255).astype(np.uint8)
+        subgoal=mapper.create_navigation_guide(obs,goal_idx)
+
+        while not done:
+            goal,done=subgoal(obs)
+            if not done and not goal is None:
+                env.unwrapped.set_goal(goal[0],goal[1]) 
+            action_dist=agent.action_dist(observation)
+            # if deterministic:
+            action = action_dist.mode()
+            observation, reward, done, truncated, info = env.step(action)
+            if env.unwrapped.is_agent_at_junction():
+                junctions.append(steps)
+            std=np.array(action_dist.log_std())
+            log_stds.append(std)
+            # moving_average.append(filter.process(np.array(action_dist.log_std())))
+            filtered_vector = ema_filter.update(std)
+            moving_average.append(filtered_vector)
+            episode_reward += reward
+            episode_length += 1
+            done = done or truncated
+            steps+=1
             
-#             if done:
-#                 restarts.append(steps)
-#                 episode_rewards.append(episode_reward)
-#                 episode_lengths.append(episode_length)
-#                 # print(info)
-#                 if "is_success" in info:
-#                     success_rate.append(float(info["is_success"]))
-#                 if "distance_completed" in info:
-#                     distance_completed.append(float(info["distance_completed"]))
-#                 if "slack" in info:
-#                     slack_values.append(float(info["slack"]))
-    
-#     # Compute statistics
-#     end=time.time()
-#     stats = {
-#         "mean_reward": np.mean(episode_rewards),
-#         "std_reward": np.std(episode_rewards),
-#         "mean_length": np.mean(episode_lengths),
-#         "std_length": np.std(episode_lengths),
-#         "total_map_steps":steps,
-#         "navigation_time":int(end-start)
-#     }
-    
-#     if success_rate:
-#         stats["success_rate"] = np.mean(success_rate)
-#     if distance_completed:
-#         stats["mean_distance"] = np.mean(distance_completed)
-#     if slack_values:
-#         stats["mean_slack"] = np.mean(slack_values)
-#     plt.plot(np.array(log_stds)[:,0], color='blue',linestyle = 'dotted')
-#     plt.plot(np.array(log_stds)[:,1], color='red',linestyle = 'dotted') 
-
-#     plt.plot(np.array(moving_average)[:,0], color='blue' )
-#     plt.plot(np.array(moving_average)[:,1], color='red') 
-
-#     # plt.plot(moving_average, color='red') 
-#     for k in junctions:
-#         plt.axvline(x=k, color='g',ls="--")
-#     for k in restarts:
-#         plt.axvline(x=k, color='m',ls="--")
-#     # plt.hlines(x=junctions, ymin=np.min(log_stds), ymax=np.max(log_stds), colors='green', ls=':', lw=2, label='Junctions')
-#     plt.legend(loc="upper left")
-#     plt.savefig("uncertainty_profile_at_junctions.pdf")
-#     # plt.legend()
-#     a=dict(log_stds=log_stds,junctions=junctions)
-#     with open('uncertainty_profile_at_junctions.pickle', 'wb') as handle:
-#         pickle.dump(a, handle, protocol=pickle.HIGHEST_PROTOCOL)
-#     return stats,mapper
-
-def main(_):
-    # Create and wrap environment
-    config = {
-        "env_config": {
-            "carla": {
-                "host": "localhost",
-                "timeout": 20.0,
-                "timestep": 0.1,
-                "retries_on_error": 25,
-                "resolution_x": 600,
-                "resolution_y": 600,
-                "quality_level": "Low",
-                "enable_map_assets": True,
-                "enable_rendering": True,
-                "show_display": True,
-                "town": "Town01"
-            },
-            "experiment": {
-                "type": JAXMappingExperiments,
-                "hero": {
-                    "blueprint": "vehicle.mercedes.coupe_2020",
-                    "sensors": {
-                        "collision": {"type": "sensor.other.collision"},
-                        "rgb": {
-                            "type": "sensor.camera.rgb",
-                            "image_size_x": 300,
-                            "image_size_y": 300,
-                            "transform": "1.9, 0.0, 1.7, 0.0, -15.0, 0.0"
-                        },
-                        "goal": {
-                            "type": "sensor.goal",
-                            "image_size_x": 300,
-                            "image_size_y": 300,
-                        },
-                        "imu": {"type": "sensor.other.imu"},
-                        "lane_invasion": {"type": "sensor.other.lane_invasion"}
-                    }
-                },
-                "background_activity": {
-                    "n_vehicles": 0,
-                    "n_walkers": 0,
-                    "tm_hybrid_mode": True
-                },
-                "town": "Town02",
-                "others": {
-                    "framestack": 1,
-                    "max_time_idle": 150,
-                    "max_dist": 200,
-                    "target_speed": 5.0
-                }
-            }
-        }
+            if done:
+                restarts.append(steps)
+                episode_rewards.append(episode_reward)
+                episode_lengths.append(episode_length)
+                # print(info)
+                if "is_success" in info:
+                    success_rate.append(float(info["is_success"]))
+                if "distance_completed" in info:
+                    distance_completed.append(float(info["distance_completed"]))
+                if "slack" in info:
+                    slack_values.append(float(info["slack"]))
+    end=time.time()
+    # Compute statistics
+    end=time.time()
+    stats = {
+        "mean_reward": np.mean(episode_rewards),
+        "std_reward": np.std(episode_rewards),
+        "mean_length": np.mean(episode_lengths),
+        "std_length": np.std(episode_lengths),
+        "total_map_steps":steps,
+        "navigation_time":int(end-start)
     }
     
-    env = CarlaEvalEnv(config["env_config"])
+    if success_rate:
+        stats["success_rate"] = np.mean(success_rate)
+    if distance_completed:
+        stats["mean_distance"] = np.mean(distance_completed)
+    if slack_values:
+        stats["mean_slack"] = np.mean(slack_values)
+
+    return stats
+
+def main(_):
+   
+    
+    env = CarlaEvalEnv()
     env = FrameStack(env=env, num_stack=1, stacking_key="pixels")
-    env = FrameStack(env=env, num_stack=1, stacking_key="goal")
-    env = TimeLimit(env, max_episode_steps=2500)
+    # env = FrameStack(env=env, num_stack=1, stacking_key="goal")
+
     env = RecordEpisodeStatistics(env)
     
     # Initialize agent
-    kwargs = dict(FLAGS.config)
+    # kwargs = dict(FLAGS.config)
     agent = DrQLearner(
-        42,  # seed
+        0,  # seed
         env.observation_space.sample(),
         env.action_space.sample(),
-        **kwargs
+        **sac_config
     )
     
     # Load checkpoint
     agent = load_checkpoint(agent, FLAGS.checkpoint_path)
-    
+
     # Evaluate
     stats,mapper = map_environment(
         agent,

@@ -154,22 +154,27 @@ def map_environment(agent:DrQLearner, env, n_eval_episodes=10, deterministic=Tru
     # start timer for entire mapping
     start=time.time()
     # log_stds.append(std)
+    steps=0
     for _ in range(n_eval_episodes):
         observation, info = env.reset()
         done = False
         episode_reward = 0
         episode_length = 0
         # heading=random.choice([0,np.pi/2,np.pi,2/3*np.pi,2*np.pi])
-        heading=np.pi
+        heading=0+1e-8
         while not done:
+            steps+=1
             target=4.5
             vecs=observation["vector"]
             current_velocity=env.unwrapped.experiment.velocity
             current_heading=env.unwrapped.experiment.current_heading
             # breakpoint()
             if (current_heading - heading)<np.deg2rad(10):
-                        heading=random.choice([np.pi/2,np.pi,2/3*np.pi,2*np.pi])
-            # print(np.rad2deg(current_heading),np.rad2deg(heading))
+                    # heading+=np.pi/4
+                    # heading=heading%np.pi
+                    steps=int(1e5) #break loop
+
+                    print(np.rad2deg(current_heading),np.rad2deg(heading))
             vecs[2] = np.clip(current_velocity/(target+1e-8), 0.0, 5.1)
             vecs[3]= np.clip(current_heading/(heading+1e-8),-5.1,5.1) 
             # vecs[4]= np.clip(heading/np.pi,-5.1,5.1) 
@@ -198,10 +203,10 @@ def map_environment(agent:DrQLearner, env, n_eval_episodes=10, deterministic=Tru
             if np.any((ema_filter.get_current()-std)>ema_filter.threshold()):
                 #add image to map
                 obs=(observation["pixels"][...,0]*255).astype(np.uint8)
-                heading_obs= observation["vector"][-2]
+                heading_obs= ((observation["vector"][-2]))*(1/heading)
                 images.append(obs)
                 heading_ar.append(heading_obs)
-                mapper.update(obs,heading_obs)
+                mapper.update(feature,heading_obs)
                 features.append(feature)
                 cv2.imwrite(f"sample_map/{steps}.jpg",(observation["pixels"][...,0]*255).astype(np.uint8))
             
@@ -216,6 +221,10 @@ def map_environment(agent:DrQLearner, env, n_eval_episodes=10, deterministic=Tru
                     distance_completed.append(float(info["distance_completed"]))
                 if "slack" in info:
                     slack_values.append(float(info["slack"]))
+            if steps>int(5e4):
+                break
+        if steps>int(5e4):
+                break
     #add the very last observation
     # obs=(observation["pixels"][...,0]*255).astype(np.uint8)
     # heading= observation["vector"][-2]
@@ -295,11 +304,12 @@ def navigate(agent:DrQLearner, env:CarlaEvalEnv, mapper:TopologicalMap,n_eval_ep
         #select goal
         # breakpoint()
         goal_idx=random.randint(0,len(mapper.image_node)-1)
-        obs=(observation["pixels"][...,0]*255).astype(np.uint8)
-        subgoal=mapper.create_navigation_guide(obs,goal_idx)
+        feature=agent.extract_features(observation)
+        subgoal=mapper.create_navigation_guide(feature,goal_idx)
 
         while not done:
-            goal,done=subgoal(obs)
+            feature=agent.extract_features(observation)
+            goal,done=subgoal(feature)
             if not done and not goal is None:
                 env.unwrapped.set_goal(goal[0],goal[1]) 
             action_dist=agent.action_dist(observation)
@@ -308,7 +318,7 @@ def navigate(agent:DrQLearner, env:CarlaEvalEnv, mapper:TopologicalMap,n_eval_ep
             observation, reward, done, truncated, info = env.step(action)
             if env.unwrapped.is_agent_at_junction():
                 junctions.append(steps)
-            std=np.array(action_dist.log_std())
+            std=np.array(action_dist.stddev())
             log_stds.append(std)
             # moving_average.append(filter.process(np.array(action_dist.log_std())))
             filtered_vector = ema_filter.update(std)
@@ -378,13 +388,13 @@ def main(_):
         n_eval_episodes=FLAGS.n_eval_episodes,
         deterministic=FLAGS.deterministic
     )
-    # stats = navigate(
-    #     agent,
-    #     env,
-    #     mapper,
-    #     n_eval_episodes=FLAGS.n_eval_episodes,
-    #     # deterministic=FLAGS.deterministic
-    # )
+    stats = navigate(
+        agent,
+        env,
+        mapper,
+        n_eval_episodes=FLAGS.n_eval_episodes,
+        # deterministic=FLAGS.deterministic
+    )
     
     # Print results
     print("\nEvaluation Results:")

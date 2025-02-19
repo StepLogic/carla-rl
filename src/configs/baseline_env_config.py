@@ -683,6 +683,7 @@ class JAXMappingExperiments(BaseExperiment):
         self.origin=None
         self.destination=None
         self.image_size=64
+        self.goal_location=None
     def reset(self,*arg,**kwargs):
         """Called at the beginning and each time the simulation is reset"""
 
@@ -718,9 +719,11 @@ class JAXMappingExperiments(BaseExperiment):
         self.target_speed = 6.0
         self.velocity=0.0
         self.current_heading=0.0
+        self.goal_location=None
         # self.target_speed = random.uniform(1.0,self.config["others"]["target_speed"])
         self.info=dict()
-
+    def set_goal(self,goal,heading,location):
+        self.goal_location=location
     # def get_action_space(self):
     #     """Returns the action space, in this case, a discrete space"""
     #     return Discrete(len(self.get_actions()))
@@ -863,7 +866,7 @@ class JAXMappingExperiments(BaseExperiment):
         self.done_falling = hero.get_location().z < -0.5
         self.diff_lane = 'lane_invasion' in sensor_data.keys() or wp is None
         self.collision = 'collision' in sensor_data.keys()
-        done=self.done_falling or self.collision
+        done=self.done_falling or self.collision or wp is None
         # done=False
         self.info.update(dict(is_success=self.done_dist,
                              distance_completed=self.distance_travelled))

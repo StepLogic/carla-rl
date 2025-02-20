@@ -34,7 +34,7 @@ def collect_basic_agent_data(replay_buffer_size=int(1e4)):
         if not env is None:
              env.close()
         config["env_config"]["carla"]["town"]=town_name
-        config["env_config"]["carla"]["start_server"]=False
+        # config["env_config"]["carla"]["start_server"]=False
         env = CarlaGoalEnv(config["env_config"])
         env = FrameStack(env=env, num_stack=1, stacking_key="pixels")
         # env = FrameStack(env=env, num_stack=1, stacking_key="goal")

@@ -7,19 +7,18 @@ import random
 
 import gym
 import gymnasium
-from jaxrl2.agents.pixel_bc.pixel_bc_learner import PixelBCLearner
 from jaxrl2.utils.misc import Logger
 from jaxrl2.wrappers.frame_stack import FrameStack
 from jaxrl2.wrappers.timelimit import TimeLimit
 from jaxrl2.wrappers.record_statistics import RecordEpisodeStatistics
 import ml_collections
 import tqdm
-import wandb
+# import wandb
 from absl import app, flags
 from ml_collections import config_flags
 from flax.training import checkpoints
 import jaxrl2.extra_envs.dm_control_suite
-from jaxrl2.agents import DrQLearner
+from jaxrl2.agents import PixelIQLLearner
 from jaxrl2.data import ReplayBuffer
 from jaxrl2.data.hindsight_replay_buffer import HindsightReplayBuffer
 from jaxrl2.evaluation import evaluate
@@ -38,22 +37,36 @@ from stable_baselines3.common.torch_layers import BaseFeaturesExtractor
 from stable_baselines3.common.callbacks import CheckpointCallback,EvalCallback
 # from vision_rl.rllib_integration.carla_env import CarlaEnv
 # from vision_rl.stb3.jax_experiments import JAXExperiments
+
 from rlib_integration.carla_goal_env import CarlaGoalEnv
 from src.configs.train_env_config import config as carla_config
 import flax
 from jaxrl2.noise import OrnsteinUhlenbeckActionNoise
 flax.config.update('flax_use_orbax_checkpointing', True)
     # ML config
+import jax
+from ml_collections.config_dict import config_dict
+jax.config.update("jax_debug_nans", True)
+
 config = ml_collections.ConfigDict()
 config.actor_lr = 3e-4
+config.critic_lr = 3e-4
+config.value_lr = 3e-4
 config.hidden_dims = (256, 256)
 config.cnn_features = (32, 64, 128, 256)
 config.cnn_filters = (3, 3, 3, 3)
 config.cnn_strides = (2, 2, 2, 2)
 config.cnn_padding = "VALID"
 config.latent_dim = 50
-config.encoder = "d4pg"
-bc_config = config.to_dict()
+config.discount = 0.99
+config.expectile = 0.7  # The actual tau for expectiles.
+config.A_scaling = 3.0
+config.dropout_rate = config_dict.placeholder(float)
+config.cosine_decay = True
+config.tau = 0.005
+config.critic_reduction = "min"
+config.share_encoder = False
+sac_config = config.to_dict()
 
 
 
@@ -64,16 +77,16 @@ flags.DEFINE_string("save_dir", "./tmp/", "Tensorboard logging dir.")
 flags.DEFINE_integer("seed", 42, "Random seed.")
 flags.DEFINE_integer("eval_episodes", 5, "Number of episodes used for evaluation.")
 flags.DEFINE_integer("log_interval", 1000, "Logging interval.")
-flags.DEFINE_integer("eval_interval", int(10), "Eval interval.")
-flags.DEFINE_integer("batch_size", 128, "Mini batch size.")
-flags.DEFINE_integer("max_steps", int(1000), "Number of training steps.")
+flags.DEFINE_integer("eval_interval", int(5e4), "Eval interval.")
+flags.DEFINE_integer("batch_size", 32, "Mini batch size.")
+flags.DEFINE_integer("max_steps", int(2e6), "Number of training steps.")
 flags.DEFINE_integer(
     "start_training", int(1e3), "Number of training steps to start training."
 )
 flags.DEFINE_integer("image_size", 64, "Image size.")
 flags.DEFINE_integer("num_stack", 3, "Stack frames.")
 flags.DEFINE_integer(
-    "replay_buffer_size", int(1e6), "Number of training steps to start training."
+    "replay_buffer_size", int(1e3), "Number of training steps to start training."
 )
 flags.DEFINE_integer(
     "action_repeat", None, "Action repeat, if None, uses 2 or PlaNet default values."
@@ -88,7 +101,7 @@ def save_checkpoint(agent, path, step):
     os.makedirs(path, exist_ok=True)
     state_dict = {
         'actor_params': agent._actor,
-        # 'critic_params': agent._critic,
+        'critic_params': agent._critic,
         # 'target_critic_params': agent._target_critic_params,
         # 'temp': agent._temp,
         # 'rng': agent._rng,
@@ -112,39 +125,49 @@ from absl import app, flags
 
 from typing import Dict, Any
 
-# expert_buffer="/home/kojogyaase/Projects/Research/carla-rl/datasets/basic_agent_data_20241229_093438.pkl"
-expert_buffers=list(glob.glob("/home/robotlab/scratch/carla-rl/datasets/*.pkl"))
+# expert_buffer="/home/kojogyaase/Projects/Research/carla-rl/datasets/goal_condition_Town05_data_0.pkl"
+expert_buffers=list(glob.glob("/home/robotlab/scratch/carla-rl/real_robot_dataset/*.pkl"))
+
+def initialize_spaces():
+    """Initialize the replay buffer with proper spaces"""
+    image_space = gym.spaces.Box(
+        low=-1.0,
+        high=1.0,
+        shape=(64,64,3,1),
+        dtype=np.float32,
+    )
+    vec_space = gym.spaces.Box(
+        low=-5.1,
+        high=5.1,
+        shape=(4,),
+        dtype=np.float32,
+    )
+    action_space = gym.spaces.Box(
+        low=np.array([-1.0, -1.0]),
+        high=np.array([1.0, 1.0]),
+        dtype=np.float32
+    )
+    observation_space = gym.spaces.Dict({"pixels": image_space, "vector": vec_space})
+    return action_space,observation_space
 def main(_):
 
-    # Create environment
-    # carla_config["env_config"]["carla"]["start_server"]=False
-    env = CarlaGoalEnv(carla_config["env_config"])
-    env = FrameStack(env=env, num_stack=1,stacking_key="pixels")
-    env = TimeLimit(env,max_episode_steps=2500)
-    env = RecordEpisodeStatistics(env)
-    action_dim = 2
-    mean = np.zeros(action_dim)
-    sigma = 0.2 * np.ones(action_dim)
-    noise = OrnsteinUhlenbeckActionNoise(mean=mean, sigma=sigma)
-  
-    # Initialize logger
-    logger = Logger(log_dir="./logs",prefix="BC")
-
+    logger = Logger(log_dir="./logs",prefix="SAC")
     # Initialize checkpoints dir
     policy_folder = os.path.join("checkpoints", f"model-sac-{len(glob.glob('./logs/*'))}")
     os.makedirs(policy_folder, exist_ok=True)
 
     np.random.seed(FLAGS.seed)
     random.seed(FLAGS.seed)
-
+    action_space,observation_space=initialize_spaces()
     # Initialize agent and replay buffer
-    agent = PixelBCLearner(
+    agent = PixelIQLLearner(
         0, 
-        env.observation_space.sample(), 
-        env.action_space.sample(), 
+        observation_space.sample(), 
+        action_space.sample(), 
         # num_qs=10,
-        **bc_config
+        **sac_config
     )
+
     expert_replay_buffers=[]
     if not expert_buffers is None:
         for path in expert_buffers:
@@ -184,35 +207,6 @@ def main(_):
                     save_checkpoint(agent,policy_folder,i)
             logger.print_status(i, FLAGS.max_steps)
 
-        if i % FLAGS.eval_interval == 0:
-            # Run evaluation
-            eval_successes = []
-            eval_rewards = []
-            eval_dists = []
-            eval_slack = []
-            
-            for _ in range(FLAGS.eval_episodes):
-                eval_obs, eval_info = env.reset()
-                eval_done = False
-                episode_reward = 0
-                
-                while not eval_done:
-                    eval_action = agent.eval_actions(eval_obs)  # No exploration
-                    eval_obs, eval_reward, eval_done, eval_truncated, eval_info = env.step(eval_action)
-                    episode_reward += eval_reward
-                    
-                    if eval_done or eval_truncated:
-                        if "is_success" in eval_info:
-                            eval_successes.append(float(eval_info["is_success"]))
-                        if "distance_completed" in eval_info:
-                            eval_dists.append(float(eval_info["distance_completed"]))
-                        if "slack" in eval_info:
-                            eval_slack.append(float(eval_info["slack"]))
-                
-                eval_rewards.append(episode_reward)
-            save_checkpoint(agent,policy_folder,i)
-            logger.log_eval(eval_info, i)
-            logger.print_status(i, FLAGS.max_steps)
         
     
     # Print final training statistics

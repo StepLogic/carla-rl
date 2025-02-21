@@ -4,29 +4,33 @@ import gymnasium as gym
 import rospy 
 import cv2
 from cv_bridge import CvBridge, CvBridgeError
-from sensor_msgs.msg import Image,Imu
+from sensor_msgs.msg import Image,Imu,LaserScan
 from geometry_msgs.msg import Twist,Vector3
 import queue
 from gymnasium.spaces import Dict,Box
 import numpy as np
+import time
 IMAGE_TOPIC="/camera/image_raw"
 IMU_TOPIC="/imu/data_raw"
 ROBOT_CMD_TOPIC="/cmd_vel"
-RATE = 9
+LIDAR_TOPIC="/scan"
+RATE = 10
 def ros_vector3_to_np_array(msg):
-    return np.array([msg.x,msg.y,msg.z])
+    return np.array([msg.x,-1*msg.y,msg.z])
 class LeoEnv(gym.Env):
     def __init__(self):
         self.image_sub = rospy.Subscriber(IMAGE_TOPIC,Image,self.image_callback)
+        self.lidar_sub = rospy.Subscriber(LIDAR_TOPIC,LaserScan,self.lidar_callback)
         self.imu_sub = rospy.Subscriber(IMU_TOPIC,Imu,self.imu_calback)
         self.robot_cmd =rospy.Publisher(ROBOT_CMD_TOPIC, Twist, queue_size=10)
         self.bridge = CvBridge()
         self.image_queue=queue.Queue() #define queue
         self.vector_queue=queue.Queue() #define quue for imu
+        self.collision_queue=queue.Queue() #define quue for imu
         # self.current_timestamp=datetime.now()
         self.current_velocity = 0
         self.current_heading = 0
-        self.target_speed=0.1
+        self.target_speed=2.0
         self.max_steer=1.0
         self.image_size=64
         self.theta=np.zeros((3,))
@@ -34,15 +38,18 @@ class LeoEnv(gym.Env):
         self.previous_actions=np.zeros((2)) #steer ,throttle
         self.heading=0
         self.idle_count=0
-        self.collision_threshold=300
+        self.collision_threshold=None #0.5m
         self.time_episode =0
         self.velocities=[]
         self.dts=[]
         self.headings=[]
         self.distance_travelled=0
         self.action=None
+        self.collision=None
         self.info=dict()
         self.rewards=[]
+        self.offsets=[]
+        self.intensities=[]
         image_space = Box(
             low=-1.0,
             high=1.0,
@@ -60,7 +67,7 @@ class LeoEnv(gym.Env):
         self.observation_space=Dict({"pixels":image_space, "vector":vec_space})
 
         self.action_space = Box(
-            low=np.array([-self.max_steer, -1.0]),  # [steering, throttle/brake]
+            low=np.array([-self.max_steer, 0.0]),  # [steering, throttle/brake]
             high=np.array([self.max_steer, 1.0]),
             dtype=np.float32
         )
@@ -74,7 +81,7 @@ class LeoEnv(gym.Env):
         image=None
         vector=None
 
-        timeout=int(1e3)
+        timeout=int(1e2)
         for _ in range(int(timeout)):
             # print(self.vector_queue.qsize())
             vector=self.vector_queue.get()
@@ -89,19 +96,48 @@ class LeoEnv(gym.Env):
             if not image is None:
                 self.image_queue.queue.clear()
                 break
-            # if reset:
-            #     break
+
+
+        self.collision=None
+        for _ in range(int(timeout)):
+            self.collision=self.collision_queue.get() 
+            if not self.collision is None:
+                self.collision_queue.queue.clear()
+                self.intensities=[]
+                break
+        
+            if reset:
+                break
 
         return dict(pixels=image,vector=vector)
     
     def reset(self,*args,**kwargs):
+        #zero robot measurements
+        self.velocities=[]
+        self.dts=[]
+        self.headings=[]
+        self.intensities=[]
+        time.sleep(10.0)
+        print("Reset Robot Please!!!!!!")
+        self.offsets=[np.mean(self.velocities),np.mean(self.headings)]
+        self.collision_threshold=np.max(self.intensities)
+    
+        self.velocities=[]
+        self.dts=[]
+        self.headings=[]
+        self.image_queue.queue.clear()
+        self.vector_queue.queue.clear()
+        time.sleep(1.0)
+        print("Awaiting observations!!!!!!")
         observation=self.get_observation(reset=True)
         self.time_episode =0
         self.distance_travelled=0
         self.rewards=[]
+        self.current_heading=0.0
         self.action=np.zeros(2)
         self.info=dict()
         self.speed=0.0
+        self.heading=np.random.uniform(1e-8,2*np.pi,)
         return observation,self.info
             
     def image_callback(self,image):
@@ -113,27 +149,53 @@ class LeoEnv(gym.Env):
         self.image_queue.put(image)
         # except Exception as e:
         #     print(e)
+    def lidar_callback(self,scan):
+        # if image.header.timestamp >= self.current_timestamp: #look up
+        #         return
+        # try:
+        
+        # print(scan)
+        self.intensities.append(np.max(scan.intensities))
+        if self.collision_threshold is None:
+            self.collision_queue.put(False)
+        else:
+            self.collision_queue.put(np.max(scan.intensities)>self.collision_threshold)
+        # except Exception as e:
+        #     print(e)
             
     def imu_calback(self,imu):
         dt=1/self.RATE
         # imu=imu.data
         vec=self.observation_space["vector"].sample()
-        if dt > int(1e3): #look up
-                return
+        # if dt > int(1e3): #look up
+        #         return
         # try:
-
+        # print(imu.linear_acceleration)
         self.theta=self.theta+ros_vector3_to_np_array(imu.angular_velocity)*dt
-        self.v=self.v+ros_vector3_to_np_array(imu.linear_acceleration)*dt
+        accel=ros_vector3_to_np_array(imu.linear_acceleration)
+        accel[2]=0
+        # accel[1]=-1*accel[1]
+        self.v=self.v+accel*dt
+        # print(accel,self.v)
         # print(self.v,np.linalg.norm(self.v))
-        self.speed=np.linalg.norm(self.v)
+        self.velocities.append(np.linalg.norm(self.v))
+        self.headings.append(self.theta[-1])
+        # breakpoint()
+        # print(self.velocities)
+        self.speed=np.mean(self.velocities)
+        self.current_heading=np.mean(self.headings)
+        if self.offsets:
+            self.current_heading-=self.offsets[-1]
+            self.speed-=self.offsets[0]
+ 
+        # print(self.speed,self.current_heading)
         vec[0]=self.previous_actions[0]/self.max_steer
         vec[1]=self.previous_actions[1]/self.max_steer
-        vec[2]=np.clip(self.speed/self.target_speed+1e-8,-5.1,5.1)
-        vec[3]=np.clip(self.theta[-1]/self.heading+1e-8,-5.1,5.1)
+        vec[2]=np.clip(self.speed/(self.target_speed+1e-8),0,5.1)
+        vec[3]=np.clip(self.current_heading/(self.heading+1e-8),-5.1,5.1)
         self.vector_queue.put(vec)
-        self.velocities.append(self.v)
         self.dts.append(dt)
-        self.distance_travelled+=max(np.mean(self.velocities)*np.mean(dt)*np.cos(self.theta[-1]),0)
+        self.distance_travelled+=abs(vec[2]*np.mean(dt)*self.current_heading)
         # except Exception as e:
         #     print(e)
     def step(self,action:np.ndarray):
@@ -141,7 +203,7 @@ class LeoEnv(gym.Env):
         vel_msg = Twist()
         vel_msg.linear.x = action[1]
         vel_msg.angular.z = action[0]
-        print(vel_msg)
+        # print(vel_msg)
         self.robot_cmd.publish(vel_msg)
         observation=self.get_observation()
         done=self.compute_done()
@@ -150,18 +212,20 @@ class LeoEnv(gym.Env):
         return observation, reward, done,False,self.info     
     def compute_done(self):
         self.info=dict()
-        self.collision = self.collision_threshold < self.idle_count
-        if np.linalg.norm(self.v) > 1e-4:
-            self.idle_count = 0
-        else:
-            self.idle_count += 1
+        # self.collision = self.collision_threshold < self.idle_count
+        # if np.linalg.norm(self.v) > 1e-4:
+        #     self.idle_count = 0
+        # else:
+        #     self.idle_count += 1
         self.time_episode += 1
                
         # hero_velocity = self.get_speed(hero)
         # marker_location=sensor_data["goal_heading"][-1][0]
         # wp=core.map.get_waypoint(hero.get_transform().location,project_to_road=False) 
-        self.done_dist = self.distance_travelled>200
+        self.done_dist = self.distance_travelled>int(2e4)
+ 
         self.done_speed=(self.speed/(self.target_speed+1e-8)) > 5.0
+        print("Speed Ratio",self.done_speed,self.speed,self.target_speed,(self.speed/(self.target_speed+1e-8)))
         # self.done_falling = hero.get_location().z < -0.5
         # self.diff_lane = 'lane_invasion' in sensor_data.keys()
         # self.collision = 'collision' in sensor_data.keys()
@@ -220,10 +284,12 @@ class LeoEnv(gym.Env):
             reward += -10
         if self.done_speed:
             # print(f'Too fast Smooth={smooth_action:3f} Dist={self.distance_travelled:3f} Ratio={hero_velocity/self.target_speed:.3f} Target_S={self.target_speed:.3f} Vel={hero_velocity:.3f} R={reward:.4f} Err={target_speed_error:.4f} H_Err={heading_error:.4f}')
+            print(f'Too fast Dist={self.distance_travelled:3f} Target_S={self.target_speed:.4f} Vel={hero_velocity:.4f} R={reward:.4f} ')
             reward += -10
         # Reward for reaching the target distance
         if self.done_dist:
             # print(f"Max Dist Smooth={smooth_action:3f} Dist={self.distance_travelled:3f}")
+            print(f'Max Dist={self.distance_travelled:3f} Target_S={self.target_speed:.4f} Vel={hero_velocity:.4f} R={reward:.4f} ')
             reward += 10
 
         # Scale the reward to a reasonable range (no need for *10)

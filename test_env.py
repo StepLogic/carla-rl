@@ -8,7 +8,7 @@ observation,info=env.reset()
 res=cv2.imwrite("test.jpg",observation["pixels"])
 # print(observation["vector"],res)
 while not rospy.is_shutdown():
-    next_observation, reward, done, truncated, info=env.step(np.array([0.2,0.1]))
+    next_observation, reward, done, truncated, info=env.step(env.action_space.sample())
     # cv2.imwrite("test.jpg",next_observation["pixels"])
 
     # print(next_observation["vector"])

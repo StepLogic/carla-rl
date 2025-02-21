@@ -30,23 +30,27 @@ import numpy as np
 import torch
 import torch.nn as nn
 from gym import spaces
-from stable_baselines3.common.noise import OrnsteinUhlenbeckActionNoise
-from stable_baselines3 import SAC
-from stable_baselines3.common.torch_layers import BaseFeaturesExtractor
-from stable_baselines3.common.callbacks import CheckpointCallback,EvalCallback
+# from stable_baselines3.common.noise import OrnsteinUhlenbeckActionNoise
+# from stable_baselines3 import SAC
+# from stable_baselines3.common.torch_layers import BaseFeaturesExtractor
+# from stable_baselines3.common.callbacks import CheckpointCallback,EvalCallback
 # from vision_rl.rllib_integration.carla_env import CarlaEnv
 # from vision_rl.stb3.jax_experiments import JAXExperiments
 
-from rlib_integration.carla_goal_env import CarlaGoalEnv
-from src.configs.train_env_config import config as carla_config
+# from rlib_integration.carla_goal_env import CarlaGoalEnv
+# from configs.train_env_config import config as carla_config
 import flax
 from jaxrl2.noise import OrnsteinUhlenbeckActionNoise
 import rospy
-from src.leo.leo_env import LeoEnv
+from leo.leo_env import LeoEnv
 flax.config.update('flax_use_orbax_checkpointing', True)
     # ML config
 import jax
 jax.config.update("jax_debug_nans", True)
+
+os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"]="false"
+
+
 config = ml_collections.ConfigDict()
 config.actor_lr = 3e-4
 config.critic_lr = 3e-4
@@ -124,11 +128,9 @@ from absl import app, flags
 from typing import Dict, Any
 
 # expert_buffer="/home/kojogyaase/Projects/Research/carla-rl/datasets/goal_condition_Town05_data_0.pkl"
-expert_buffers=[
-                # "/home/kojogyaase/Projects/Research/carla-rl/datasets/goal_condition_Town05_data_1.pkl",
-                "/home/kojogyaase/Projects/Research/carla-rl/datasets/real_robot_data_0.pkl"
-                ]
-# expert=None
+expert_buffers=list(glob.glob("/workspaces/ROS1/carla-rl/real_robot_dataset/*.pkl"))
+
+# expert_buffers=None
 
 def main(_):
 
@@ -140,10 +142,10 @@ def main(_):
     env = FrameStack(env=env, num_stack=1,stacking_key="pixels")
     env = TimeLimit(env,max_episode_steps=2500)
     env = RecordEpisodeStatistics(env)
-    action_dim = 2
-    mean = np.zeros(action_dim)
-    sigma = 0.2 * np.ones(action_dim)
-    noise = OrnsteinUhlenbeckActionNoise(mean=mean, sigma=sigma)
+    # action_dim = 2
+    # mean = np.zeros(action_dim)
+    # sigma = 0.2 * np.ones(action_dim)
+    # noise = OrnsteinUhlenbeckActionNoise(mean=mean, sigma=sigma)
   
     # Initialize logger
     logger = Logger(log_dir="./logs",prefix="SAC")
@@ -208,7 +210,7 @@ def main(_):
         else:
             action = agent.sample_actions(observation)
             # if i>int(5e5):
-            action = action + noise()
+            # action = action + noise()
             action = np.clip(action, env.action_space.low, env.action_space.high)
         next_observation, reward, done, truncated, info = env.step(action)
         
@@ -263,7 +265,7 @@ def main(_):
                 })
                 logger.log_episode(episode_info, i)
             observation, info, done = *env.reset(), False
-            noise.reset()
+            # noise.reset()
         
         # Training updates
         if i >= FLAGS.start_training:

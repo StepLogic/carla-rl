@@ -22,7 +22,7 @@ from jaxrl2.data import ReplayBuffer
 from jaxrl2.data.hindsight_replay_buffer import HindsightReplayBuffer
 from jaxrl2.evaluation import evaluate
 from jaxrl2.wrappers import wrap_pixels
-from flax.core.frozen_dict import freeze
+from flax.core.frozen_dict import freeze,unfreeze
 import glob
 import os
 import argparse
@@ -30,19 +30,19 @@ import numpy as np
 import torch
 import torch.nn as nn
 from gym import spaces
-from stable_baselines3.common.noise import OrnsteinUhlenbeckActionNoise
-from stable_baselines3 import SAC
-from stable_baselines3.common.torch_layers import BaseFeaturesExtractor
-from stable_baselines3.common.callbacks import CheckpointCallback,EvalCallback
+# from stable_baselines3.common.noise import OrnsteinUhlenbeckActionNoise
+# from stable_baselines3 import SAC
+# from stable_baselines3.common.torch_layers import BaseFeaturesExtractor
+# from stable_baselines3.common.callbacks import CheckpointCallback,EvalCallback
 # from vision_rl.rllib_integration.carla_env import CarlaEnv
 # from vision_rl.stb3.jax_experiments import JAXExperiments
-
-from rlib_integration.carla_goal_env import CarlaGoalEnv
-from src.configs.train_env_config import config as carla_config
+import itertools
+# from rlib_integration.carla_goal_env import CarlaGoalEnv
+# from src.configs.train_env_config import config as carla_config
 import flax
 from jaxrl2.noise import OrnsteinUhlenbeckActionNoise
 
-from src.leo.leo_env import LeoEnv
+from leo.leo_env import LeoEnv
 flax.config.update('flax_use_orbax_checkpointing', True)
     # ML config
 import jax
@@ -66,6 +66,7 @@ config.cosine_decay = True
 config.tau = 0.005
 config.critic_reduction = "min"
 config.share_encoder = False
+config.freeze_encoders = True
 sac_config = config.to_dict()
 
 
@@ -76,12 +77,12 @@ flags.DEFINE_string("env_name", "cheetah-run-v0", "Environment name.")
 flags.DEFINE_string("save_dir", "./tmp/", "Tensorboard logging dir.")
 flags.DEFINE_integer("seed", 42, "Random seed.")
 flags.DEFINE_integer("eval_episodes", 5, "Number of episodes used for evaluation.")
-flags.DEFINE_integer("log_interval", 1000, "Logging interval.")
+flags.DEFINE_integer("log_interval", 100, "Logging interval.")
 flags.DEFINE_integer("eval_interval", int(5e4), "Eval interval.")
 flags.DEFINE_integer("batch_size", 32, "Mini batch size.")
 flags.DEFINE_integer("max_steps", int(5e6), "Number of training steps.")
 flags.DEFINE_integer(
-    "start_training", int(1e3), "Number of training steps to start training."
+    "start_training", int(1), "Number of training steps to start training."
 )
 flags.DEFINE_integer("image_size", 64, "Image size.")
 flags.DEFINE_integer("num_stack", 3, "Stack frames.")
@@ -102,9 +103,9 @@ def save_checkpoint(agent, path, step):
     state_dict = {
         'actor_params': agent._actor,
         'critic_params': agent._critic,
-        'target_critic_params': agent._target_critic_params,
-        'temp': agent._temp,
-        'rng': agent._rng,
+        # 'target_critic_params': agent._target_critic_params,
+        # 'temp': agent._temp,
+        # 'rng': agent._rng,
         # Add any other numerical state you need to save
     }
     checkpoints.save_checkpoint(
@@ -126,11 +127,32 @@ import rospy
 from typing import Dict, Any
 
 # expert_buffer="/home/kojogyaase/Projects/Research/carla-rl/datasets/goal_condition_Town05_data_0.pkl"
-expert_buffers=[
-                "/home/kojogyaase/Projects/Research/carla-rl/datasets/goal_condition_Town05_data_1.pkl",
-                # "/home/kojogyaase/Projects/Research/carla-rl/datasets/real_robot_data_0.pkl"
-                ]
+expert_buffers=list(glob.glob("/workspaces/ROS1/carla-rl/real_robot_dataset/*.pkl"))
+checkpoint_path="/workspaces/ROS1/carla-rl/best_models/iql"
+def load_checkpoint(agent, checkpoint_path):
+    """Load agent parameters from checkpoint."""
+    state_dict = {
+        'actor_params': agent._actor,
+        'critic_params': agent._critic,
+        # 'target_critic_params': agent._target_critic_params,
+        # 'temp': agent._temp,
+        # 'rng': agent._rng,
+        # Add any other numerical state you need to save
+    }
+    state_dict = checkpoints.restore_checkpoint(
+        ckpt_dir=checkpoint_path,
+        target=state_dict
+    )
 
+    # Update agent parameters
+    # breakpoint()
+    agent._actor = state_dict['actor_params']
+    agent._critic = state_dict['critic_params'] 
+    # agent._target_critic_params = state_dict['target_critic_params']
+    # agent._temp = state_dict['temp']
+    # agent._rng = state_dict['rng']
+    
+    return agent
 
 def main(_):
     rospy.init_node("IQL", anonymous=False)
@@ -159,9 +181,10 @@ def main(_):
         0, 
         env.observation_space.sample(), 
         env.action_space.sample(), 
-        **sac_config
+        **sac_config,
     )
-    
+    agent = load_checkpoint(agent, checkpoint_path)
+
     replay_buffer_size = FLAGS.replay_buffer_size
     expert_replay_buffers=[]
     if not expert_buffers is None:
@@ -182,10 +205,13 @@ def main(_):
         sample_args={"batch_size": FLAGS.batch_size}
     )
     expert_replay_buffer_iterators=[]
+    
     if not expert_buffers is None:
         for expert_replay_buffer in expert_replay_buffers:
-            expert_replay_buffer_iterators.append(expert_replay_buffer.get_iterator(
-                    sample_args={"batch_size": FLAGS.batch_size}))
+            if expert_replay_buffer:
+                expert_replay_buffer_iterators.append(expert_replay_buffer.get_iterator(
+                        sample_args={"batch_size": FLAGS.batch_size}))
+        expert_replay_buffer_iterators=itertools.cycle(expert_replay_buffer_iterators)
     # Track success metrics
     success_history = deque(maxlen=100)  # Track last 100 episodes
     eval_success_history = deque(maxlen=100)
@@ -201,6 +227,19 @@ def main(_):
         smoothing=0.1,
         disable=not FLAGS.tqdm,
     ):
+        if not expert_buffers is None:
+                expert_replay_buffer_iterator = next(expert_replay_buffer_iterators)
+                for _ in range(2):
+                    batch_expert = next(expert_replay_buffer_iterator)
+                    batch_expert=unfreeze(batch_expert)
+                    batch_expert["actions"]=np.clip(batch_expert["actions"], env.action_space.low, env.action_space.high)
+                    batch_expert=freeze(batch_expert)
+                    update_info_expert = agent.update(
+                        batch_expert)
+                if i % FLAGS.log_interval == 0:
+                    logger.log_training(update_info, i)
+                    logger.print_status(i, FLAGS.max_steps)
+
         if i < FLAGS.start_training:
             action = env.action_space.sample()
         else:
@@ -265,17 +304,9 @@ def main(_):
         
         # Training updates
         if i >= FLAGS.start_training:
-            batch = next(replay_buffer_iterator)
-            update_info = agent.update(batch)
-            if i % FLAGS.log_interval == 0:
-                logger.log_training(update_info, i)
-                logger.print_status(i, FLAGS.max_steps)
-            if not expert_buffers is None:
-                for expert_replay_buffer_iterator in expert_replay_buffer_iterators:
-                    batch_expert = next(expert_replay_buffer_iterator)
-                    update_info_expert = agent.update(
-                        batch_expert,
-                        enable_update_temperature=False)
+                batch = next(replay_buffer_iterator)
+                update_info = agent.update(batch)
+
                 if i % FLAGS.log_interval == 0:
                     logger.log_training(update_info_expert, i,prefix="_expert")
                     logger.print_status(i, FLAGS.max_steps)

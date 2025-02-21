@@ -49,7 +49,7 @@ class LeoEnv(gym.Env):
         self.info=dict()
         self.rewards=[]
         self.offsets=[]
-        self.intensities=[]
+        self.ranges=[]
         image_space = Box(
             low=-1.0,
             high=1.0,
@@ -103,7 +103,7 @@ class LeoEnv(gym.Env):
             self.collision=self.collision_queue.get() 
             if not self.collision is None:
                 self.collision_queue.queue.clear()
-                self.intensities=[]
+                self.ranges=[]
                 break
         
             if reset:
@@ -116,11 +116,11 @@ class LeoEnv(gym.Env):
         self.velocities=[]
         self.dts=[]
         self.headings=[]
-        self.intensities=[]
+        self.ranges=[]
         time.sleep(10.0)
         print("Reset Robot Please!!!!!!")
         self.offsets=[np.mean(self.velocities),np.mean(self.headings)]
-        self.collision_threshold=np.max(self.intensities)
+        self.collision_threshold=np.max(self.ranges)
     
         self.velocities=[]
         self.dts=[]
@@ -155,12 +155,36 @@ class LeoEnv(gym.Env):
         # try:
         
         # print(scan)
-        self.intensities.append(np.max(scan.intensities))
+
+        angles = np.arange(
+            scan.angle_min,
+            scan.angle_max + scan.angle_increment,
+            scan.angle_increment
+        )
+        
+        # Select indices where:
+        # 1. Angle is either < 90° or > 270° (convert to radians)
+        # 2. Range values are greater than minimum range
+        selected_indices = np.argwhere(
+            np.logical_and(
+                np.logical_or(
+                    angles < np.pi/2,  # Less than 90 degrees
+                    angles > np.pi*(3/2)  # Greater than 270 degrees
+                ),
+                np.array(scan.ranges) > scan.range_min
+            )
+        )
+        
+        # Update ranges using only the selected indices
+        self.ranges.append(np.max(scan.ranges[selected_indices]))
+        
+        # Check for collision based on range threshold
         if self.collision_threshold is None:
             self.collision_queue.put(False)
         else:
-            self.collision_queue.put(np.max(scan.intensities)>self.collision_threshold)
-        # except Exception as e:
+            self.collision_queue.put(
+                np.max(scan.ranges[selected_indices]) > self.collision_threshold
+        )
         #     print(e)
             
     def imu_calback(self,imu):

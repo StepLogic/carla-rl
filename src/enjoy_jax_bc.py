@@ -6,7 +6,7 @@ import numpy as np
 from absl import app, flags
 from ml_collections import config_flags
 from flax.training import checkpoints
-from jaxrl2.agents import DrQLearner,PPOLearner
+from jaxrl2.agents import DrQLearner,PPOLearner,PixelBCLearner
 from jaxrl2.wrappers.frame_stack import FrameStack
 from jaxrl2.wrappers.timelimit import TimeLimit
 from jaxrl2.wrappers.record_statistics import RecordEpisodeStatistics
@@ -38,7 +38,7 @@ def load_checkpoint(agent, checkpoint_path):
     # Update agent parameters
     # breakpoint()
     agent._actor = state_dict['actor_params']
-    agent._critic = state_dict['critic_params'] 
+    # agent._critic = state_dict['critic_params'] 
     # agent._target_critic_params = state_dict['target_critic_params']
     # agent._temp = state_dict['temp']
     # agent._rng = state_dict['rng']
@@ -108,7 +108,7 @@ def evaluate_policy(agent, env, n_eval_episodes=10, deterministic=True):
 
 def main(_):
     # Create and wrap environment
-
+    carla_config["env_config"]["carla"]["town"]="Town01"
     env = CarlaGoalEnv(carla_config["env_config"])
     env = FrameStack(env=env, num_stack=1, stacking_key="pixels")
     # env = FrameStack(env=env, num_stack=1, stacking_key="goal")
@@ -120,7 +120,6 @@ def main(_):
     from jaxrl2.agents import PPOLearner
     config = ml_collections.ConfigDict()
     config.actor_lr = 3e-4
-    config.critic_lr = 3e-4
     config.hidden_dims = (256, 256)
     config.cnn_features = (32, 64, 128, 256)
     config.cnn_filters = (3, 3, 3, 3)
@@ -128,17 +127,13 @@ def main(_):
     config.cnn_padding = "VALID"
     config.latent_dim = 50
     config.encoder = "d4pg"
-    config.discount = 0.98
-    config.critic_reduction = "mean"
-    config.clip_ratio = 0.2  # Add clip ratio
-    config.gae_lambda = 0.95  # Add GAE lambda
-    config = config.to_dict()
+    bc_config = config.to_dict()
 
-    agent = DrQLearner(
+    agent = PixelBCLearner(
         0,
         env.observation_space.sample(),
         env.action_space.sample(),
-        **sac_config
+        **bc_config
     )
     
     # Load checkpoint

@@ -40,7 +40,7 @@ class CarlaEvalEnv(gym.Env):
         # Reset sensors hero and experiment
         self.experiment.reset(self)
         self.experiment.config["hero"]["is_goal_env"]=True
-        self.experiment.config["hero"]["origin"]=self.last_position or self.experiment.origin
+        self.experiment.config["hero"]["origin"]=self.experiment.origin or self.last_position 
         if hasattr(self.experiment,"curriculum_step"):
             self.experiment.config["hero"]["curriculum_step"]=self.experiment.curriculum_step
         self.hero = self.core.reset_hero_for_experiments(self.experiment.config["hero"])

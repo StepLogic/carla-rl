@@ -58,7 +58,6 @@ bc_config = config.to_dict()
 
 
 FLAGS = flags.FLAGS
-
 flags.DEFINE_string("env_name", "cheetah-run-v0", "Environment name.")
 flags.DEFINE_string("save_dir", "./tmp/", "Tensorboard logging dir.")
 flags.DEFINE_integer("seed", 42, "Random seed.")

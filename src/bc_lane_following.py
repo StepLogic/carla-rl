@@ -1,5 +1,6 @@
 #! /usr/bin/env python
 from collections import deque
+from copy import copy
 import itertools
 import os
 import pickle
@@ -43,6 +44,9 @@ from src.configs.train_env_config import config as carla_config
 import flax
 from jaxrl2.noise import OrnsteinUhlenbeckActionNoise
 flax.config.update('flax_use_orbax_checkpointing', True)
+
+import jax
+jax.config.update("jax_debug_nans", True)
     # ML config
 config = ml_collections.ConfigDict()
 config.actor_lr = 3e-4
@@ -63,9 +67,9 @@ flags.DEFINE_string("save_dir", "./tmp/", "Tensorboard logging dir.")
 flags.DEFINE_integer("seed", 42, "Random seed.")
 flags.DEFINE_integer("eval_episodes", 5, "Number of episodes used for evaluation.")
 flags.DEFINE_integer("log_interval", 1000, "Logging interval.")
-flags.DEFINE_integer("eval_interval", int(10), "Eval interval.")
-flags.DEFINE_integer("batch_size", 128, "Mini batch size.")
-flags.DEFINE_integer("max_steps", int(1000), "Number of training steps.")
+flags.DEFINE_integer("eval_interval", int(10000), "Eval interval.")
+flags.DEFINE_integer("batch_size", 32, "Mini batch size.")
+flags.DEFINE_integer("max_steps", int(2e6), "Number of training steps.")
 flags.DEFINE_integer(
     "start_training", int(1e3), "Number of training steps to start training."
 )
@@ -114,9 +118,8 @@ from typing import Dict, Any
 # expert_buffer="/home/kojogyaase/Projects/Research/carla-rl/datasets/basic_agent_data_20241229_093438.pkl"
 expert_buffers=list(glob.glob("/home/robotlab/scratch/carla-rl/datasets/*.pkl"))
 def main(_):
-
     # Create environment
-    # carla_config["env_config"]["carla"]["start_server"]=False
+    carla_config["env_config"]["carla"]["start_server"]=False
     env = CarlaGoalEnv(carla_config["env_config"])
     env = FrameStack(env=env, num_stack=1,stacking_key="pixels")
     env = TimeLimit(env,max_episode_steps=2500)
@@ -207,9 +210,12 @@ def main(_):
                             eval_dists.append(float(eval_info["distance_completed"]))
                         if "slack" in eval_info:
                             eval_slack.append(float(eval_info["slack"]))
-                
+                        # ep=(eval_info["episode"])
+                        # eval_info.update(ep)
+                        del eval_info["episode"]
                 eval_rewards.append(episode_reward)
             save_checkpoint(agent,policy_folder,i)
+            print(eval_info)
             logger.log_eval(eval_info, i)
             logger.print_status(i, FLAGS.max_steps)
         

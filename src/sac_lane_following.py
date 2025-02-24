@@ -1,5 +1,6 @@
 #! /usr/bin/env python
 from collections import deque
+import itertools
 import os
 import pickle
 import random
@@ -122,11 +123,7 @@ from absl import app, flags
 from typing import Dict, Any
 
 # expert_buffer="/home/kojogyaase/Projects/Research/carla-rl/datasets/goal_condition_Town05_data_0.pkl"
-expert_buffers=[
-                "/home/kojogyaase/Projects/Research/carla-rl/datasets/goal_condition_Town05_data_1.pkl",
-                # "/home/kojogyaase/Projects/Research/carla-rl/datasets/real_robot_data_0.pkl"
-                ]
-
+expert_buffers=list(glob.glob("/home/robotlab/scratch/carla-rl/datasets/*.pkl"))
 
 def main(_):
 
@@ -184,6 +181,7 @@ def main(_):
         for expert_replay_buffer in expert_replay_buffers:
             expert_replay_buffer_iterators.append(expert_replay_buffer.get_iterator(
                     sample_args={"batch_size": FLAGS.batch_size}))
+        expert_replay_buffer_iterators=itertools.cycle(expert_replay_buffer_iterators)
     # Track success metrics
     success_history = deque(maxlen=100)  # Track last 100 episodes
     eval_success_history = deque(maxlen=100)
@@ -269,11 +267,12 @@ def main(_):
                 logger.log_training(update_info, i)
                 logger.print_status(i, FLAGS.max_steps)
             if not expert_buffers is None:
-                for expert_replay_buffer_iterator in expert_replay_buffer_iterators:
-                    batch_expert = next(expert_replay_buffer_iterator)
-                    update_info_expert = agent.update(
-                        batch_expert,
-                        enable_update_temperature=False)
+                # for expert_replay_buffer_iterator in expert_replay_buffer_iterators:
+                expert_replay_buffer_iterator=next(expert_replay_buffer_iterators)
+                batch_expert = next(expert_replay_buffer_iterator)
+                update_info_expert = agent.update(
+                    batch_expert,
+                    enable_update_temperature=False)
                 if i % FLAGS.log_interval == 0:
                     logger.log_training(update_info_expert, i,prefix="_expert")
                     logger.print_status(i, FLAGS.max_steps)

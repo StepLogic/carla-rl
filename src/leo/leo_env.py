@@ -17,6 +17,22 @@ LIDAR_TOPIC="/scan"
 RATE = 10
 def ros_vector3_to_np_array(msg):
     return np.array([msg.x,-1*msg.y,msg.z])
+
+import numpy as np
+from scipy.signal import filtfilt, butter
+from quaternion import quaternion, from_rotation_vector, rotate_vectors
+
+def estimate_orientation(a, w, dt, alpha=0.9, g_ref=(0., 0., 1.), theta_min=1e-6, highpass=.01, lowpass=.05):
+    """
+    Source:https://gist.github.com/phausamann/721fa3df0f8ef6f4f6f24b86fdde53c0
+    """
+
+    g_ref = np.array(g_ref)
+    w = filtfilt(*butter(5, highpass, btype='high'), w, axis=0)
+    w[np.linalg.norm(w, axis=1) < theta_min] = 0
+    a = filtfilt(*butter(5, lowpass, btype='low'), a, axis=0)
+    angle = (1-alpha)*(angle + w * dt) + (alpha)*(a)
+    return angle
 class LeoEnv(gym.Env):
     def __init__(self):
         self.image_sub = rospy.Subscriber(IMAGE_TOPIC,Image,self.image_callback)
@@ -195,14 +211,15 @@ class LeoEnv(gym.Env):
         #         return
         # try:
         # print(imu.linear_acceleration)
-        self.theta=self.theta+ros_vector3_to_np_array(imu.angular_velocity)*dt
+        w=self.theta+ros_vector3_to_np_array(imu.angular_velocity)
         accel=ros_vector3_to_np_array(imu.linear_acceleration)
+        self.theta=estimate_orientation(accel,w,dt)
         accel[2]=0
         # accel[1]=-1*accel[1]
         self.v=self.v+accel*dt
         # print(accel,self.v)
         # print(self.v,np.linalg.norm(self.v))
-        self.velocities.append(np.linalg.norm(self.v))
+        self.velocities.append(self.v[0]) # on forward velocity
         self.headings.append(self.theta[-1])
         # breakpoint()
         # print(self.velocities)

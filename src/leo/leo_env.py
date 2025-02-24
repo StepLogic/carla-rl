@@ -22,7 +22,7 @@ import numpy as np
 from scipy.signal import filtfilt, butter
 from quaternion import quaternion, from_rotation_vector, rotate_vectors
 
-def estimate_orientation(a, w, dt, alpha=0.9, g_ref=(0., 0., 1.), theta_min=1e-6, highpass=.01, lowpass=.05):
+def estimate_orientation(a, w, angle,dt, alpha=0.9, g_ref=(0., 0., 1.), theta_min=1e-6, highpass=.01, lowpass=.05):
     """
     Source:https://gist.github.com/phausamann/721fa3df0f8ef6f4f6f24b86fdde53c0
     """
@@ -32,6 +32,7 @@ def estimate_orientation(a, w, dt, alpha=0.9, g_ref=(0., 0., 1.), theta_min=1e-6
     w[np.linalg.norm(w, axis=1) < theta_min] = 0
     a = filtfilt(*butter(5, lowpass, btype='low'), a, axis=0)
     angle = (1-alpha)*(angle + w * dt) + (alpha)*(a)
+
     return angle
 class LeoEnv(gym.Env):
     def __init__(self):
@@ -213,7 +214,7 @@ class LeoEnv(gym.Env):
         # print(imu.linear_acceleration)
         w=self.theta+ros_vector3_to_np_array(imu.angular_velocity)
         accel=ros_vector3_to_np_array(imu.linear_acceleration)
-        self.theta=estimate_orientation(accel,w,dt)
+        self.theta=estimate_orientation(accel,w,self.theta,dt)
         accel[2]=0
         # accel[1]=-1*accel[1]
         self.v=self.v+accel*dt

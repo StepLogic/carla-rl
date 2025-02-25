@@ -3,31 +3,71 @@ import random
 import time
 import cv2
 import matplotlib.pyplot as plt
+import ml_collections
 import numpy as np
 from absl import app, flags
 from flax.training import checkpoints
 from ml_collections import config_flags
 from src.carla_eval import CarlaEvalEnv
 from src.sac_lane_following import sac_config
-from jaxrl2.agents import DrQLearner
+# from src.bc_lane_following import bc_config
+from jaxrl2.agents import DrQLearner,PixelBCLearner
+from rlib_integration.helper import ndarray_to_location
+from rlib_integration.agent import GlobalRoutePlanner
 from jaxrl2.wrappers.frame_stack import FrameStack
 from jaxrl2.wrappers.record_statistics import RecordEpisodeStatistics
 from jaxrl2.wrappers.timelimit import TimeLimit
 import pickle
 from pyflann import *
-
 from src.mapping.topological_map import TopologicalMap
 # fix
 os.environ['XLA_FLAGS']="--xla_gpu_enable_command_buffer="
 os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"]="false"
 os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"]=".30"
 os.environ["XLA_PYTHON_CLIENT_ALLOCATOR"]="platform"
+
+
+config = ml_collections.ConfigDict()
+config.actor_lr = 3e-4
+config.hidden_dims = (256, 256)
+config.cnn_features = (32, 64, 128, 256)
+config.cnn_filters = (3, 3, 3, 3)
+config.cnn_strides = (2, 2, 2, 2)
+config.cnn_padding = "VALID"
+config.latent_dim = 50
+config.encoder = "d4pg"
+bc_config = config.to_dict()
+
+
+
+config = ml_collections.ConfigDict()
+config.actor_lr = 3e-4
+config.critic_lr = 3e-4
+config.temp_lr = 3e-4
+config.hidden_dims = (256, 256)
+config.cnn_features = (32, 64, 128, 256)
+config.cnn_filters = (3, 3, 3, 3)
+config.cnn_strides = (2, 2, 2, 2)
+config.cnn_padding = "VALID"
+config.latent_dim = 50
+config.encoder = "d4pg"
+config.discount = 0.98
+config.tau = 0.005
+config.init_temperature = 1.0
+config.target_entropy = None
+config.backup_entropy = True
+config.critic_reduction = "mean"
+sac_config = config.to_dict()
+
+
+
 # Define flags
 FLAGS = flags.FLAGS
 flags.DEFINE_string("checkpoint_path", None, "Path to the checkpoint directory")
+flags.DEFINE_enum('model', 'DrQLearner', ['DrQLearner', 'PixelBCLearner'], 'Model to run')
 flags.DEFINE_integer("n_eval_episodes", 10, "Number of evaluation episodes")
 flags.DEFINE_boolean("deterministic", True, "Whether to use deterministic actions")
-
+flags.DEFINE_string("map_dir", None, "Evaluation directory trajectory")
 
 def load_checkpoint(agent, checkpoint_path):
     """Load agent parameters from checkpoint."""
@@ -100,6 +140,7 @@ class RealTimeVectorEMA:
         return np.std(self.window)
     def get_current(self):
         return self.last_value
+    
 class Mapper:
     def __init__(self):
         self.sift = cv2.xfeatures2d.SIFT_create()
@@ -128,8 +169,13 @@ class Mapper:
         
 
 
-def map_environment(agent:DrQLearner, env, n_eval_episodes=10, deterministic=True):
-    """Evaluate the agent for n_eval_episodes."""
+def eval_environment(agent:DrQLearner, env, n_eval_episodes=10, deterministic=True):
+    """
+    
+    Evaluate the agent for n_eval_episodes
+   
+    """
+
     episode_rewards = []
     episode_lengths = []
     success_rate = []
@@ -146,15 +192,37 @@ def map_environment(agent:DrQLearner, env, n_eval_episodes=10, deterministic=Tru
     heading_ar=[]
     locations=[]
     unit_vectors=[]
-    # filter=StreamingMovingAverage(window_size=100)
-    ema_filter = RealTimeVectorEMA(window_size=100, vector_dim=2)
+
+        
+    ema_filter = RealTimeVectorEMA(window_size=100, vector_dim=1)
     # Real-time updates
     start=time.time()
     mapper=TopologicalMap()
     # start timer for entire mapping
     start=time.time()
-    # log_stds.append(std)
     truncate_steps=0
+
+    #
+    shortest_distance_along_road=1e-8
+    with open(f'{FLAGS.map_dir}/aux.pkl', 'rb') as handle:
+            dataset=pickle.load(handle)
+            start_location=ndarray_to_location(dataset["start"])
+            goal_location=ndarray_to_location(dataset["goal"])
+            env.unwrapped.set_start_transform(start_location)
+            route_plannner=GlobalRoutePlanner(env.unwrapped.core.map, 2.0)
+    
+            prev_waypoint=None
+            trace=route_plannner.trace_route(start_location,goal_location)
+            for wp,_ in trace:
+                if prev_waypoint is None:
+                    prev_waypoint=wp
+                shortest_distance_along_road+=prev_waypoint.transform.location.distance(wp.transform.location)
+                prev_waypoint=wp
+            assert shortest_distance_along_road>1.0
+
+
+
+
     for _ in range(n_eval_episodes):
         observation, info = env.reset()
         done = False
@@ -169,14 +237,11 @@ def map_environment(agent:DrQLearner, env, n_eval_episodes=10, deterministic=Tru
             current_velocity=env.unwrapped.experiment.velocity
             current_heading=env.unwrapped.experiment.current_heading
             # breakpoint()
-            if (current_heading - heading)<np.deg2rad(10):
-                    # heading+=np.pi/4
-                    # heading=heading%np.pi
-                    truncate_steps=int(1e5) #break loop
-
-                    print(np.rad2deg(current_heading),np.rad2deg(heading))
+            # if (current_heading - heading)<np.deg2rad(10):
+            #         truncate_steps=int(1e5) #break loop
+            #         print(np.rad2deg(current_heading),np.rad2deg(heading))
             vecs[2] = np.clip(current_velocity/(target+1e-8), 0.0, 5.1)
-            vecs[3]= np.clip(current_heading/(heading+1e-8),-5.1,5.1) 
+            vecs[3]= np.clip(current_heading/(current_heading+1e-8),-5.1,5.1) 
             # vecs[4]= np.clip(heading/np.pi,-5.1,5.1) 
             observation["vector"]=vecs
             action_dist=agent.action_dist(observation)
@@ -208,7 +273,7 @@ def map_environment(agent:DrQLearner, env, n_eval_episodes=10, deterministic=Tru
                 heading_ar.append(heading_obs)
                 mapper.update(feature,heading_obs)
                 features.append(feature)
-                cv2.imwrite(f"sample_map/{steps}.jpg",(observation["pixels"][...,0]*255).astype(np.uint8))
+                # cv2.imwrite(f"sample_map/{steps}.jpg",(observation["pixels"][...,0]*255).astype(np.uint8))
             
             if done:
                 restarts.append(steps)
@@ -265,124 +330,46 @@ def map_environment(agent:DrQLearner, env, n_eval_episodes=10, deterministic=Tru
     plt.legend(loc="upper left")
     plt.savefig("uncertainty_profile_at_junctions.pdf")
     # plt.legend()
+    #######################################################################
     a=dict(log_stds=log_stds,junctions=junctions)
     with open('uncertainty_profile_at_junctions.pickle', 'wb') as handle:
         pickle.dump(a, handle, protocol=pickle.HIGHEST_PROTOCOL)
+    #######################################################################
     a=dict(images=images,heading=heading_ar,features=features)
     with open('map.pickle', 'wb') as handle:
         pickle.dump(a, handle, protocol=pickle.HIGHEST_PROTOCOL)
+    #######################################################################
     with open('plot_data.pickle', 'wb') as handle:
         pickle.dump(dict(log_stds=log_stds,trace_log_stds=trace_log_stds,
                          locations=locations,
                          unit_vectors=unit_vectors), handle, protocol=pickle.HIGHEST_PROTOCOL)
-    return stats,mapper
-
-
-def navigate(agent:DrQLearner, env:CarlaEvalEnv, mapper:TopologicalMap,n_eval_episodes=10):
-    """Evaluate the agent for n_eval_episodes."""
-    episode_rewards = []
-    episode_lengths = []
-    success_rate = []
-    distance_completed = []
-    slack_values = []
-    steps=0
-    log_stds=[]
-    moving_average=[]
-    junctions=[]
-    restarts=[]
-    env = TimeLimit(env, max_episode_steps=2500)
-    # filter=StreamingMovingAverage(window_size=100)
-    ema_filter = RealTimeVectorEMA(window_size=100, vector_dim=2)
-    
-    # Real-time updates
-    # mapper=TopologicalMap()
-    start=time.time()
-    for _ in range(n_eval_episodes):
-        observation, info = env.reset()
-        done = False
-        episode_reward = 0
-        episode_length = 0
-        #select goal
-        # breakpoint()
-        goal_idx=random.randint(0,len(mapper.image_node)-1)
-        obs=(observation["pixels"][...,0]*255).astype(np.uint8)
-        subgoal=mapper.create_navigation_guide(obs,goal_idx)
-
-        while not done:
-            goal,done=subgoal(obs)
-            if not done and not goal is None:
-                env.unwrapped.set_goal(goal[0],goal[1]) 
-            action_dist=agent.action_dist(observation)
-            # if deterministic:
-            action = action_dist.mode()
-            observation, reward, done, truncated, info = env.step(action)
-            if env.unwrapped.is_agent_at_junction():
-                junctions.append(steps)
-            std=np.array(action_dist.log_std())
-            log_stds.append(std)
-            # moving_average.append(filter.process(np.array(action_dist.log_std())))
-            filtered_vector = ema_filter.update(std)
-            moving_average.append(filtered_vector)
-            episode_reward += reward
-            episode_length += 1
-            done = done or truncated
-            steps+=1
-            
-            if done:
-                restarts.append(steps)
-                episode_rewards.append(episode_reward)
-                episode_lengths.append(episode_length)
-                # print(info)
-                if "is_success" in info:
-                    success_rate.append(float(info["is_success"]))
-                if "distance_completed" in info:
-                    distance_completed.append(float(info["distance_completed"]))
-                if "slack" in info:
-                    slack_values.append(float(info["slack"]))
-    end=time.time()
-    # Compute statistics
-    end=time.time()
-    stats = {
-        "mean_reward": np.mean(episode_rewards),
-        "std_reward": np.std(episode_rewards),
-        "mean_length": np.mean(episode_lengths),
-        "std_length": np.std(episode_lengths),
-        "total_map_steps":steps,
-        "navigation_time":int(end-start)
-    }
-    
-    if success_rate:
-        stats["success_rate"] = np.mean(success_rate)
-    if distance_completed:
-        stats["mean_distance"] = np.mean(distance_completed)
-    if slack_values:
-        stats["mean_slack"] = np.mean(slack_values)
-
     return stats
+
 
 def main(_):
    
     
     env = CarlaEvalEnv()
     env = FrameStack(env=env, num_stack=1, stacking_key="pixels")
-    # env = FrameStack(env=env, num_stack=1, stacking_key="goal")
-
     env = RecordEpisodeStatistics(env)
-    
+
     # Initialize agent
-    # kwargs = dict(FLAGS.config)
-    agent = DrQLearner(
+    if FLAGS.model == "DrQLearner":
+        config=sac_config
+    else:
+        config=bc_config
+    agent = globals()[FLAGS.model](
         0,  # seed
         env.observation_space.sample(),
         env.action_space.sample(),
-        **sac_config
+        **config
     )
     
     # Load checkpoint
     agent = load_checkpoint(agent, FLAGS.checkpoint_path)
 
     # Evaluate
-    stats,mapper = map_environment(
+    stats = eval_environment(
         agent,
         env,
         n_eval_episodes=FLAGS.n_eval_episodes,

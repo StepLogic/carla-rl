@@ -109,7 +109,7 @@ def main(_):
     env = TimeLimit(env,max_episode_steps=2500)
     env = RecordEpisodeStatistics(env)
     # logger = Logger(log_dir="./logs",prefix="SAC")
-
+    env.unwrapped.target_speed=100
     np.random.seed(42)
     random.seed(42)
 

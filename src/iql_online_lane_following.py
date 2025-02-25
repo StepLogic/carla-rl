@@ -103,6 +103,7 @@ def save_checkpoint(agent, path, step):
     state_dict = {
         'actor_params': agent._actor,
         'critic_params': agent._critic,
+        "value_params":agent._value
         # 'target_critic_params': agent._target_critic_params,
         # 'temp': agent._temp,
         # 'rng': agent._rng,
@@ -128,16 +129,15 @@ from typing import Dict, Any
 
 # expert_buffer="/home/kojogyaase/Projects/Research/carla-rl/datasets/goal_condition_Town05_data_0.pkl"
 expert_buffers=list(glob.glob("/workspaces/ROS1/carla-rl/real_robot_dataset/*.pkl"))
-checkpoint_path="/workspaces/ROS1/carla-rl/best_models/iql"
+checkpoint_path="/workspaces/ROS1/carla-rl/checkpoints/iql_checkpoint/checkpoint_1"
+# rb_path="/workspaces/ROS1/carla-rl/savepoint/lane_following_buffer.pkl"
+rb_path=None
 def load_checkpoint(agent, checkpoint_path):
     """Load agent parameters from checkpoint."""
     state_dict = {
         'actor_params': agent._actor,
         'critic_params': agent._critic,
-        # 'target_critic_params': agent._target_critic_params,
-        # 'temp': agent._temp,
-        # 'rng': agent._rng,
-        # Add any other numerical state you need to save
+        "value_params":agent._value
     }
     state_dict = checkpoints.restore_checkpoint(
         ckpt_dir=checkpoint_path,
@@ -148,6 +148,7 @@ def load_checkpoint(agent, checkpoint_path):
     # breakpoint()
     agent._actor = state_dict['actor_params']
     agent._critic = state_dict['critic_params'] 
+    agent._value = state_dict['value_params'] 
     # agent._target_critic_params = state_dict['target_critic_params']
     # agent._temp = state_dict['temp']
     # agent._rng = state_dict['rng']
@@ -192,12 +193,15 @@ def main(_):
             with open(path, 'rb') as f:
                 expert_replay_buffer = pickle.load(f)
             expert_replay_buffers.append(expert_replay_buffer)
-    
-    replay_buffer = ReplayBuffer(
-        env.observation_space, 
-        env.action_space, 
-        replay_buffer_size
-    )
+    if rb_path:
+        with open(rb_path, 'rb') as f:
+             replay_buffer = pickle.load(f)
+    else:
+        replay_buffer = ReplayBuffer(
+            env.observation_space, 
+            env.action_space, 
+            replay_buffer_size
+        )
 
 
     replay_buffer.seed(FLAGS.seed)
@@ -240,13 +244,13 @@ def main(_):
                     logger.log_training(update_info, i)
                     logger.print_status(i, FLAGS.max_steps)
 
-        if i < FLAGS.start_training:
-            action = env.action_space.sample()
-        else:
-            action = agent.sample_actions(observation)
+        # if i < FLAGS.start_training:
+        #     action = env.action_space.sample()
+        # else:
+        action = agent.sample_actions(observation)
             # if i>int(5e5):
             # action = action + noise()
-            action = np.clip(action, env.action_space.low, env.action_space.high)
+        action = np.clip(action, env.action_space.low, env.action_space.high)
         next_observation, reward, done, truncated, info = env.step(action)
         
         # Handle episode termination
@@ -304,12 +308,19 @@ def main(_):
         
         # Training updates
         if i >= FLAGS.start_training:
-                batch = next(replay_buffer_iterator)
-                update_info = agent.update(batch)
+            batch = next(replay_buffer_iterator)
+            update_info = agent.update(batch)
 
-                if i % FLAGS.log_interval == 0:
-                    logger.log_training(update_info_expert, i,prefix="_expert")
-                    logger.print_status(i, FLAGS.max_steps)
+            if i % FLAGS.log_interval == 0:
+                logger.log_training(update_info_expert, i,prefix="_expert")
+                logger.print_status(i, FLAGS.max_steps)
+            save_checkpoint(agent,f"checkpoints/iql_checkpoint",1)
+            # if FLAGS.save_buffer:
+            dataset_folder ="savepoint"
+            os.makedirs(dataset_folder, exist_ok=True)
+            dataset_file = os.path.join(dataset_folder, f"lane_following_buffer.pkl")
+            with open(dataset_file, "wb") as f:
+                pickle.dump(replay_buffer, f)
         # Periodic evaluation
         if i % FLAGS.eval_interval == 0:
             # Save replay buffer if requested
@@ -364,13 +375,7 @@ def main(_):
             logger.print_status(i, FLAGS.max_steps)
     
     # Print final training statistics
-    save_checkpoint(agent,f"checkpoints/final_drq",1)
-    # if FLAGS.save_buffer:
-    dataset_folder ="datasets"
-    os.makedirs(dataset_folder, exist_ok=True)
-    dataset_file = os.path.join(dataset_folder, f"lane_following_buffer")
-    with open(dataset_file, "wb") as f:
-        pickle.dump(replay_buffer, f)
+
     training_duration = time.time() - training_start_time
     print(f"\nTraining completed in {training_duration/3600:.2f} hours")
     print(f"Logs saved to: {logger.log_dir}")

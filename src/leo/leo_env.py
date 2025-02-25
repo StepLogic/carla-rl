@@ -20,7 +20,6 @@ def ros_vector3_to_np_array(msg):
 
 import numpy as np
 from scipy.signal import filtfilt, butter
-from quaternion import quaternion, from_rotation_vector, rotate_vectors
 
 def estimate_orientation(a, w, angle,dt, alpha=0.9, g_ref=(0., 0., 1.), theta_min=1e-6, highpass=.01, lowpass=.05):
     """

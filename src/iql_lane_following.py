@@ -102,6 +102,7 @@ def save_checkpoint(agent, path, step):
     state_dict = {
         'actor_params': agent._actor,
         'critic_params': agent._critic,
+        "value_params":agent._value,
         # 'target_critic_params': agent._target_critic_params,
         # 'temp': agent._temp,
         # 'rng': agent._rng,
@@ -126,8 +127,8 @@ from absl import app, flags
 from typing import Dict, Any
 
 # expert_buffer="/home/kojogyaase/Projects/Research/carla-rl/datasets/goal_condition_Town05_data_0.pkl"
-expert_buffers=list(glob.glob("/home/robotlab/scratch/carla-rl/real_robot_dataset/*.pkl"))
-
+expert_buffers=list(glob.glob("/home/kojogyaase/Projects/Research/carla-rl/datasets/*.pkl"))
+print(expert_buffers)
 def initialize_spaces():
     """Initialize the replay buffer with proper spaces"""
     image_space = gym.spaces.Box(
@@ -179,6 +180,7 @@ def main(_):
     if not expert_buffers is None:
         for expert_replay_buffer in expert_replay_buffers:
             if expert_replay_buffer:
+                expert_replay_buffer.optimize()
                 expert_replay_buffer_iterators.append(expert_replay_buffer.get_iterator(
                         sample_args={"batch_size": FLAGS.batch_size}))
 

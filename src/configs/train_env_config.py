@@ -35,7 +35,7 @@ class STBL3Experiment(BaseExperiment):
         self.velocity=0.0
         self.info=dict()
         self.rewards=[]
-        self.image_size=64
+        self.image_size=96
 
     def reset(self,*arg,**kwargs):
         """Called at the beginning and each time the simulation is reset"""
@@ -215,12 +215,13 @@ class STBL3Experiment(BaseExperiment):
         hero_velocity = self.get_speed(hero)
         # marker_location=sensor_data["goal_heading"][-1][0]
         wp=core.map.get_waypoint(hero.get_transform().location,project_to_road=False) 
-        self.done_dist = self.distance_travelled>200
+        # self.done_dist = self.distance_travelled>200
         self.done_falling = hero.get_location().z < -0.5
         self.diff_lane = 'lane_invasion' in sensor_data.keys()
         self.collision = 'collision' in sensor_data.keys()
         self.done_speed=(hero_velocity/(self.target_speed+1e-8)) > 5.0
-        done=self.done_falling or self.done_dist or self.diff_lane or self.collision
+        self.done_dist=core.destination.transform.location.distance(hero.get_transform().location) <1.0
+        done=self.done_falling or self.done_dist or self.diff_lane or self.collision or self.done_dist
         self.info.update(dict(is_success=self.done_dist,
                              distance_completed=self.distance_travelled,
                              max_reward=0,
@@ -333,7 +334,7 @@ class STBL3Experiment(BaseExperiment):
             reward += -10
         # Reward for reaching the target distance
         if self.done_dist:
-            # print(f"Max Dist Smooth={smooth_action:3f} Dist={self.distance_travelled:3f}")
+            print(f"Max Dist Dist={self.distance_travelled:3f}")
             reward += 10
 
         # Scale the reward to a reasonable range (no need for *10)

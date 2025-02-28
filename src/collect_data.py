@@ -1,5 +1,6 @@
 from datetime import datetime
 import glob
+import math
 import random
 import time
 from jaxrl2.data.replay_buffer import ReplayBuffer,VariableCapacityBuffer
@@ -15,7 +16,54 @@ from rlib_integration.agent import BasicAgent
 # from train_online_pixels import CarlaGoalEnv,config,FrameStack,TimeLimit,RecordEpisodeStatistics,ReplayBuffer
 from src.configs.train_env_config import config
 from jaxrl2.noise import OrnsteinUhlenbeckActionNoise
+import carla
 import argparse
+def random_shift(observation,next_observation,action):
+    observation["pixels"]=np.fliplr(observation["pixels"][...,0])[...,None]
+    next_observation["pixels"]=np.fliplr(next_observation["pixels"][...,0])[...,None]
+    action[0]=-action[0]
+    return observation,next_observation,action
+
+def random_perturb(env):
+    # observation["pixels"]=np.fliplr(observation["pixels"][...,0])[...,None]
+    # next_observation["pixels"]=np.fliplr(next_observation["pixels"][...,0])[...,None]
+    perturb_steering_list=[1.0,-1.0]
+    _, _, _, _, _ = env.step([random.choice(perturb_steering_list),0.5])
+    observation, _, _, _, _ = env.step([random.choice(perturb_steering_list),0.5])
+    # action[0]=-action[0]
+    return observation
+
+
+def is_agent_at_junction(env):
+    env=env.unwrapped
+    wp =env.core.map.get_waypoint(env.hero.get_transform().location,project_to_road=True)
+    return wp.is_junction
+
+def add_random_impulse(env):
+    impulse_strength = 80000  # Base strength of the impulse
+    env = env.unwrapped  # Unwrap the environment if necessary
+
+    # Generate a random Y-axis impulse between negative and positive values
+    y_impulse = random.uniform(-impulse_strength, impulse_strength)
+
+    # Ensure physics simulation is enabled for the vehicle
+    env.hero.set_simulate_physics(True)
+
+    # Get the vehicle's rotation (yaw in degrees)
+    rotation = env.hero.get_transform().rotation
+    yaw = math.radians(rotation.yaw)  # Convert yaw to radians
+
+    # Transform the local Y-axis force to the world coordinate system
+    # Local Y-axis force: (0, y_impulse, 0)
+    # World coordinate system:
+    # X_world = -sin(yaw) * Y_local
+    # Y_world = cos(yaw) * Y_local
+    x_force = -math.sin(yaw) * y_impulse
+    y_force = math.cos(yaw) * y_impulse
+
+    # Apply the force in the world coordinate system
+    env.hero.add_force(carla.Vector3D(x_force, y_force, 0))
+     
 def collect_basic_agent_data(replay_buffer_size=int(1e4)):
     # Create environment
 
@@ -44,10 +92,18 @@ def collect_basic_agent_data(replay_buffer_size=int(1e4)):
     def reset_agent(env):
             # Initialize BasicAgent
             agent = BasicAgent(env.unwrapped.core.hero, target_speed=env.unwrapped.experiment.target_speed)
-            agent.set_destination(env.unwrapped.core.destination.transform.location)
+            try:
+                agent.set_destination(env.unwrapped.core.destination.transform.location)
+            except:
+                env=reset_env()
+                agent=reset_agent(env)
+                 
             agent.ignore_traffic_lights(True)
             agent.ignore_stop_signs(True)
             # data=[]
+            # do some recursion
+
+
             return agent
     env=reset_env()
 
@@ -81,8 +137,12 @@ def collect_basic_agent_data(replay_buffer_size=int(1e4)):
             noise.reset()
             agent=reset_agent(env=env)
         # Get action from BasicAgent
+        rand_key=random.randint(0,1)
+        # if rand_key==1:
+        #      add_random_impulse(env)
+
         control = agent.run_step()
-        action = np.array([control.steer, control.throttle])
+        action = np.array([control.steer,control.throttle])
         
         # Add noise and clip
         # action = np.clip(action + noise(), -1, 1)
@@ -96,8 +156,35 @@ def collect_basic_agent_data(replay_buffer_size=int(1e4)):
         # Handle episode termination
         mask = 1.0 if not done and not truncated else 0.0
         done = done or agent.done()
+
         if  agent.done():
              reward+=10
+        # breakpoint()
+        copy_observation,copy_next_observation,copy_action=random_shift(observation,next_observation,action)
+        replay_buffer.insert(
+            dict(
+                observations=copy_observation,
+                actions=copy_action,
+                rewards=reward,
+                masks=mask,
+                dones=done,
+                next_observations=copy_next_observation,
+            )
+        )
+        # oversample junction entries
+        if is_agent_at_junction(env):
+             for _ in range(10):
+                  replay_buffer.insert(
+                    dict(
+                        observations=observation,
+                        actions=action,
+                        rewards=reward,
+                        masks=mask,
+                        dones=done,
+                        next_observations=next_observation,
+                    )
+                )
+                  
         # Store transition
         replay_buffer.insert(
             dict(
@@ -109,8 +196,9 @@ def collect_basic_agent_data(replay_buffer_size=int(1e4)):
                 next_observations=next_observation,
             )
         )
-        
-        observation = next_observation
+        observation=next_observation
+        if rand_key==1:
+            observation = random_perturb(env)
         # # Save buffer periodically
         # if i % 10000 == 0:
         #     dataset_folder = os.path.join("datasets")

@@ -37,3 +37,4 @@ logs_car_racing/*
 .devcontainer/*
 .idea/*
 best_models/*
+*.bag

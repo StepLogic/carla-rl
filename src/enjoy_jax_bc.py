@@ -60,13 +60,13 @@ def evaluate_policy(agent, env, n_eval_episodes=10, deterministic=True):
         episode_length = 0
         
         while not done:
-            target=3.0
-            heading=np.pi
-            vecs=observation["vector"]
-            current_velocity=env.unwrapped.experiment.velocity
-            current_heading=env.unwrapped.experiment.current_heading
-            vecs[2] = np.clip(current_velocity/(target+1e-8), 0.0, 1.0)
-            vecs[3]= np.clip(current_heading/(heading+1e-8),-1.0,1.0) 
+            # target=3.0
+            # heading=np.pi
+            # vecs=observation["vector"]
+            # current_velocity=env.unwrapped.experiment.velocity
+            # current_heading=env.unwrapped.experiment.current_heading
+            # vecs[2] = np.clip(current_velocity/(target+1e-8), 0.0, 1.0)
+            # vecs[3]= np.clip(current_heading/(heading+1e-8),-1.0,1.0) 
             
             if deterministic:
                 action = agent.eval_actions(observation)

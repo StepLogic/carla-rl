@@ -10,7 +10,7 @@ class CarlaEvalEnv(gym.Env):
     """
     This is a carla environment, responsible of handling all the CARLA related steps of the training.
     """
-    def __init__(self,use_rgb=False,image_size=32,start_server=True):
+    def __init__(self,use_rgb=False,image_size=64,start_server=True,town="Town01"):
         """Initializes the environment"""
         self.config = config["env_config"]
         self.experiment = JAXMappingExperiments(self.config["experiment"],is_rgb=use_rgb,image_size=image_size)
@@ -18,7 +18,9 @@ class CarlaEvalEnv(gym.Env):
         self.observation_space = self.experiment.get_observation_space()
         sim_conf=self.config['carla']
         sim_conf.update({
-            "max_dist":self.config["experiment"]["others"].get("max_dist",200)
+            "max_dist":self.config["experiment"]["others"].get("max_dist",200),
+            "start_server":start_server,
+            "town":town
         })
         # print(sim_conf,self.config["experiment"])
         self.core = CarlaCore(sim_conf)
@@ -40,7 +42,8 @@ class CarlaEvalEnv(gym.Env):
         # Reset sensors hero and experiment
         self.experiment.reset(self)
         self.experiment.config["hero"]["is_goal_env"]=True
-        self.experiment.config["hero"]["origin"]=self.experiment.origin or self.last_position 
+        self.experiment.config["hero"]["origin"]=self.experiment.origin.transform or self.last_position 
+        self.experiment.config["hero"]["destination"]=self.experiment.destination.transform or self.last_position 
         if hasattr(self.experiment,"curriculum_step"):
             self.experiment.config["hero"]["curriculum_step"]=self.experiment.curriculum_step
         self.hero = self.core.reset_hero_for_experiments(self.experiment.config["hero"])

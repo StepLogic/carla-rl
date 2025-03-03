@@ -1,5 +1,6 @@
 #! /usr/bin/env python
 from collections import deque
+from copy import copy
 import itertools
 import os
 import pickle
@@ -43,6 +44,9 @@ from src.configs.train_env_config import config as carla_config
 import flax
 from jaxrl2.noise import OrnsteinUhlenbeckActionNoise
 flax.config.update('flax_use_orbax_checkpointing', True)
+
+import jax
+jax.config.update("jax_debug_nans", True)
     # ML config
 config = ml_collections.ConfigDict()
 config.actor_lr = 3e-4
@@ -71,9 +75,9 @@ flags.DEFINE_integer(
 )
 flags.DEFINE_integer("image_size", 64, "Image size.")
 flags.DEFINE_integer("num_stack", 3, "Stack frames.")
-flags.DEFINE_integer(
-    "replay_buffer_size", int(1e6), "Number of training steps to start training."
-)
+# flags.DEFINE_integer(
+#     "replay_buffer_size", int(1e6), "Number of training steps to start training."
+# )
 flags.DEFINE_integer(
     "action_repeat", None, "Action repeat, if None, uses 2 or PlaNet default values."
 )
@@ -114,9 +118,8 @@ from typing import Dict, Any
 # expert_buffer="/home/kojogyaase/Projects/Research/carla-rl/datasets/basic_agent_data_20241229_093438.pkl"
 expert_buffers=list(glob.glob("/home/kojogyaase/Projects/Research/carla-rl/datasets/*.pkl"))
 def main(_):
-
     # Create environment
-    # carla_config["env_config"]["carla"]["start_server"]=False
+    carla_config["env_config"]["carla"]["start_server"]=False
     env = CarlaGoalEnv(carla_config["env_config"])
     env = FrameStack(env=env, num_stack=1,stacking_key="pixels")
     env = TimeLimit(env,max_episode_steps=2500)
@@ -149,6 +152,7 @@ def main(_):
         for path in expert_buffers:
             with open(path, 'rb') as f:
                 expert_replay_buffer = pickle.load(f)
+                expert_replay_buffer.optimize()
             expert_replay_buffers.append(expert_replay_buffer)
     # breakpoint()
     expert_replay_buffer_iterators=[]
@@ -199,7 +203,10 @@ def main(_):
                 episode_reward = 0
                 
                 while not eval_done:
-                    eval_action = agent.eval_actions(eval_obs)  # No exploration
+                    try:
+                        eval_action = agent.eval_actions(eval_obs)  # No exploration
+                    except:
+                        pass
                     eval_obs, eval_reward, eval_done, eval_truncated, eval_info = env.step(eval_action)
                     episode_reward += eval_reward
                     

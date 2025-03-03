@@ -34,7 +34,7 @@ results/*
 logs_car_racing/*
 *.pickle
 *.pdf
-.devcontainer/*
+# .devcontainer/*
 .idea/*
 best_models/*
 *.bag

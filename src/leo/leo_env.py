@@ -220,7 +220,7 @@ class LeoEnv(gym.Env):
                 self.collision=False
         else:
             # self.collision_queue.put(
-                self.collision=np.max(ranges[selected_indices]) > self.collision_threshold
+                self.collision=np.min(ranges[selected_indices]) > self.collision_threshold
         # )
         #     print(e)
             
@@ -232,7 +232,7 @@ class LeoEnv(gym.Env):
         #         return
         # try:
         # print(imu.linear_acceleration)
-        w=self.theta+ros_vector3_to_np_array(imu.angular_velocity)
+        w=ros_vector3_to_np_array(imu.angular_velocity)
         accel=ros_vector3_to_np_array(imu.linear_acceleration)
         self.theta=estimate_orientation(accel,w,self.theta,dt)
         accel[2]=0

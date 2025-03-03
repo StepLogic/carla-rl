@@ -1,3 +1,4 @@
+from copy import copy
 from datetime import datetime
 import glob
 import random
@@ -16,7 +17,7 @@ from rlib_integration.agent import BasicAgent
 from src.configs.train_env_config import config
 from jaxrl2.noise import OrnsteinUhlenbeckActionNoise
 import argparse
-def collect_basic_agent_data(replay_buffer_size=int(1e4)):
+def collect_basic_agent_data(replay_buffer_size=int(2e5)):
     # Create environment
 
     parser = argparse.ArgumentParser(description='Collect basic agent data')
@@ -38,13 +39,21 @@ def collect_basic_agent_data(replay_buffer_size=int(1e4)):
         env = CarlaGoalEnv(config["env_config"])
         env = FrameStack(env=env, num_stack=1, stacking_key="pixels")
         # env = FrameStack(env=env, num_stack=1, stacking_key="goal")
-        env = TimeLimit(env, max_episode_steps=2500)
+        env = TimeLimit(env, max_episode_steps=4500)
         env = RecordEpisodeStatistics(env)
         return env
     def reset_agent(env):
             # Initialize BasicAgent
+            # print("hell",env.unwrapped.experiment.target_speed)
             agent = BasicAgent(env.unwrapped.core.hero, target_speed=env.unwrapped.experiment.target_speed)
-            agent.set_destination(env.unwrapped.core.destination.transform.location)
+ 
+            try:
+                agent.set_destination(env.unwrapped.core.destination.transform.location)
+            except:
+                #   do some  recursion
+                env=reset_env()
+                reset_agent(env)
+            
             agent.ignore_traffic_lights(True)
             agent.ignore_stop_signs(True)
             # data=[]
@@ -59,8 +68,8 @@ def collect_basic_agent_data(replay_buffer_size=int(1e4)):
 
     # Initialize noise for exploration
     action_dim = 2
-    mean = np.zeros(action_dim)
-    sigma = 0.2 * np.ones(action_dim)
+    mean = np.zeros(1)
+    sigma = 2 * np.ones(1)
     noise = OrnsteinUhlenbeckActionNoise(mean=mean, sigma=sigma)
 
     # Main collection loop
@@ -81,14 +90,26 @@ def collect_basic_agent_data(replay_buffer_size=int(1e4)):
             noise.reset()
             agent=reset_agent(env=env)
         # Get action from BasicAgent
+    
+        vecs=observation["vector"]
+        env_target_speed=env.unwrapped.experiment.target_speed
+        target=np.clip(float(env_target_speed-noise().item()),0,env_target_speed+2)
+        # print(target)
+        current_velocity=env.unwrapped.experiment.velocity
+        # current_heading=env.unwrapped.experiment.current_heading
+        vecs[2] = np.clip(current_velocity/(target+1e-8), 0.0, 5.1)
+        # vecs[3]= np.clip(current_heading/(heading+1e-8),-5.1,5.1) 
+        agent.set_target_speed(target)
         control = agent.run_step()
         action = np.array([control.steer, control.throttle])
         
         # Add noise and clip
-        # action = np.clip(action + noise(), -1, 1)
+        # action = np.clip(action + noise(),
+        #     env.action_space.low,
+        #     env.action_space.high)
         # action = np.array([
-        #     np.clip(action[0], -1.0, 1.0),  # steer
-        #     np.clip(action[1], 0.0, 1.0)    # throttle
+        #     env.action_space.low,  # steer
+        #     env.action_space.high  # throttle
         # ])
 
         next_observation, reward, done, truncated, info = env.step(action)
@@ -98,6 +119,33 @@ def collect_basic_agent_data(replay_buffer_size=int(1e4)):
         done = done or agent.done()
         if  agent.done():
              reward+=10
+        #complement_image
+        observation_copy=copy(observation)
+        next_observation_copy=copy(next_observation)
+        observation_copy["pixels"]=np.fliplr(observation_copy["pixels"][:,:,:,0])[...,None]
+        next_observation_copy["pixels"]=np.fliplr(next_observation_copy["pixels"][:,:,:,0])[...,None]
+        action_copy=np.array([-control.steer, control.throttle])
+        replay_buffer.insert(
+            dict(
+                observations=observation_copy,
+                actions=action_copy,
+                rewards=reward,
+                masks=mask,
+                dones=done,
+                next_observations=next_observation_copy,
+            )
+        )
+        replay_buffer.insert(
+            dict(
+                observations=observation,
+                actions=action,
+                rewards=reward,
+                masks=mask,
+                dones=done,
+                next_observations=next_observation,
+            )
+        )
+        
         # Store transition
         replay_buffer.insert(
             dict(

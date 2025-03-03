@@ -731,7 +731,7 @@ class JAXMappingExperiments(BaseExperiment):
         image_space = Box(
             low=-1.0,
             high=1.0,
-            shape=(self.image_size, self.image_size, 1,),
+            shape=(self.image_size, self.image_size, 3,),
             dtype=np.float32,
         )
         
@@ -823,7 +823,7 @@ class JAXMappingExperiments(BaseExperiment):
         self.current_heading=imu
         return vecs
     def get_img_obs(self, sensor_data, core):
-        image = post_process_image(sensor_data['rgb'][1], normalized = True,crop=False, grayscale = True,image_size=self.image_size)
+        image = post_process_image(sensor_data['rgb'][1], normalized = True,crop=False, grayscale = False,image_size=self.image_size)
 
         if self.prev_image_0 is None:
             self.prev_image_0 = image
@@ -866,7 +866,7 @@ class JAXMappingExperiments(BaseExperiment):
         self.done_falling = hero.get_location().z < -0.5
         self.diff_lane = 'lane_invasion' in sensor_data.keys() or wp is None
         self.collision = 'collision' in sensor_data.keys()
-        done=self.done_falling or self.collision or wp is None
+        done=self.done_falling or self.collision or wp is None or self.diff_lane
         # done=False
         self.info.update(dict(is_success=self.done_dist,
                              distance_completed=self.distance_travelled))
@@ -941,7 +941,7 @@ class JAXMappingExperiments(BaseExperiment):
         if self.done_falling:
             reward += -10.0
         if self.done_dist:
-            print("Max dist travelled")
+            # print("Max dist travelled")
             reward += 10.0
         # if self.done_time_idle:
         #     # print("Done idle")

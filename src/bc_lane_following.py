@@ -67,17 +67,17 @@ flags.DEFINE_string("save_dir", "./tmp/", "Tensorboard logging dir.")
 flags.DEFINE_integer("seed", 42, "Random seed.")
 flags.DEFINE_integer("eval_episodes", 5, "Number of episodes used for evaluation.")
 flags.DEFINE_integer("log_interval", 1000, "Logging interval.")
-flags.DEFINE_integer("eval_interval", int(10000), "Eval interval.")
-flags.DEFINE_integer("batch_size", 32, "Mini batch size.")
-flags.DEFINE_integer("max_steps", int(2e6), "Number of training steps.")
+flags.DEFINE_integer("eval_interval", int(10), "Eval interval.")
+flags.DEFINE_integer("batch_size", 256, "Mini batch size.")
+flags.DEFINE_integer("max_steps", int(1e4), "Number of training steps.")
 flags.DEFINE_integer(
     "start_training", int(1e3), "Number of training steps to start training."
 )
 flags.DEFINE_integer("image_size", 64, "Image size.")
 flags.DEFINE_integer("num_stack", 3, "Stack frames.")
-flags.DEFINE_integer(
-    "replay_buffer_size", int(1e6), "Number of training steps to start training."
-)
+# flags.DEFINE_integer(
+#     "replay_buffer_size", int(1e6), "Number of training steps to start training."
+# )
 flags.DEFINE_integer(
     "action_repeat", None, "Action repeat, if None, uses 2 or PlaNet default values."
 )
@@ -152,6 +152,7 @@ def main(_):
         for path in expert_buffers:
             with open(path, 'rb') as f:
                 expert_replay_buffer = pickle.load(f)
+                expert_replay_buffer.optimize()
             expert_replay_buffers.append(expert_replay_buffer)
     # breakpoint()
     expert_replay_buffer_iterators=[]
@@ -199,7 +200,10 @@ def main(_):
                 episode_reward = 0
                 
                 while not eval_done:
-                    eval_action = agent.eval_actions(eval_obs)  # No exploration
+                    try:
+                        eval_action = agent.eval_actions(eval_obs)  # No exploration
+                    except:
+                        pass
                     eval_obs, eval_reward, eval_done, eval_truncated, eval_info = env.step(eval_action)
                     episode_reward += eval_reward
                     

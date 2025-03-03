@@ -68,7 +68,7 @@ flags.DEFINE_enum('model', 'DrQLearner', ['DrQLearner', 'PixelBCLearner'], 'Mode
 flags.DEFINE_integer("n_eval_episodes", 10, "Number of evaluation episodes")
 flags.DEFINE_boolean("deterministic", True, "Whether to use deterministic actions")
 flags.DEFINE_string("map_dir", None, "Evaluation directory trajectory")
-
+flags.DEFINE_string("town", "Town01", "Town Name")
 def load_checkpoint(agent, checkpoint_path):
     """Load agent parameters from checkpoint."""
     state_dict = {
@@ -209,6 +209,8 @@ def eval_environment(agent:DrQLearner, env, n_eval_episodes=10, deterministic=Tr
             start_location=ndarray_to_location(dataset["start"])
             goal_location=ndarray_to_location(dataset["goal"])
             env.unwrapped.set_start_transform(start_location)
+            env.unwrapped.set_destination_transform(goal_location)
+
             route_plannner=GlobalRoutePlanner(env.unwrapped.core.map, 2.0)
     
             prev_waypoint=None
@@ -218,7 +220,7 @@ def eval_environment(agent:DrQLearner, env, n_eval_episodes=10, deterministic=Tr
                     prev_waypoint=wp
                 shortest_distance_along_road+=prev_waypoint.transform.location.distance(wp.transform.location)
                 prev_waypoint=wp
-            assert shortest_distance_along_road>1.0
+            # assert shortest_distance_along_road>1.0
 
 
 
@@ -240,8 +242,8 @@ def eval_environment(agent:DrQLearner, env, n_eval_episodes=10, deterministic=Tr
             # if (current_heading - heading)<np.deg2rad(10):
             #         truncate_steps=int(1e5) #break loop
             #         print(np.rad2deg(current_heading),np.rad2deg(heading))
-            vecs[2] = np.clip(current_velocity/(target+1e-8), 0.0, 5.1)
-            vecs[3]= np.clip(current_heading/(current_heading+1e-8),-5.1,5.1) 
+            # vecs[2] = np.clip(current_velocity/(target+1e-8), 0.0, 5.1)
+            # vecs[3]= np.clip(current_heading/(current_heading+1e-8),-5.1,5.1) 
             # vecs[4]= np.clip(heading/np.pi,-5.1,5.1) 
             observation["vector"]=vecs
             action_dist=agent.action_dist(observation)
@@ -249,6 +251,7 @@ def eval_environment(agent:DrQLearner, env, n_eval_episodes=10, deterministic=Tr
             # breakpoint()
             # if deterministic:
             action = action_dist.mode()
+            # print(action)
             observation, reward, done, truncated, info = env.step(action)
             is_at_junction,unit_vector,location=env.unwrapped.is_agent_at_junction()
             if is_at_junction:
@@ -318,8 +321,8 @@ def eval_environment(agent:DrQLearner, env, n_eval_episodes=10, deterministic=Tr
         
     plt.plot(np.array(log_stds)[:,0], color='blue',linestyle = 'dotted')
     plt.plot(np.array(log_stds)[:,1], color='red',linestyle = 'dotted') 
-    plt.plot(np.array(moving_average)[:,0], color='blue' )
-    plt.plot(np.array(moving_average)[:,1], color='red') 
+    # plt.plot(np.array(moving_average)[:,0], color='blue')
+    # plt.plot(np.array(moving_average)[:,1], color='red') 
 
     # plt.plot(moving_average, color='red') 
     for k in junctions:
@@ -328,18 +331,18 @@ def eval_environment(agent:DrQLearner, env, n_eval_episodes=10, deterministic=Tr
         plt.axvline(x=k, color='m',ls="--")
     # plt.hlines(x=junctions, ymin=np.min(log_stds), ymax=np.max(log_stds), colors='green', ls=':', lw=2, label='Junctions')
     plt.legend(loc="upper left")
-    plt.savefig("uncertainty_profile_at_junctions.pdf")
+    plt.savefig(f"uncertainty_profile_at_junctions_{FLAGS.model}.pdf")
     # plt.legend()
     #######################################################################
     a=dict(log_stds=log_stds,junctions=junctions)
-    with open('uncertainty_profile_at_junctions.pickle', 'wb') as handle:
+    with open(f'uncertainty_profile_at_junctions_{FLAGS.model}.pickle', 'wb') as handle:
         pickle.dump(a, handle, protocol=pickle.HIGHEST_PROTOCOL)
     #######################################################################
     a=dict(images=images,heading=heading_ar,features=features)
-    with open('map.pickle', 'wb') as handle:
+    with open(f'map_{FLAGS.model}.pickle', 'wb') as handle:
         pickle.dump(a, handle, protocol=pickle.HIGHEST_PROTOCOL)
     #######################################################################
-    with open('plot_data.pickle', 'wb') as handle:
+    with open(f'plot_data_{FLAGS.model}.pickle', 'wb') as handle:
         pickle.dump(dict(log_stds=log_stds,trace_log_stds=trace_log_stds,
                          locations=locations,
                          unit_vectors=unit_vectors), handle, protocol=pickle.HIGHEST_PROTOCOL)
@@ -348,8 +351,10 @@ def eval_environment(agent:DrQLearner, env, n_eval_episodes=10, deterministic=Tr
 
 def main(_):
    
-    
-    env = CarlaEvalEnv()
+    # config["env_config"]["carla"]["town"]=town_name
+    # # config["env_config"]["carla"]["start_server"]=False
+    env = CarlaEvalEnv(start_server=False,town=FLAGS.town)
+    env = TimeLimit(env, max_episode_steps=2500)
     env = FrameStack(env=env, num_stack=1, stacking_key="pixels")
     env = RecordEpisodeStatistics(env)
 

@@ -68,7 +68,7 @@ class STBL3Experiment(BaseExperiment):
         self.prev_throttle = 0.0
         self.steer = 0.0
         self.throttle = 0.0
-        self.target_speed = 8.0
+        self.target_speed = 6.0
         self.velocity=0.0
         self.current_heading=0.0
         # self.target_speed = random.uniform(5.0,10.0)
@@ -217,7 +217,8 @@ class STBL3Experiment(BaseExperiment):
         wp=core.map.get_waypoint(hero.get_transform().location,project_to_road=False) 
         self.done_dist = self.distance_travelled>200
         self.done_falling = hero.get_location().z < -0.5
-        self.diff_lane = 'lane_invasion' in sensor_data.keys()
+        # self.diff_lane = 'lane_invasion' in sensor_data.keys()
+        self.diff_lane=False
         self.collision = 'collision' in sensor_data.keys()
         self.done_speed=(hero_velocity/(self.target_speed+1e-8)) > 5.0
         done=self.done_falling or self.done_dist or self.diff_lane or self.collision
@@ -245,6 +246,7 @@ class STBL3Experiment(BaseExperiment):
         hero = core.hero
         heading=sensor_data["goal_heading"][-1][-1]
         imu=sensor_data["imu"][-1][-1]
+        # print(heading,imu)
         # delta_heading=np.clip(abs(imu-heading),0,np.pi)
         # angle_factor=max(1-min(delta_heading/self.max_angle_deviation,1.0),1e-3)
         # heading=np.nan_to_num(math.cos(delta_heading),0)

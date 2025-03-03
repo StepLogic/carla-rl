@@ -28,7 +28,7 @@ def random_perturb(env):
     # observation["pixels"]=np.fliplr(observation["pixels"][...,0])[...,None]
     # next_observation["pixels"]=np.fliplr(next_observation["pixels"][...,0])[...,None]
     perturb_steering_list=[1.0,-1.0]
-    _, _, _, _, _ = env.step([random.choice(perturb_steering_list),0.5])
+    # _, _, _, _, _ = env.step([random.choice(perturb_steering_list),0.5])
     observation, _, _, _, _ = env.step([random.choice(perturb_steering_list),0.5])
     # action[0]=-action[0]
     return observation
@@ -81,8 +81,8 @@ def collect_basic_agent_data(replay_buffer_size=int(1e4)):
         nonlocal env
         if not env is None:
              env.close()
-        config["env_config"]["carla"]["town"]=town_name
-        # config["env_config"]["carla"]["start_server"]=False
+        config["env_config"]["carla"]["town"]=random.choice(["Town02","Town04"])
+        config["env_config"]["carla"]["start_server"]=False
         env = CarlaGoalEnv(config["env_config"])
         env = FrameStack(env=env, num_stack=1, stacking_key="pixels")
         # env = FrameStack(env=env, num_stack=1, stacking_key="goal")
@@ -124,11 +124,11 @@ def collect_basic_agent_data(replay_buffer_size=int(1e4)):
     collection_start_time = time.time()
     agent=reset_agent(env=env)
 
-    # epidsodes_per_env=int(replay_buffer_size/len(towns))
+    epidsodes_per_env=int(replay_buffer_size/2)
     switch_env=False
     for i in tqdm(range(1, replay_buffer_size + 10)):
-        # if not switch_env:
-        #     switch_env=i%epidsodes_per_env
+        if not switch_env:
+            switch_env=i%epidsodes_per_env
         if done:
             if switch_env:
                  env=reset_env()
@@ -157,20 +157,20 @@ def collect_basic_agent_data(replay_buffer_size=int(1e4)):
         mask = 1.0 if not done and not truncated else 0.0
         done = done or agent.done()
 
-        if  agent.done():
-             reward+=10
+        # if  agent.done():
+        #      reward+=10
         # breakpoint()
-        copy_observation,copy_next_observation,copy_action=random_shift(observation,next_observation,action)
-        replay_buffer.insert(
-            dict(
-                observations=copy_observation,
-                actions=copy_action,
-                rewards=reward,
-                masks=mask,
-                dones=done,
-                next_observations=copy_next_observation,
-            )
-        )
+        # copy_observation,copy_next_observation,copy_action=random_shift(observation,next_observation,action)
+        # replay_buffer.insert(
+        #     dict(
+        #         observations=copy_observation,
+        #         actions=copy_action,
+        #         rewards=reward,
+        #         masks=mask,
+        #         dones=done,
+        #         next_observations=copy_next_observation,
+        #     )
+        # )
         # oversample junction entries
         if is_agent_at_junction(env):
              for _ in range(10):
@@ -184,18 +184,18 @@ def collect_basic_agent_data(replay_buffer_size=int(1e4)):
                         next_observations=next_observation,
                     )
                 )
-                  
-        # Store transition
-        replay_buffer.insert(
-            dict(
-                observations=observation,
-                actions=action,
-                rewards=reward,
-                masks=mask,
-                dones=done,
-                next_observations=next_observation,
-            )
-        )
+        else: 
+            if random.randint(0,10)==1:
+                replay_buffer.insert(
+                    dict(
+                        observations=observation,
+                        actions=action,
+                        rewards=reward,
+                        masks=mask,
+                        dones=done,
+                        next_observations=next_observation,
+                    )
+                )
         observation=next_observation
         if rand_key==1:
             observation = random_perturb(env)

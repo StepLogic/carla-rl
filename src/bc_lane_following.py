@@ -173,6 +173,7 @@ def main(_):
     while i <  FLAGS.max_steps + 1:
         if not expert_buffers is None:
             expert_replay_buffer_iterator = next(expert_replay_buffer_iterators)
+            # breakpoint()
             batch_expert = next(expert_replay_buffer_iterator)
             update_info_expert = agent.update(
                 batch_expert)
@@ -215,7 +216,7 @@ def main(_):
                 
                 eval_rewards.append(episode_reward)
             save_checkpoint(agent,policy_folder,i)
-            print(eval_info)
+            # print(eval_info)
             logger.log_eval(eval_info, i)
             logger.print_status(i, FLAGS.max_steps)
         

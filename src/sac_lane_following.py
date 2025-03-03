@@ -1,5 +1,6 @@
 #! /usr/bin/env python
 from collections import deque
+import itertools
 import os
 import pickle
 import random
@@ -122,12 +123,7 @@ from absl import app, flags
 from typing import Dict, Any
 
 # expert_buffer="/home/kojogyaase/Projects/Research/carla-rl/datasets/goal_condition_Town05_data_0.pkl"
-expert_buffers=[
-                "/home/kojogyaase/Projects/Research/carla-rl/datasets/goal_condition_Town05_data_1.pkl",
-                # "/home/kojogyaase/Projects/Research/carla-rl/datasets/real_robot_data_0.pkl"
-                ]
-
-
+expert_buffers=list(glob.glob("/home/kojogyaase/Projects/Research/carla-rl/datasets/*.pkl"))
 def main(_):
 
     # Create environment
@@ -182,6 +178,7 @@ def main(_):
     expert_replay_buffer_iterators=[]
     if not expert_buffers is None:
         for expert_replay_buffer in expert_replay_buffers:
+            expert_replay_buffer.optimize()
             expert_replay_buffer_iterators.append(expert_replay_buffer.get_iterator(
                     sample_args={"batch_size": FLAGS.batch_size}))
     # Track success metrics
@@ -260,7 +257,8 @@ def main(_):
                 logger.log_episode(episode_info, i)
             observation, info, done = *env.reset(), False
             noise.reset()
-        
+
+        expert_replay_buffer_iterators=itertools.cycle(expert_replay_buffer_iterators)
         # Training updates
         if i >= FLAGS.start_training:
             batch = next(replay_buffer_iterator)
@@ -268,15 +266,15 @@ def main(_):
             if i % FLAGS.log_interval == 0:
                 logger.log_training(update_info, i)
                 logger.print_status(i, FLAGS.max_steps)
-            if not expert_buffers is None:
-                for expert_replay_buffer_iterator in expert_replay_buffer_iterators:
-                    batch_expert = next(expert_replay_buffer_iterator)
-                    update_info_expert = agent.update(
-                        batch_expert,
-                        enable_update_temperature=False)
-                if i % FLAGS.log_interval == 0:
-                    logger.log_training(update_info_expert, i,prefix="_expert")
-                    logger.print_status(i, FLAGS.max_steps)
+            # if not expert_buffers is None:
+            expert_replay_buffer_iterator = next(expert_replay_buffer_iterators)
+            batch_expert = next(expert_replay_buffer_iterator)
+            update_info_expert = agent.update(
+                batch_expert,
+                enable_update_temperature=False)
+            if i % FLAGS.log_interval == 0:
+                logger.log_training(update_info_expert, i,prefix="_expert")
+                logger.print_status(i, FLAGS.max_steps)
         # Periodic evaluation
         if i % FLAGS.eval_interval == 0:
             # Save replay buffer if requested

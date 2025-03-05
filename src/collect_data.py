@@ -65,7 +65,7 @@ def add_random_impulse(env):
     # Apply the force in the world coordinate system
     env.hero.add_force(carla.Vector3D(x_force, y_force, 0))
      
-def collect_basic_agent_data(replay_buffer_size=int(1e4)):
+def collect_basic_agent_data(replay_buffer_size=int(5e3)):
     # Create environment
 
     parser = argparse.ArgumentParser(description='Collect basic agent data')
@@ -82,7 +82,7 @@ def collect_basic_agent_data(replay_buffer_size=int(1e4)):
         nonlocal env
         if not env is None:
              env.close()
-        config["env_config"]["carla"]["town"]=random.choice(["Town02","Town04"])
+        config["env_config"]["carla"]["town"]=town_name
         config["env_config"]["carla"]["start_server"]=False
         env = CarlaGoalEnv(config["env_config"])
         env = FrameStack(env=env, num_stack=1, stacking_key="pixels")
@@ -126,15 +126,15 @@ def collect_basic_agent_data(replay_buffer_size=int(1e4)):
     collection_start_time = time.time()
     agent=reset_agent(env=env)
 
-    epidsodes_per_env=int(replay_buffer_size/2)
-    switch_env=False
+    # epidsodes_per_env=int(replay_buffer_size/2)
+    # switch_env=False
     for i in tqdm(range(1, replay_buffer_size + 10)):
-        if not switch_env:
-            switch_env=i%epidsodes_per_env
+        # if not switch_env:
+        #     switch_env=i%epidsodes_per_env
         if done:
-            if switch_env:
-                 env=reset_env()
-                 switch_env=False
+            # if switch_env:
+            #      env=reset_env()
+            #      switch_env=False
             observation, info = env.reset()
             noise.reset()
             agent=reset_agent(env=env)

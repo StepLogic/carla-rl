@@ -56,7 +56,7 @@ config.cnn_filters = (3, 3, 3, 3)
 config.cnn_strides = (2, 2, 2, 2)
 config.cnn_padding = "VALID"
 config.latent_dim = 50
-config.encoder = "d4pg"
+config.encoder = "pretrained-resnet"
 bc_config = config.to_dict()
 
 

@@ -35,7 +35,7 @@ class STBL3Experiment(BaseExperiment):
         self.velocity=0.0
         self.info=dict()
         self.rewards=[]
-        self.image_size=96
+        self.image_size=64
 
     def reset(self,*arg,**kwargs):
         """Called at the beginning and each time the simulation is reset"""

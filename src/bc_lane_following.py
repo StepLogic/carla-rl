@@ -116,7 +116,9 @@ from absl import app, flags
 from typing import Dict, Any
 
 # expert_buffer="/home/kojogyaase/Projects/Research/carla-rl/datasets/basic_agent_data_20241229_093438.pkl"
-expert_buffers=list(glob.glob("/home/kojogyaase/Projects/Research/carla-rl/datasets/*.pkl"))
+expert_buffers=list(glob.glob("/home/robotlab/scratch/carla-rl/datasets/*.pkl"))
+def sample_from_buffers():
+    pass
 def main(_):
     # Create environment
     carla_config["env_config"]["carla"]["start_server"]=False
@@ -152,14 +154,14 @@ def main(_):
         for path in expert_buffers:
             with open(path, 'rb') as f:
                 expert_replay_buffer = pickle.load(f)
-                expert_replay_buffer.optimize()
+                # expert_replay_buffer.optimize()
             expert_replay_buffers.append(expert_replay_buffer)
     # breakpoint()
     expert_replay_buffer_iterators=[]
     if not expert_buffers is None:
         for expert_replay_buffer in expert_replay_buffers:
             if expert_replay_buffer:
-                expert_replay_buffer.optimize()
+                # expert_replay_buffer.optimize()
                 expert_replay_buffer_iterators.append(expert_replay_buffer.get_iterator(
                         sample_args={"batch_size": FLAGS.batch_size}))
             
@@ -190,7 +192,7 @@ def main(_):
                     save_checkpoint(agent,policy_folder,i)
             logger.print_status(i, FLAGS.max_steps)
 
-        if i % FLAGS.eval_interval == 0:
+        # if i % FLAGS.eval_interval == 0:
             # Run evaluation
             eval_successes = []
             eval_rewards = []
@@ -222,7 +224,7 @@ def main(_):
                             del eval_info["episode"]
                 
                 eval_rewards.append(episode_reward)
-            save_checkpoint(agent,policy_folder,i)
+            # save_checkpoint(agent,policy_folder,i)
             # print(eval_info)
             logger.log_eval(eval_info, i)
             logger.print_status(i, FLAGS.max_steps)

@@ -1,10 +1,11 @@
 from copy import copy
 from datetime import datetime
 import glob
+import itertools
 import math
 import random
 import time
-from jaxrl2.data.replay_buffer import ReplayBuffer,VariableCapacityBuffer
+from jaxrl2.data.replay_buffer import ReplayBuffer
 from jaxrl2.wrappers.frame_stack import FrameStack
 from jaxrl2.wrappers.record_statistics import RecordEpisodeStatistics
 from jaxrl2.wrappers.timelimit import TimeLimit
@@ -65,7 +66,7 @@ def add_random_impulse(env):
     # Apply the force in the world coordinate system
     env.hero.add_force(carla.Vector3D(x_force, y_force, 0))
      
-def collect_basic_agent_data(replay_buffer_size=int(1e4)):
+def collect_basic_agent_data(replay_buffer_size=int(1e3)):
     # Create environment
 
     parser = argparse.ArgumentParser(description='Collect basic agent data')
@@ -78,11 +79,12 @@ def collect_basic_agent_data(replay_buffer_size=int(1e4)):
     #do not use 01,02,05
     env=None
     # towns=['Town04',"Town03",""]
+    towns=itertools.cycle(["Town07","Town03","Town06","Town04"])
     def reset_env():
         nonlocal env
         if not env is None:
              env.close()
-        config["env_config"]["carla"]["town"]=random.choice(["Town02","Town04"])
+        config["env_config"]["carla"]["town"]=next(towns)
         config["env_config"]["carla"]["start_server"]=False
         env = CarlaGoalEnv(config["env_config"])
         env = FrameStack(env=env, num_stack=1, stacking_key="pixels")
@@ -97,7 +99,8 @@ def collect_basic_agent_data(replay_buffer_size=int(1e4)):
             try:
                 agent.set_destination(env.unwrapped.core.destination.transform.location)
             except:
-                env=reset_env()
+                # env=reset_env()
+                env.reset()
                 agent=reset_agent(env)
                  
             agent.ignore_traffic_lights(True)
@@ -110,9 +113,10 @@ def collect_basic_agent_data(replay_buffer_size=int(1e4)):
     env=reset_env()
 
     # Initialize replay buffer
-    replay_buffer = VariableCapacityBuffer(
+    replay_buffer = ReplayBuffer(
         env.observation_space, 
-        env.action_space
+        env.action_space,
+        capacity=int(1e6)
     )
 
     # Initialize noise for exploration
@@ -126,11 +130,11 @@ def collect_basic_agent_data(replay_buffer_size=int(1e4)):
     collection_start_time = time.time()
     agent=reset_agent(env=env)
 
-    epidsodes_per_env=int(replay_buffer_size/2)
+    epidsodes_per_env=int(replay_buffer_size/4)
     switch_env=False
-    for i in tqdm(range(1, replay_buffer_size + 10)):
+    for i in tqdm(range(1, replay_buffer_size*4 + 10)):
         if not switch_env:
-            switch_env=i%epidsodes_per_env
+            switch_env=i%epidsodes_per_env == 0
         if done:
             if switch_env:
                  env=reset_env()
@@ -155,6 +159,7 @@ def collect_basic_agent_data(replay_buffer_size=int(1e4)):
         agent.set_target_speed(target)
         control = agent.run_step()
         action = np.array([control.steer,control.throttle])
+        action = np.nan_to_num(action)
         
         # Add noise and clip
         # action = np.clip(action + noise(),
@@ -187,7 +192,7 @@ def collect_basic_agent_data(replay_buffer_size=int(1e4)):
         # )
         # oversample junction entries
         if is_agent_at_junction(env):
-             for _ in range(10):
+             for _ in range(5):
                   replay_buffer.insert(
                     dict(
                         observations=observation,
@@ -199,7 +204,7 @@ def collect_basic_agent_data(replay_buffer_size=int(1e4)):
                     )
                 )
         else: 
-            if random.randint(0,10)==1:
+            if random.randint(0,5)==1:
                 replay_buffer.insert(
                     dict(
                         observations=observation,

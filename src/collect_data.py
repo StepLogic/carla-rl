@@ -1,10 +1,11 @@
 from copy import copy
 from datetime import datetime
 import glob
+import itertools
 import math
 import random
 import time
-from jaxrl2.data.replay_buffer import ReplayBuffer,VariableCapacityBuffer
+from jaxrl2.data.replay_buffer import ReplayBuffer
 from jaxrl2.wrappers.frame_stack import FrameStack
 from jaxrl2.wrappers.record_statistics import RecordEpisodeStatistics
 from jaxrl2.wrappers.timelimit import TimeLimit
@@ -78,6 +79,7 @@ def collect_basic_agent_data(replay_buffer_size=int(5e3)):
     #do not use 01,02,05
     env=None
     # towns=['Town04',"Town03",""]
+    towns=itertools.cycle(["Town07","Town03","Town06","Town04"])
     def reset_env():
         nonlocal env
         if not env is None:
@@ -97,7 +99,8 @@ def collect_basic_agent_data(replay_buffer_size=int(5e3)):
             try:
                 agent.set_destination(env.unwrapped.core.destination.transform.location)
             except:
-                env=reset_env()
+                # env=reset_env()
+                env.reset()
                 agent=reset_agent(env)
                  
             agent.ignore_traffic_lights(True)
@@ -110,9 +113,10 @@ def collect_basic_agent_data(replay_buffer_size=int(5e3)):
     env=reset_env()
 
     # Initialize replay buffer
-    replay_buffer = VariableCapacityBuffer(
+    replay_buffer = ReplayBuffer(
         env.observation_space, 
-        env.action_space
+        env.action_space,
+        capacity=int(1e6)
     )
 
     # Initialize noise for exploration
@@ -155,6 +159,7 @@ def collect_basic_agent_data(replay_buffer_size=int(5e3)):
         agent.set_target_speed(target)
         control = agent.run_step()
         action = np.array([control.steer,control.throttle])
+        action = np.nan_to_num(action)
         
         # Add noise and clip
         # action = np.clip(action + noise(),
@@ -187,7 +192,7 @@ def collect_basic_agent_data(replay_buffer_size=int(5e3)):
         # )
         # oversample junction entries
         if is_agent_at_junction(env):
-             for _ in range(10):
+             for _ in range(5):
                   replay_buffer.insert(
                     dict(
                         observations=observation,
@@ -199,7 +204,7 @@ def collect_basic_agent_data(replay_buffer_size=int(5e3)):
                     )
                 )
         else: 
-            if random.randint(0,10)==1:
+            if random.randint(0,5)==1:
                 replay_buffer.insert(
                     dict(
                         observations=observation,

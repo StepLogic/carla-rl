@@ -1,5 +1,5 @@
 #! /usr/bin/env python
-from collections import deque
+from collections import defaultdict, deque
 from copy import copy
 import itertools
 import os
@@ -9,6 +9,7 @@ import random
 import gym
 import gymnasium
 from jaxrl2.agents.pixel_bc.pixel_bc_learner import PixelBCLearner
+from jaxrl2.agents.pixel_bc_resnet.pixel_bc_resnet_learner import PixelResNetBCLearner
 from jaxrl2.utils.misc import Logger
 from jaxrl2.wrappers.frame_stack import FrameStack
 from jaxrl2.wrappers.timelimit import TimeLimit
@@ -69,7 +70,7 @@ flags.DEFINE_integer("eval_episodes", 5, "Number of episodes used for evaluation
 flags.DEFINE_integer("log_interval", 1000, "Logging interval.")
 flags.DEFINE_integer("eval_interval", int(10), "Eval interval.")
 flags.DEFINE_integer("batch_size", 32, "Mini batch size.")
-flags.DEFINE_integer("max_steps", int(5e4), "Number of training steps.")
+flags.DEFINE_integer("epochs", int(5e4), "Number of training steps.")
 flags.DEFINE_integer(
     "start_training", int(1e3), "Number of training steps to start training."
 )
@@ -116,10 +117,13 @@ from absl import app, flags
 from typing import Dict, Any
 
 # expert_buffer="/home/kojogyaase/Projects/Research/carla-rl/datasets/basic_agent_data_20241229_093438.pkl"
+# expert_buffers=list(glob.glob("/home/robotlab/scratch/carla-rl/datasets/*.pkl"))
 expert_buffers=list(glob.glob("/home/kojogyaase/Projects/Research/carla-rl/datasets/*.pkl"))
+def sample_from_buffers():
+    pass
 def main(_):
     # Create environment
-    carla_config["env_config"]["carla"]["start_server"]=False
+    carla_config["env_config"]["carla"]["start_server"]=True
     env = CarlaGoalEnv(carla_config["env_config"])
     env = FrameStack(env=env, num_stack=1,stacking_key="pixels")
     env = TimeLimit(env,max_episode_steps=2500)
@@ -140,7 +144,7 @@ def main(_):
     random.seed(FLAGS.seed)
     # breakpoint()
     # Initialize agent and replay buffer
-    agent = PixelBCLearner(
+    agent = PixelResNetBCLearner(
         0, 
         env.observation_space.sample(), 
         env.action_space.sample(), 
@@ -156,39 +160,48 @@ def main(_):
             expert_replay_buffers.append(expert_replay_buffer)
     # breakpoint()
     expert_replay_buffer_iterators=[]
-    if not expert_buffers is None:
-        for expert_replay_buffer in expert_replay_buffers:
-            if expert_replay_buffer:
-                expert_replay_buffer.optimize()
-                expert_replay_buffer_iterators.append(expert_replay_buffer.get_iterator(
-                        sample_args={"batch_size": FLAGS.batch_size}))
+    # if not expert_buffers is None:
+    #     for expert_replay_buffer in expert_replay_buffers:
+    #         if expert_replay_buffer:
+    #             # expert_replay_buffer.optimize()
+    #             expert_replay_buffer_iterators.append(expert_replay_buffer.get_sequential_iterator(
+    #                     sample_args={"batch_size": FLAGS.batch_size}))
             
 
     training_start_time = time.time()
     
-    p_bar = tqdm.tqdm(range(1,FLAGS.max_steps + 1))
+    p_bar = tqdm.tqdm(range(1,FLAGS.epochs + 1))
     p_bar.update(5)
     p_bar.refresh()
     
 
     i=1
     run_eval=False
-    expert_replay_buffer_iterators=itertools.cycle(expert_replay_buffer_iterators)
-    while i <  FLAGS.max_steps + 1:
+    # expert_replay_buffer_iterators=itertools.cycle(expert_replay_buffer_iterators)
+    expert_replay_buffers=itertools.cycle(expert_replay_buffers)
+    while i <  FLAGS.epochs + 1:
         if not expert_buffers is None:
-            expert_replay_buffer_iterator = next(expert_replay_buffer_iterators)
-            # breakpoint()
-            batch_expert = next(expert_replay_buffer_iterator)
-            update_info_expert = agent.update(
-                batch_expert)
-            logger.log_training(update_info_expert, i,prefix="_expert")
+            total_metrics = defaultdict(list)
+            expert_replay_buffer = next(expert_replay_buffers)
+            expert_replay_buffer_iterator=expert_replay_buffer.get_sequential_iterator(sample_args={"batch_size": FLAGS.batch_size})
+            for batch_expert in expert_replay_buffer_iterator:
+                update_info_expert = agent.update(
+                    batch_expert)
+                for key, value in update_info_expert.items():
+                        total_metrics[key].append(float(value))
+                        # Calculate averages for each metric
+            average_metrics = {
+                key: np.mean(value)  
+                for key, value in total_metrics.items()
+            }
+            # print(average_metrics,total_metrics)
+            logger.log_training(average_metrics, i,prefix="_expert")
+            # logger.log_training(update_info_expert, i,prefix="_expert")
             i+=1
             p_bar.n = i  
-            # breakpoint()   
-            # if i%FLAGS.en
             if i % FLAGS.eval_interval == 0:
                     save_checkpoint(agent,policy_folder,i)
-            logger.print_status(i, FLAGS.max_steps)
+            logger.print_status(i, FLAGS.epochs)
 
         if i % FLAGS.eval_interval == 0:
             # Run evaluation
@@ -203,10 +216,12 @@ def main(_):
                 episode_reward = 0
                 
                 while not eval_done:
-                    try:
-                        eval_action = agent.eval_actions(eval_obs)  # No exploration
-                    except:
-                        pass
+                # try:
+                    eval_action = agent.eval_actions(eval_obs)  # No exploration
+                    # eval_action=jax
+                    # print(eval_action)
+                    # except:
+                    #     pass
                     eval_obs, eval_reward, eval_done, eval_truncated, eval_info = env.step(eval_action)
                     episode_reward += eval_reward
                     
@@ -222,10 +237,10 @@ def main(_):
                             del eval_info["episode"]
                 
                 eval_rewards.append(episode_reward)
-            save_checkpoint(agent,policy_folder,i)
+            # save_checkpoint(agent,policy_folder,i)
             # print(eval_info)
             logger.log_eval(eval_info, i)
-            logger.print_status(i, FLAGS.max_steps)
+            logger.print_status(i, FLAGS.epochs)
         
     
     # Print final training statistics

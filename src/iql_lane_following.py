@@ -127,8 +127,8 @@ from absl import app, flags
 from typing import Dict, Any
 
 # expert_buffer="/home/kojogyaase/Projects/Research/carla-rl/datasets/goal_condition_Town05_data_0.pkl"
-expert_buffers=list(glob.glob("/home/kojogyaase/Projects/Research/carla-rl/datasets/*.pkl"))
-print(expert_buffers)
+expert_buffers=list(glob.glob("/home/kojogyaase/Projects/Research/carla-rl/real_robot_dataset/*.pkl"))
+# print(expert_buffers)
 image_size=96
 def initialize_spaces():
     """Initialize the replay buffer with proper spaces"""
@@ -181,7 +181,7 @@ def main(_):
     if not expert_buffers is None:
         for expert_replay_buffer in expert_replay_buffers:
             if expert_replay_buffer:
-                expert_replay_buffer.optimize()
+                # expert_replay_buffer.optimize()
                 # breakpoint()
                 expert_replay_buffer_iterators.append(expert_replay_buffer.get_iterator(
                         sample_args={"batch_size": FLAGS.batch_size}))

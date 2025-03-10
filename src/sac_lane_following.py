@@ -18,7 +18,7 @@ from absl import app, flags
 from ml_collections import config_flags
 from flax.training import checkpoints
 import jaxrl2.extra_envs.dm_control_suite
-from jaxrl2.agents import DrQLearner
+from jaxrl2.agents import DrQLearner,PixelResNetDrQLearner
 from jaxrl2.data import ReplayBuffer
 from jaxrl2.data.hindsight_replay_buffer import HindsightReplayBuffer
 from jaxrl2.evaluation import evaluate
@@ -123,8 +123,8 @@ from absl import app, flags
 from typing import Dict, Any
 
 # expert_buffer="/home/kojogyaase/Projects/Research/carla-rl/datasets/goal_condition_Town05_data_0.pkl"
-expert_buffers=list(glob.glob("/home/robotlab/scratch/carla-rl/datasets/*.pkl"))
-
+# expert_buffers=list(glob.glob("/home/robotlab/scratch/carla-rl/datasets/*.pkl"))
+expert_buffers=None
 def main(_):
 
     # Create environment
@@ -149,7 +149,7 @@ def main(_):
     random.seed(FLAGS.seed)
 
     # Initialize agent and replay buffer
-    agent = DrQLearner(
+    agent = PixelResNetDrQLearner(
         0, 
         env.observation_space.sample(), 
         env.action_space.sample(), 
@@ -179,7 +179,7 @@ def main(_):
     expert_replay_buffer_iterators=[]
     if not expert_buffers is None:
         for expert_replay_buffer in expert_replay_buffers:
-            expert_replay_buffer.optimize()
+            # expert_replay_buffer.optimize()
             expert_replay_buffer_iterators.append(expert_replay_buffer.get_iterator(
                     sample_args={"batch_size": FLAGS.batch_size}))
         expert_replay_buffer_iterators=itertools.cycle(expert_replay_buffer_iterators)

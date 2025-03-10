@@ -9,7 +9,7 @@ import random
 import gym
 import gymnasium
 from jaxrl2.agents.pixel_bc.pixel_bc_learner import PixelBCLearner
-from jaxrl2.agents.pixel_bc_resnet.pixel_bc_resnet_learner import PixelResNetBCLearner
+from jaxrl2.agents.resnet_agents.pixel_bc_resnet_learner import PixelResNetBCLearner
 from jaxrl2.utils.misc import Logger
 from jaxrl2.wrappers.frame_stack import FrameStack
 from jaxrl2.wrappers.timelimit import TimeLimit

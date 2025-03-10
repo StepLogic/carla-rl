@@ -1,5 +1,5 @@
 #! /usr/bin/env python
-from collections import deque
+from collections import defaultdict, deque
 import itertools
 import os
 import pickle
@@ -127,9 +127,9 @@ from absl import app, flags
 from typing import Dict, Any
 
 # expert_buffer="/home/kojogyaase/Projects/Research/carla-rl/datasets/goal_condition_Town05_data_0.pkl"
-expert_buffers=list(glob.glob("/home/kojogyaase/Projects/Research/carla-rl/real_robot_dataset/*.pkl"))
+expert_buffers=list(glob.glob("/home/kojogyaase/Projects/Research/carla-rl/datasets/*.pkl"))
 # print(expert_buffers)
-image_size=96
+image_size=64
 def initialize_spaces():
     """Initialize the replay buffer with proper spaces"""
     image_space = gym.spaces.Box(
@@ -195,15 +195,24 @@ def main(_):
 
     i=1
     run_eval=False
-    expert_replay_buffer_iterators=itertools.cycle(expert_replay_buffer_iterators)
+    expert_replay_buffers=itertools.cycle(expert_replay_buffers)
     while i <  FLAGS.max_steps + 1:
         if not expert_buffers is None:
-            expert_replay_buffer_iterator = next(expert_replay_buffer_iterators)
-            batch_expert = next(expert_replay_buffer_iterator)
-            # breakpoint()
-            update_info_expert = agent.update(
-                batch_expert)
-            logger.log_training(update_info_expert, i,prefix="_expert")
+            total_metrics = defaultdict(list)
+            expert_replay_buffer = next(expert_replay_buffers)
+            expert_replay_buffer_iterator=expert_replay_buffer.get_sequential_iterator(sample_args={"batch_size": FLAGS.batch_size})
+            for batch_expert in expert_replay_buffer_iterator:
+                update_info_expert = agent.update(
+                    batch_expert)
+                for key, value in update_info_expert.items():
+                        total_metrics[key].append(float(value))
+                        # Calculate averages for each metric
+                # print(total_metrics)
+            average_metrics = {
+                key: np.mean(value)  
+                for key, value in total_metrics.items()
+            }
+            logger.log_training(average_metrics, i,prefix="_expert")
             i+=1
             p_bar.n = i  
             # breakpoint()   

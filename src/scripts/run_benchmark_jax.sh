@@ -7,9 +7,9 @@ town_mapping["medium"]="Town02"
 town_mapping["hard"]="Town05"
 
 # Models to evaluate
-models=("DrQLearner" "PixelBCLearner" )
+models=("PixelResNetBCLearner" ) #"DrQLearner"
 declare -A checkpoints
-checkpoints["PixelBCLearner"]="/home/robotlab/scratch/carla-rl/best_models/bc/checkpoint_1"
+checkpoints["PixelResNetBCLearner"]="/home/robotlab/scratch/carla-rl/checkpoints/final_bc/checkpoint_1"
 checkpoints["DrQLearner"]="/home/robotlab/scratch/carla-rl/best_models/SAC_checkpoint_2000000"
 
 
@@ -33,7 +33,7 @@ run_evaluation() {
     echo "- Map Directory: ${map_dir}"
     echo "-----------------------------------"
 
-    python src/mapping/run_jax_raw.py \
+   XLA_PYTHON_CLIENT_PREALLOCATE=false  python src/mapping/run_jax_raw.py \
         --model=${model} \
         --n_eval_episodes=10 \
         --deterministic=true \

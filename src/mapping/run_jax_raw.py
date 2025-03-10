@@ -12,6 +12,7 @@ from src.carla_eval import CarlaEvalEnv
 from src.sac_lane_following import sac_config
 # from src.bc_lane_following import bc_config
 from jaxrl2.agents import DrQLearner,PixelBCLearner
+from jaxrl2.agents.pixel_bc_resnet.pixel_bc_resnet_learner import PixelResNetBCLearner
 from rlib_integration.helper import ndarray_to_location
 from rlib_integration.agent import GlobalRoutePlanner
 from jaxrl2.wrappers.frame_stack import FrameStack
@@ -64,7 +65,7 @@ sac_config = config.to_dict()
 # Define flags
 FLAGS = flags.FLAGS
 flags.DEFINE_string("checkpoint_path", None, "Path to the checkpoint directory")
-flags.DEFINE_enum('model', 'DrQLearner', ['DrQLearner', 'PixelBCLearner'], 'Model to run')
+flags.DEFINE_enum('model', 'DrQLearner', ['DrQLearner', 'PixelResNetBCLearner'], 'Model to run')
 flags.DEFINE_integer("n_eval_episodes", 10, "Number of evaluation episodes")
 flags.DEFINE_boolean("deterministic", True, "Whether to use deterministic actions")
 flags.DEFINE_string("map_dir", None, "Evaluation directory trajectory")
@@ -79,6 +80,7 @@ def load_checkpoint(agent, checkpoint_path):
         # 'rng': agent._rng,
         # Add any other numerical state you need to save
     }
+    # breakpoint()
     state_dict = checkpoints.restore_checkpoint(
         ckpt_dir=checkpoint_path,
         target=state_dict

@@ -66,7 +66,7 @@ def add_random_impulse(env):
     # Apply the force in the world coordinate system
     env.hero.add_force(carla.Vector3D(x_force, y_force, 0))
      
-def collect_basic_agent_data(replay_buffer_size=int(5e3)):
+def collect_basic_agent_data(replay_buffer_size=int(6e4)):
     # Create environment
 
     parser = argparse.ArgumentParser(description='Collect basic agent data')
@@ -76,15 +76,16 @@ def collect_basic_agent_data(replay_buffer_size=int(5e3)):
     args = parser.parse_args()
     # Access the town name
     town_name = args.town
-    #do not use 01,02,05
+    #do not use 01,07,05
     env=None
     # towns=['Town04',"Town03",""]
-    towns=itertools.cycle(["Town07","Town03","Town06","Town04"])
+    _towns=["Town15","Town10HD_Opt","Town02","Town03","Town06","Town04"]
+    towns=itertools.cycle(_towns)
     def reset_env():
         nonlocal env
         if not env is None:
              env.close()
-        config["env_config"]["carla"]["town"]=town_name
+        config["env_config"]["carla"]["town"]=next(towns)
         config["env_config"]["carla"]["start_server"]=False
         env = CarlaGoalEnv(config["env_config"])
         env = FrameStack(env=env, num_stack=1, stacking_key="pixels")
@@ -130,15 +131,15 @@ def collect_basic_agent_data(replay_buffer_size=int(5e3)):
     collection_start_time = time.time()
     agent=reset_agent(env=env)
 
-    # epidsodes_per_env=int(replay_buffer_size/2)
-    # switch_env=False
-    for i in tqdm(range(1, replay_buffer_size + 10)):
-        # if not switch_env:
-        #     switch_env=i%epidsodes_per_env
+    epidsodes_per_env=int(replay_buffer_size)
+    switch_env=False
+    for i in tqdm(range(1, (replay_buffer_size + 10)*len(_towns))):
+        if not switch_env:
+            switch_env=i%epidsodes_per_env==0
         if done:
-            # if switch_env:
-            #      env=reset_env()
-            #      switch_env=False
+            if switch_env:
+                 env=reset_env()
+                 switch_env=False
             observation, info = env.reset()
             noise.reset()
             agent=reset_agent(env=env)

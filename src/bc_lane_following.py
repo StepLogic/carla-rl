@@ -117,8 +117,8 @@ from absl import app, flags
 from typing import Dict, Any
 
 # expert_buffer="/home/kojogyaase/Projects/Research/carla-rl/datasets/basic_agent_data_20241229_093438.pkl"
-# expert_buffers=list(glob.glob("/home/robotlab/scratch/carla-rl/datasets/*.pkl"))
-expert_buffers=list(glob.glob("/home/kojogyaase/Projects/Research/carla-rl/datasets/*.pkl"))
+expert_buffers=list(glob.glob("/home/robotlab/scratch/carla-rl/datasets/*.pkl"))
+# expert_buffers=list(glob.glob("/home/kojogyaase/Projects/Research/carla-rl/datasets/*.pkl"))
 def sample_from_buffers():
     pass
 def main(_):
@@ -156,7 +156,7 @@ def main(_):
         for path in expert_buffers:
             with open(path, 'rb') as f:
                 expert_replay_buffer = pickle.load(f)
-                expert_replay_buffer.optimize()
+                # expert_replay_buffer.optimize()
             expert_replay_buffers.append(expert_replay_buffer)
     # breakpoint()
     expert_replay_buffer_iterators=[]
@@ -190,6 +190,7 @@ def main(_):
                 for key, value in update_info_expert.items():
                         total_metrics[key].append(float(value))
                         # Calculate averages for each metric
+                # print(total_metrics)
             average_metrics = {
                 key: np.mean(value)  
                 for key, value in total_metrics.items()

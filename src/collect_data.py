@@ -116,7 +116,7 @@ def collect_basic_agent_data(replay_buffer_size=int(5e3)):
     replay_buffer = ReplayBuffer(
         env.observation_space, 
         env.action_space,
-        capacity=int(1e6)
+        capacity=int(4e5)
     )
 
     # Initialize noise for exploration
@@ -192,7 +192,7 @@ def collect_basic_agent_data(replay_buffer_size=int(5e3)):
         # )
         # oversample junction entries
         if is_agent_at_junction(env):
-             for _ in range(5):
+             for _ in range(10):
                   replay_buffer.insert(
                     dict(
                         observations=observation,

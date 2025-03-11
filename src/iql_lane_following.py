@@ -1,6 +1,7 @@
 #! /usr/bin/env python
 from collections import defaultdict, deque
 import itertools
+import math
 import os
 import pickle
 import random
@@ -18,7 +19,7 @@ from absl import app, flags
 from ml_collections import config_flags
 from flax.training import checkpoints
 import jaxrl2.extra_envs.dm_control_suite
-from jaxrl2.agents import PixelIQLLearner
+from jaxrl2.agents import PixelIQLLearner,PixelResNetIQLLearner
 from jaxrl2.data import ReplayBuffer
 from jaxrl2.data.hindsight_replay_buffer import HindsightReplayBuffer
 from jaxrl2.evaluation import evaluate
@@ -60,7 +61,7 @@ config.cnn_padding = "VALID"
 config.latent_dim = 50
 config.discount = 0.99
 config.expectile = 0.7  # The actual tau for expectiles.
-config.A_scaling = 3.0
+config.A_scaling = 10.0
 config.dropout_rate = config_dict.placeholder(float)
 config.cosine_decay = True
 config.tau = 0.005
@@ -77,9 +78,9 @@ flags.DEFINE_string("save_dir", "./tmp/", "Tensorboard logging dir.")
 flags.DEFINE_integer("seed", 42, "Random seed.")
 flags.DEFINE_integer("eval_episodes", 5, "Number of episodes used for evaluation.")
 flags.DEFINE_integer("log_interval", 1000, "Logging interval.")
-flags.DEFINE_integer("eval_interval", int(5e4), "Eval interval.")
+flags.DEFINE_integer("eval_interval", int(1), "Eval interval.")
 flags.DEFINE_integer("batch_size", 16, "Mini batch size.")
-flags.DEFINE_integer("max_steps", int(2e6), "Number of training steps.")
+flags.DEFINE_integer("max_steps", int(70), "Number of training steps.")
 flags.DEFINE_integer(
     "start_training", int(1e3), "Number of training steps to start training."
 )
@@ -162,7 +163,7 @@ def main(_):
     random.seed(FLAGS.seed)
     action_space,observation_space=initialize_spaces()
     # Initialize agent and replay buffer
-    agent = PixelIQLLearner(
+    agent = PixelResNetIQLLearner(
         0, 
         observation_space.sample(), 
         action_space.sample(), 
@@ -201,18 +202,49 @@ def main(_):
             total_metrics = defaultdict(list)
             expert_replay_buffer = next(expert_replay_buffers)
             expert_replay_buffer_iterator=expert_replay_buffer.get_sequential_iterator(sample_args={"batch_size": FLAGS.batch_size})
-            for batch_expert in expert_replay_buffer_iterator:
-                update_info_expert = agent.update(
-                    batch_expert)
-                for key, value in update_info_expert.items():
-                        total_metrics[key].append(float(value))
-                        # Calculate averages for each metric
-                # print(total_metrics)
+                
+            epoch_bar = tqdm.tqdm(
+                total=math.ceil(expert_replay_buffer._size / FLAGS.batch_size),  # Total number of batches
+                desc="Epoch Progress",  # Description for the progress bar
+                dynamic_ncols=True,  # Adjust progress bar width to the terminal
+            )
+
+            # Dictionary to store metrics
+            total_metrics = defaultdict(list)
+
+            try:
+                # Iterate over the expert replay buffer
+                # with cProfile.Profile() as pr:
+
+                    for ix, batch_expert in enumerate(expert_replay_buffer_iterator):
+                        # Update the agent with the current batch
+                        update_info_expert = agent.update(batch_expert)
+                        
+                        # Log metrics
+                        for key, value in update_info_expert.items():
+                            total_metrics[key].append(float(value))
+                        
+                        # Update the progress bar by 1 step
+                        epoch_bar.update(1)
+                        
+                        # Optionally, display metrics in the progress bar
+                        epoch_bar.set_postfix({key: f"{np.mean(value):.4f}" for key, value in total_metrics.items()})
+                        # ... do something ...
+
+                        # pr.dump_stats("sample.prof")        
+                        # exit(0)
+                    
+            finally:
+                # Ensure the progress bar is closed even if an error occurs
+                epoch_bar.close()
+            
             average_metrics = {
                 key: np.mean(value)  
                 for key, value in total_metrics.items()
             }
+            # print(average_metrics,total_metrics)
             logger.log_training(average_metrics, i,prefix="_expert")
+            # logger.log_training(update_info_expert, i,prefix="_expert")
             i+=1
             p_bar.n = i  
             # breakpoint()   

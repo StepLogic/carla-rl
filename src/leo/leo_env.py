@@ -33,6 +33,26 @@ def estimate_orientation(a, w, angle,dt, alpha=0.9, g_ref=(0., 0., 1.), theta_mi
     angle = (1-alpha)*(angle + w * dt) + (alpha)*(a)
 
     return angle
+
+def mean_distance_to_obstacle(scan):
+        angles = np.arange(
+            scan.angle_min,
+            scan.angle_max + scan.angle_increment,
+            scan.angle_increment
+        )
+        
+        selected_indices = np.ravel(np.argwhere(
+            np.logical_and(
+                np.logical_or(
+                    angles < np.pi/2,  # Less than 90 degrees
+                    angles > np.pi*(3/2)  # Greater than 270 degrees
+                ),
+                np.array(scan.ranges) > scan.range_min
+            )
+        ))
+        ranges=np.array(scan.ranges)
+        collision=np.min(ranges[selected_indices])
+        return collision    
 class LeoEnv(gym.Env):
     def __init__(self):
         self.image_sub = rospy.Subscriber(IMAGE_TOPIC,Image,self.image_callback)
@@ -71,6 +91,7 @@ class LeoEnv(gym.Env):
         self.rewards=[]
         self.offsets=[]
         self.ranges=[]
+        self.prev_acceleration=np.zeros(3)
         # self.vector=None
         image_space = Box(
             low=-1.0,
@@ -100,10 +121,9 @@ class LeoEnv(gym.Env):
         # image=self.observation_space["pixels"].sample()
 
         # vector=self.observation_space["vector"].sample()
-        image=None
-        vector=None
-
-        timeout=int(1e2)
+        # image=None
+        # vector=None
+        # timeout=int(1e2)
         # for _ in range(int(timeout)):
         #     # print(self.vector_queue.qsize())
         #     vector=self.vector_queue.get()
@@ -127,7 +147,6 @@ class LeoEnv(gym.Env):
         #         # self.collision_queue.queue.clear()
         #         # self.ranges=[]
         #         break
-        
         #     if reset:
         #         break
 
@@ -148,7 +167,8 @@ class LeoEnv(gym.Env):
         time.sleep(10.0)
         print("Reset Robot Please!!!!!!")
         self.offsets=[np.mean(self.velocities),np.mean(self.headings)]
-        self.collision_threshold=np.max(self.ranges)
+        self.collision_threshold=np.min(self.ranges)
+        self.prev_acceleration=np.zeros(3)
         self.ranges=[]
         self.velocities=[]
         self.dts=[]
@@ -180,49 +200,8 @@ class LeoEnv(gym.Env):
         # except Exception as e:
         #     print(e)
     def lidar_callback(self,scan):
-        # if image.header.timestamp >= self.current_timestamp: #look up
-        #         return
-        # try:
-        
-        # print(scan)
-
-        angles = np.arange(
-            scan.angle_min,
-            scan.angle_max + scan.angle_increment,
-            scan.angle_increment
-        )
-        
-        # Select indices where:
-        # 1. Angle is either < 90° or > 270° (convert to radians)
-        # 2. Range values are greater than minimum range
-        selected_indices = np.ravel(np.argwhere(
-            np.logical_and(
-                np.logical_or(
-                    angles < np.pi/2,  # Less than 90 degrees
-                    angles > np.pi*(3/2)  # Greater than 270 degrees
-                ),
-                np.array(scan.ranges) > scan.range_min
-            )
-        ))
-        # print(selected_indices)
-        
-        # Update ranges using only the selected indices
-        ranges=np.array(scan.ranges)
-        
-    
-        self.ranges.append(np.max(ranges[selected_indices]))
-        
-        # Check for collision based on range threshold
-        if self.collision_threshold is None or not self.collision:
-            # self.collision_queue.put(False)
-            # if not self.co
-            # if not self.collision:
-                self.collision=False
-        else:
-            # self.collision_queue.put(
-                self.collision=np.min(ranges[selected_indices]) > self.collision_threshold
-        # )
-        #     print(e)
+        dist_to_obs = mean_distance_to_obstacle(scan)
+        self.collision=dist_to_obs<self.collision_threshold
             
     def imu_calback(self,imu):
         dt=1/self.RATE
@@ -237,7 +216,10 @@ class LeoEnv(gym.Env):
         self.theta=estimate_orientation(accel,w,self.theta,dt)
         accel[2]=0
         # accel[1]=-1*accel[1]
-        self.v=self.v+accel*dt
+        
+        self.v=self.v + ((self.prev_acceleration - accel)/ 2) *dt
+
+        self.prev_acceleration=accel
         # print(accel,self.v)
         # print(self.v,np.linalg.norm(self.v))
         self.velocities.append(self.v[0]) # on forward velocity

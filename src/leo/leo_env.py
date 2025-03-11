@@ -26,17 +26,13 @@ def ros_vector3_to_np_array(msg):
 import numpy as np
 from scipy.signal import filtfilt, butter
 
-def estimate_orientation(a, w, angle,dt, alpha=0.9, g_ref=(0., 0., 1.), theta_min=1e-6, highpass=.01, lowpass=.05):
+
+def estimate_orientation(a, w, angle,dt, alpha=0.9, theta_min=1e-6):
     """
     Source:https://gist.github.com/phausamann/721fa3df0f8ef6f4f6f24b86fdde53c0
     """
-
-    g_ref = np.array(g_ref)
-    w = filtfilt(*butter(5, highpass, btype='high'), w, axis=0)
-    w[np.linalg.norm(w, axis=1) < theta_min] = 0
-    a = filtfilt(*butter(5, lowpass, btype='low'), a, axis=0)
+    w[np.linalg.norm(w) < theta_min] = 0
     angle = (1-alpha)*(angle + w * dt) + (alpha)*(a)
-
     return angle
 
 def mean_distance_to_obstacle(scan):
@@ -201,7 +197,7 @@ class LeoEnv(gym.Env):
         image = self.bridge.imgmsg_to_cv2(image, "rgb8")
         image=cv2.resize(image,(self.image_size,self.image_size))
         # self.image_queue.put(image)
-        self.image=image
+        self.image=image/255
         # except Exception as e:
         #     print(e)
     def lidar_callback(self,scan):
@@ -217,20 +213,20 @@ class LeoEnv(gym.Env):
         accel = ros_vector3_to_np_array(imu.linear_acceleration)
         
         # Apply a low-pass filter to the IMU data to reduce noise
-        def butter_lowpass(cutoff, fs, order=5):
-            nyquist = 0.5 * fs
-            normal_cutoff = cutoff / nyquist
-            b, a = butter(order, normal_cutoff, btype='low', analog=False)
-            return b, a
+        # def butter_lowpass(cutoff, fs, order=1):
+        #     nyquist = 0.5 * fs
+        #     normal_cutoff = cutoff / nyquist
+        #     b, a = butter(order, normal_cutoff, btype='low', analog=False)
+        #     return b, a
 
-        def lowpass_filter(data, cutoff, fs, order=5):
-            b, a = butter_lowpass(cutoff, fs, order=order)
-            y = filtfilt(b, a, data)
-            return y
+        # def lowpass_filter(data, cutoff, fs, order=1):
+        #     b, a = butter_lowpass(cutoff, fs, order=order)
+        #     y = filtfilt(b, a, data)
+        #     return y
 
         cutoff_frequency = 5.0  # Adjust based on your requirements
-        accel = lowpass_filter(accel+[np.zeros(3) for _ in range(17)], cutoff_frequency, self.RATE)
-        w = lowpass_filter(w, cutoff_frequency, self.RATE)
+        # accel = lowpass_filter(accel+[np.zeros(3) for _ in range(17)], cutoff_frequency, self.RATE)
+        # w = lowpass_filter(w, cutoff_frequency, self.RATE)
 #           File "/root/.local/share/virtualenvs/carla-rl-JfCMuBLH/lib/python3.9/site-packages/scipy/signal/_signaltools.py", line 4221, in _validate_pad
 #     raise ValueError("The length of the input vector x must be greater "
 # ValueError: The length of the input vector x must be greater than padlen, which is 18.
@@ -241,7 +237,7 @@ class LeoEnv(gym.Env):
         accel[2] = 0
         
         # Update velocity using trapezoidal integration
-        self.v = self.v + ((self.prev_acceleration + accel) / 2) * dt
+        self.v = self.v + ((accel) / 2) * dt
         self.prev_acceleration = accel
         
         # Calculate the norm of the velocity vector
@@ -252,11 +248,12 @@ class LeoEnv(gym.Env):
         self.headings.append(self.theta[-1])
         
         # Calculate mean speed and heading
-        self.speed = np.mean(self.velocities)
+        self.speed = abs(np.mean(self.velocities))
         self.current_heading = np.mean(self.headings)
         
         # Adjust for any offsets
         if self.offsets:
+            print(self.offsets)
             self.current_heading -= self.offsets[-1]
             self.speed -= self.offsets[0]
         
@@ -369,7 +366,7 @@ class LeoEnv(gym.Env):
         # else:
         #     reward+=0
         # reward=  target_speed_error*0.5 + heading_error + smooth_action*0.1
-        # print(reward,target_speed_error,heading_error)
+        print(reward,self.target_speed,self.speed,self.heading,imu)
         # Penalize falling, collisions, lane invasions, and excessive speed
         if self.collision:
             print(f'Collision Dist={self.distance_travelled:3f} Target_S={self.target_speed:.4f} Vel={hero_velocity:.4f} R={reward:.4f} ')

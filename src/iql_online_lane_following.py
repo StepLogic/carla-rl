@@ -17,7 +17,7 @@ from absl import app, flags
 from ml_collections import config_flags
 from flax.training import checkpoints
 import jaxrl2.extra_envs.dm_control_suite
-from jaxrl2.agents import PixelIQLLearner
+from jaxrl2.agents import PixelIQLLearner,PixelResNetIQLLearner
 from jaxrl2.data import ReplayBuffer
 from jaxrl2.data.hindsight_replay_buffer import HindsightReplayBuffer
 from jaxrl2.evaluation import evaluate
@@ -128,8 +128,10 @@ import rospy
 from typing import Dict, Any
 
 # expert_buffer="/home/kojogyaase/Projects/Research/carla-rl/datasets/goal_condition_Town05_data_0.pkl"
-expert_buffers=list(glob.glob("/workspaces/ROS1/carla-rl/real_robot_dataset/*.pkl"))
-checkpoint_path="/workspaces/ROS1/carla-rl/checkpoints/iql_checkpoint/checkpoint_1"
+# expert_buffers=list(glob.glob("/workspaces/ROS1/carla-rl/real_robot_dataset/*.pkl"))
+expert_buffers=None
+checkpoint_path="/workspaces/ROS1/carla-rl/best_models/iql"
+
 # rb_path="/workspaces/ROS1/carla-rl/savepoint/lane_following_buffer.pkl"
 rb_path=None
 def load_checkpoint(agent, checkpoint_path):
@@ -178,7 +180,7 @@ def main(_):
     random.seed(FLAGS.seed)
 
     # Initialize agent and replay buffer
-    agent = PixelIQLLearner(
+    agent = PixelResNetIQLLearner(
         0, 
         env.observation_space.sample(), 
         env.action_space.sample(), 

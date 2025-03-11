@@ -10,6 +10,11 @@ import queue
 from gymnasium.spaces import Dict,Box
 import numpy as np
 import time
+
+import numpy as np
+from scipy.signal import butter, filtfilt
+
+
 IMAGE_TOPIC="/camera/image_raw"
 IMU_TOPIC="/imu/data_raw"
 ROBOT_CMD_TOPIC="/cmd_vel"
@@ -203,47 +208,76 @@ class LeoEnv(gym.Env):
         dist_to_obs = mean_distance_to_obstacle(scan)
         self.collision=dist_to_obs<self.collision_threshold
             
-    def imu_calback(self,imu):
-        dt=1/self.RATE
-        # imu=imu.data
-        vec=self.observation_space["vector"].sample()
-        # if dt > int(1e3): #look up
-        #         return
-        # try:
-        # print(imu.linear_acceleration)
-        w=ros_vector3_to_np_array(imu.angular_velocity)
-        accel=ros_vector3_to_np_array(imu.linear_acceleration)
-        self.theta=estimate_orientation(accel,w,self.theta,dt)
-        accel[2]=0
-        # accel[1]=-1*accel[1]
+
+    def imu_callback(self, imu):
+        dt = 1 / self.RATE
         
-        self.v=self.v + ((self.prev_acceleration - accel)/ 2) *dt
+        # Convert ROS IMU data to numpy arrays
+        w = ros_vector3_to_np_array(imu.angular_velocity)
+        accel = ros_vector3_to_np_array(imu.linear_acceleration)
+        
+        # Apply a low-pass filter to the IMU data to reduce noise
+        def butter_lowpass(cutoff, fs, order=5):
+            nyquist = 0.5 * fs
+            normal_cutoff = cutoff / nyquist
+            b, a = butter(order, normal_cutoff, btype='low', analog=False)
+            return b, a
 
-        self.prev_acceleration=accel
-        # print(accel,self.v)
-        # print(self.v,np.linalg.norm(self.v))
-        self.velocities.append(self.v[0]) # on forward velocity
+        def lowpass_filter(data, cutoff, fs, order=5):
+            b, a = butter_lowpass(cutoff, fs, order=order)
+            y = filtfilt(b, a, data)
+            return y
+
+        cutoff_frequency = 5.0  # Adjust based on your requirements
+        accel = lowpass_filter(accel, cutoff_frequency, self.RATE)
+        w = lowpass_filter(w, cutoff_frequency, self.RATE)
+        
+        # Estimate orientation using filtered data
+        self.theta = estimate_orientation(accel, w, self.theta, dt)
+        
+        # Zero out the z-component of acceleration (assuming 2D motion)
+        accel[2] = 0
+        
+        # Update velocity using trapezoidal integration
+        self.v = self.v + ((self.prev_acceleration + accel) / 2) * dt
+        self.prev_acceleration = accel
+        
+        # Calculate the norm of the velocity vector
+        velocity_norm = np.linalg.norm(self.v)
+        
+        # Append velocity norm and heading to their respective lists
+        self.velocities.append(velocity_norm)  # Use norm of velocity
         self.headings.append(self.theta[-1])
-        # breakpoint()
-        # print(self.velocities)
-        self.speed=np.mean(self.velocities)
-        self.current_heading=np.mean(self.headings)
+        
+        # Calculate mean speed and heading
+        self.speed = np.mean(self.velocities)
+        self.current_heading = np.mean(self.headings)
+        
+        # Adjust for any offsets
         if self.offsets:
-            self.current_heading-=self.offsets[-1]
-            self.speed-=self.offsets[0]
- 
-        # print(self.speed,self.current_heading)
-        vec[0]=self.previous_actions[0]/self.max_steer
-        vec[1]=self.previous_actions[1]/self.max_steer
-        vec[2]=np.clip(self.speed/(self.target_speed+1.0),0,5.1)
-        vec[3]=np.clip(self.current_heading/(self.heading+1.0),-5.1,5.1)
-        self.vector=np.nan_to_num(vec,nan=0)
+            self.current_heading -= self.offsets[-1]
+            self.speed -= self.offsets[0]
+        
+        # Normalize and clip the vector components
+        vec = self.observation_space["vector"].sample()
+        vec[0] = self.previous_actions[0] / self.max_steer
+        vec[1] = self.previous_actions[1] / self.max_steer
+        vec[2] = np.clip(self.speed / (self.target_speed + 1.0), 0, 5.1)
+        vec[3] = np.clip(self.current_heading / (self.heading + 1.0), -5.1, 5.1)
+        
+        # Ensure no NaNs in the vector
+        self.vector = np.nan_to_num(vec, nan=0)
         self.vector_queue.put(vec)
+        
+        # Append dt to the list of time intervals
         self.dts.append(dt)
-
-        self.distance_travelled+=abs(self.v[0]*self.current_heading)
-        # except Exception as e:
-        #     print(e)
+        
+        # Update distance travelled using velocity norm
+        self.distance_travelled += velocity_norm * dt
+        
+        # Handle exceptions and print errors if any
+        except Exception as e:
+            print(f"Error in IMU callback: {e}")
     def step(self,action:np.ndarray):
         # action[0]=np.clip(action[0]+self.previous_actions[0],-1.0,1.0)
         # action[1]=np.clip(action[1]+self.previous_actions[1],-1.0,1.0)

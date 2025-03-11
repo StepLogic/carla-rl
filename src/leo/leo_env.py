@@ -62,7 +62,7 @@ class LeoEnv(gym.Env):
     def __init__(self):
         self.image_sub = rospy.Subscriber(IMAGE_TOPIC,Image,self.image_callback)
         self.lidar_sub = rospy.Subscriber(LIDAR_TOPIC,LaserScan,self.lidar_callback)
-        self.imu_sub = rospy.Subscriber(IMU_TOPIC,Imu,self.imu_calback)
+        self.imu_sub = rospy.Subscriber(IMU_TOPIC,Imu,self.imu_callback)
         self.robot_cmd =rospy.Publisher(ROBOT_CMD_TOPIC, Twist, queue_size=10)
         self.bridge = CvBridge()
         self.image_queue=queue.Queue() #define queue
@@ -229,9 +229,11 @@ class LeoEnv(gym.Env):
             return y
 
         cutoff_frequency = 5.0  # Adjust based on your requirements
-        accel = lowpass_filter(accel, cutoff_frequency, self.RATE)
+        accel = lowpass_filter(accel+[np.zeros(3) for _ in range(17)], cutoff_frequency, self.RATE)
         w = lowpass_filter(w, cutoff_frequency, self.RATE)
-        
+#           File "/root/.local/share/virtualenvs/carla-rl-JfCMuBLH/lib/python3.9/site-packages/scipy/signal/_signaltools.py", line 4221, in _validate_pad
+#     raise ValueError("The length of the input vector x must be greater "
+# ValueError: The length of the input vector x must be greater than padlen, which is 18.
         # Estimate orientation using filtered data
         self.theta = estimate_orientation(accel, w, self.theta, dt)
         
@@ -275,9 +277,9 @@ class LeoEnv(gym.Env):
         # Update distance travelled using velocity norm
         self.distance_travelled += velocity_norm * dt
         
-        # Handle exceptions and print errors if any
-        except Exception as e:
-            print(f"Error in IMU callback: {e}")
+        # # Handle exceptions and print errors if any
+        # except Exception as e:
+        #     print(f"Error in IMU callback: {e}")
     def step(self,action:np.ndarray):
         # action[0]=np.clip(action[0]+self.previous_actions[0],-1.0,1.0)
         # action[1]=np.clip(action[1]+self.previous_actions[1],-1.0,1.0)

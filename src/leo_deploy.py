@@ -17,7 +17,7 @@ from absl import app, flags
 from ml_collections import config_flags
 from flax.training import checkpoints
 import jaxrl2.extra_envs.dm_control_suite
-from jaxrl2.agents import PixelIQLLearner
+from jaxrl2.agents import PixelIQLLearner,PixelResNetIQLLearner
 from jaxrl2.data import ReplayBuffer
 from jaxrl2.data.hindsight_replay_buffer import HindsightReplayBuffer
 from jaxrl2.evaluation import evaluate
@@ -114,7 +114,7 @@ def main(_):
     random.seed(42)
 
     # Initialize agent and replay buffer
-    agent = PixelIQLLearner(
+    agent = PixelResNetIQLLearner(
         0, 
         env.observation_space.sample(), 
         env.action_space.sample(), 

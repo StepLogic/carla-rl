@@ -21,17 +21,12 @@ def ros_vector3_to_np_array(msg):
 import numpy as np
 from scipy.signal import filtfilt, butter
 
-def estimate_orientation(a, w, angle,dt, alpha=0.9, g_ref=(0., 0., 1.), theta_min=1e-6, highpass=.01, lowpass=.05):
+def estimate_orientation(a, w, angle,dt, alpha=0.9, theta_min=1e-6):
     """
     Source:https://gist.github.com/phausamann/721fa3df0f8ef6f4f6f24b86fdde53c0
     """
-
-    g_ref = np.array(g_ref)
-    w = filtfilt(*butter(5, highpass, btype='high'), w, axis=0)
-    w[np.linalg.norm(w, axis=1) < theta_min] = 0
-    a = filtfilt(*butter(5, lowpass, btype='low'), a, axis=0)
+    w[np.linalg.norm(w) < theta_min] = 0
     angle = (1-alpha)*(angle + w * dt) + (alpha)*(a)
-
     return angle
 
 def mean_distance_to_obstacle(scan):
@@ -185,7 +180,7 @@ class LeoEnv(gym.Env):
         self.action=np.zeros(2)
         self.info=dict()
         self.speed=0.0
-        self.heading=np.random.uniform(1e-8,2*np.pi,)+self.offsets[-1]
+        self.heading=np.random.uniform(1e-8,2*np.pi)
         self.target_speed=2.0+self.offsets[0]
         return observation,self.info
             
@@ -201,6 +196,7 @@ class LeoEnv(gym.Env):
         #     print(e)
     def lidar_callback(self,scan):
         dist_to_obs = mean_distance_to_obstacle(scan)
+        print(dist_to_obs)
         self.collision=dist_to_obs<self.collision_threshold
             
     def imu_calback(self,imu):
@@ -213,8 +209,9 @@ class LeoEnv(gym.Env):
         # print(imu.linear_acceleration)
         w=ros_vector3_to_np_array(imu.angular_velocity)
         accel=ros_vector3_to_np_array(imu.linear_acceleration)
-        self.theta=estimate_orientation(accel,w,self.theta,dt)
         accel[2]=0
+        self.theta=estimate_orientation(accel,w,self.theta,dt)
+        
         # accel[1]=-1*accel[1]
         
         self.v=self.v + ((self.prev_acceleration - accel)/ 2) *dt
@@ -227,7 +224,7 @@ class LeoEnv(gym.Env):
         # breakpoint()
         # print(self.velocities)
         self.speed=np.mean(self.velocities)
-        self.current_heading=np.mean(self.headings)
+        self.current_heading=self.theta[-1]
         if self.offsets:
             self.current_heading-=self.offsets[-1]
             self.speed-=self.offsets[0]
@@ -316,7 +313,7 @@ class LeoEnv(gym.Env):
 
 
         speed_factor=np.exp(-(hero_velocity-self.target_speed)**2)
-
+        print(self.target_speed,heading,self.current_heading,hero_velocity)
         # Normalize heading error to [-1.0, 1.0] to allow for larger corrections
         heading_factor = np.exp(-(imu-heading)**2)
         # heading_error = np.clip(heading_error, -1.0, 1.0)

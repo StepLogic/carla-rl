@@ -62,7 +62,7 @@ class LeoEnv(gym.Env):
     def __init__(self):
         self.image_sub = rospy.Subscriber(IMAGE_TOPIC,Image,self.image_callback)
         self.lidar_sub = rospy.Subscriber(LIDAR_TOPIC,LaserScan,self.lidar_callback)
-        self.imu_sub = rospy.Subscriber(IMU_TOPIC,Imu,self.imu_calback)
+        self.imu_sub = rospy.Subscriber(IMU_TOPIC,Imu,self.imu_callback)
         self.robot_cmd =rospy.Publisher(ROBOT_CMD_TOPIC, Twist, queue_size=10)
         self.bridge = CvBridge()
         self.image_queue=queue.Queue() #define queue
@@ -217,21 +217,23 @@ class LeoEnv(gym.Env):
         accel = ros_vector3_to_np_array(imu.linear_acceleration)
         
         # Apply a low-pass filter to the IMU data to reduce noise
-        def butter_lowpass(cutoff, fs, order=5):
+        def butter_lowpass(cutoff, fs, order=1):
             nyquist = 0.5 * fs
             normal_cutoff = cutoff / nyquist
             b, a = butter(order, normal_cutoff, btype='low', analog=False)
             return b, a
 
-        def lowpass_filter(data, cutoff, fs, order=5):
+        def lowpass_filter(data, cutoff, fs, order=1):
             b, a = butter_lowpass(cutoff, fs, order=order)
             y = filtfilt(b, a, data)
             return y
 
         cutoff_frequency = 5.0  # Adjust based on your requirements
-        accel = lowpass_filter(accel, cutoff_frequency, self.RATE)
+        accel = lowpass_filter(accel+[np.zeros(3) for _ in range(17)], cutoff_frequency, self.RATE)
         w = lowpass_filter(w, cutoff_frequency, self.RATE)
-        
+#           File "/root/.local/share/virtualenvs/carla-rl-JfCMuBLH/lib/python3.9/site-packages/scipy/signal/_signaltools.py", line 4221, in _validate_pad
+#     raise ValueError("The length of the input vector x must be greater "
+# ValueError: The length of the input vector x must be greater than padlen, which is 18.
         # Estimate orientation using filtered data
         self.theta = estimate_orientation(accel, w, self.theta, dt)
         
@@ -275,7 +277,7 @@ class LeoEnv(gym.Env):
         # Update distance travelled using velocity norm
         self.distance_travelled += velocity_norm * dt
         
-        # Handle exceptions and print errors if any
+        # # Handle exceptions and print errors if any
         # except Exception as e:
         #     print(f"Error in IMU callback: {e}")
     def step(self,action:np.ndarray):

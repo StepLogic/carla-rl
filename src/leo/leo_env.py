@@ -276,8 +276,8 @@ class LeoEnv(gym.Env):
         self.distance_travelled += velocity_norm * dt
         
         # Handle exceptions and print errors if any
-        except Exception as e:
-            print(f"Error in IMU callback: {e}")
+        # except Exception as e:
+        #     print(f"Error in IMU callback: {e}")
     def step(self,action:np.ndarray):
         # action[0]=np.clip(action[0]+self.previous_actions[0],-1.0,1.0)
         # action[1]=np.clip(action[1]+self.previous_actions[1],-1.0,1.0)

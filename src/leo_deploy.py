@@ -72,7 +72,7 @@ config.tau = 0.005
 config.critic_reduction = "min"
 config.share_encoder = False
 sac_config = config.to_dict()
-checkpoint_path="/workspaces/ROS1/carla-rl/best_models/iql"
+checkpoint_path="/workspaces/ROS1/carla-rl/checkpoints/iql_checkpoint/checkpoint_1"
 
 def load_checkpoint(agent, checkpoint_path):
     """Load agent parameters from checkpoint."""
@@ -106,7 +106,7 @@ def main(_):
     env = LeoEnv()
     rate = rospy.Rate(env.RATE)
     env = FrameStack(env=env, num_stack=1,stacking_key="pixels")
-    env = TimeLimit(env,max_episode_steps=2500)
+    env = TimeLimit(env,max_episode_steps=12000)
     env = RecordEpisodeStatistics(env)
     # logger = Logger(log_dir="./logs",prefix="SAC")
     env.unwrapped.target_speed=100
@@ -145,12 +145,23 @@ def main(_):
         episode_reward = 0
         
         while not eval_done:
+            target=4.5
+            vecs=observation["vector"]
+            current_velocity=env.unwrapped.speed
+            current_heading=env.unwrapped.current_heading
+            # breakpoint()
+            # if (current_heading - heading)<np.deg2rad(10):
+            #         truncate_steps=int(1e5) #break loop
+            #         print(np.rad2deg(current_heading),np.rad2deg(heading))
+            vecs[2] = np.clip(current_velocity/(target+1e-8), 0.0, 5.1)
+            vecs[3]= np.clip(current_heading/(0+1e-8),-5.1,5.1) 
+            # vecs[4]= np.clip(heading/np.pi,-5.1,5.1) 
             eval_action = agent.eval_actions(eval_obs)  # No exploration
             eval_obs, eval_reward, eval_done, eval_truncated, eval_info = env.step(eval_action)
             episode_reward += eval_reward
             
             if eval_done or eval_truncated:
-                if "is_success" in eval_info:
+                if "is_success" in eval_info or "TimeLimit.truncated" in eval_info:
                     eval_successes.append(float(eval_info["is_success"]))
                 if "distance_completed" in eval_info:
                     eval_dists.append(float(eval_info["distance_completed"]))
@@ -173,12 +184,12 @@ def main(_):
         eval_info["distance_completed"] = np.mean(eval_dists)
         eval_info["slack"] = np.mean(eval_slack)
     # save_checkpoint(agent,policy_folder,i)
-    logger.log_eval(eval_info, i)
-    logger.print_status(i, FLAGS.max_steps)
-    
+    # logger.log_eval(eval_info, i)
+    # logger.print_status(i, FLAGS.max_steps)
+    print(eval_info)
     training_duration = time.time() - training_start_time
     print(f"\nTraining completed in {training_duration/3600:.2f} hours")
-    print(f"Logs saved to: {logger.log_dir}")
+    # print(f"Logs saved to: {logger.log_dir}")
 
 if __name__ == "__main__":
     app.run(main)

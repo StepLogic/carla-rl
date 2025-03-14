@@ -28,7 +28,9 @@ class CarlaEvalEnv(gym.Env):
         self.last_position=None
         # self.reset()
     def set_start_transform(self,start):
+        # print(start)
         self.experiment.origin=self.core.map.get_waypoint(start)
+
     def set_destination_transform(self,end):
         self.experiment.destination=self.core.map.get_waypoint(end)
     def set_goal(self,goal_image,heading,location=None):

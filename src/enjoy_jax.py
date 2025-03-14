@@ -24,7 +24,7 @@ def load_checkpoint(agent, checkpoint_path):
     """Load agent parameters from checkpoint."""
     state_dict = {
         'actor_params': agent._actor,
-        # 'critic_params': agent._critic,
+        'critic_params': agent._critic,
         # 'target_critic_params': agent._target_critic_params,
         # 'temp': agent._temp,
         # 'rng': agent._rng,

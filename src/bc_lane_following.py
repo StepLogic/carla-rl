@@ -9,13 +9,14 @@ import random
 
 import gym
 import gymnasium
-from jaxrl2.agents.pixel_bc.pixel_bc_learner import PixelBCLearner
-from jaxrl2.agents.resnet_agents.pixel_bc_resnet_learner import PixelResNetBCLearner
+# from jaxrl2.agents.pixel_bc.pixel_bc_learner import PixelBCLearner
+from jaxrl2.agents.resnet_agents import PixelResNetBCLearner
 from jaxrl2.utils.misc import Logger
 from jaxrl2.wrappers.frame_stack import FrameStack
 from jaxrl2.wrappers.timelimit import TimeLimit
 from jaxrl2.wrappers.record_statistics import RecordEpisodeStatistics
 import ml_collections
+import optax
 import tqdm
 import wandb
 from absl import app, flags
@@ -55,7 +56,7 @@ config.cnn_strides = (2, 2, 2, 2)
 config.cnn_padding = "VALID"
 config.latent_dim = 50
 config.encoder = "pretrained-resnet"
-config.dropout_rate=0.2
+config.dropout_rate=0.5
 bc_config = config.to_dict()
 
 
@@ -119,8 +120,60 @@ expert_buffers=list(glob.glob("/home/robotlab/scratch/carla-rl/datasets/*.pkl"))
 # expert_buffers=list(glob.glob("/home/kojogyaase/Projects/Research/carla-rl/datasets/*.pkl"))
 def sample_from_buffers():
     pass
+
+
+def update(expert_replay_buffers,agent,train_encoder,logger,i,update_func=None,prefix="_expert"):
+
+
+    if not expert_buffers is None:
+        total_metrics = defaultdict(list)
+        expert_replay_buffer = next(expert_replay_buffers)
+        expert_replay_buffer_iterator=expert_replay_buffer.get_sequential_iterator(sample_args={"batch_size": FLAGS.batch_size})
+            
+        epoch_bar = tqdm.tqdm(
+            total=math.ceil(expert_replay_buffer._size / FLAGS.batch_size),  # Total number of batches
+            desc=f"{prefix} Epoch Progress",  # Description for the progress bar
+            dynamic_ncols=True,  # Adjust progress bar width to the terminal
+        )
+
+        # Dictionary to store metrics
+        total_metrics = defaultdict(list)
+
+        try:
+            # Iterate over the expert replay buffer
+            # with cProfile.Profile() as pr:
+
+                for ix, batch_expert in enumerate(expert_replay_buffer_iterator):
+                    # Update the agent with the current batch
+                    update_info_expert = update_func(batch_expert,train_encoder=train_encoder)
+                    
+                    # Log metrics
+                    for key, value in update_info_expert.items():
+                        total_metrics[key].append(float(value))
+                    
+                    # Update the progress bar by 1 step
+                    epoch_bar.update(1)
+                    
+                    # Optionally, display metrics in the progress bar
+                    epoch_bar.set_postfix({key: f"{np.mean(value):.4f}" for key, value in total_metrics.items()})
+                    # ... do something ...
+
+                    # pr.dump_stats("sample.prof")        
+                    # exit(0)
+                
+        finally:
+            # Ensure the progress bar is closed even if an error occurs
+            epoch_bar.close()
+        
+        average_metrics = {
+            key: np.mean(value)  
+            for key, value in total_metrics.items()
+        }
+        # print(average_metrics,total_metrics)
+        logger.log_training(average_metrics, i,prefix=prefix)
 def main(_):
     # Create environment
+    carla_config["env_config"]["carla"]["town"]="Town04"
     carla_config["env_config"]["carla"]["start_server"]=False
     env = CarlaGoalEnv(carla_config["env_config"])
     env = FrameStack(env=env, num_stack=1,stacking_key="pixels")
@@ -142,6 +195,16 @@ def main(_):
     random.seed(FLAGS.seed)
     # breakpoint()
     # Initialize agent and replay buffer
+    bc_config["actor_lr"] = optax.schedules.warmup_exponential_decay_schedule(
+            init_value=0.0,            # Initial learning rate
+            peak_value=0.001,          # Maximum learning rate after warmup
+            warmup_steps=1000,         # Number of steps for warmup phase
+            transition_steps=10000,    # Steps over which to decay after warmup
+            decay_rate=0.5,            # Exponential decay rate
+            staircase=False,            # Whether to use staircase decay
+            end_value=1e-6
+        )
+
     agent = PixelResNetBCLearner(
         0, 
         env.observation_space.sample(), 
@@ -158,6 +221,7 @@ def main(_):
             expert_replay_buffers.append(expert_replay_buffer)
     # breakpoint()
     expert_replay_buffer_iterators=[]
+    
     # if not expert_buffers is None:
     #     for expert_replay_buffer in expert_replay_buffers:
     #         if expert_replay_buffer:
@@ -176,58 +240,21 @@ def main(_):
     i=1
     run_eval=False
     # expert_replay_buffer_iterators=itertools.cycle(expert_replay_buffer_iterators)
+    train_encoder=True
     expert_replay_buffers=itertools.cycle(expert_replay_buffers)
+    with open("/home/robotlab/scratch/carla-rl/datasets copy/goal_condition_Town01_data_1.pkl", 'rb') as f:
+        validation_buffer = pickle.load(f)
+    validation_buffers=itertools.cycle([validation_buffer])
+        # validation_buffer=
     while i <  FLAGS.epochs + 1:
-        if not expert_buffers is None:
-            total_metrics = defaultdict(list)
-            expert_replay_buffer = next(expert_replay_buffers)
-            expert_replay_buffer_iterator=expert_replay_buffer.get_sequential_iterator(sample_args={"batch_size": FLAGS.batch_size})
-                
-            epoch_bar = tqdm.tqdm(
-                total=math.ceil(expert_replay_buffer._size / FLAGS.batch_size),  # Total number of batches
-                desc="Epoch Progress",  # Description for the progress bar
-                dynamic_ncols=True,  # Adjust progress bar width to the terminal
-            )
-
-            # Dictionary to store metrics
-            total_metrics = defaultdict(list)
-
-            try:
-                # Iterate over the expert replay buffer
-                # with cProfile.Profile() as pr:
-
-                    for ix, batch_expert in enumerate(expert_replay_buffer_iterator):
-                        # Update the agent with the current batch
-                        update_info_expert = agent.update(batch_expert)
-                        
-                        # Log metrics
-                        for key, value in update_info_expert.items():
-                            total_metrics[key].append(float(value))
-                        
-                        # Update the progress bar by 1 step
-                        epoch_bar.update(1)
-                        
-                        # Optionally, display metrics in the progress bar
-                        epoch_bar.set_postfix({key: f"{np.mean(value):.4f}" for key, value in total_metrics.items()})
-                        # ... do something ...
-
-                        # pr.dump_stats("sample.prof")        
-                        # exit(0)
-                    
-            finally:
-                # Ensure the progress bar is closed even if an error occurs
-                epoch_bar.close()
-            
-            average_metrics = {
-                key: np.mean(value)  
-                for key, value in total_metrics.items()
-            }
-            # print(average_metrics,total_metrics)
-            logger.log_training(average_metrics, i,prefix="_expert")
             # logger.log_training(update_info_expert, i,prefix="_expert")
+            update(validation_buffers,agent,train_encoder,logger,i,update_func=agent.eval,prefix="_eval")
+            update(expert_replay_buffers,agent,train_encoder,logger,i,update_func=agent.update,prefix="_expert")
+
             i+=1
             p_bar.update(i)
             p_bar.refresh()  
+            # train_encoder=i<2
             # if i % FLAGS.eval_interval == 0:
             save_checkpoint(agent,policy_folder,i)
             logger.print_status(i, FLAGS.epochs)

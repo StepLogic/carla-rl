@@ -148,14 +148,20 @@ def update(expert_replay_buffers,agent,train_encoder,logger,i,update_func=None,p
                     update_info_expert = update_func(batch_expert,train_encoder=train_encoder)
                     
                     # Log metrics
+                    extra={}
                     for key, value in update_info_expert.items():
+                        # if isinstance(value,(int,float)):
                         total_metrics[key].append(float(value))
-                    
+                        # else:
+                            # extra[key]=value
+
+                    print_dict={key: f"{np.mean(value):.4f}" for key, value in total_metrics.items()}
+                    print_dict.update(extra)
                     # Update the progress bar by 1 step
                     epoch_bar.update(1)
                     
                     # Optionally, display metrics in the progress bar
-                    epoch_bar.set_postfix({key: f"{np.mean(value):.4f}" for key, value in total_metrics.items()})
+                    epoch_bar.set_postfix(print_dict)
                     # ... do something ...
 
                     # pr.dump_stats("sample.prof")        
@@ -173,7 +179,7 @@ def update(expert_replay_buffers,agent,train_encoder,logger,i,update_func=None,p
         logger.log_training(average_metrics, i,prefix=prefix)
 def main(_):
     # Create environment
-    carla_config["env_config"]["carla"]["town"]="Town04"
+    # carla_config["env_config"]["carla"]["town"]="Town04"
     carla_config["env_config"]["carla"]["start_server"]=False
     env = CarlaGoalEnv(carla_config["env_config"])
     env = FrameStack(env=env, num_stack=1,stacking_key="pixels")

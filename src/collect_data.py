@@ -16,22 +16,38 @@ import os
 import pickle
 from rlib_integration.agent import BasicAgent
 # from train_online_pixels import CarlaGoalEnv,config,FrameStack,TimeLimit,RecordEpisodeStatistics,ReplayBuffer
-from src.configs.train_env_config import config
+from src.configs.collect_data_config import config
 from jaxrl2.noise import OrnsteinUhlenbeckActionNoise
 import carla
 import argparse
-def random_shift(observation,next_observation,action):
-    observation["pixels"]=np.fliplr(observation["pixels"][...,0])[...,None]
-    next_observation["pixels"]=np.fliplr(next_observation["pixels"][...,0])[...,None]
-    action[0]=-action[0]
+# def random_shift(observation,next_observation,action):
+#     observation["pixels"]=np.fliplr(observation["pixels"][...,0])[...,None]
+#     next_observation["pixels"]=np.fliplr(next_observation["pixels"][...,0])[...,None]
+#     action[0]=-action[0]
+#     return observation,next_observation,action
+def filter_observations(observation):
+    acceptable_keys=["pixels","vector"]
+    return {k:observation[k] for  k in acceptable_keys}
+
+def random_shift_left(observation,next_observation,action):
+    observation["pixels"]=observation["left_pixels"][...,None]
+    next_observation["pixels"]=next_observation["left_pixels"][...,None]
+    action[0] = action[0] - 0.1
     return observation,next_observation,action
+
+def random_shift_right(observation,next_observation,action):
+    observation["pixels"]=observation["right_pixels"][...,None]
+    next_observation["pixels"]=next_observation["right_pixels"][...,None]
+    action[0] = action[0] + 0.1
+    return observation,next_observation,action
+
 
 def random_perturb(env):
     # observation["pixels"]=np.fliplr(observation["pixels"][...,0])[...,None]
     # next_observation["pixels"]=np.fliplr(next_observation["pixels"][...,0])[...,None]
     perturb_steering_list=[1.0,-1.0]
-    _, _, _, _, _ = env.step([random.choice(perturb_steering_list),random.choice(perturb_steering_list)])
-    observation, _, _, _, _ = env.step([np.random.uniform(-1.0,1.0),np.random.uniform(-1.0,1.0)])
+    observation, _, _, _, _ = env.step([random.choice(perturb_steering_list),random.choice(perturb_steering_list)])
+    # observation, _, _, _, _ = env.step([np.random.uniform(-1.0,1.0),np.random.uniform(-1.0,1.0)])
     # action[0]=-action[0]
     return observation
 
@@ -66,7 +82,7 @@ def add_random_impulse(env):
     # Apply the force in the world coordinate system
     env.hero.add_force(carla.Vector3D(x_force, y_force, 0))
      
-def collect_basic_agent_data(replay_buffer_size=int(5e4)):
+def collect_basic_agent_data(replay_buffer_size=int(1e2)):
     # Create environment
 
     parser = argparse.ArgumentParser(description='Collect basic agent data')
@@ -113,6 +129,8 @@ def collect_basic_agent_data(replay_buffer_size=int(5e4)):
             return agent
     env=reset_env()
 
+
+
     # Initialize replay buffer
     replay_buffer = ReplayBuffer(
         env.observation_space, 
@@ -148,7 +166,6 @@ def collect_basic_agent_data(replay_buffer_size=int(5e4)):
         # if rand_key==1:
         #      add_random_impulse(env)
 
-    
         vecs=observation["vector"]
         env_target_speed=env.unwrapped.experiment.target_speed
         target=np.clip(float(env_target_speed-noise().item()),0,env_target_speed+2)
@@ -180,15 +197,29 @@ def collect_basic_agent_data(replay_buffer_size=int(5e4)):
         # if  agent.done():
         #      reward+=10
         # breakpoint()
-        copy_observation,copy_next_observation,copy_action=random_shift(observation,next_observation,action)
+
+        # shifts
+        copy_observation,copy_next_observation,copy_action=random_shift_left(observation,next_observation,action)
         replay_buffer.insert(
             dict(
-                observations=copy_observation,
+                observations=filter_observations(copy_observation),
                 actions=copy_action,
                 rewards=reward,
                 masks=mask,
                 dones=done,
-                next_observations=copy_next_observation,
+                next_observations=filter_observations(copy_next_observation),
+            )
+        )
+
+        copy_observation,copy_next_observation,copy_action=random_shift_right(observation,next_observation,action)
+        replay_buffer.insert(
+            dict(
+                observations=filter_observations(copy_observation),
+                actions=copy_action,
+                rewards=reward,
+                masks=mask,
+                dones=done,
+                next_observations=filter_observations(copy_next_observation),
             )
         )
         # oversample junction entries
@@ -196,24 +227,24 @@ def collect_basic_agent_data(replay_buffer_size=int(5e4)):
              for _ in range(10):
                   replay_buffer.insert(
                     dict(
-                        observations=observation,
+                        observations=filter_observations(observation),
                         actions=action,
                         rewards=reward,
                         masks=mask,
                         dones=done,
-                        next_observations=next_observation,
+                        next_observations=filter_observations(next_observation),
                     )
                 )
         else: 
-            if random.randint(0,5)==1:
+            if random.randint(0,10)==1:
                 replay_buffer.insert(
                     dict(
-                        observations=observation,
+                        observations=filter_observations(observation),
                         actions=action,
                         rewards=reward,
                         masks=mask,
                         dones=done,
-                        next_observations=next_observation,
+                        next_observations=filter_observations(next_observation),
                     )
                 )
         observation=next_observation

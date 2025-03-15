@@ -16,7 +16,7 @@ def normalize_angle(angle):
     return ((angle + np.pi) % (2 * np.pi)) - np.pi
 
 
-class STBL3Experiment(BaseExperiment):
+class BCDataCollectExperiment(BaseExperiment):
     def __init__(self, config={}):
         super().__init__(config)  # Creates a self.config with the experiment configuration
 
@@ -141,17 +141,15 @@ class STBL3Experiment(BaseExperiment):
 
     # Remove the get_actions method since we're using continuous actions
     def get_observation(self, sensor_data, core):
-        """Function to do all the post processing of observations (sensor data).
 
-        :param sensor_data: dictionary {sensor_name: sensor_data}
-
-        Should return a tuple or list with two items, the processed observations,
-        as well as a variable with additional information about such observation.
-        The information variable can be empty
-        """
         vecs = self.get_vec_obs(sensor_data, core)
-        images = self.get_img_obs(sensor_data, core)
-        return {"pixels":images, "vector":vecs}, self.info
+
+        images,right_image,left_image = self.get_img_obs(sensor_data, core)
+
+        return {"pixels":images,
+                "left_pixels":left_image,
+                "right_pixels":right_image, 
+                "vector":vecs}, self.info
 
     def get_vec_obs(self, sensor_data, core):
         # breakpoint()
@@ -187,7 +185,11 @@ class STBL3Experiment(BaseExperiment):
         return vecs
     def get_img_obs(self, sensor_data, core):
         image = post_process_image(sensor_data['rgb'][1], normalized = True,crop=False, grayscale = False,image_size=self.image_size)
-
+        right_image = post_process_image(sensor_data['right_rgb'][1], normalized = True,crop=False, grayscale = False,image_size=self.image_size)
+        left_image = post_process_image(sensor_data['left_rgb'][1], normalized = True,crop=False, grayscale = False,image_size=self.image_size)
+        
+        # breakpoint()
+        
         if self.prev_image_0 is None:
             self.prev_image_0 = image
             self.prev_image_1 = self.prev_image_0
@@ -206,7 +208,7 @@ class STBL3Experiment(BaseExperiment):
         self.prev_image_1 = self.prev_image_0
         self.prev_image_0 = image
 
-        return images
+        return images,right_image,left_image
     
     def get_speed(self, hero):
         """Computes the speed of the hero vehicle in Km/h"""
@@ -396,7 +398,7 @@ config = {
             "town":"Town01"
         },
         "experiment": {
-            "type":STBL3Experiment,
+            "type":BCDataCollectExperiment,
             "hero": {
                 "blueprint": "vehicle.mercedes.coupe_2020",
                 "sensors": {
@@ -409,7 +411,18 @@ config = {
                         "image_size_y": 300,
                         "transform": "1.9, 0.0, 1.7, 0.0, -15.0, 0.0"
                     },
-                    
+                    "left_rgb": {
+                        "type": "sensor.camera.rgb",
+                        "image_size_x": 300,
+                        "image_size_y": 300,
+                        "transform": "1.9, 1.5, 1.7, 0.0, -15.0, 0.0"
+                    },
+                    "right_rgb": {
+                        "type": "sensor.camera.rgb",
+                        "image_size_x": 300,
+                        "image_size_y": 300,
+                        "transform": "1.9, -1.5, 1.7, 0.0, -15.0, 0.0"
+                    },
                     "lane_invasion": {
                         "type": "sensor.other.lane_invasion"
                     },

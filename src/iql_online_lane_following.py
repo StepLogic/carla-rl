@@ -66,7 +66,7 @@ config.cosine_decay = True
 config.tau = 0.005
 config.critic_reduction = "min"
 config.share_encoder = False
-config.freeze_encoders = True
+config.freeze_encoders = False
 sac_config = config.to_dict()
 
 
@@ -82,12 +82,12 @@ flags.DEFINE_integer("eval_interval", int(5e4), "Eval interval.")
 flags.DEFINE_integer("batch_size", 32, "Mini batch size.")
 flags.DEFINE_integer("max_steps", int(5e6), "Number of training steps.")
 flags.DEFINE_integer(
-    "start_training", int(1), "Number of training steps to start training."
+    "start_training", int(2000), "Number of training steps to start training."
 )
 flags.DEFINE_integer("image_size", 64, "Image size.")
 flags.DEFINE_integer("num_stack", 3, "Stack frames.")
 flags.DEFINE_integer(
-    "replay_buffer_size", int(1e4), "Number of training steps to start training."
+    "replay_buffer_size", int(1e5), "Number of training steps to start training."
 )
 flags.DEFINE_integer(
     "action_repeat", None, "Action repeat, if None, uses 2 or PlaNet default values."
@@ -130,8 +130,9 @@ from typing import Dict, Any
 # expert_buffer="/home/kojogyaase/Projects/Research/carla-rl/datasets/goal_condition_Town05_data_0.pkl"
 # expert_buffers=list(glob.glob("/workspaces/ROS1/carla-rl/real_robot_dataset/*.pkl"))
 expert_buffers=None
-checkpoint_path="/workspaces/ROS1/carla-rl/best_models/iql"
 
+checkpoint_path="/workspaces/ROS1/carla-rl/checkpoints/iql_checkpoint/checkpoint_1"
+# rb_path="/workspaces/ROS1/carla-rl/savepoint/lane_following_buffer.pkl"
 # rb_path="/workspaces/ROS1/carla-rl/savepoint/lane_following_buffer.pkl"
 rb_path=None
 def load_checkpoint(agent, checkpoint_path):
@@ -162,7 +163,7 @@ def main(_):
     # Create environment
     env=LeoEnv()
     env = FrameStack(env=env, num_stack=1,stacking_key="pixels")
-    env = TimeLimit(env,max_episode_steps=2500)
+    env = TimeLimit(env,max_episode_steps=12500)
     env = RecordEpisodeStatistics(env)
     # action_dim = 2
     # mean = np.zeros(action_dim)
@@ -227,7 +228,7 @@ def main(_):
     # Main training loop
     observation, info, done = *env.reset(), False
     training_start_time = time.time()
-    
+    rollout=0
     for i in tqdm.tqdm(
         range(1, FLAGS.max_steps + 1),
         smoothing=0.1,
@@ -254,7 +255,7 @@ def main(_):
             # action = action + noise()
         action = np.clip(action, env.action_space.low, env.action_space.high)
         next_observation, reward, done, truncated, info = env.step(action)
-        
+        rollout+=1
         # Handle episode termination
         if not done or not truncated or "TimeLimit.truncated" in info:
             mask = 1.0
@@ -309,20 +310,22 @@ def main(_):
             # noise.reset()
         
         # Training updates
-        if i >= FLAGS.start_training:
+        if i >= FLAGS.start_training and rollout >100:
+            rollout=0
             batch = next(replay_buffer_iterator)
             update_info = agent.update(batch)
 
             if i % FLAGS.log_interval == 0:
-                logger.log_training(update_info_expert, i,prefix="_expert")
+                logger.log_training(update_info, i,prefix="_expert")
                 logger.print_status(i, FLAGS.max_steps)
             save_checkpoint(agent,f"checkpoints/iql_checkpoint",1)
             # if FLAGS.save_buffer:
-            dataset_folder ="savepoint"
-            os.makedirs(dataset_folder, exist_ok=True)
-            dataset_file = os.path.join(dataset_folder, f"lane_following_buffer.pkl")
-            with open(dataset_file, "wb") as f:
-                pickle.dump(replay_buffer, f)
+            if i % FLAGS.log_interval == 0:
+                dataset_folder ="savepoint"
+                os.makedirs(dataset_folder, exist_ok=True)
+                dataset_file = os.path.join(dataset_folder, f"lane_following_buffer.pkl")
+                with open(dataset_file, "wb") as f:
+                    pickle.dump(replay_buffer, f)
         # Periodic evaluation
         if i % FLAGS.eval_interval == 0:
             # Save replay buffer if requested

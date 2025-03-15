@@ -250,7 +250,7 @@ def main(_):
             # breakpoint()   
             # if i%FLAGS.en
             if i % FLAGS.eval_interval == 0:
-                    save_checkpoint(agent,policy_folder,i)
+                save_checkpoint(agent,f"checkpoints/final_iql",1)
             logger.print_status(i, FLAGS.max_steps)
 
         

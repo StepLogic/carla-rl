@@ -83,7 +83,7 @@ flags.DEFINE_integer(
 flags.DEFINE_integer("image_size", 64, "Image size.")
 flags.DEFINE_integer("num_stack", 3, "Stack frames.")
 flags.DEFINE_integer(
-    "replay_buffer_size", int(2e5), "Number of training steps to start training."
+    "replay_buffer_size", int(1e5), "Number of training steps to start training."
 )
 flags.DEFINE_integer(
     "action_repeat", None, "Action repeat, if None, uses 2 or PlaNet default values."
@@ -128,7 +128,7 @@ expert_buffers=None
 def main(_):
 
     # Create environment
-    carla_config["env_config"]["carla"]["town"]="Town07"
+    carla_config["env_config"]["carla"]["town"]="Town15"
     env = CarlaGoalEnv(carla_config["env_config"])
     env = FrameStack(env=env, num_stack=1,stacking_key="pixels")
     env = TimeLimit(env,max_episode_steps=2500)

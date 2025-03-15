@@ -12,7 +12,7 @@ from src.carla_eval import CarlaEvalEnv
 from src.sac_lane_following import sac_config
 # from src.bc_lane_following import bc_config
 from jaxrl2.agents import DrQLearner,PixelBCLearner
-from jaxrl2.agents.pixel_bc_resnet.pixel_bc_resnet_learner import PixelResNetBCLearner
+from jaxrl2.agents.resnet_agents import PixelResNetBCLearner
 from rlib_integration.helper import ndarray_to_location
 from rlib_integration.agent import GlobalRoutePlanner
 from jaxrl2.wrappers.frame_stack import FrameStack
@@ -239,12 +239,12 @@ def eval_environment(agent:DrQLearner, env, n_eval_episodes=10, deterministic=Tr
             target=4.5
             vecs=observation["vector"]
             current_velocity=env.unwrapped.experiment.velocity
-            current_heading=env.unwrapped.experiment.current_heading
+            # current_heading=env.unwrapped.experiment.current_heading
             # breakpoint()
             # if (current_heading - heading)<np.deg2rad(10):
             #         truncate_steps=int(1e5) #break loop
             #         print(np.rad2deg(current_heading),np.rad2deg(heading))
-            # vecs[2] = np.clip(current_velocity/(target+1e-8), 0.0, 5.1)
+            vecs[2] = np.clip(current_velocity/(target+1e-8), 0.0, 5.1)
             # vecs[3]= np.clip(current_heading/(current_heading+1e-8),-5.1,5.1) 
             # vecs[4]= np.clip(heading/np.pi,-5.1,5.1) 
             observation["vector"]=vecs
@@ -354,7 +354,7 @@ def eval_environment(agent:DrQLearner, env, n_eval_episodes=10, deterministic=Tr
 def main(_):
    
     # config["env_config"]["carla"]["town"]=town_name
-    # # config["env_config"]["carla"]["start_server"]=False
+    # config["env_config"]["carla"]["start_server"]=False
     env = CarlaEvalEnv(start_server=False,town=FLAGS.town)
     env = TimeLimit(env, max_episode_steps=2500)
     env = FrameStack(env=env, num_stack=1, stacking_key="pixels")

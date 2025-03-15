@@ -1,6 +1,7 @@
 
 # Modified from https://github.com/carla-simulator/rllib-integration/blob/main/dqn_example/dqn_experiment.py
 
+from collections import defaultdict
 import math
 import random
 import numpy as np
@@ -32,12 +33,21 @@ class STBL3Experiment(BaseExperiment):
         self.prev_steer = 0.0
         self.prev_throttle = 0.0
         self.current_heading=0.0
+        self.trajectories = None
         self.velocity=0.0
         self.info=dict()
         self.rewards=[]
         self.image_size=64
-
-    def reset(self,*arg,**kwargs):
+    def _cache_waypoints(self,world) -> None:
+            env_map = world.get_map()
+            waypoints = env_map.generate_waypoints(distance=2)
+            trajectories = defaultdict(list)
+            for wpt in waypoints:
+                trajectories[f"{wpt.road_id}-{wpt.lane_id}"].append(wpt)
+            self.trajectories = sorted([traj for traj in trajectories.values() if len(traj) > 3], 
+                                        key=len, reverse=True)
+            # self.max_curriculum_steps = len(self.trajectories)
+    def reset(self,env):
         """Called at the beginning and each time the simulation is reset"""
 
         # Ending variables
@@ -73,6 +83,8 @@ class STBL3Experiment(BaseExperiment):
         self.current_heading=0.0
         # self.target_speed = random.uniform(5.0,10.0)
         self.info=dict()
+        if self.trajectories is None:
+            self._cache_waypoints(env.core.world)
 
     # def get_action_space(self):
     #     """Returns the action space, in this case, a discrete space"""

@@ -30,8 +30,8 @@ def random_perturb(env):
     # observation["pixels"]=np.fliplr(observation["pixels"][...,0])[...,None]
     # next_observation["pixels"]=np.fliplr(next_observation["pixels"][...,0])[...,None]
     perturb_steering_list=[1.0,-1.0]
-    # _, _, _, _, _ = env.step([random.choice(perturb_steering_list),0.5])
-    observation, _, _, _, _ = env.step([random.choice(perturb_steering_list),0.5])
+    _, _, _, _, _ = env.step([random.choice(perturb_steering_list),random.choice(perturb_steering_list)])
+    observation, _, _, _, _ = env.step([np.random.uniform(-1.0,1.0),np.random.uniform(-1.0,1.0)])
     # action[0]=-action[0]
     return observation
 
@@ -66,7 +66,7 @@ def add_random_impulse(env):
     # Apply the force in the world coordinate system
     env.hero.add_force(carla.Vector3D(x_force, y_force, 0))
      
-def collect_basic_agent_data(replay_buffer_size=int(6e4)):
+def collect_basic_agent_data(replay_buffer_size=int(5e4)):
     # Create environment
 
     parser = argparse.ArgumentParser(description='Collect basic agent data')
@@ -79,7 +79,7 @@ def collect_basic_agent_data(replay_buffer_size=int(6e4)):
     #do not use 01,07,05
     env=None
     # towns=['Town04',"Town03",""]
-    _towns=["Town15","Town10HD_Opt","Town02","Town03","Town06","Town04"]
+    _towns=["Town15","Town10HD_Opt","Town03","Town06","Town04"]
     towns=itertools.cycle(_towns)
     def reset_env():
         nonlocal env
@@ -117,7 +117,7 @@ def collect_basic_agent_data(replay_buffer_size=int(6e4)):
     replay_buffer = ReplayBuffer(
         env.observation_space, 
         env.action_space,
-        capacity=int(4e5)
+        capacity=int(5e5)
     )
 
     # Initialize noise for exploration
@@ -180,17 +180,17 @@ def collect_basic_agent_data(replay_buffer_size=int(6e4)):
         # if  agent.done():
         #      reward+=10
         # breakpoint()
-        # copy_observation,copy_next_observation,copy_action=random_shift(observation,next_observation,action)
-        # replay_buffer.insert(
-        #     dict(
-        #         observations=copy_observation,
-        #         actions=copy_action,
-        #         rewards=reward,
-        #         masks=mask,
-        #         dones=done,
-        #         next_observations=copy_next_observation,
-        #     )
-        # )
+        copy_observation,copy_next_observation,copy_action=random_shift(observation,next_observation,action)
+        replay_buffer.insert(
+            dict(
+                observations=copy_observation,
+                actions=copy_action,
+                rewards=reward,
+                masks=mask,
+                dones=done,
+                next_observations=copy_next_observation,
+            )
+        )
         # oversample junction entries
         if is_agent_at_junction(env):
              for _ in range(10):

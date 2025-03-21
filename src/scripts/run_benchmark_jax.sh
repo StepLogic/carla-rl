@@ -33,7 +33,7 @@ run_evaluation() {
     echo "- Map Directory: ${map_dir}"
     echo "-----------------------------------"
 
-   XLA_PYTHON_CLIENT_PREALLOCATE=false  python src/mapping/run_jax_raw.py \
+   XLA_PYTHON_CLIENT_PREALLOCATE=false  python src/mapping/benchmark_rl_policy.py \
         --model=${model} \
         --n_eval_episodes=10 \
         --deterministic=true \

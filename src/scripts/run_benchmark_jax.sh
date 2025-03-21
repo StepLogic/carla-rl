@@ -9,7 +9,7 @@ town_mapping["hard"]="Town05"
 # Models to evaluate
 models=("PixelResNetBCLearner" ) #"DrQLearner"
 declare -A checkpoints
-checkpoints["PixelResNetBCLearner"]="/home/robotlab/scratch/carla-rl/checkpoints/final_bc/checkpoint_1"
+checkpoints["PixelResNetBCLearner"]="/home/robotlab/scratch/carla-rl/checkpoints/final_bc/checkpoint_10"
 checkpoints["DrQLearner"]="/home/robotlab/scratch/carla-rl/best_models/SAC_checkpoint_2000000"
 
 

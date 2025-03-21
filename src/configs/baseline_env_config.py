@@ -683,7 +683,9 @@ class JAXMappingExperiments(BaseExperiment):
         self.origin=None
         self.destination=None
         self.image_size=64
-        self.goal_location=None
+        self.done_goal=False
+        self.destination=None
+
     def reset(self,*arg,**kwargs):
         """Called at the beginning and each time the simulation is reset"""
 
@@ -720,6 +722,7 @@ class JAXMappingExperiments(BaseExperiment):
         self.velocity=0.0
         self.current_heading=0.0
         self.goal_location=None
+        self.done_goal=False
         # self.target_speed = random.uniform(1.0,self.config["others"]["target_speed"])
         self.info=dict()
     def set_goal(self,goal,heading,location):
@@ -866,6 +869,8 @@ class JAXMappingExperiments(BaseExperiment):
         self.done_falling = hero.get_location().z < -0.5
         self.diff_lane = 'lane_invasion' in sensor_data.keys() or wp is None
         self.collision = 'collision' in sensor_data.keys()
+        if self.destination:
+            self.done_goal=self.destination.transform.location.distance(hero.get_transform().location) < 5.0
         done=self.done_falling or self.collision or wp is None or self.diff_lane
         # done=False
         self.info.update(dict(is_success=self.done_dist,
@@ -875,8 +880,8 @@ class JAXMappingExperiments(BaseExperiment):
                              max_reward=np.max(self.rewards),
                              min_reward=np.min(self.rewards),
                              mean_reward=np.mean(self.rewards)))
-        # if done:
-        #     self.info.update(is_success=self.done_dist,
+        if done:
+            self.info.update(dict(is_success=self.done_goal))
         #                      distance_completed=self.distance_travelled,
         #                      max_reward=np.max(self.rewards),
         #                      min_reward=np.min(self.rewards),

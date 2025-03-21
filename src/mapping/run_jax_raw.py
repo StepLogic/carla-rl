@@ -70,6 +70,8 @@ flags.DEFINE_integer("n_eval_episodes", 10, "Number of evaluation episodes")
 flags.DEFINE_boolean("deterministic", True, "Whether to use deterministic actions")
 flags.DEFINE_string("map_dir", None, "Evaluation directory trajectory")
 flags.DEFINE_string("town", "Town01", "Town Name")
+# flags.DEFINE_string("difficulty", "easy", "Difficulty")
+
 def load_checkpoint(agent, checkpoint_path):
     """Load agent parameters from checkpoint."""
     state_dict = {
@@ -206,6 +208,8 @@ def eval_environment(agent:DrQLearner, env, n_eval_episodes=10, deterministic=Tr
 
     #
     shortest_distance_along_road=1e-8
+    difficulty=FLAGS.map_dir.split("/")[-2]
+    name=FLAGS.map_dir.split("/")[-1] or FLAGS.model
     with open(f'{FLAGS.map_dir}/aux.pkl', 'rb') as handle:
             dataset=pickle.load(handle)
             start_location=ndarray_to_location(dataset["start"])
@@ -216,12 +220,15 @@ def eval_environment(agent:DrQLearner, env, n_eval_episodes=10, deterministic=Tr
             route_plannner=GlobalRoutePlanner(env.unwrapped.core.map, 2.0)
     
             prev_waypoint=None
-            trace=route_plannner.trace_route(start_location,goal_location)
-            for wp,_ in trace:
-                if prev_waypoint is None:
+            try:
+                trace=route_plannner.trace_route(start_location,goal_location)
+                for wp,_ in trace:
+                    if prev_waypoint is None:
+                        prev_waypoint=wp
+                    shortest_distance_along_road+=prev_waypoint.transform.location.distance(wp.transform.location)
                     prev_waypoint=wp
-                shortest_distance_along_road+=prev_waypoint.transform.location.distance(wp.transform.location)
-                prev_waypoint=wp
+            except:
+                    shortest_distance_along_road=1
             # assert shortest_distance_along_road>1.0
 
 
@@ -236,7 +243,7 @@ def eval_environment(agent:DrQLearner, env, n_eval_episodes=10, deterministic=Tr
         heading=0+1e-8
         while not done:
             truncate_steps+=1
-            target=4.5
+            target=5.0
             vecs=observation["vector"]
             current_velocity=env.unwrapped.experiment.velocity
             # current_heading=env.unwrapped.experiment.current_heading
@@ -356,7 +363,7 @@ def main(_):
     # config["env_config"]["carla"]["town"]=town_name
     # config["env_config"]["carla"]["start_server"]=False
     env = CarlaEvalEnv(start_server=False,town=FLAGS.town)
-    env = TimeLimit(env, max_episode_steps=2500)
+    env = TimeLimit(env, max_episode_steps=4500)
     env = FrameStack(env=env, num_stack=1, stacking_key="pixels")
     env = RecordEpisodeStatistics(env)
 

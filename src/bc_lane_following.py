@@ -56,7 +56,7 @@ config.cnn_strides = (2, 2, 2, 2)
 config.cnn_padding = "VALID"
 config.latent_dim = 50
 config.encoder = "pretrained-resnet"
-config.dropout_rate=0.5
+# config.dropout_rate=0.5
 bc_config = config.to_dict()
 
 
@@ -67,9 +67,9 @@ flags.DEFINE_string("save_dir", "./tmp/", "Tensorboard logging dir.")
 flags.DEFINE_integer("seed", 42, "Random seed.")
 flags.DEFINE_integer("eval_episodes", 5, "Number of episodes used for evaluation.")
 flags.DEFINE_integer("log_interval", 1000, "Logging interval.")
-flags.DEFINE_integer("eval_interval", int(10), "Eval interval.")
-flags.DEFINE_integer("batch_size", 32, "Mini batch size.")
-flags.DEFINE_integer("epochs", int(5), "Number of training steps.")
+flags.DEFINE_integer("eval_interval", int(1), "Eval interval.")
+flags.DEFINE_integer("batch_size", 64, "Mini batch size.")
+flags.DEFINE_integer("epochs", int(70), "Number of training steps.")
 flags.DEFINE_integer(
     "start_training", int(1e3), "Number of training steps to start training."
 )
@@ -84,7 +84,65 @@ flags.DEFINE_integer(
 flags.DEFINE_boolean("tqdm", True, "Use tqdm progress bar.")
 flags.DEFINE_boolean("save_video", False, "Save videos during evaluation.")
 flags.DEFINE_boolean("save_buffer", False, "Save the replay buffer.")
-
+class EarlyStopping:
+    """
+    Early stopping handler to monitor training progress and stop when evaluation
+    metric doesn't improve for a specified number of epochs.
+    """
+    def __init__(self, patience=4, mode='max', min_delta=0.0):
+        """
+        Initialize the EarlyStopping handler.
+        
+        Args:
+            patience (int): Number of epochs with no improvement after which training will be stopped.
+            mode (str): 'min' or 'max' depending on whether we want to minimize or maximize the metric.
+            min_delta (float): Minimum change in the monitored quantity to qualify as an improvement.
+        """
+        self.patience = patience
+        self.mode = mode
+        self.min_delta = min_delta
+        self.counter = 0
+        self.best_score = None
+        self.early_stop = False
+        self.best_epoch = 0
+    
+    def __call__(self, current_score, epoch):
+        """
+        Call the early stopping handler.
+        
+        Args:
+            current_score (float): Current value of the metric being monitored.
+            epoch (int): Current epoch number.
+            
+        Returns:
+            bool: True if training should stop, False otherwise.
+        """
+        if self.best_score is None:
+            self.best_score = current_score
+            self.best_epoch = epoch
+            return False
+        
+        if self.mode == 'min':
+            # For metrics we want to minimize (like loss)
+            if current_score < self.best_score - self.min_delta:
+                self.best_score = current_score
+                self.counter = 0
+                self.best_epoch = epoch
+            else:
+                self.counter += 1
+        else:
+            # For metrics we want to maximize (like accuracy, reward)
+            if current_score > self.best_score + self.min_delta:
+                self.best_score = current_score
+                self.counter = 0
+                self.best_epoch = epoch
+            else:
+                self.counter += 1
+                
+        if self.counter >= self.patience:
+            self.early_stop = True
+            return True
+        return False
 
 
 def save_checkpoint(agent, path, step):
@@ -177,10 +235,11 @@ def update(expert_replay_buffers,agent,train_encoder,logger,i,update_func=None,p
         }
         # print(average_metrics,total_metrics)
         logger.log_training(average_metrics, i,prefix=prefix)
+
 def main(_):
     # Create environment
     # carla_config["env_config"]["carla"]["town"]="Town04"
-    carla_config["env_config"]["carla"]["start_server"]=False
+    # carla_config["env_config"]["carla"]["start_server"]=False
     env = CarlaGoalEnv(carla_config["env_config"])
     env = FrameStack(env=env, num_stack=1,stacking_key="pixels")
     env = TimeLimit(env,max_episode_steps=2500)
@@ -199,74 +258,48 @@ def main(_):
 
     np.random.seed(FLAGS.seed)
     random.seed(FLAGS.seed)
-    # breakpoint()
-    # Initialize agent and replay buffer
-    bc_config["actor_lr"] = optax.schedules.warmup_exponential_decay_schedule(
-            init_value=0.0,            # Initial learning rate
-            peak_value=0.001,          # Maximum learning rate after warmup
-            warmup_steps=1000,         # Number of steps for warmup phase
-            transition_steps=10000,    # Steps over which to decay after warmup
-            decay_rate=0.5,            # Exponential decay rate
-            staircase=False,            # Whether to use staircase decay
-            end_value=1e-6
-        )
 
+    # Initialize agent
     agent = PixelResNetBCLearner(
         0, 
         env.observation_space.sample(), 
         env.action_space.sample(), 
-        # num_qs=10,
         **bc_config
     )
+    
+    # Initialize expert replay buffers
     expert_replay_buffers=[]
     if not expert_buffers is None:
         for path in expert_buffers:
             with open(path, 'rb') as f:
                 expert_replay_buffer = pickle.load(f)
-                # expert_replay_buffer.optimize()
             expert_replay_buffers.append(expert_replay_buffer)
-    # breakpoint()
-    expert_replay_buffer_iterators=[]
     
-    # if not expert_buffers is None:
-    #     for expert_replay_buffer in expert_replay_buffers:
-    #         if expert_replay_buffer:
-    #             # expert_replay_buffer.optimize()
-    #             expert_replay_buffer_iterators.append(expert_replay_buffer.get_sequential_iterator(
-    #                     sample_args={"batch_size": FLAGS.batch_size}))
-            
+    # Initialize early stopping with patience of 4 epochs
+    early_stopper = EarlyStopping(patience=7, mode='max')  # Using 'max' since higher reward is better
+    best_model_saved = False
 
     training_start_time = time.time()
     
-    p_bar = tqdm.tqdm(range(1,FLAGS.epochs + 1))
+    p_bar = tqdm.tqdm(range(1, FLAGS.epochs + 1))
     p_bar.update(5)
     p_bar.refresh()
     
+    i = 1
+    train_encoder = True
+    expert_replay_buffers = itertools.cycle(expert_replay_buffers)
+    
+    # Training loop
+    while i < FLAGS.epochs + 1:
+        # Update on expert data
+        update(expert_replay_buffers, agent, train_encoder, logger, i, update_func=agent.update, prefix="_expert")
 
-    i=1
-    run_eval=False
-    # expert_replay_buffer_iterators=itertools.cycle(expert_replay_buffer_iterators)
-    train_encoder=True
-    expert_replay_buffers=itertools.cycle(expert_replay_buffers)
-    with open("/home/robotlab/scratch/carla-rl/datasets copy/goal_condition_Town01_data_1.pkl", 'rb') as f:
-        validation_buffer = pickle.load(f)
-    validation_buffers=itertools.cycle([validation_buffer])
-        # validation_buffer=
-    while i <  FLAGS.epochs + 1:
-            # logger.log_training(update_info_expert, i,prefix="_expert")
-            update(validation_buffers,agent,train_encoder,logger,i,update_func=agent.eval,prefix="_eval")
-            update(expert_replay_buffers,agent,train_encoder,logger,i,update_func=agent.update,prefix="_expert")
-
-            i+=1
-            p_bar.update(i)
-            p_bar.refresh()  
-            # train_encoder=i<2
-            # if i % FLAGS.eval_interval == 0:
-            save_checkpoint(agent,policy_folder,i)
-            logger.print_status(i, FLAGS.epochs)
-
-        # if i % FLAGS.eval_interval == 0:
-            # Run evaluation
+        # Save checkpoint periodically
+        if i % FLAGS.eval_interval == 0:
+            save_checkpoint(agent, policy_folder, i)
+        
+        # Run evaluation every eval_interval epochs
+        if i % FLAGS.eval_interval == 0:
             eval_successes = []
             eval_rewards = []
             eval_dists = []
@@ -278,12 +311,7 @@ def main(_):
                 episode_reward = 0
                 
                 while not eval_done:
-                # try:
-                    eval_action = agent.eval_actions(eval_obs)  # No exploration
-                    # eval_action=jax
-                    # print(eval_action)
-                    # except:
-                    #     pass
+                    eval_action = agent.eval_actions(eval_obs)
                     eval_obs, eval_reward, eval_done, eval_truncated, eval_info = env.step(eval_action)
                     episode_reward += eval_reward
                     
@@ -299,17 +327,38 @@ def main(_):
                             del eval_info["episode"]
                 
                 eval_rewards.append(episode_reward)
-            # save_checkpoint(agent,policy_folder,i)
-            # print(eval_info)
+            
+            # Log evaluation results
+            mean_eval_reward = np.mean(eval_rewards) if eval_rewards else 0
             logger.log_eval(eval_info, i)
             logger.print_status(i, FLAGS.epochs)
+            
+            # Add early stopping check with current evaluation reward
+            if early_stopper(mean_eval_reward, i):
+                print(f"\nEarly stopping triggered after {i} epochs. Best performance at epoch {early_stopper.best_epoch}")
+                
+                # Save the best model if not already saved
+                if not best_model_saved:
+                    save_checkpoint(agent, f"checkpoints/best_model_early_stopped", early_stopper.best_epoch)
+                    best_model_saved = True
+                break
+            
+            # Save best model so far
+            if early_stopper.best_epoch == i:
+                save_checkpoint(agent, f"checkpoints/best_model", i)
+                best_model_saved = True
         
+        i += 1
+        p_bar.update(1)
+        p_bar.refresh()
     
-    # Print final training statistics
-    save_checkpoint(agent,f"checkpoints/final_bc",1)
+    # Save final model
+    save_checkpoint(agent, f"checkpoints/final_bc", i)
+    
     training_duration = time.time() - training_start_time
     print(f"\nTraining completed in {training_duration/3600:.2f} hours")
     print(f"Logs saved to: {logger.log_dir}")
+    print(f"Best model saved at epoch {early_stopper.best_epoch}")
 
 if __name__ == "__main__":
     app.run(main)

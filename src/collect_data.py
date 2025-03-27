@@ -16,7 +16,7 @@ import os
 import pickle
 from rlib_integration.agent import BasicAgent
 # from train_online_pixels import CarlaGoalEnv,config,FrameStack,TimeLimit,RecordEpisodeStatistics,ReplayBuffer
-from src.configs.train_env_config import config
+from configs.train_env_config import config
 from jaxrl2.noise import OrnsteinUhlenbeckActionNoise
 import carla
 import argparse
@@ -92,10 +92,10 @@ def collect_basic_agent_data(replay_buffer_size=int(2e4)):
     args = parser.parse_args()
     # Access the town name
     town_name = args.town
-    #do not use 01,07,05
+    #do not use 01,02,05
     env=None
     # _towns=['Town04',"Town03","Town01"]
-    _towns=["Town02","Town10HD_Opt","Town06"]
+    _towns=["Town07","Town10HD_Opt","Town06","Town04"]
     towns=itertools.cycle(_towns)
     def reset_env():
         nonlocal env

@@ -200,13 +200,18 @@ def eval_environment(agent:DrQLearner, env, n_eval_episodes=10, deterministic=Tr
             route_plannner=GlobalRoutePlanner(env.unwrapped.core.map, 2.0)
     
             prev_waypoint=None
-            trace=route_plannner.trace_route(start_location,goal_location)
-            for wp,_ in trace:
-                if prev_waypoint is None:
+            try:
+                trace=route_plannner.trace_route(start_location,goal_location)
+                for wp,_ in trace:
+                    if prev_waypoint is None:
+                        prev_waypoint=wp
+                    shortest_distance_along_road+=prev_waypoint.transform.location.distance(wp.transform.location)
                     prev_waypoint=wp
-                shortest_distance_along_road+=prev_waypoint.transform.location.distance(wp.transform.location)
-                prev_waypoint=wp
+            except:
+                    shortest_distance_along_road=1
             # assert shortest_distance_along_road>1.0
+
+
 
     for _ in range(n_eval_episodes):
         observation, info = env.reset()

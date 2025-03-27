@@ -31,15 +31,15 @@ import numpy as np
 import torch
 import torch.nn as nn
 from gym import spaces
-from stable_baselines3.common.noise import OrnsteinUhlenbeckActionNoise
-from stable_baselines3 import SAC
-from stable_baselines3.common.torch_layers import BaseFeaturesExtractor
-from stable_baselines3.common.callbacks import CheckpointCallback,EvalCallback
-# from vision_rl.rllib_integration.carla_env import CarlaEnv
+# from stable_baselines3.common.noise import OrnsteinUhlenbeckActionNoise
+# from stable_baselines3 import SAC
+# from stable_baselines3.common.torch_layers import BaseFeaturesExtractor
+# from stable_baselines3.common.callbacks import CheckpointCallback,EvalCallback
+# # from vision_rl.rllib_integration.carla_env import CarlaEnv
 # from vision_rl.stb3.jax_experiments import JAXExperiments
 
 from rlib_integration.carla_goal_env import CarlaGoalEnv
-from src.configs.train_env_config import config as carla_config
+from configs.train_env_config import config as carla_config
 import flax
 from jaxrl2.noise import OrnsteinUhlenbeckActionNoise
 flax.config.update('flax_use_orbax_checkpointing', True)
@@ -76,7 +76,7 @@ flags.DEFINE_integer("eval_episodes", 5, "Number of episodes used for evaluation
 flags.DEFINE_integer("log_interval", 1000, "Logging interval.")
 flags.DEFINE_integer("eval_interval", int(5e4), "Eval interval.")
 flags.DEFINE_integer("batch_size", 32, "Mini batch size.")
-flags.DEFINE_integer("max_steps", int(5e6), "Number of training steps.")
+flags.DEFINE_integer("max_steps", int(1e6), "Number of training steps.")
 flags.DEFINE_integer(
     "start_training", int(1e3), "Number of training steps to start training."
 )
@@ -124,11 +124,12 @@ from typing import Dict, Any
 
 # expert_buffer="/home/kojogyaase/Projects/Research/carla-rl/datasets/goal_condition_Town05_data_0.pkl"
 # expert_buffers=list(glob.glob("/home/robotlab/scratch/carla-rl/datasets/*.pkl"))
-expert_buffers=None
+expert_buffers=list(glob.glob("/home/robotlab/scratch/carla-rl/datasets/*.pkl"))
+# expert_buffers=None
 def main(_):
 
     # Create environment
-    carla_config["env_config"]["carla"]["town"]="Town15"
+    carla_config["env_config"]["carla"]["town"]="Town04"
     env = CarlaGoalEnv(carla_config["env_config"])
     env = FrameStack(env=env, num_stack=1,stacking_key="pixels")
     env = TimeLimit(env,max_episode_steps=2500)
@@ -174,7 +175,7 @@ def main(_):
 
     replay_buffer.seed(FLAGS.seed)
     replay_buffer_iterator = replay_buffer.get_iterator(
-        sample_args={"batch_size": FLAGS.batch_size}
+        sample_args={"batch_size": int(FLAGS.batch_size/4)}
     )
     expert_replay_buffer_iterators=[]
     if not expert_buffers is None:
@@ -192,7 +193,7 @@ def main(_):
     # Main training loop
     observation, info, done = *env.reset(), False
     training_start_time = time.time()
-    
+    # save_checkpoint(agent,policy_folder,1)
     for i in tqdm.tqdm(
         range(1, FLAGS.max_steps + 1),
         smoothing=0.1,
@@ -202,7 +203,8 @@ def main(_):
             action = env.action_space.sample()
         else:
             action = agent.sample_actions(observation)
-            # if i>int(5e5):
+            action=np.nan_to_num(action,nan=0)
+                # if i>int(5e5):
             action = action + noise()
             action = np.clip(action, env.action_space.low, env.action_space.high)
         next_observation, reward, done, truncated, info = env.step(action)
@@ -265,6 +267,16 @@ def main(_):
         if i >= FLAGS.start_training:
             batch = next(replay_buffer_iterator)
             update_info = agent.update(batch)
+
+            # if not expert_buffers is None:
+            #     # for expert_replay_buffer_iterator in expert_replay_buffer_iterators:
+            #     # expert_replay_buffer_iterator=next(expert_replay_buffer_iterators)
+            #     # batch_expert = next(expert_replay_buffer_iterator)
+            #     # update_info_expert = agent.update(
+            #     #     batch_expert,
+            #     #     enable_update_temperature=False)
+            #     # if i % FLAGS.log_interval == 0:
+            #         logger.log_training(update_info_expert, i,prefix="_expert")
             if i % FLAGS.log_interval == 0:
                 logger.log_training(update_info, i)
                 logger.print_status(i, FLAGS.max_steps)

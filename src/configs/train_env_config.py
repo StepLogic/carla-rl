@@ -327,7 +327,7 @@ class STBL3Experiment(BaseExperiment):
         # Only penalize heading when it's significantly off or at intersections
         # heading_factor = np.exp(-((imu-heading)**2)) 
         # heading_weight = 1.0 if  wp.is_junction else 0.0
-        reward=  2.0*speed_factor + 0.1*action_factor + heading_factor
+        reward =  2.0*speed_factor + 0.1*action_factor + heading_factor
         # print(speed_factor,self.target_speed)
         # reward=-1e-3
         # if hero_velocity<self.target_speed:

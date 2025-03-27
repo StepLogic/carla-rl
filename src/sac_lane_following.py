@@ -83,7 +83,7 @@ flags.DEFINE_integer(
 flags.DEFINE_integer("image_size", 64, "Image size.")
 flags.DEFINE_integer("num_stack", 3, "Stack frames.")
 flags.DEFINE_integer(
-    "replay_buffer_size", int(1e5), "Number of training steps to start training."
+    "replay_buffer_size", int(6e4), "Number of training steps to start training."
 )
 flags.DEFINE_integer(
     "action_repeat", None, "Action repeat, if None, uses 2 or PlaNet default values."
@@ -269,12 +269,11 @@ def main(_):
                 logger.log_training(update_info, i)
                 logger.print_status(i, FLAGS.max_steps)
             if not expert_buffers is None:
-                # for expert_replay_buffer_iterator in expert_replay_buffer_iterators:
                 expert_replay_buffer_iterator=next(expert_replay_buffer_iterators)
                 batch_expert = next(expert_replay_buffer_iterator)
-                update_info_expert = agent.update(
-                    batch_expert,
-                    enable_update_temperature=False)
+                
+                update_info_expert = agent.update_expert(batch_expert)
+
                 if i % FLAGS.log_interval == 0:
                     logger.log_training(update_info_expert, i,prefix="_expert")
                     logger.print_status(i, FLAGS.max_steps)

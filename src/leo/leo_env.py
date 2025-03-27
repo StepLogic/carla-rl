@@ -228,7 +228,7 @@ class LeoEnv(gym.Env):
         image = self.bridge.imgmsg_to_cv2(image, "rgb8")
         image=cv2.resize(image,(self.image_size,self.image_size))
         # self.image_queue.put(image/255)
-        self.image=image/255
+        self.image = image/255
         # except Exception as e:
         #     print(e)
     def lidar_callback(self,scan):

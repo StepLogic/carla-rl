@@ -82,7 +82,7 @@ def add_random_impulse(env):
     # Apply the force in the world coordinate system
     env.hero.add_force(carla.Vector3D(x_force, y_force, 0))
      
-def collect_basic_agent_data(replay_buffer_size=int(2e4)):
+def collect_basic_agent_data(replay_buffer_size=int(1e5)):
     # Create environment
 
     parser = argparse.ArgumentParser(description='Collect basic agent data')
@@ -92,17 +92,17 @@ def collect_basic_agent_data(replay_buffer_size=int(2e4)):
     args = parser.parse_args()
     # Access the town name
     town_name = args.town
-    #do not use 01,02,05
+    #do not use 02,03,05
     env=None
     # _towns=['Town04',"Town03","Town01"]
-    _towns=["Town07","Town10HD_Opt","Town06","Town04"]
+    _towns=["Town07","Town10HD_Opt","Town01","Town06","Town04"]
     towns=itertools.cycle(_towns)
     def reset_env():
         nonlocal env
         if not env is None:
              env.close()
         config["env_config"]["carla"]["town"]=next(towns)
-        config["env_config"]["carla"]["start_server"]=False
+        # config["env_config"]["carla"]["start_server"]=False
         env = CarlaGoalEnv(config["env_config"])
         env = FrameStack(env=env, num_stack=1, stacking_key="pixels")
         # env = FrameStack(env=env, num_stack=1, stacking_key="goal")
@@ -275,7 +275,7 @@ def collect_basic_agent_data(replay_buffer_size=int(2e4)):
                 #     )
                 # )
             noisy_action=action
-            noisy_action[0] = action[0] + np.random.normal(0.0,0.4,size=(1,)).item()
+            noisy_action[0] = action[0] + np.random.normal(0.0,4.0,size=(1,)).item()
             noisy_action = np.clip(noisy_action, env.action_space.low, env.action_space.high)
             next_observation, reward, done, truncated, info = env.step(noisy_action)
         else: 
@@ -290,11 +290,16 @@ def collect_basic_agent_data(replay_buffer_size=int(2e4)):
                         next_observations=filter_observations(next_observation),
                     )
                 )
+            noisy_action=action
+            noisy_action[0] = action[0] + np.random.normal(0.0,4.0,size=(1,)).item()
+            noisy_action = np.clip(noisy_action, env.action_space.low, env.action_space.high)
+            next_observation, reward, done, truncated, info = env.step(noisy_action)
             # noisy_action=action
             # noisy_action[0] = action[0] + np.random.normal(0.0,0.05,size=(1,))
             # noisy_action = np.clip(noisy_action, env.action_space.low, env.action_space.high)
             # next_observation, reward, done, truncated, info = env.step(noisy_action)
         observation=next_observation
+        
         # if rand_key==1:
         # observation = random_perturb(env)
         # # Save buffer periodically

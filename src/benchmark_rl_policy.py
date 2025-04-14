@@ -1,15 +1,18 @@
 import os
-import random
-import time
+
+# import random
+# import time
+
 import cv2
 import matplotlib.pyplot as plt
 import ml_collections
 import numpy as np
 from absl import app, flags
 from flax.training import checkpoints
-from ml_collections import config_flags
-from src.carla_eval import CarlaEvalEnv
-from src.sac_lane_following import sac_config
+# from ml_collections import config_flags
+
+from sac_lane_following import sac_config
+from carla_eval import CarlaEvalEnv
 # from src.bc_lane_following import bc_config
 from jaxrl2.agents import DrQLearner,PixelBCLearner
 from jaxrl2.agents.resnet_agents import PixelResNetBCLearner
@@ -20,7 +23,7 @@ from jaxrl2.wrappers.record_statistics import RecordEpisodeStatistics
 from jaxrl2.wrappers.timelimit import TimeLimit
 import pickle
 from pyflann import *
-from src.mapping.topological_map import TopologicalMap
+from mapping.topological_map import TopologicalMap
 # fix
 os.environ['XLA_FLAGS']="--xla_gpu_enable_command_buffer="
 os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"]="false"
@@ -37,6 +40,7 @@ config.cnn_strides = (2, 2, 2, 2)
 config.cnn_padding = "VALID"
 config.latent_dim = 50
 config.encoder = "d4pg"
+config.dropout_rate=0.2
 bc_config = config.to_dict()
 
 
@@ -60,12 +64,14 @@ config.backup_entropy = True
 config.critic_reduction = "mean"
 sac_config = config.to_dict()
 
-
+def filter_observations(observation):
+    acceptable_keys=["pixels","vector"]
+    return {k:observation[k] for  k in acceptable_keys}
 
 # Define flags
 FLAGS = flags.FLAGS
 flags.DEFINE_string("checkpoint_path", None, "Path to the checkpoint directory")
-flags.DEFINE_enum('model', 'DrQLearner', ['DrQLearner', 'PixelResNetBCLearner'], 'Model to run')
+flags.DEFINE_enum('model', 'DrQLearner', ['DrQLearner', 'PixelResNetBCLearner',"PixelBCLearner"], 'Model to run')
 flags.DEFINE_integer("n_eval_episodes", 10, "Number of evaluation episodes")
 flags.DEFINE_boolean("deterministic", True, "Whether to use deterministic actions")
 flags.DEFINE_string("map_dir", None, "Evaluation directory trajectory")
@@ -234,8 +240,8 @@ def eval_environment(agent:DrQLearner, env, n_eval_episodes=10, deterministic=Tr
             # vecs[3]= np.clip(current_heading/(current_heading+1e-8),-5.1,5.1) 
             # vecs[4]= np.clip(heading/np.pi,-5.1,5.1) 
             observation["vector"]=vecs
-            action_dist=agent.action_dist(observation)
-            feature=agent.extract_features(observation)
+            action_dist=agent.action_dist(filter_observations(observation))
+            feature=agent.extract_features(filter_observations(observation))
             # breakpoint()
             # if deterministic:
             action = action_dist.mode()
@@ -320,7 +326,7 @@ def main(_):
         config=bc_config
     agent = globals()[FLAGS.model](
         0,  # seed
-        env.observation_space.sample(),
+        filter_observations(env.observation_space.sample()),
         env.action_space.sample(),
         **config
     )

@@ -17,7 +17,7 @@ class TopologicalMap:
         """
         self.graph = None        
         # Build the graph connectivity
-        self.sift = cv2.xfeatures2d.SIFT_create()
+        # self.sift = cv2.xfeatures2d.SIFT_create()
         self.des_nodes=[]
         self.image_node=[]
         self.heading_nodes=[]
@@ -55,7 +55,7 @@ class TopologicalMap:
     #     # Optional: Convert defaultdict to a regular dict for consistency
     #     self.graph = dict(self.graph)
 
-    def create_navigation_guide(self,image_obs,goal_idx):
+    def create_navigation_guide(self,goal_idx):
         # path,_= self.find_path_to_goal(image_obs,goal_idx)
         # print("Path",path,len(self.des_nodes))
         def subgoal(image_obs):

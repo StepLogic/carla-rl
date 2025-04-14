@@ -2,8 +2,8 @@
 
 # Define arrays for difficulty levels and their corresponding towns
 declare -A town_mapping
-town_mapping["easy"]="Town01"
-town_mapping["medium"]="Town02"
+town_mapping["easy"]="Town02"
+town_mapping["medium"]="Town03"
 town_mapping["hard"]="Town05"
 
 # Models to evaluate

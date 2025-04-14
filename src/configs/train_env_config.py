@@ -78,7 +78,7 @@ class STBL3Experiment(BaseExperiment):
         self.prev_throttle = 0.0
         self.steer = 0.0
         self.throttle = 0.0
-        self.target_speed = 6.0
+        self.target_speed = 8.0
         self.velocity=0.0
         self.current_heading=0.0
         # self.target_speed = random.uniform(5.0,10.0)
@@ -184,6 +184,7 @@ class STBL3Experiment(BaseExperiment):
         self.prev_vec_0 = vec
         self.velocity=self.get_speed(hero)
         self.current_heading=imu
+        vecs=np.nan_to_num(vecs,nan=1e-8)
         return vecs
     def get_img_obs(self, sensor_data, core):
         image = post_process_image(sensor_data['rgb'][1], normalized = True,crop=False, grayscale = False,image_size=self.image_size)
@@ -215,8 +216,9 @@ class STBL3Experiment(BaseExperiment):
 
     def get_done_status(self, sensor_data, core):
         """Returns whether or not the experiment has to end"""
-        hero = core.hero
         self.info=dict()
+        hero = core.hero
+       
         self.done_time_idle = self.max_time_idle < self.time_idle
         if self.get_speed(hero) > 1.0:
             self.time_idle = 0
@@ -232,7 +234,7 @@ class STBL3Experiment(BaseExperiment):
         self.diff_lane = 'lane_invasion' in sensor_data.keys()
         # self.diff_lane=False
         self.collision = 'collision' in sensor_data.keys()
-        self.done_speed=(hero_velocity/(self.target_speed+1e-8)) > 5.0
+        self.done_speed=(hero_velocity/(self.target_speed+1e-8)) > 5.0 or hero_velocity<=1e-4
         self.done_dist=core.destination.transform.location.distance(hero.get_transform().location) <1.0
         done=self.done_falling or self.done_dist or self.diff_lane or self.collision or self.done_dist
         self.info.update(dict(is_success=self.done_dist,
@@ -256,14 +258,16 @@ class STBL3Experiment(BaseExperiment):
         return done
 
     def compute_reward(self, sensor_data, core):
+        
         hero = core.hero
-        heading=sensor_data["goal_heading"][-1][-1]
-        imu=sensor_data["imu"][-1][-1]
+        heading=np.nan_to_num(sensor_data["goal_heading"][-1][-1])
+        imu=np.nan_to_num(sensor_data["imu"][-1][-1])
         # print(heading,imu)
         # delta_heading=np.clip(abs(imu-heading),0,np.pi)
         # angle_factor=max(1-min(delta_heading/self.max_angle_deviation,1.0),1e-3)
         # heading=np.nan_to_num(math.cos(delta_heading),0)
         # Hero-related variables
+        
         hero_location = hero.get_location()
         hero_velocity = self.get_speed(hero)
 
@@ -310,16 +314,17 @@ class STBL3Experiment(BaseExperiment):
         # reward=-1.0 + np.exp(-(imu-heading)**2) + .4*np.exp(-(self.target_speed-hero_velocity)**2)+0.1*np.exp(-np.sum(np.array([self.prev_steer,self.prev_throttle]-np.array([self.steer,self.throttle])))**2)
         # reward=-1e-3
         # Normalize target speed error to [0.2, 1.0] to avoid being too lenient
-        # target_speed_error = np.clip( / self.target_speed, -1.0, 1.0)
-        speed_factor=np.exp(-(hero_velocity-self.target_speed)**2)
+        # speed_factor = np.clip(hero_velocity/ self.target_speed, 0 ,1.0)
+        speed_factor=np.exp(-abs(hero_velocity-self.target_speed))
+        # heading_factor = np.clip(imu/ (heading+1e-8), 0, 1.0)
 
         # Normalize heading error to [-1.0, 1.0] to allow for larger corrections
-        heading_factor = np.exp(-(imu-heading)**2)
+        heading_factor = np.exp(-1*abs(imu-heading))
         # heading_error = np.clip(heading_error, -1.0, 1.0)
 
         # Calculate smooth action penalty to encourage smoother control inputs
-        action_factor = np.exp(-np.sum(abs(self.prev_steer - self.steer) + abs(self.prev_throttle - self.throttle)))
-
+        action_factor = -0.1*abs(self.prev_steer - self.steer)
+        # print(action_factor)
         # Base reward combines speed error, heading error, and smooth action
         # reward = target_speed_error * (heading_error + smooth_action)
         # reward = target_speed_error*(0.8+heading_error+0.2*smooth_action) + self.distance_travelled/200
@@ -327,11 +332,30 @@ class STBL3Experiment(BaseExperiment):
         # Only penalize heading when it's significantly off or at intersections
         # heading_factor = np.exp(-((imu-heading)**2)) 
         # heading_weight = 1.0 if  wp.is_junction else 0.0
-        reward =  2.0*speed_factor + 0.1*action_factor + heading_factor
-        # print(speed_factor,self.target_speed)
+        # print("Heading Actor",heading_factor)
+        heading_factor=np.nan_to_num(heading_factor,nan=1e-8)
+        # reward =speed_factor+heading_factor
+        reward=0
+        reward=np.nan_to_num(reward,nan=1e-8)
+        self.info.update(dict(speed_factor=speed_factor*0.5,
+                             heading_factor_raw=heading_factor,
+                             heading_factor=speed_factor*heading_factor,
+                             action_factor=action_factor
+                             ))
+        # reward=reward*10
+        # reward=0
+        # print(reward)
         # reward=-1e-3
+
+        agent_vector = np.array([hero_velocity*np.cos(imu),hero_velocity*np.sin(imu)])
+        target_vector = np.array([self.target_speed*np.cos(heading),self.target_speed*np.sin(heading)])
+        
+        reward=np.dot(agent_vector,target_vector)
+        # print(reward)
+        
         # if hero_velocity<self.target_speed:
-        #     reward += delta_distance
+            # reward += delta_distance
+            # reward += delta_distance + heading_factor*delta_distance
         # else:
         #     reward+=0
         # reward=  target_speed_error*0.5 + heading_error + smooth_action*0.1
@@ -348,14 +372,15 @@ class STBL3Experiment(BaseExperiment):
             reward += -10
         # Reward for reaching the target distance
         if self.done_dist:
-            print(f"Max Dist Dist={self.distance_travelled:3f}")
+            # print(f"Max Dist Dist={self.distance_travelled:3f}")
             reward += 10
-
+        # reward=reward
         # Scale the reward to a reasonable range (no need for *10)
         # reward = np.clip(reward, -2.0, 2.0)
         # reward*=10
 # 
         # Store the reward for logging or analysis
+    
         self.rewards.append(reward)
 
         # Update previous actions for smoothness calculation
@@ -398,7 +423,7 @@ config = {
         "experiment": {
             "type":STBL3Experiment,
             "hero": {
-                "blueprint": "vehicle.mercedes.coupe_2020",
+                "blueprint": ["vehicle.citroen.c3","vehicle.mini.cooper_s_2021","vehicle.seat.leon"," vehicle.toyota.prius","vehicle.citroen.c3"],
                 "sensors": {
                     "collision": {
                         "type": "sensor.other.collision"

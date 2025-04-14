@@ -649,6 +649,7 @@
 
 # Modified from https://github.com/carla-simulator/rllib-integration/blob/main/dqn_example/dqn_experiment.py
 
+from collections import defaultdict
 import math
 import random
 import numpy as np
@@ -681,11 +682,19 @@ class JAXMappingExperiments(BaseExperiment):
         self.info=dict()
         self.rewards=[]
         self.origin=None
+        self.trajectories=None
         self.destination=None
         self.image_size=64
         self.done_goal=False
         self.destination=None
-
+    def _cache_waypoints(self,world) -> None:
+            env_map = world.get_map()
+            waypoints = env_map.generate_waypoints(distance=2)
+            trajectories = defaultdict(list)
+            for wpt in waypoints:
+                trajectories[f"{wpt.road_id}-{wpt.lane_id}"].append(wpt)
+            self.trajectories = sorted([traj for traj in trajectories.values() if len(traj) > 3], 
+                                        key=len, reverse=True)
     def reset(self,*arg,**kwargs):
         """Called at the beginning and each time the simulation is reset"""
 
@@ -745,7 +754,7 @@ class JAXMappingExperiments(BaseExperiment):
             dtype=np.float32,
         )
 
-        return Dict({"pixels":image_space, "vector":vec_space})
+        return Dict({"pixels":image_space, "vector":vec_space,"goal":image_space})
 
     def get_action_space(self):
         """Returns the continuous action space for steering and throttle"""
@@ -790,8 +799,8 @@ class JAXMappingExperiments(BaseExperiment):
         The information variable can be empty
         """
         vecs = self.get_vec_obs(sensor_data, core)
-        images = self.get_img_obs(sensor_data, core)
-        return {"pixels":images, "vector":vecs}, self.info
+        images,goal = self.get_img_obs(sensor_data, core)
+        return {"pixels":images, "vector":vecs,"goal":goal}, self.info
 
     def get_vec_obs(self, sensor_data, core):
         # breakpoint()
@@ -827,7 +836,7 @@ class JAXMappingExperiments(BaseExperiment):
         return vecs
     def get_img_obs(self, sensor_data, core):
         image = post_process_image(sensor_data['rgb'][1], normalized = True,crop=False, grayscale = False,image_size=self.image_size)
-
+        goal = post_process_image(sensor_data['goal'][1][0], normalized = True,crop=False, grayscale = False,image_size=self.image_size)
         if self.prev_image_0 is None:
             self.prev_image_0 = image
             self.prev_image_1 = self.prev_image_0
@@ -846,7 +855,7 @@ class JAXMappingExperiments(BaseExperiment):
         self.prev_image_1 = self.prev_image_0
         self.prev_image_0 = image
 
-        return images
+        return images,goal
     
     def get_speed(self, hero):
         """Computes the speed of the hero vehicle in Km/h"""
@@ -867,11 +876,11 @@ class JAXMappingExperiments(BaseExperiment):
         wp=core.map.get_waypoint(hero.get_transform().location,project_to_road=False) 
         self.done_dist = self.distance_travelled > 200
         self.done_falling = hero.get_location().z < -0.5
-        self.diff_lane = 'lane_invasion' in sensor_data.keys() or wp is None
+        self.diff_lane = 'lane_invasion' in sensor_data.keys()
         self.collision = 'collision' in sensor_data.keys()
         if self.destination:
             self.done_goal=self.destination.transform.location.distance(hero.get_transform().location) < 5.0
-        done=self.done_falling or self.collision or wp is None or self.diff_lane
+        done=self.done_falling or self.collision or self.done_goal or self.diff_lane
         # done=False
         self.info.update(dict(is_success=self.done_dist,
                              distance_completed=self.distance_travelled))
@@ -954,7 +963,7 @@ class JAXMappingExperiments(BaseExperiment):
         if self.collision:
             print('collision')
             reward += -10.0
-        if self.diff_lane:
+        # if self.diff_lane:
             print('Lane Invasion')
             reward += -10.0
         self.rewards.append(reward)
@@ -997,7 +1006,7 @@ config = {
         "experiment": {
             "type":JAXMappingExperiments,
             "hero": {
-                "blueprint": "vehicle.mercedes.coupe_2020",
+                "blueprint": "vehicle.citroen.c3",
                 "sensors": {
                     "collision": {
                         "type": "sensor.other.collision"

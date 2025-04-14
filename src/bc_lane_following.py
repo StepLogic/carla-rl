@@ -23,7 +23,7 @@ from absl import app, flags
 from ml_collections import config_flags
 from flax.training import checkpoints
 import jaxrl2.extra_envs.dm_control_suite
-from jaxrl2.agents import DrQLearner
+from jaxrl2.agents import DrQLearner,PixelBCLearner
 from jaxrl2.data import ReplayBuffer
 from jaxrl2.data.hindsight_replay_buffer import HindsightReplayBuffer
 from jaxrl2.evaluation import evaluate
@@ -38,7 +38,7 @@ import numpy as np
 # from vision_rl.rllib_integration.carla_env import CarlaEnv
 # from vision_rl.stb3.jax_experiments import JAXExperiments
 from rlib_integration.carla_goal_env import CarlaGoalEnv
-from src.configs.train_env_config import config as carla_config
+from configs.train_env_config import config as carla_config
 import flax
 from jaxrl2.noise import OrnsteinUhlenbeckActionNoise
 import cProfile
@@ -55,8 +55,8 @@ config.cnn_filters = (3, 3, 3, 3)
 config.cnn_strides = (2, 2, 2, 2)
 config.cnn_padding = "VALID"
 config.latent_dim = 50
-config.encoder = "pretrained-resnet"
-# config.dropout_rate=0.5
+config.encoder = "d4pg"
+config.dropout_rate=0.2
 bc_config = config.to_dict()
 
 
@@ -203,7 +203,7 @@ def update(expert_replay_buffers,agent,train_encoder,logger,i,update_func=None,p
 
                 for ix, batch_expert in enumerate(expert_replay_buffer_iterator):
                     # Update the agent with the current batch
-                    update_info_expert = update_func(batch_expert,train_encoder=train_encoder)
+                    update_info_expert = update_func(batch_expert)
                     
                     # Log metrics
                     extra={}
@@ -238,7 +238,7 @@ def update(expert_replay_buffers,agent,train_encoder,logger,i,update_func=None,p
 
 def main(_):
     # Create environment
-    # carla_config["env_config"]["carla"]["town"]="Town04"
+    carla_config["env_config"]["carla"]["town"]="Town02"
     # carla_config["env_config"]["carla"]["start_server"]=False
     env = CarlaGoalEnv(carla_config["env_config"])
     env = FrameStack(env=env, num_stack=1,stacking_key="pixels")
@@ -260,7 +260,7 @@ def main(_):
     random.seed(FLAGS.seed)
 
     # Initialize agent
-    agent = PixelResNetBCLearner(
+    agent = PixelBCLearner(
         0, 
         env.observation_space.sample(), 
         env.action_space.sample(), 
@@ -276,7 +276,7 @@ def main(_):
             expert_replay_buffers.append(expert_replay_buffer)
     
     # Initialize early stopping with patience of 4 epochs
-    early_stopper = EarlyStopping(patience=7, mode='max')  # Using 'max' since higher reward is better
+    early_stopper = EarlyStopping(patience=20, mode='max')  # Using 'max' since higher reward is better
     best_model_saved = False
 
     training_start_time = time.time()

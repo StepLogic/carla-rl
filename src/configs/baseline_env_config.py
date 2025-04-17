@@ -1006,7 +1006,7 @@ config = {
         "experiment": {
             "type":JAXMappingExperiments,
             "hero": {
-                "blueprint": "vehicle.citroen.c3",
+                "blueprint": "vehicle.micro.microlino",
                 "sensors": {
                     "collision": {
                         "type": "sensor.other.collision"

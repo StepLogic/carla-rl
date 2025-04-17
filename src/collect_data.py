@@ -82,7 +82,7 @@ def add_random_impulse(env):
     # Apply the force in the world coordinate system
     env.hero.add_force(carla.Vector3D(x_force, y_force, 0))
      
-def collect_basic_agent_data(replay_buffer_size=int(1e5)):
+def collect_basic_agent_data(replay_buffer_size=int(6e5)):
     # Create environment
 
     parser = argparse.ArgumentParser(description='Collect basic agent data')

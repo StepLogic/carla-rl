@@ -335,6 +335,7 @@ def eval_environment(agent:DrQLearner, env, n_eval_episodes=10, deterministic=Tr
         data.update({
             "experiment_results":stats,
             "SPLs":SPL_per_skip_frame,
+            "nodes":mapper.heading_nodes.__len__(),
         })
         path=f"results/{FLAGS.model}_ours/{difficulty}"
         os.makedirs(path,exist_ok=True)

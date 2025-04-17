@@ -314,7 +314,7 @@ def main(_):
    
     # config["env_config"]["carla"]["town"]=town_name
     # config["env_config"]["carla"]["start_server"]=False
-    env = CarlaEvalEnv(start_server=False,town=FLAGS.town)
+    env = CarlaEvalEnv(start_server=True,town=FLAGS.town)
     env = TimeLimit(env, max_episode_steps=2500)
     env = FrameStack(env=env, num_stack=1, stacking_key="pixels")
     env = RecordEpisodeStatistics(env)

@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+from collections import deque
 from datetime import datetime
 import math
 import gymnasium as gym
@@ -89,6 +90,8 @@ class LeoEnv(gym.Env):
         self.heading=0
         self.idle_count=0
         self.collision_threshold=None #0.5m
+        self.accelerations=deque(maxlen=100)
+        self.omegas=omega-
         self.time_episode =0
         self.velocities=[]
         self.dts=[]
@@ -227,7 +230,7 @@ class LeoEnv(gym.Env):
         image = self.bridge.imgmsg_to_cv2(image, "rgb8")
         image=cv2.resize(image,(self.image_size,self.image_size))
         # self.image_queue.put(image/255)
-        self.image=image/255
+        self.image = image/255
         # except Exception as e:
         #     print(e)
     def lidar_callback(self,scan):

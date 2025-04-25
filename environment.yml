@@ -3,7 +3,7 @@ channels:
   - defaults
   - conda-forge
 dependencies:
-  - python=3.9
+  - python=3.10
   - pip:
       - absl-py==1.4.0
       - carla==0.9.15

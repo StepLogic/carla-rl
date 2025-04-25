@@ -1,0 +1,5 @@
+Bootstrap: docker
+From: pytorch/pytorch
+%post
+    apt update && apt-get install -y python3-opencv
+    pip install gymnasium gym stable-baselines3[extra] moviepy carla==0.9.15 scikit-image transform3d 

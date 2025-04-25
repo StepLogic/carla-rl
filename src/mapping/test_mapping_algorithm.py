@@ -9,7 +9,6 @@ from src.mapping.topological_map import TopologicalMap
 mapper=TopologicalMap()
 with open('map.pickle', 'rb') as handle:
     dataset=pickle.load(handle)
-# cv2.imwrite("j.jpg",)
 features=dataset["features"]
 heading=dataset["heading"]
 

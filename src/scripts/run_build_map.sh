@@ -33,7 +33,7 @@ run_evaluation() {
     echo "- Map Directory: ${map_dir}"
     echo "-----------------------------------"
 
-   XLA_PYTHON_CLIENT_PREALLOCATE=false  python src/benchmark_rl_policy.py \
+   XLA_PYTHON_CLIENT_PREALLOCATE=false  python src/build_map.py \
         --model=${model} \
         --n_eval_episodes=10 \
         --deterministic=true \

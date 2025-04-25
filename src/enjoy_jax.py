@@ -11,8 +11,8 @@ from jaxrl2.wrappers.frame_stack import FrameStack
 from jaxrl2.wrappers.timelimit import TimeLimit
 from jaxrl2.wrappers.record_statistics import RecordEpisodeStatistics
 from rlib_integration.carla_goal_env import CarlaGoalEnv
-from src.configs.train_env_config import config as carla_config
-from src.sac_lane_following import sac_config
+from configs.train_env_config import config as carla_config
+from sac_lane_following import sac_config
 os.environ['XLA_FLAGS']="--xla_gpu_enable_command_buffer="
 # Define flags
 FLAGS = flags.FLAGS
@@ -24,7 +24,7 @@ def load_checkpoint(agent, checkpoint_path):
     """Load agent parameters from checkpoint."""
     state_dict = {
         'actor_params': agent._actor,
-        # 'critic_params': agent._critic,
+        'critic_params': agent._critic,
         # 'target_critic_params': agent._target_critic_params,
         # 'temp': agent._temp,
         # 'rng': agent._rng,

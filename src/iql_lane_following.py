@@ -6,8 +6,8 @@ import os
 import pickle
 import random
 
-import gym
-import gymnasium
+# import gym
+import gymnasium as gym
 from jaxrl2.utils.misc import Logger
 from jaxrl2.wrappers.frame_stack import FrameStack
 from jaxrl2.wrappers.timelimit import TimeLimit
@@ -62,7 +62,7 @@ config.latent_dim = 50
 config.discount = 0.99
 config.expectile = 0.7  # The actual tau for expectiles.
 config.A_scaling = 10.0
-config.dropout_rate = config_dict.placeholder(float)
+config.dropout_rate = 0.5
 config.cosine_decay = True
 config.tau = 0.005
 config.critic_reduction = "min"
@@ -250,7 +250,7 @@ def main(_):
             # breakpoint()   
             # if i%FLAGS.en
             if i % FLAGS.eval_interval == 0:
-                    save_checkpoint(agent,policy_folder,i)
+                save_checkpoint(agent,f"checkpoints/final_iql",1)
             logger.print_status(i, FLAGS.max_steps)
 
         

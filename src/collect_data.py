@@ -16,22 +16,38 @@ import os
 import pickle
 from rlib_integration.agent import BasicAgent
 # from train_online_pixels import CarlaGoalEnv,config,FrameStack,TimeLimit,RecordEpisodeStatistics,ReplayBuffer
-from src.configs.train_env_config import config
+from configs.train_env_config import config
 from jaxrl2.noise import OrnsteinUhlenbeckActionNoise
 import carla
 import argparse
-def random_shift(observation,next_observation,action):
-    observation["pixels"]=np.fliplr(observation["pixels"][...,0])[...,None]
-    next_observation["pixels"]=np.fliplr(next_observation["pixels"][...,0])[...,None]
-    action[0]=-action[0]
+# def random_shift(observation,next_observation,action):
+#     observation["pixels"]=np.fliplr(observation["pixels"][...,0])[...,None]
+#     next_observation["pixels"]=np.fliplr(next_observation["pixels"][...,0])[...,None]
+#     action[0]=-action[0]
+#     return observation,next_observation,action
+def filter_observations(observation):
+    acceptable_keys=["pixels","vector"]
+    return {k:observation[k] for  k in acceptable_keys}
+
+def random_shift_left(observation,next_observation,action):
+    observation["pixels"]=observation["left_pixels"][...,None]
+    next_observation["pixels"]=next_observation["left_pixels"][...,None]
+    action[0] = action[0] - 0.1
     return observation,next_observation,action
+
+def random_shift_right(observation,next_observation,action):
+    observation["pixels"]=observation["right_pixels"][...,None]
+    next_observation["pixels"]=next_observation["right_pixels"][...,None]
+    action[0] = action[0] + 0.1
+    return observation,next_observation,action
+
 
 def random_perturb(env):
     # observation["pixels"]=np.fliplr(observation["pixels"][...,0])[...,None]
     # next_observation["pixels"]=np.fliplr(next_observation["pixels"][...,0])[...,None]
     perturb_steering_list=[1.0,-1.0]
-    # _, _, _, _, _ = env.step([random.choice(perturb_steering_list),0.5])
-    observation, _, _, _, _ = env.step([random.choice(perturb_steering_list),0.5])
+    observation, _, _, _, _ = env.step([random.choice(perturb_steering_list),random.choice(perturb_steering_list)])
+    # observation, _, _, _, _ = env.step([np.random.uniform(-1.0,1.0),np.random.uniform(-1.0,1.0)])
     # action[0]=-action[0]
     return observation
 
@@ -66,7 +82,7 @@ def add_random_impulse(env):
     # Apply the force in the world coordinate system
     env.hero.add_force(carla.Vector3D(x_force, y_force, 0))
      
-def collect_basic_agent_data(replay_buffer_size=int(6e4)):
+def collect_basic_agent_data(replay_buffer_size=int(6e5)):
     # Create environment
 
     parser = argparse.ArgumentParser(description='Collect basic agent data')
@@ -76,17 +92,17 @@ def collect_basic_agent_data(replay_buffer_size=int(6e4)):
     args = parser.parse_args()
     # Access the town name
     town_name = args.town
-    #do not use 01,07,05
+    #do not use 02,03,05
     env=None
-    # towns=['Town04',"Town03",""]
-    _towns=["Town15","Town10HD_Opt","Town02","Town03","Town06","Town04"]
+    # _towns=['Town04',"Town03","Town01"]
+    _towns=["Town07","Town10HD_Opt","Town01","Town06","Town04"]
     towns=itertools.cycle(_towns)
     def reset_env():
         nonlocal env
         if not env is None:
              env.close()
         config["env_config"]["carla"]["town"]=next(towns)
-        config["env_config"]["carla"]["start_server"]=False
+        # config["env_config"]["carla"]["start_server"]=False
         env = CarlaGoalEnv(config["env_config"])
         env = FrameStack(env=env, num_stack=1, stacking_key="pixels")
         # env = FrameStack(env=env, num_stack=1, stacking_key="goal")
@@ -113,18 +129,25 @@ def collect_basic_agent_data(replay_buffer_size=int(6e4)):
             return agent
     env=reset_env()
 
+
+
     # Initialize replay buffer
     replay_buffer = ReplayBuffer(
         env.observation_space, 
         env.action_space,
-        capacity=int(4e5)
+        capacity=int(5e5)
     )
 
     # Initialize noise for exploration
     action_dim = 2
     mean = np.zeros(1)
-    sigma = 2 * np.ones(1)
+    sigma = 1 * np.ones(1)
     noise = OrnsteinUhlenbeckActionNoise(mean=mean, sigma=sigma)
+
+    # mean = np.zeros(2)
+    # sigma =  np.ones(1)*0.2
+    # action_noise = OrnsteinUhlenbeckActionNoise(mean=mean, sigma=sigma)
+
 
     # Main collection loop
     observation, info, done = *env.reset(), False
@@ -142,16 +165,16 @@ def collect_basic_agent_data(replay_buffer_size=int(6e4)):
                  switch_env=False
             observation, info = env.reset()
             noise.reset()
+            # action_noise.reset()
             agent=reset_agent(env=env)
         # Get action from BasicAgent
-        rand_key=random.randint(0,1)
+        # rand_key=random.randint(0,4)
         # if rand_key==1:
         #      add_random_impulse(env)
 
-    
         vecs=observation["vector"]
         env_target_speed=env.unwrapped.experiment.target_speed
-        target=np.clip(float(env_target_speed-noise().item()),0,env_target_speed+2)
+        target=max(float(env_target_speed+np.random.normal(0.0,0.4,size=(1,)).item()),2.0)
         # print(target)
         current_velocity=env.unwrapped.experiment.velocity
         # current_heading=env.unwrapped.experiment.current_heading
@@ -171,54 +194,114 @@ def collect_basic_agent_data(replay_buffer_size=int(6e4)):
         #     env.action_space.high  # throttle
         # ])
 
+        # if rand_key==1:
+
+        #     noisy_action = action + np.random.normal(0.0,0.1,size=(2,))
+        #     noisy_action = np.clip(noisy_action, env.action_space.low, env.action_space.high)
+        #     next_observation, reward, done, truncated, info = env.step(noisy_action)
+        # else:
         next_observation, reward, done, truncated, info = env.step(action)
-        
+            
         # Handle episode termination
         mask = 1.0 if not done and not truncated else 0.0
         done = done or agent.done()
-
+        #     observation = random_perturb(env)
         # if  agent.done():
         #      reward+=10
         # breakpoint()
-        # copy_observation,copy_next_observation,copy_action=random_shift(observation,next_observation,action)
+
+        # shifts
+        # copy_observation,copy_next_observation,copy_action=random_shift_left(observation,next_observation,action)
         # replay_buffer.insert(
         #     dict(
-        #         observations=copy_observation,
+        #         observations=filter_observations(copy_observation),
         #         actions=copy_action,
         #         rewards=reward,
         #         masks=mask,
         #         dones=done,
-        #         next_observations=copy_next_observation,
+        #         next_observations=filter_observations(copy_next_observation),
+        #     )
+        # )
+
+        # copy_observation,copy_next_observation,copy_action=random_shift_right(observation,next_observation,action)
+        # replay_buffer.insert(
+        #     dict(
+        #         observations=filter_observations(copy_observation),
+        #         actions=copy_action,
+        #         rewards=reward,
+        #         masks=mask,
+        #         dones=done,
+        #         next_observations=filter_observations(copy_next_observation),
         #     )
         # )
         # oversample junction entries
         if is_agent_at_junction(env):
-             for _ in range(10):
-                  replay_buffer.insert(
-                    dict(
-                        observations=observation,
-                        actions=action,
-                        rewards=reward,
-                        masks=mask,
-                        dones=done,
-                        next_observations=next_observation,
-                    )
-                )
-        else: 
-            if random.randint(0,5)==1:
+            #  noisy_action = action + action_noise()
+            #  noisy_action = np.clip(noisy_action, env.action_space.low, env.action_space.high)
+            #  next_observation, reward, done, truncated, info = env.step(noisy_action)
+            for _ in range(10):
+
                 replay_buffer.insert(
                     dict(
-                        observations=observation,
+                        observations=filter_observations(observation),
                         actions=action,
                         rewards=reward,
                         masks=mask,
                         dones=done,
-                        next_observations=next_observation,
+                        next_observations=filter_observations(next_observation),
                     )
                 )
+                # copy_observation,copy_next_observation,copy_action=random_shift_left(observation,next_observation,action)
+                # replay_buffer.insert(
+                #     dict(
+                #         observations=filter_observations(copy_observation),
+                #         actions=copy_action,
+                #         rewards=reward,
+                #         masks=mask,
+                #         dones=done,
+                #         next_observations=filter_observations(copy_next_observation),
+                #     )
+                # )
+
+                # copy_observation,copy_next_observation,copy_action=random_shift_right(observation,next_observation,action)
+                # replay_buffer.insert(
+                #     dict(
+                #         observations=filter_observations(copy_observation),
+                #         actions=copy_action,
+                #         rewards=reward,
+                #         masks=mask,
+                #         dones=done,
+                #         next_observations=filter_observations(copy_next_observation),
+                #     )
+                # )
+            noisy_action=action
+            noisy_action[0] = action[0] + np.random.normal(0.0,4.0,size=(1,)).item()
+            noisy_action = np.clip(noisy_action, env.action_space.low, env.action_space.high)
+            next_observation, reward, done, truncated, info = env.step(noisy_action)
+        else: 
+            if random.randint(0,10)==1:
+                replay_buffer.insert(
+                    dict(
+                        observations=filter_observations(observation),
+                        actions=action,
+                        rewards=reward,
+                        masks=mask,
+                        dones=done,
+                        next_observations=filter_observations(next_observation),
+                    )
+                )
+            noisy_action=action
+            noisy_action[0] = action[0] + np.random.normal(0.0,4.0,size=(1,)).item()
+            noisy_action = np.clip(noisy_action, env.action_space.low, env.action_space.high)
+            next_observation, reward, done, truncated, info = env.step(noisy_action)
+            # noisy_action=action
+            # noisy_action[0] = action[0] + np.random.normal(0.0,0.05,size=(1,))
+            # noisy_action = np.clip(noisy_action, env.action_space.low, env.action_space.high)
+            # next_observation, reward, done, truncated, info = env.step(noisy_action)
         observation=next_observation
-        if rand_key==1:
-            observation = random_perturb(env)
+        
+        # if rand_key==1:
+        # observation = random_perturb(env)
         # # Save buffer periodically
         # if i % 10000 == 0:
         #     dataset_folder = os.path.join("datasets")

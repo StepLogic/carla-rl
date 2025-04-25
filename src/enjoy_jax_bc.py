@@ -7,6 +7,7 @@ from absl import app, flags
 from ml_collections import config_flags
 from flax.training import checkpoints
 from jaxrl2.agents import DrQLearner,PPOLearner,PixelBCLearner
+from jaxrl2.agents.resnet_agents import PixelResNetBCLearner
 from jaxrl2.wrappers.frame_stack import FrameStack
 from jaxrl2.wrappers.timelimit import TimeLimit
 from jaxrl2.wrappers.record_statistics import RecordEpisodeStatistics
@@ -60,14 +61,14 @@ def evaluate_policy(agent, env, n_eval_episodes=10, deterministic=True):
         episode_length = 0
         
         while not done:
-            # target=3.0
-            # heading=np.pi
-            # vecs=observation["vector"]
-            # current_velocity=env.unwrapped.experiment.velocity
-            # current_heading=env.unwrapped.experiment.current_heading
-            # vecs[2] = np.clip(current_velocity/(target+1e-8), 0.0, 1.0)
-            # vecs[3]= np.clip(current_heading/(heading+1e-8),-1.0,1.0) 
-            
+            target=3.0
+            heading=0
+            vecs=observation["vector"]
+            current_velocity=env.unwrapped.experiment.velocity
+            current_heading=env.unwrapped.experiment.current_heading
+            vecs[2] = np.clip(current_velocity/(target+1e-8), 0.0, 5.1)
+            vecs[3]= np.clip(current_heading/(heading+1e-8),-5.1,5.1) 
+            observation["vector"]=vecs
             if deterministic:
                 action = agent.eval_actions(observation)
             else:
@@ -108,6 +109,7 @@ def evaluate_policy(agent, env, n_eval_episodes=10, deterministic=True):
 
 def main(_):
     # Create and wrap environment
+    carla_config["env_config"]["carla"]["start_server"]=False   
     carla_config["env_config"]["carla"]["town"]="Town01"
     env = CarlaGoalEnv(carla_config["env_config"])
     env = FrameStack(env=env, num_stack=1, stacking_key="pixels")
@@ -129,7 +131,7 @@ def main(_):
     config.encoder = "d4pg"
     bc_config = config.to_dict()
 
-    agent = PixelBCLearner(
+    agent = PixelResNetBCLearner(
         0,
         env.observation_space.sample(),
         env.action_space.sample(),

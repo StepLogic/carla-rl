@@ -66,7 +66,7 @@ config.dropout_rate = config_dict.placeholder(float)
 config.cosine_decay = True
 config.tau = 0.005
 config.critic_reduction = "min"
-config.share_encoder = False
+config.share_encoder = True
 sac_config = config.to_dict()
 
 

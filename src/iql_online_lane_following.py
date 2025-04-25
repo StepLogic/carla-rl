@@ -65,8 +65,8 @@ config.dropout_rate = config_dict.placeholder(float)
 config.cosine_decay = True
 config.tau = 0.005
 config.critic_reduction = "min"
-config.share_encoder = False
-config.freeze_encoders = False
+config.share_encoder = True
+config.freeze_encoders = True
 sac_config = config.to_dict()
 
 
@@ -82,7 +82,7 @@ flags.DEFINE_integer("eval_interval", int(5e4), "Eval interval.")
 flags.DEFINE_integer("batch_size", 32, "Mini batch size.")
 flags.DEFINE_integer("max_steps", int(5e6), "Number of training steps.")
 flags.DEFINE_integer(
-    "start_training", int(2000), "Number of training steps to start training."
+    "start_training", int(1000), "Number of training steps to start training."
 )
 flags.DEFINE_integer("image_size", 64, "Image size.")
 flags.DEFINE_integer("num_stack", 3, "Stack frames.")
@@ -131,9 +131,10 @@ from typing import Dict, Any
 # expert_buffers=list(glob.glob("/workspaces/ROS1/carla-rl/real_robot_dataset/*.pkl"))
 expert_buffers=None
 
-checkpoint_path="/workspaces/ROS1/carla-rl/checkpoints/iql_checkpoint/checkpoint_1"
+# checkpoint_path="/workspaces/ROS1/carlca-rl/checkpoints/iql_checkpoint/checkpoint_1"
 # rb_path="/workspaces/ROS1/carla-rl/savepoint/lane_following_buffer.pkl"
 # rb_path="/workspaces/ROS1/carla-rl/savepoint/lane_following_buffer.pkl"
+checkpoint_path="/workspaces/carla-rl/checkpoints/final_iql/checkpoint_1"
 rb_path=None
 def load_checkpoint(agent, checkpoint_path):
     """Load agent parameters from checkpoint."""
@@ -247,12 +248,13 @@ def main(_):
                     logger.log_training(update_info, i)
                     logger.print_status(i, FLAGS.max_steps)
 
-        # if i < FLAGS.start_training:
-        #     action = env.action_space.sample()
-        # else:
-        action = agent.sample_actions(observation)
+        if i < FLAGS.start_training:
+            action = env.action_space.sample()
+        else:
+            action = agent.sample_actions(observation)
             # if i>int(5e5):
             # action = action + noise()
+        action=np.nan_to_num(action,nan=0)
         action = np.clip(action, env.action_space.low, env.action_space.high)
         next_observation, reward, done, truncated, info = env.step(action)
         rollout+=1
@@ -310,8 +312,9 @@ def main(_):
             # noise.reset()
         
         # Training updates
-        if i >= FLAGS.start_training and rollout >100:
-            rollout=0
+        if i >= FLAGS.start_training:
+            
+            # for  _ in range(rollout)
             batch = next(replay_buffer_iterator)
             update_info = agent.update(batch)
 

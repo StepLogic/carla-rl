@@ -5,6 +5,9 @@
   },
   "runArgs": [
     "--privileged",
-    "--network=host"
-  ]
+    "--network=host",
+     "--gpus=all"
+  ],
+  "mounts": ["type=bind,source=/dev/input,target=/dev/input"]
+  
 }

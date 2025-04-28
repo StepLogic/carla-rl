@@ -29,7 +29,7 @@ class CarlaEvalEnv(gym.Env):
         self.last_position=None
         # self.reset()
     def set_start_transform(self,start):
-        # print(start)
+        # print(start,self.last_position.location)
         self.experiment.origin=self.core.map.get_waypoint(start)
 
     def set_destination_transform(self,end):
@@ -45,9 +45,10 @@ class CarlaEvalEnv(gym.Env):
         # Reset sensors hero and experiment
         self.experiment.reset(self)
         self.experiment.config["hero"]["is_goal_env"]=True
+        # print()
         if self.experiment.origin and self.experiment.destination:
             self.experiment.config["hero"]["origin"]=self.experiment.origin.transform or self.last_position 
-            self.experiment.config["hero"]["destination"]=self.experiment.destination.transform or self.last_position 
+            self.experiment.config["hero"]["destination"]=self.experiment.destination.transform
             self.hero = self.core.reset_hero_for_experiments(self.experiment.config["hero"])
         else:
             if not  self.experiment.trajectories is None:

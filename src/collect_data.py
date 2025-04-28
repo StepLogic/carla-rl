@@ -95,7 +95,7 @@ def collect_basic_agent_data(replay_buffer_size=int(6e5)):
     #do not use 02,03,05
     env=None
     # _towns=['Town04',"Town03","Town01"]
-    _towns=["Town07","Town10HD_Opt","Town01","Town06","Town04"]
+    _towns=["Town01","Town15","Town07"]
     towns=itertools.cycle(_towns)
     def reset_env():
         nonlocal env
@@ -106,14 +106,15 @@ def collect_basic_agent_data(replay_buffer_size=int(6e5)):
         env = CarlaGoalEnv(config["env_config"])
         env = FrameStack(env=env, num_stack=1, stacking_key="pixels")
         # env = FrameStack(env=env, num_stack=1, stacking_key="goal")
-        env = TimeLimit(env, max_episode_steps=4500)
+        env = TimeLimit(env, max_episode_steps=500)
         env = RecordEpisodeStatistics(env)
         return env
-    def reset_agent(env):
+    def reset_agent(env,explore=False):
             # Initialize BasicAgent
             # print("hell",env.unwrapped.experiment.target_speed)
             agent = BasicAgent(env.unwrapped.core.hero, target_speed=env.unwrapped.experiment.target_speed)
             try:
+                # if not explore:
                 agent.set_destination(env.unwrapped.core.destination.transform.location)
             except:
                 # env=reset_env()
@@ -141,7 +142,7 @@ def collect_basic_agent_data(replay_buffer_size=int(6e5)):
     # Initialize noise for exploration
     action_dim = 2
     mean = np.zeros(1)
-    sigma = 1 * np.ones(1)
+    sigma = 0.1 * np.ones(1)
     noise = OrnsteinUhlenbeckActionNoise(mean=mean, sigma=sigma)
 
     # mean = np.zeros(2)
@@ -153,13 +154,14 @@ def collect_basic_agent_data(replay_buffer_size=int(6e5)):
     observation, info, done = *env.reset(), False
     collection_start_time = time.time()
     agent=reset_agent(env=env)
-
+    explore=False
     epidsodes_per_env=int(replay_buffer_size)
     switch_env=False
     for i in tqdm(range(1, (replay_buffer_size + 10)*len(_towns))):
         if not switch_env:
             switch_env=i%epidsodes_per_env==0
         if done:
+            explore=random.randint(0,2)==1
             if switch_env:
                  env=reset_env()
                  switch_env=False
@@ -177,9 +179,11 @@ def collect_basic_agent_data(replay_buffer_size=int(6e5)):
         target=max(float(env_target_speed+np.random.normal(0.0,0.4,size=(1,)).item()),2.0)
         # print(target)
         current_velocity=env.unwrapped.experiment.velocity
+    
         # current_heading=env.unwrapped.experiment.current_heading
         vecs[2] = np.clip(current_velocity/(target+1e-8), 0.0, 5.1)
-        # vecs[3]= np.clip(current_heading/(heading+1e-8),-5.1,5.1) 
+        if explore:
+            vecs[3] = -1.0 
         agent.set_target_speed(target)
         control = agent.run_step()
         action = np.array([control.steer,control.throttle])
@@ -204,7 +208,13 @@ def collect_basic_agent_data(replay_buffer_size=int(6e5)):
             
         # Handle episode termination
         mask = 1.0 if not done and not truncated else 0.0
-        done = done or agent.done()
+        if not explore:
+            done = done or agent.done()
+        else:
+            done=done
+        # print(current_velocity)
+        if current_velocity<1e-4:
+            done=True
         #     observation = random_perturb(env)
         # if  agent.done():
         #      reward+=10
@@ -275,7 +285,7 @@ def collect_basic_agent_data(replay_buffer_size=int(6e5)):
                 #     )
                 # )
             noisy_action=action
-            noisy_action[0] = action[0] + np.random.normal(0.0,4.0,size=(1,)).item()
+            noisy_action[0] = action[0] + np.random.normal(0.0,0.01,size=(1,)).item()
             noisy_action = np.clip(noisy_action, env.action_space.low, env.action_space.high)
             next_observation, reward, done, truncated, info = env.step(noisy_action)
         else: 
@@ -291,7 +301,7 @@ def collect_basic_agent_data(replay_buffer_size=int(6e5)):
                     )
                 )
             noisy_action=action
-            noisy_action[0] = action[0] + np.random.normal(0.0,4.0,size=(1,)).item()
+            noisy_action[0] = action[0] + np.random.normal(0.0,0.2,size=(1,)).item()
             noisy_action = np.clip(noisy_action, env.action_space.low, env.action_space.high)
             next_observation, reward, done, truncated, info = env.step(noisy_action)
             # noisy_action=action

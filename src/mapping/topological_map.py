@@ -28,6 +28,11 @@ class TopologicalMap:
         # breakpoint()
         # features = skimage.feature.hog(image_obs,channel_axis=-1)
         image_obs=np.ravel(image_obs)
+        if len(self.des_nodes)>0:
+            indices,distances=self.flann.nn_index(image_obs,num_neighbors=1)
+            if distances and distances[-1]<1e-3:
+                return
+            
         self.image_node.append(image_obs)
         self.des_nodes.append(image_obs)
         self.heading_nodes.append(heading_obs)
@@ -73,7 +78,8 @@ class TopologicalMap:
             #     if len(path)==0:
             #         return None ,True
             # return (self.des_nodes[path[0]],self.heading_nodes[path[0]]),False
-            return (self.des_nodes[indices[0]],self.heading_nodes[indices[0]]),indices[0]==goal_idx
+            # print(indices)
+            return (self.des_nodes[indices[0]],self.heading_nodes[indices[0]]),(indices[0]==goal_idx,indices)
         return subgoal
             
             

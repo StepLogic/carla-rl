@@ -3,14 +3,14 @@
 # Define arrays for difficulty levels and their corresponding towns
 declare -A town_mapping
 town_mapping["easy"]="Town02"
-town_mapping["medium"]="Town03"
-town_mapping["hard"]="Town05"
+town_mapping["medium"]="Town02"
+town_mapping["hard"]="Town02"
 
 # Models to evaluate
 models=("PixelBCLearner" "DrQLearner") #"DrQLearner"
 declare -A checkpoints
 checkpoints["PixelBCLearner"]="/home/robotlab/scratch/carla-rl/best_models/final_bc/checkpoint_49"
-checkpoints["DrQLearner"]="/home/robotlab/scratch/carla-rl/best_models/model-sac-33/checkpoint_800000"
+checkpoints["DrQLearner"]="/home/robotlab/scratch/carla-rl/best_models/model-sac-16/checkpoint_1650000"
 
 
 # Number of trajectories per difficulty (0-4)
@@ -35,7 +35,7 @@ run_evaluation() {
 
    XLA_PYTHON_CLIENT_PREALLOCATE=false  python src/build_map.py \
         --model=${model} \
-        --n_eval_episodes=10 \
+        --n_eval_episodes=1 \
         --deterministic=true \
         --map_dir=${map_dir} \
         --town=${town} \

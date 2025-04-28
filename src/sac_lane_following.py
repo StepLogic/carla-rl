@@ -21,7 +21,7 @@ from ml_collections import config_flags
 from flax.training import checkpoints
 import jaxrl2.extra_envs.dm_control_suite
 from jaxrl2.agents import DrQLearner,PixelResNetDrQLearner
-from jaxrl2.data import ReplayBuffer
+from jaxrl2.data import ReplayBuffer,PrioritizedReplayBuffer
 from jaxrl2.data.hindsight_replay_buffer import HindsightReplayBuffer
 from jaxrl2.evaluation import evaluate
 from jaxrl2.wrappers import wrap_pixels
@@ -33,6 +33,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 from gym import spaces
+from gymnasium.wrappers.utils import RunningMeanStd
 # from stable_baselines3.common.noise import OrnsteinUhlenbeckActionNoise
 # from stable_baselines3 import SAC
 # from stable_baselines3.common.torch_layers import BaseFeaturesExtractor
@@ -53,18 +54,18 @@ config.actor_lr = 3e-4
 config.critic_lr = 3e-4
 config.temp_lr = 3e-4
 config.hidden_dims = (256, 256)
-config.cnn_features = (8, 16, 32, 32)
+config.cnn_features = (32, 64, 128, 256)
 config.cnn_filters = (3, 3, 3, 3)
 config.cnn_strides = (2, 2, 2, 2)
 config.cnn_padding = "VALID"
 config.latent_dim = 50
 config.encoder = "d4pg"
-config.discount = 0.997
+config.discount = 0.98
 config.tau = 0.005
 config.init_temperature = 1.0
 # config.target_entropy = 0.1
 config.backup_entropy = True
-# config.num_qs=10
+config.num_qs=10
 config.critic_reduction = "mean"
 sac_config = config.to_dict()
 
@@ -77,8 +78,8 @@ flags.DEFINE_string("save_dir", "./tmp/", "Tensorboard logging dir.")
 flags.DEFINE_integer("seed", 42, "Random seed.")
 flags.DEFINE_integer("eval_episodes", 5, "Number of episodes used for evaluation.")
 flags.DEFINE_integer("log_interval", 1000, "Logging interval.")
-flags.DEFINE_integer("eval_interval", int(5e4), "Eval interval.")
-flags.DEFINE_integer("batch_size", 256, "Mini batch size.")
+flags.DEFINE_integer("eval_interval", int(1.5e5), "Eval interval.")
+flags.DEFINE_integer("batch_size", 128, "Mini batch size.")
 flags.DEFINE_integer("max_steps", int(2e6), "Number of training steps.")
 flags.DEFINE_integer(
     "start_training", int(1e3), "Number of training steps to start training."
@@ -86,7 +87,7 @@ flags.DEFINE_integer(
 flags.DEFINE_integer("image_size", 64, "Image size.")
 flags.DEFINE_integer("num_stack", 3, "Stack frames.")
 flags.DEFINE_integer(
-    "replay_buffer_size", int(1e6), "Number of training steps to start training."
+    "replay_buffer_size", int(5e5), "Number of training steps to start training."
 )
 flags.DEFINE_integer(
     "action_repeat", None, "Action repeat, if None, uses 2 or PlaNet default values."
@@ -95,7 +96,7 @@ flags.DEFINE_boolean("tqdm", True, "Use tqdm progress bar.")
 flags.DEFINE_boolean("save_video", False, "Save videos during evaluation.")
 flags.DEFINE_boolean("save_buffer", False, "Save the replay buffer.")
 
-flags.DEFINE_string("checkpoint_path", "/home/robotlab/scratch/carla-rl/best_models/model-sac-3/checkpoint_750000", "Save the replay buffer.")
+flags.DEFINE_string("checkpoint_path", "/home/robotlab/scratch/carla-rl/checkpoints/model-sac-9/checkpoint_450000", "Save the replay buffer.")
 
 
 
@@ -166,9 +167,17 @@ def main(_):
     # env = FrameStack(env=env, num_stack=1,stacking_key="pixels")
     # env = TimeLimit(env,max_episode_steps=2500)
     # env = RecordEpisodeStatistics(env)
+    gamma: float = 0.99,
+    epsilon: float = 1e-8,
+
+
+    return_rms = RunningMeanStd(shape=())
+    discounted_reward: np.array = np.array([0.0])
+    gamma = gamma
+    epsilon = epsilon
     env=None
     # _towns=['Town04',"Town03","Town01"]
-    _towns=["Town07","Town06","Town15","Town01"]
+    _towns=["Town01","Town15","Town07"]
     towns=itertools.cycle(_towns)
     def reset_env(eval_town=False):
         nonlocal env
@@ -181,14 +190,14 @@ def main(_):
         # config["env_config"]["carla"]["start_server"]=False
         env = CarlaGoalEnv(carla_config["env_config"])
         env = FrameStack(env=env, num_stack=1, stacking_key="pixels")
-        env = TimeLimit(env, max_episode_steps=1500)
+        env = TimeLimit(env, max_episode_steps=3500)
         env = RecordEpisodeStatistics(env)
         return env
     action_dim = 2
     mean = np.zeros(action_dim)
-    sigma = .3* np.ones(action_dim)
+    sigma = .1* np.ones(action_dim)
     noise = OrnsteinUhlenbeckActionNoise(mean=mean, sigma=sigma)
-    timelimit=10
+    timelimit=100
     env=reset_env()
     # Initialize logger
     logger = Logger(log_dir="./logs",prefix="SAC")
@@ -208,6 +217,7 @@ def main(_):
         # num_qs=10,
         **sac_config
     )
+    # breakpoint()
     # agent=load_checkpoint(agent,FLAGS.checkpoint_path)
     replay_buffer_size = FLAGS.replay_buffer_size
     # expert_replay_buffers=[]
@@ -246,24 +256,27 @@ def main(_):
     distance_to_goal_history = deque(maxlen=100)  # Track last 100 episodes
     eval_distance_to_goal_history = deque(maxlen=100)  # Track last 100 episodes
     aux_data = defaultdict(lambda:deque(maxlen=2500))  # Track last 100 episodes
+    # normalized_reward=
     # Main training loop
     observation, info, done = *env.reset(), False
     training_start_time = time.time()
     episodes_per_environment=0
+    town_count=1
     # save_checkpoint(agent,policy_folder,1)
     for i in tqdm.tqdm(
         range(1, FLAGS.max_steps + 1),
         smoothing=0.1,
         disable=not FLAGS.tqdm,
     ):
-        if i < FLAGS.start_training:
+        if i>=FLAGS.start_training:
             action = env.action_space.sample()
         else:
             action = agent.sample_actions(observation)
             # action = action + noise()
-            action = np.clip(action, env.action_space.low, env.action_space.high)
+        action = np.clip(action, env.action_space.low, env.action_space.high)
         next_observation, reward, done, truncated, info = env.step(action)
-        
+        if "TimeLimit.truncated" in info:
+            print(info)
         # Handle episode termination
         if not done or not truncated or "TimeLimit.truncated" in info:
             mask = 1.0
@@ -271,8 +284,12 @@ def main(_):
             mask = 0.0
         for k,v in info.items():
             if isinstance(v,(int,float)): 
-                aux_data[k].append(v)
-            
+                aux_data[k].append(np.mean(np.array([v])))
+        # normalize_returns 
+        discounted_reward =  discounted_reward *  gamma * mask + float(reward)       
+        return_rms.update( discounted_reward)
+        # We don't (reward -  return_rms.mean) see https://github.com/openai/baselines/issues/538
+        normalized_reward = reward / np.sqrt( return_rms.var +  epsilon)
         # Store transition in replay buffer
         replay_buffer.insert(
             dict(
@@ -323,11 +340,12 @@ def main(_):
             
                 # print([list(v) for k,v in aux_data.items()])
                 logger.log_episode(episode_info, i)
-                if episodes_per_environment > 0 and episodes_per_environment % 100 == 0:
-                    if i> int(3e5):
-                        timelimit+=1000
-                    else:
-                        timelimit+=100
+                if episodes_per_environment > 0 and episodes_per_environment % timelimit == 0:
+                    if town_count%len(_towns)==0:
+                        timelimit=min(timelimit+100,1000)
+                        
+                    # else:
+                        # timelimit+=100
                     episodes_per_environment = 1
                     
                     max_attempts = 50
@@ -350,8 +368,18 @@ def main(_):
         if i >= FLAGS.start_training:
             # for i in 
             batch = next(replay_buffer_iterator)
-            update_info = agent.update(batch) #prevent entropy from dying too quickly
-
+            update_info = agent.update(batch,utd_ratio=8) #prevent entropy from dying too quickly
+            # indices = batch.get('indices', None)
+    
+            # if indices is not None:
+            #     # info['td_errors'] = td_errors
+            #     td_errors=update_info.get("td_errors",None)
+                
+            #     # Update priorities outside of JAX (since we've extracted indices already)
+            #     if hasattr(replay_buffer, 'update_priorities') and  not td_errors is None:
+            #         # Convert to numpy for the replay buffer
+            #         td_errors_np = np.array(td_errors)
+            #         replay_buffer.update_priorities(indices, td_errors_np)
             # if not expert_buffer_iterator is None:
             # #     # for expert_replay_buffer_iterator in expert_replay_buffer_iterators:
             # #     # expert_replay_buffer_iterator=next(expert_replay_buffer_iterators)
@@ -416,6 +444,11 @@ def main(_):
                 eval_info["distance_completed"] = np.mean(eval_dists)
                 eval_info["slack"] = np.mean(eval_slack)
             save_checkpoint(agent,policy_folder,i)
+            # dataset_folder ="datasets"
+            # os.makedirs(dataset_folder, exist_ok=True)
+            # dataset_file = os.path.join(dataset_folder, f"lane_following_buffer")
+            # with open(dataset_file, "wb") as f:
+            #     pickle.dump(replay_buffer, f)
             logger.log_eval(eval_info, i)
             logger.print_status(i, FLAGS.max_steps)
     

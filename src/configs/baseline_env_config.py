@@ -687,6 +687,7 @@ class JAXMappingExperiments(BaseExperiment):
         self.image_size=64
         self.done_goal=False
         self.destination=None
+        self.lane_invasion_count=0
     def _cache_waypoints(self,world) -> None:
             env_map = world.get_map()
             waypoints = env_map.generate_waypoints(distance=2)
@@ -732,6 +733,7 @@ class JAXMappingExperiments(BaseExperiment):
         self.current_heading=0.0
         self.goal_location=None
         self.done_goal=False
+        self.lane_invasion_count=0
         # self.target_speed = random.uniform(1.0,self.config["others"]["target_speed"])
         self.info=dict()
     def set_goal(self,goal,heading,location):
@@ -810,10 +812,30 @@ class JAXMappingExperiments(BaseExperiment):
         vec[0] = self.steer / self.max_steer
         vec[1] = self.throttle / self.max_throttle
         hero = core.hero
-        vec[2] = np.clip(self.get_speed(hero)/(self.target_speed+1e-8), 0.0, 5.1)
+        wp=core.map.get_waypoint(hero.get_transform().location,project_to_road=True) 
+        # vec[2] = np.clip(self.get_speed(hero)/(self.target_speed+1e-8), 0.0, 1.0)
+        if self.target_speed == 0:
+            vec[2] = 0.0 if self.get_speed(hero) < 0.1 else 1.0  # Only 0 if almost stopped
+        else:
+            vec[2] = np.clip(self.get_speed(hero)/self.target_speed, 0.0, 1.0)
         # vec[3] = self.time_idle / self.max_time_idle
-        vec[3]= np.clip(imu/(heading+1e-8),-5.1,5.1) 
-        # vec[4]= np.clip(heading/np.pi,-5.1,5.1) 
+        # if self.explore_mode:
+        #     vec[3]= -1.0
+        # else:
+            # if not wp.is_junction:
+            
+        # vec[3]= np.clip((imu+1e-8)/(heading+1e-8),-1.0,1.0)
+        vec[3]=np.cos(abs(imu-heading))
+        # print(np.cos(imu-heading))
+            # else:
+            #     wp=core.map.get_waypoint(core.hero.get_transform().location,project_to_road=True) 
+            #     if not wp is None:
+            #         current_forward_vector=carla_location_to_np_array(core.hero.get_transform().get_forward_vector())
+            #         correct_forward_vector=carla_location_to_np_array(wp.transform.get_forward_vector())
+            #         vec[3] = np.dot(current_forward_vector,correct_forward_vector)
+            #     else:
+            #         vec[3] = -1
+
         if self.prev_vec_0 is None:
             self.prev_vec_0 = vec
             self.prev_vec_1 = self.prev_vec_0
@@ -831,6 +853,10 @@ class JAXMappingExperiments(BaseExperiment):
         self.prev_vec_2 = self.prev_vec_1
         self.prev_vec_1 = self.prev_vec_0
         self.prev_vec_0 = vec
+        self.velocity=self.get_speed(hero)
+        self.current_heading=imu
+        vecs=np.nan_to_num(vecs,nan=1e-8)
+        # return vecs
         self.velocity=self.get_speed(hero)
         self.current_heading=imu
         return vecs
@@ -876,13 +902,15 @@ class JAXMappingExperiments(BaseExperiment):
         wp=core.map.get_waypoint(hero.get_transform().location,project_to_road=False) 
         self.done_dist = self.distance_travelled > 200
         self.done_falling = hero.get_location().z < -0.5
-        self.diff_lane = 'lane_invasion' in sensor_data.keys()
+        if  'lane_invasion' in sensor_data.keys():
+            self.lane_invasion_count+=1
+        self.diff_lane = self.lane_invasion_count>2 or wp is None
         self.collision = 'collision' in sensor_data.keys()
         if self.destination:
             self.done_goal=self.destination.transform.location.distance(hero.get_transform().location) < 5.0
         done=self.done_falling or self.collision or self.done_goal or self.diff_lane
         # done=False
-        self.info.update(dict(is_success=self.done_dist,
+        self.info.update(dict(is_success=self.done_goal,
                              distance_completed=self.distance_travelled))
         if len(self.rewards)>0:
                     self.info.update(dict(

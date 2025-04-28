@@ -86,7 +86,7 @@ flags.DEFINE_integer(
 flags.DEFINE_integer("image_size", 64, "Image size.")
 flags.DEFINE_integer("num_stack", 3, "Stack frames.")
 flags.DEFINE_integer(
-    "replay_buffer_size", int(1e6), "Number of training steps to start training."
+    "replay_buffer_size", int(3e5), "Number of training steps to start training."
 )
 flags.DEFINE_integer(
     "action_repeat", None, "Action repeat, if None, uses 2 or PlaNet default values."
@@ -170,20 +170,26 @@ def main(_):
     # _towns=['Town04',"Town03","Town01"]
     _towns=["Town07","Town06","Town15","Town01"]
     towns=itertools.cycle(_towns)
+    carla_config["env_config"]["carla"]["town"]="Town01"
+    env = CarlaGoalEnv(carla_config["env_config"])
+    env = FrameStack(env=env, num_stack=1, stacking_key="pixels")
+    env = TimeLimit(env, max_episode_steps=1500)
+    env = RecordEpisodeStatistics(env)
     def reset_env(eval_town=False):
-        nonlocal env
-        if not env is None:
-             env.close()
-        if eval_town:
-            carla_config["env_config"]["carla"]["town"]="Town02"
-        else:    
-            carla_config["env_config"]["carla"]["town"]=next(towns)
-        # config["env_config"]["carla"]["start_server"]=False
-        env = CarlaGoalEnv(carla_config["env_config"])
-        env = FrameStack(env=env, num_stack=1, stacking_key="pixels")
-        env = TimeLimit(env, max_episode_steps=1500)
-        env = RecordEpisodeStatistics(env)
-        return env
+        return  env
+    #     nonlocal env
+    #     if not env is None:
+    #          env.close()
+    #     if eval_town:
+    #         carla_config["env_config"]["carla"]["town"]="Town02"
+    #     else:    
+    #         carla_config["env_config"]["carla"]["town"]=next(towns)
+    #     # config["env_config"]["carla"]["start_server"]=False
+    #     env = CarlaGoalEnv(carla_config["env_config"])
+    #     env = FrameStack(env=env, num_stack=1, stacking_key="pixels")
+    #     env = TimeLimit(env, max_episode_steps=1500)
+    #     env = RecordEpisodeStatistics(env)
+    #     return env
     action_dim = 2
     mean = np.zeros(action_dim)
     sigma = .3* np.ones(action_dim)

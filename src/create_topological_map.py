@@ -396,7 +396,7 @@ class JunctionTrajectoryAgent(BasicAgent):
 
 def collect_basic_agent_data(origin,destination,difficulty="easy"):
     
-    env = CarlaEvalEnv(use_rgb=True,town="Town02",start_server=True,max_dist=100,image_size=96)
+    env = CarlaEvalEnv(use_rgb=True,town="Town01",start_server=True,max_dist=100,image_size=96)
     env = FrameStack(env=env, num_stack=1, stacking_key="pixels")
     env = FrameStack(env=env, num_stack=1, stacking_key="goal")
     # env = TimeLimit(env, max_episode_steps=2500)

@@ -1,10 +1,10 @@
 import glob
 import os
-import random
 
 # import random
 # import time
 
+import carla
 import cv2
 import matplotlib.pyplot as plt
 import ml_collections
@@ -18,7 +18,7 @@ from carla_eval import CarlaEvalEnv
 # from src.bc_lane_following import bc_config
 from jaxrl2.agents import DrQLearner,PixelBCLearner
 from jaxrl2.agents.resnet_agents import PixelResNetBCLearner
-from rlib_integration.helper import carla_location_to_np_array, ndarray_to_location
+from rlib_integration.helper import ndarray_to_location
 from rlib_integration.agent import GlobalRoutePlanner
 from jaxrl2.wrappers.frame_stack import FrameStack
 from jaxrl2.wrappers.record_statistics import RecordEpisodeStatistics
@@ -36,7 +36,7 @@ os.environ["XLA_PYTHON_CLIENT_ALLOCATOR"]="platform"
 config = ml_collections.ConfigDict()
 config.actor_lr = 3e-4
 config.hidden_dims = (256, 256)
-config.cnn_features = (8, 16, 32, 64)
+config.cnn_features = (32, 64, 128, 256)
 config.cnn_filters = (3, 3, 3, 3)
 config.cnn_strides = (2, 2, 2, 2)
 config.cnn_padding = "VALID"
@@ -52,7 +52,7 @@ config.actor_lr = 3e-4
 config.critic_lr = 3e-4
 config.temp_lr = 3e-4
 config.hidden_dims = (256, 256)
-config.cnn_features = (8, 16, 32, 64)
+config.cnn_features = (32, 64, 128, 256)
 config.cnn_filters = (3, 3, 3, 3)
 config.cnn_strides = (2, 2, 2, 2)
 config.cnn_padding = "VALID"
@@ -63,7 +63,7 @@ config.tau = 0.005
 config.init_temperature = 1.0
 # config.target_entropy = 0.1
 config.backup_entropy = True
-config.num_qs=2
+config.num_qs=10
 config.critic_reduction = "mean"
 sac_config = config.to_dict()
 
@@ -180,7 +180,7 @@ class Mapper:
         
 
 
-def eval_environment(agent:DrQLearner, env, n_eval_episodes=10, deterministic=True):
+def eval_environment(agent:DrQLearner, env, n_eval_episodes=10, deterministic=True,start=None,goal=None):
     """
     
     Evaluate the agent for n_eval_episodes
@@ -200,44 +200,39 @@ def eval_environment(agent:DrQLearner, env, n_eval_episodes=10, deterministic=Tr
     mean_nodes=[]
     #
     shortest_distance_along_road=1e-8
-    with open(f'{FLAGS.map_dir}/aux.pkl', 'rb') as handle:
-            dataset=pickle.load(handle)
-            start_location=ndarray_to_location(dataset["start"])
-            goal_location=ndarray_to_location(dataset["goal"])
-            env.unwrapped.set_start_transform(start_location)
-            env.unwrapped.set_destination_transform(goal_location)
-            route_plannner=GlobalRoutePlanner(env.unwrapped.core.map, 2.0)
-            prev_waypoint=None
-            try:
-                trace=route_plannner.trace_route(start_location,goal_location)
-                for wp,_ in trace:
-                    if prev_waypoint is None:
-                        prev_waypoint=wp
-                    shortest_distance_along_road+=prev_waypoint.transform.location.distance(wp.transform.location)
-                    prev_waypoint=wp
-            except:
-                if shortest_distance_along_road <= 2.0:
-                    shortest_distance_along_road=start_location.distance(goal_location)
-            # assert shortest_distance_along_road>1.0
-    difficulty=FLAGS.map_dir.split("/")[-2]
-    name=FLAGS.model
-    base_path = f"maps/{name}"
-    
-    # Get all directories recursively
-    for root, dirs, files in os.walk(base_path):
-        for file in files:
-            file_path = os.path.join(root, file)
-            print(file_path)
-            
-            with open(file_path, 'rb') as handle:
-                dataset = pickle.load(handle)
-                features = dataset["features"]
-                headings = dataset["heading"]
-                print(f"File: {file_path}, Headings count: {len(headings)}")
-                
-                for image, heading in zip(features, headings):
-                    mapper.update(image, heading)  # build map
+    # with open(f'/aux.pkl', 'rb') as handle:
+    #         dataset=pickle.load(handle)
+    start_location=ndarray_to_location(start)
+    goal_location=ndarray_to_location(goal)
 
+    env.unwrapped.set_start_transform(start_location)
+    env.unwrapped.set_destination_transform(goal_location)
+    route_plannner=GlobalRoutePlanner(env.unwrapped.core.map, 2.0)
+    prev_waypoint=None
+    try:
+        trace=route_plannner.trace_route(start_location,goal_location)
+        for wp,_ in trace:
+            if prev_waypoint is None:
+                prev_waypoint=wp
+            shortest_distance_along_road+=prev_waypoint.transform.location.distance(wp.transform.location)
+            prev_waypoint=wp
+    except:
+        if shortest_distance_along_road <= 2.0:
+            shortest_distance_along_road=start_location.distance(goal_location)
+    # assert shortest_distance_along_road>1.0
+    # difficulty=FLAGS.map_dir.split("/")[-2]
+    name=FLAGS.model
+    path=f"maps/{name}/**/*"
+    # breakpoint()
+    for m in glob.glob(path):
+        with open(m, 'rb') as handle:
+            dataset=pickle.load(handle)
+        features=dataset["features"]
+        headings=dataset["heading"]
+        # print(heading)
+
+        for image,heading in zip(features,headings):
+            mapper.update(image,heading) #build map
 
     # breakpoint()
         # # breakpoint()
@@ -260,7 +255,7 @@ def eval_environment(agent:DrQLearner, env, n_eval_episodes=10, deterministic=Tr
         goal_observation=dict(pixels=observation["goal"][...,None],vector=np.ones_like(observation["vector"]))
         # breakpoint()
         feature=agent.extract_features(filter_observations(goal_observation))
-        # breakpoint()
+        
         mapper.update(feature,1e-8) #build map
         feature=agent.extract_features(filter_observations(observation))
         subgoal=mapper.create_navigation_guide(len(mapper.des_nodes))
@@ -273,17 +268,25 @@ def eval_environment(agent:DrQLearner, env, n_eval_episodes=10, deterministic=Tr
             if len(index)>0 and not index[0] in mean_nodes: 
                  mean_nodes.append(index[0])
 
+            target=5.0
             vecs=observation["vector"]
-            dot=np.dot(carla_location_to_np_array(env.unwrapped.core.hero.get_transform().get_forward_vector()),heading)
-            # print(dot)
-            vecs[3]=random.random()
+            current_velocity=env.unwrapped.experiment.velocity
+            current_heading=env.unwrapped.experiment.current_heading
+            # breakpoint()
+            # if (current_heading - heading)<np.deg2rad(10):
+            #         truncate_steps=int(1e5) #break loop
+            #         print(np.rad2deg(current_heading),np.rad2deg(heading))
+            vecs[2] = np.clip(current_velocity/(target+1e-8), 0.0, 5.1)
+            # vecs[3]= np.cos(abs(current_heading - heading)) 
+            # vecs[4]= np.clip(heading/np.pi,-5.1,5.1) 
             observation["vector"]=vecs
-            action = agent.eval_actions(filter_observations(observation))
-            # action_dist=agent.action_dist(filter_observations(observation))
-            print(vecs)
+            # breakpoint()
+            action_dist=agent.action_dist(filter_observations(observation))
             feature=agent.extract_features(filter_observations(observation))
-
-            # # print(action)
+            # breakpoint()
+            # if deterministic:
+            action = action_dist.mode()
+            # print(action)
             observation, reward, done, truncated, info = env.step(action)
             episode_reward += reward
             episode_length += 1
@@ -350,9 +353,9 @@ def eval_environment(agent:DrQLearner, env, n_eval_episodes=10, deterministic=Tr
         "experiment_results":stats,
         "SPLs":SPL_per_skip_frame,
         "nodes":mapper.heading_nodes.__len__(),
-        "mean_nodes":mapper.heading_nodes.__len__()
+        "mean_nodes":len(mean_nodes)
     })
-    path=f"results/{FLAGS.model}_ours/{difficulty}"
+    path=f"results/{FLAGS.model}/random"
     os.makedirs(path,exist_ok=True)
     with open(f"{path}/{name}_test_results.pkl", "wb") as f:
         pickle.dump(dict(data), f)
@@ -381,14 +384,29 @@ def main(_):
     
     # Load checkpoint
     agent = load_checkpoint(agent, FLAGS.checkpoint_path)
+    user_defined_trajectories=None
+    with open("/home/robotlab/scratch/carla-rl/full_traj_aux.pkl", 'rb') as handle:
+            user_defined_trajectories=pickle.load(handle)
+    
 
-    # Evaluate
-    stats = eval_environment(
-        agent,
-        env,
-        n_eval_episodes=FLAGS.n_eval_episodes,
-        deterministic=FLAGS.deterministic
-    )
+    if user_defined_trajectories:
+       locations=user_defined_trajectories["locations"]
+       for (start,goal) in locations:
+            location=start
+            origin=carla.Location(x=location[0],y=location[1],z=location[2])
+            location=goal
+            destination=carla.Location(x=location[0],y=location[1],z=location[2])
+            env.unwrapped.set_start_transform(origin)
+            env.unwrapped.set_destination_transform(destination)
+            stats = eval_environment(
+               agent,
+                env,
+                n_eval_episodes=FLAGS.n_eval_episodes,
+                deterministic=FLAGS.deterministic,
+                start=start,
+                goal=goal
+            
+            )
     # stats = navigate(
     #     agent,
     #     env,

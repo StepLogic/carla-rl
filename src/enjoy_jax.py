@@ -25,7 +25,7 @@ config.actor_lr = 3e-4
 config.critic_lr = 3e-4
 config.temp_lr = 3e-4
 config.hidden_dims = (256, 256)
-config.cnn_features = (8, 16, 32, 32)
+config.cnn_features = (8, 16, 32, 64)
 config.cnn_filters = (3, 3, 3, 3)
 config.cnn_strides = (2, 2, 2, 2)
 config.cnn_padding = "VALID"
@@ -36,9 +36,10 @@ config.tau = 0.005
 config.init_temperature = 1.0
 # config.target_entropy = 0.1
 config.backup_entropy = True
-config.num_qs=10
+config.num_qs=2
 config.critic_reduction = "mean"
 sac_config = config.to_dict()
+
 def filter_observations(observation):
     acceptable_keys=["pixels","vector"]
     return {k:observation[k] for  k in acceptable_keys}
@@ -82,28 +83,17 @@ def evaluate_policy(agent, env, n_eval_episodes=10, deterministic=True):
         episode_reward = 0
         episode_length = 0
         reward=0
-        slack_actions=100
+        slack_actions=0
         truncated =False
+        previous_heading=None
         while not done:
             target=3.0
-            # heading=np.pi
             vecs=observation["vector"]
-            current_velocity=env.unwrapped.experiment.velocity
-            # current_heading=env.unwrapped.experiment.current_heading
-            vecs[2] = np.clip(current_velocity/(target+1e-8), 0.0, 1.0)
+            vecs[3]=-1.0
+            observation["vector"]=vecs
+            action = agent.eval_actions(filter_observations(observation))
+            observation, reward, done, truncated, info = env.step(action)
 
-            if deterministic:
-                action = agent.eval_actions(filter_observations(observation))
-            else:
-                action = agent.sample_actions(filter_observations(observation))
-            if slack_actions==0:
-                vecs[3]= np.cos(0)
-                observation["vector"]=vecs
-                observation, reward, done, truncated, info = env.step(action)
-            else:
-                observation, reward, done, truncated, info = env.step(np.array([0.0,0.2]))
-                slack_actions-=1
-            
             episode_reward += reward
             episode_length += 1
             done = done or truncated
@@ -139,34 +129,10 @@ def evaluate_policy(agent, env, n_eval_episodes=10, deterministic=True):
 
 def main(_):
     # Create and wrap environment
-    # carla_config["env_config"]["carla"]["town"]="Town02"
-    env = CarlaEvalEnv(start_server=True,town="Town01")
+    env = CarlaEvalEnv(start_server=True,town="Town02")
     env = TimeLimit(env, max_episode_steps=2500)
     env = FrameStack(env=env, num_stack=1, stacking_key="pixels")
     env = RecordEpisodeStatistics(env)
-    
-    # Initialize agent
-    # kwargs = dict(FLAGS.config)
-    # jax.config.update("jax_debug_nans", True)
-    config = ml_collections.ConfigDict()
-    config.actor_lr = 3e-4
-    config.critic_lr = 3e-4
-    config.temp_lr = 3e-4
-    config.hidden_dims = (256, 256)
-    config.cnn_features = (32, 64, 128, 256)
-    config.cnn_filters = (3, 3, 3, 3)
-    config.cnn_strides = (2, 2, 2, 2)
-    config.cnn_padding = "VALID"
-    config.latent_dim = 50
-    config.encoder = "d4pg"
-    config.discount = 0.98
-    config.tau = 0.005
-    config.init_temperature = 1.0
-    # config.target_entropy = 0.1
-    config.backup_entropy = True
-    config.num_qs=10
-    config.critic_reduction = "mean"
-    sac_config = config.to_dict()
 
 
     agent = DrQLearner(

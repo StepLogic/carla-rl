@@ -105,8 +105,7 @@ def collect_basic_agent_data(replay_buffer_size=int(6e5)):
         # config["env_config"]["carla"]["start_server"]=False
         env = CarlaGoalEnv(config["env_config"])
         env = FrameStack(env=env, num_stack=1, stacking_key="pixels")
-        # env = FrameStack(env=env, num_stack=1, stacking_key="goal")
-        env = TimeLimit(env, max_episode_steps=500)
+        env = TimeLimit(env, max_episode_steps=2500)
         env = RecordEpisodeStatistics(env)
         return env
     def reset_agent(env,explore=False):
@@ -123,10 +122,6 @@ def collect_basic_agent_data(replay_buffer_size=int(6e5)):
                  
             agent.ignore_traffic_lights(True)
             agent.ignore_stop_signs(True)
-            # data=[]
-            # do some recursion
-
-
             return agent
     env=reset_env()
 
@@ -138,8 +133,6 @@ def collect_basic_agent_data(replay_buffer_size=int(6e5)):
         env.action_space,
         capacity=int(5e5)
     )
-
-    # Initialize noise for exploration
     action_dim = 2
     mean = np.zeros(1)
     sigma = 0.1 * np.ones(1)
@@ -161,7 +154,7 @@ def collect_basic_agent_data(replay_buffer_size=int(6e5)):
         if not switch_env:
             switch_env=i%epidsodes_per_env==0
         if done:
-            explore=random.randint(0,2)==1
+            explore=random.random() < 0.5
             if switch_env:
                  env=reset_env()
                  switch_env=False
@@ -188,22 +181,6 @@ def collect_basic_agent_data(replay_buffer_size=int(6e5)):
         control = agent.run_step()
         action = np.array([control.steer,control.throttle])
         action = np.nan_to_num(action)
-        
-        # Add noise and clip
-        # action = np.clip(action + noise(),
-        #     env.action_space.low,
-        #     env.action_space.high)
-        # action = np.array([
-        #     env.action_space.low,  # steer
-        #     env.action_space.high  # throttle
-        # ])
-
-        # if rand_key==1:
-
-        #     noisy_action = action + np.random.normal(0.0,0.1,size=(2,))
-        #     noisy_action = np.clip(noisy_action, env.action_space.low, env.action_space.high)
-        #     next_observation, reward, done, truncated, info = env.step(noisy_action)
-        # else:
         next_observation, reward, done, truncated, info = env.step(action)
             
         # Handle episode termination

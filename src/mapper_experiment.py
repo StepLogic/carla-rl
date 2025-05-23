@@ -3,12 +3,13 @@ import random
 import time
 import cv2
 import matplotlib.pyplot as plt
+import ml_collections
 import numpy as np
 from absl import app, flags
 from flax.training import checkpoints
 from ml_collections import config_flags
-from src.carla_eval import CarlaEvalEnv
-from src.sac_lane_following import sac_config
+from carla_eval import CarlaEvalEnv
+# from src.sac_lane_following import sac_config
 from jaxrl2.agents import DrQLearner
 from jaxrl2.wrappers.frame_stack import FrameStack
 from jaxrl2.wrappers.record_statistics import RecordEpisodeStatistics
@@ -16,7 +17,7 @@ from jaxrl2.wrappers.timelimit import TimeLimit
 import pickle
 from pyflann import *
 
-from src.mapping.topological_map import TopologicalMap
+from mapping.topological_map import TopologicalMap
 # fix
 os.environ['XLA_FLAGS']="--xla_gpu_enable_command_buffer="
 os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"]="false"
@@ -28,6 +29,29 @@ flags.DEFINE_string("checkpoint_path", None, "Path to the checkpoint directory")
 flags.DEFINE_integer("n_eval_episodes", 10, "Number of evaluation episodes")
 flags.DEFINE_boolean("deterministic", True, "Whether to use deterministic actions")
 
+config = ml_collections.ConfigDict()
+config.actor_lr = 3e-4
+config.critic_lr = 3e-4
+config.temp_lr = 3e-4
+config.hidden_dims = (256, 256)
+config.cnn_features = (32, 64, 128, 256)
+config.cnn_filters = (3, 3, 3, 3)
+config.cnn_strides = (2, 2, 2, 2)
+config.cnn_padding = "VALID"
+config.latent_dim = 50
+config.encoder = "d4pg"
+config.discount = 0.98
+config.tau = 0.005
+config.init_temperature = 1.0
+# config.target_entropy = 0.1
+config.backup_entropy = True
+config.num_qs=10
+config.critic_reduction = "mean"
+sac_config = config.to_dict()
+
+def filter_observations(observation):
+    acceptable_keys=["pixels","vector"]
+    return {k:observation[k] for  k in acceptable_keys}
 
 def load_checkpoint(agent, checkpoint_path):
     """Load agent parameters from checkpoint."""
@@ -128,7 +152,7 @@ class Mapper:
         
 
 
-def map_environment(agent:DrQLearner, env, n_eval_episodes=10, deterministic=True):
+def map_environment(agent:DrQLearner, env, n_eval_episodes=20, deterministic=True):
     """Evaluate the agent for n_eval_episodes."""
     episode_rewards = []
     episode_lengths = []
@@ -179,8 +203,8 @@ def map_environment(agent:DrQLearner, env, n_eval_episodes=10, deterministic=Tru
             vecs[3]= np.clip(current_heading/(heading+1e-8),-5.1,5.1) 
             # vecs[4]= np.clip(heading/np.pi,-5.1,5.1) 
             observation["vector"]=vecs
-            action_dist=agent.action_dist(observation)
-            feature=agent.extract_features(observation)
+            action_dist=agent.action_dist(filter_observations(observation))
+            feature=agent.extract_features(filter_observations(observation))
             # breakpoint()
             # if deterministic:
             action = action_dist.mode()
@@ -292,7 +316,7 @@ def navigate(agent:DrQLearner, env:CarlaEvalEnv, mapper:TopologicalMap,n_eval_ep
     env = TimeLimit(env, max_episode_steps=2500)
     # filter=StreamingMovingAverage(window_size=100)
     ema_filter = RealTimeVectorEMA(window_size=100, vector_dim=2)
-    
+    trace_log_stds=[]
     # Real-time updates
     # mapper=TopologicalMap()
     start=time.time()
@@ -320,6 +344,7 @@ def navigate(agent:DrQLearner, env:CarlaEvalEnv, mapper:TopologicalMap,n_eval_ep
                 junctions.append(steps)
             std=np.array(action_dist.stddev())
             log_stds.append(std)
+            trace_log_stds.append(np.sum(std**2))
             # moving_average.append(filter.process(np.array(action_dist.log_std())))
             filtered_vector = ema_filter.update(std)
             moving_average.append(filtered_vector)
@@ -357,13 +382,17 @@ def navigate(agent:DrQLearner, env:CarlaEvalEnv, mapper:TopologicalMap,n_eval_ep
         stats["mean_distance"] = np.mean(distance_completed)
     if slack_values:
         stats["mean_slack"] = np.mean(slack_values)
-
+    a=dict(log_stds=trace_log_stds,junctions=junctions)
+    path=f"uncertainty/{FLAGS.model}/test"
+    os.makedirs(path,exist_ok=True)
+    with open(f'{path}/uncertainty_profile_at_junctions".pickle', 'wb') as handle:
+        pickle.dump(a, handle, protocol=pickle.HIGHEST_PROTOCOL)
     return stats
 
 def main(_):
    
     
-    env = CarlaEvalEnv()
+    env = CarlaEvalEnv(town="Town01")
     env = FrameStack(env=env, num_stack=1, stacking_key="pixels")
     # env = FrameStack(env=env, num_stack=1, stacking_key="goal")
 
@@ -373,7 +402,7 @@ def main(_):
     # kwargs = dict(FLAGS.config)
     agent = DrQLearner(
         0,  # seed
-        env.observation_space.sample(),
+        filter_observations(env.observation_space.sample()),
         env.action_space.sample(),
         **sac_config
     )
@@ -388,13 +417,13 @@ def main(_):
         n_eval_episodes=FLAGS.n_eval_episodes,
         deterministic=FLAGS.deterministic
     )
-    stats = navigate(
-        agent,
-        env,
-        mapper,
-        n_eval_episodes=FLAGS.n_eval_episodes,
-        # deterministic=FLAGS.deterministic
-    )
+    # stats = navigate(
+    #     agent,
+    #     env,
+    #     mapper,
+    #     n_eval_episodes=FLAGS.n_eval_episodes,
+    #     # deterministic=FLAGS.deterministic
+    # )
     
     # Print results
     print("\nEvaluation Results:")

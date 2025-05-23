@@ -7,45 +7,38 @@ town_mapping["medium"]="Town02"
 town_mapping["hard"]="Town02"
 town_mapping["trajectories"]="Town02"
 # Models to evaluate
-models=("vint" "nomad" "gnm")
+# Models to evaluate
+models=("PixelBCLearner" "DrQLearner") #"DrQLearner"
+declare -A checkpoints
+checkpoints["PixelBCLearner"]="/home/robotlab/scratch/carla-rl/best_models/final_bc/checkpoint_49"
+checkpoints["DrQLearner"]="/home/robotlab/scratch/carla-rl/best_models/final_drq/checkpoint_1"
 
 # Number of trajectories per difficulty (0-4)
 num_trajectories=5
 
 # Function to run evaluation for a specific configuration
 run_evaluation() {
-    local difficulty=$1
-    local trajectory=$2
-    local model=$3
-    local town=${town_mapping[$difficulty]}
-    local map_dir="evaluation_trajectory/${difficulty}/${trajectory}"
+    local model=$1
 
+    local map_dir="baseline_maps/${model}"
+    local checkpoint_path=${checkpoints[$model]}
     echo "Running evaluation for:"
-    echo "- Difficulty: ${difficulty}"
-    echo "- Town: ${town}"
-    echo "- Trajectory: ${trajectory}"
     echo "- Model: ${model}"
     echo "- Map Directory: ${map_dir}"
     echo "-----------------------------------"
 
-    python src/benchmark_policy.py \
+    XLA_PYTHON_CLIENT_PREALLOCATE=false python src/evaluate_rl_policy_random_trajectory.py \
         --model=${model} \
-        --n_eval_episodes=5 \
-        --deterministic=true \
         --map_dir=${map_dir} \
-        --town=${town}
+        --checkpoint_path=${checkpoint_path}
 
-    echo "Evaluation complete for ${difficulty}/${trajectory}/${model}"
+    echo "Build complete for ${model}"
     echo "==================================="
 }
 
 # Main execution loop
 for model in "${models[@]}"; do
-    for difficulty in "easy" "medium" "hard" "trajectories"; do
-        for ((trajectory=0; trajectory<num_trajectories; trajectory++)); do
-            run_evaluation "$difficulty" "$trajectory" "$model"
-        done
-    done
+    run_evaluation "$model"
 done
 
 echo "All evaluations completed successfully!"

@@ -9,6 +9,7 @@ import numpy as np
 from absl import app, flags
 from flax.training import checkpoints
 from ml_collections import config_flags
+from rlib_integration.helper import carla_location_to_np_array
 from carla_eval import CarlaEvalEnv
 # from src.sac_lane_following import sac_config
 from jaxrl2.agents import DrQLearner,PixelBCLearner,PixelResNetBCLearner
@@ -37,7 +38,7 @@ flags.DEFINE_string("town", "Town01", "Town Name")
 config = ml_collections.ConfigDict()
 config.actor_lr = 3e-4
 config.hidden_dims = (256, 256)
-config.cnn_features = (32, 64, 128, 256)
+config.cnn_features = (8, 16, 32, 64)
 config.cnn_filters = (3, 3, 3, 3)
 config.cnn_strides = (2, 2, 2, 2)
 config.cnn_padding = "VALID"
@@ -53,7 +54,7 @@ config.actor_lr = 3e-4
 config.critic_lr = 3e-4
 config.temp_lr = 3e-4
 config.hidden_dims = (256, 256)
-config.cnn_features = (32, 64, 128, 256)
+config.cnn_features = (8, 16, 32, 64)
 config.cnn_filters = (3, 3, 3, 3)
 config.cnn_strides = (2, 2, 2, 2)
 config.cnn_padding = "VALID"
@@ -199,8 +200,8 @@ def map_environment(agent:DrQLearner, env, n_eval_episodes=10, deterministic=Tru
 
     truncate_steps=0
     # observation, info = env.reset()
-    for p in range(n_eval_episodes):
-        print(p)
+    termination_budget=10
+    while termination_budget>0:
 
         observation, info = env.reset()
         done = False
@@ -213,31 +214,15 @@ def map_environment(agent:DrQLearner, env, n_eval_episodes=10, deterministic=Tru
 
                 # env.unwrapped.experiment.destination=None
         while not done:
-            target=3.0
-            # heading=np.pi
+            # target=3.0
+            # # heading=np.pi
             vecs=observation["vector"]
-            current_velocity=env.unwrapped.experiment.velocity
-            # current_heading=env.unwrapped.experiment.current_heading
-            vecs[2] = np.clip(current_velocity/(target+1e-8), 0.0, 1.0)
-            vecs[3]= np.cos(np.pi)
+            vecs[3]=-1.0
             observation["vector"]=vecs
-            if deterministic:
-                action = agent.eval_actions(filter_observations(observation))
-            else:
-                action = agent.sample_actions(filter_observations(observation))
-
-            if slack_actions==0:
-                observation, reward, done, truncated, info = env.step(action)
-            else:
-                observation, reward, done, truncated, info = env.step(np.array([0.0,0.2]))
-                slack_actions-=1
-            # vecs[4]= np.clip(heading/np.pi,-5.1,5.1) 
-            observation["vector"]=vecs
+            action = agent.eval_actions(filter_observations(observation))
             action_dist=agent.action_dist(filter_observations(observation))
             feature=agent.extract_features(filter_observations(observation))
-            # breakpoint()
-            # if deterministic:
-            action = action_dist.mode()
+
             observation, reward, done, truncated, info = env.step(action)
             is_at_junction,unit_vector,location=env.unwrapped.is_agent_at_junction()
             if is_at_junction:
@@ -255,20 +240,21 @@ def map_environment(agent:DrQLearner, env, n_eval_episodes=10, deterministic=Tru
             done = done or truncated
             # print("Done",done)
             steps+=1
-            if np.any((ema_filter.get_current()-np.sum(std**2))>ema_filter.threshold()) and not done:
+            if np.any((ema_filter.get_current()-np.sum(std**2))>ema_filter.threshold())  and not done:
                 #add image to map
                 obs=(observation["pixels"][...,0]*255).astype(np.uint8)
                 # heading_obs= ((observation["vector"][-2]))*(1/heading)
-                heading_obs=env.unwrapped.experiment.current_heading
+                heading_obs=carla_location_to_np_array(env.unwrapped.core.hero.get_transform().get_forward_vector())
                 # print("Heading",heading_obs)
                 images.append(obs)
                 heading_ar.append(heading_obs)
                 mapper.update(feature,heading_obs)
                 features.append(feature)
                 cv2.imwrite(f"dummy.jpg",(observation["pixels"][...,0]*255).astype(np.uint8))
+                locations.append(carla_location_to_np_array(env.unwrapped.core.hero.get_transform().location))
             
             if done:
-                env.unwrapped.set_start_transform(env.unwrapped.last_position.location)
+                # env.unwrapped.set_start_transform(env.unwrapped.last_position.location)
                 restarts.append(steps)
                 episode_rewards.append(episode_reward)
                 episode_lengths.append(episode_length)
@@ -279,10 +265,15 @@ def map_environment(agent:DrQLearner, env, n_eval_episodes=10, deterministic=Tru
                     distance_completed.append(float(info["distance_completed"]))
                 if "slack" in info:
                     slack_values.append(float(info["slack"]))
-            if truncate_steps>int(5e3):
-                break
-        if truncate_steps>int(5e3):
-                break
+                # if "is_success" in info:
+                #     termination_budget=0
+                # else:
+                termination_budget-=1
+                env.unwrapped.set_start_transform(env.unwrapped.last_position.location)
+        #     if truncate_steps>int(5e3):
+        #         break
+        # if truncate_steps>int(5e3):
+        #         break
         
     # add the very last observation
     # obs=(observation["pixels"][...,0]*255).astype(np.uint8)
@@ -302,7 +293,8 @@ def map_environment(agent:DrQLearner, env, n_eval_episodes=10, deterministic=Tru
         "std_length": np.std(episode_lengths),
         "total_map_steps":steps,
         "number_of_restarts":len(restarts),
-        "exploration_time":int(end-start)
+        "exploration_time":int(end-start),
+        "Nodes":len(heading_ar)
     }
     # if success_rate:
     #     stats["success_rate"] = np.mean(success_rate)
@@ -323,9 +315,11 @@ def map_environment(agent:DrQLearner, env, n_eval_episodes=10, deterministic=Tru
     # plt.legend(loc="upper left")
     # plt.savefig("uncertainty_profile_at_junctions.pdf")
     # # plt.legend()
-    # a=dict(log_stds=log_stds,junctions=junctions)
-    # with open('uncertainty_profile_at_junctions.pickle', 'wb') as handle:
-    #     pickle.dump(a, handle, protocol=pickle.HIGHEST_PROTOCOL)
+    a=dict(log_stds=trace_log_stds,junctions=junctions)
+    path=f"uncertainty/{FLAGS.model}/{difficulty}"
+    os.makedirs(path,exist_ok=True)
+    with open(f'{path}/uncertainty_profile_at_junctions".pickle', 'wb') as handle:
+        pickle.dump(a, handle, protocol=pickle.HIGHEST_PROTOCOL)
     a=dict(images=images,heading=heading_ar,features=features,locations=locations)
     path=f"maps/{FLAGS.model}/{difficulty}"
     os.makedirs(path,exist_ok=True)
@@ -486,23 +480,23 @@ def main(_):
             user_defined_trajectories=pickle.load(handle)
     
 
-    if user_defined_trajectories:
-       for difficult,trajectories in user_defined_trajectories.items():
-           # print(trajectories)
-           for trajectory in trajectories.values():
-               # breakpoint()
-                location=trajectory[0]["location"]
-                origin=carla.Location(x=location[0],y=location[1],z=location[2])
-                location=trajectory[-1]["location"]
-                destination=carla.Location(x=location[0],y=location[1],z=location[2])
-                env.unwrapped.set_start_transform(origin)
-                env.unwrapped.set_destination_transform(destination)
-                stats = map_environment(
-                        agent,
-                        env,
-                        n_eval_episodes=FLAGS.n_eval_episodes,
-                        deterministic=FLAGS.deterministic
-                    )
+    # if user_defined_trajectories:
+    #    for difficult,trajectories in user_defined_trajectories.items():
+    #        # print(trajectories)
+    #        for trajectory in trajectories.values():
+    #            # breakpoint()
+    #             location=trajectory[0]["location"]
+    #             origin=carla.Location(x=location[0],y=location[1],z=location[2])
+    #             location=trajectory[-1]["location"]
+    #             destination=carla.Location(x=location[0],y=location[1],z=location[2])
+    #             env.unwrapped.set_start_transform(origin)
+    #             env.unwrapped.set_destination_transform(destination)
+    stats = map_environment(
+            agent,
+            env,
+            n_eval_episodes=FLAGS.n_eval_episodes,
+            deterministic=FLAGS.deterministic
+        )
 
     # Evaluate
     

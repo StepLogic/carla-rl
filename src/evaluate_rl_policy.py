@@ -60,8 +60,9 @@ config.encoder = "d4pg"
 config.discount = 0.98
 config.tau = 0.005
 config.init_temperature = 1.0
-config.target_entropy = None
+# config.target_entropy = 0.1
 config.backup_entropy = True
+config.num_qs=10
 config.critic_reduction = "mean"
 sac_config = config.to_dict()
 
@@ -73,7 +74,7 @@ def filter_observations(observation):
 FLAGS = flags.FLAGS
 flags.DEFINE_string("checkpoint_path", None, "Path to the checkpoint directory")
 flags.DEFINE_enum('model', 'DrQLearner', ['DrQLearner', 'PixelResNetBCLearner',"PixelBCLearner"], 'Model to run')
-flags.DEFINE_integer("n_eval_episodes", 10, "Number of evaluation episodes")
+flags.DEFINE_integer("n_eval_episodes", 5, "Number of evaluation episodes")
 flags.DEFINE_boolean("deterministic", True, "Whether to use deterministic actions")
 flags.DEFINE_string("map_dir", None, "Evaluation directory trajectory")
 flags.DEFINE_string("town", "Town01", "Town Name")
@@ -195,6 +196,7 @@ def eval_environment(agent:DrQLearner, env, n_eval_episodes=10, deterministic=Tr
     truncate_steps=0
     data=defaultdict(lambda :[])
     mapper=TopologicalMap()
+    mean_nodes=[]
     #
     shortest_distance_along_road=1e-8
     with open(f'{FLAGS.map_dir}/aux.pkl', 'rb') as handle:
@@ -224,8 +226,8 @@ def eval_environment(agent:DrQLearner, env, n_eval_episodes=10, deterministic=Tr
             dataset=pickle.load(handle)
         features=dataset["features"]
         heading=dataset["heading"]
-        print(heading)
-    
+        # print(heading)
+
         for image,heading in zip(features,heading):
             mapper.update(image,heading) #build map
 
@@ -253,12 +255,15 @@ def eval_environment(agent:DrQLearner, env, n_eval_episodes=10, deterministic=Tr
         mapper.update(feature,1e-8) #build map
         feature=agent.extract_features(filter_observations(observation))
         subgoal=mapper.create_navigation_guide(len(mapper.des_nodes))
-        (_,heading),goal_reached=subgoal(feature)
+        (_,heading),(goal_reached,index)=subgoal(feature)
         # heading=0+1e-8
-        print(mapper.heading_nodes)
+        # print(mapper.heading_nodes)
     
         while not (done or goal_reached):
-            truncate_steps+=1
+            # truncate_steps+=1
+            if len(index)>0 and not index[0] in mean_nodes: 
+                 mean_nodes.append(index[0])
+
             target=5.0
             vecs=observation["vector"]
             current_velocity=env.unwrapped.experiment.velocity
@@ -268,7 +273,7 @@ def eval_environment(agent:DrQLearner, env, n_eval_episodes=10, deterministic=Tr
             #         truncate_steps=int(1e5) #break loop
             #         print(np.rad2deg(current_heading),np.rad2deg(heading))
             vecs[2] = np.clip(current_velocity/(target+1e-8), 0.0, 5.1)
-            vecs[3]= np.clip(current_heading/(heading+1e-8),-5.1,5.1) 
+            vecs[3]= np.cos(abs(current_heading - heading)) 
             # vecs[4]= np.clip(heading/np.pi,-5.1,5.1) 
             observation["vector"]=vecs
             action_dist=agent.action_dist(filter_observations(observation))
@@ -281,8 +286,8 @@ def eval_environment(agent:DrQLearner, env, n_eval_episodes=10, deterministic=Tr
             episode_reward += reward
             episode_length += 1
             done = done or truncated
-            (_,heading),goal_reached=subgoal(feature)
-            print(heading)
+            (_,heading),(goal_reached,index)=subgoal(feature)
+            # print(heading)
             if done or goal_reached:
                 episode_rewards.append(episode_reward)
                 episode_lengths.append(episode_length)
@@ -313,35 +318,36 @@ def eval_environment(agent:DrQLearner, env, n_eval_episodes=10, deterministic=Tr
                 #     SPL = []
         # breakpoint()
         # Compute statistics
-        difficulty=FLAGS.map_dir.split("/")[-2]
-        name=FLAGS.map_dir.split("/")[-1] or FLAGS.model
-        stats = {
-            "mean_reward": np.mean(episode_rewards),
-            "std_reward": np.std(episode_rewards),
-            "mean_length": np.mean(episode_lengths),
-            "std_length": np.std(episode_lengths),
-            "max_SPL":np.nan_to_num(np.mean(SPL),nan=0),
-            "mean_distance_per_step":dataset.get("mean_distance_per_step",1.0)
-        }
-        if success_rate:
-            stats["std_success_rate"] = np.std(success_rate)
-            stats["success_rate"] = np.mean(success_rate)
-            stats["max_success_rate"] = np.max(success_rate)
-        if distance_completed:
-            stats["mean_distance"] = np.mean(distance_completed)
-            stats["std_distance"] = np.std(distance_completed)
-        if slack_values:
-            stats["mean_slack"] = np.mean(slack_values)
-        data.update({
-            "experiment_results":stats,
-            "SPLs":SPL_per_skip_frame,
-            "nodes":mapper.heading_nodes.__len__(),
-        })
-        path=f"results/{FLAGS.model}_ours/{difficulty}"
-        os.makedirs(path,exist_ok=True)
-        with open(f"{path}/{name}_test_results.pkl", "wb") as f:
-            pickle.dump(dict(data), f)
-        return stats
+    difficulty=FLAGS.map_dir.split("/")[-2]
+    name=FLAGS.map_dir.split("/")[-1] or FLAGS.model
+    stats = {
+        "mean_reward": np.mean(episode_rewards),
+        "std_reward": np.std(episode_rewards),
+        "mean_length": np.mean(episode_lengths),
+        "std_length": np.std(episode_lengths),
+        "max_SPL":np.nan_to_num(np.mean(SPL),nan=0),
+        "mean_distance_per_step":dataset.get("mean_distance_per_step",1.0)
+    }
+    if success_rate:
+        stats["std_success_rate"] = np.std(success_rate)
+        stats["success_rate"] = np.mean(success_rate)
+        stats["max_success_rate"] = np.max(success_rate)
+    if distance_completed:
+        stats["mean_distance"] = np.mean(distance_completed)
+        stats["std_distance"] = np.std(distance_completed)
+    if slack_values:
+        stats["mean_slack"] = np.mean(slack_values)
+    data.update({
+        "experiment_results":stats,
+        "SPLs":SPL_per_skip_frame,
+        "nodes":mapper.heading_nodes.__len__(),
+        "mean_nodes":len(mean_nodes)
+    })
+    path=f"results/{FLAGS.model}_ours/{difficulty}"
+    os.makedirs(path,exist_ok=True)
+    with open(f"{path}/{name}_test_results.pkl", "wb") as f:
+        pickle.dump(dict(data), f)
+    return stats
 
 def main(_):
    

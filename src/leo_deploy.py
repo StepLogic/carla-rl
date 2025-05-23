@@ -3,6 +3,7 @@ from collections import deque
 import os
 import pickle
 import random
+import sys
 
 import gym
 import gymnasium
@@ -17,7 +18,7 @@ from absl import app, flags
 from ml_collections import config_flags
 from flax.training import checkpoints
 import jaxrl2.extra_envs.dm_control_suite
-from jaxrl2.agents import PixelIQLLearner,PixelResNetIQLLearner
+from jaxrl2.agents import PixelIQLLearner,PixelResNetIQLLearner,PixelResNetBCLearner
 from jaxrl2.data import ReplayBuffer
 from jaxrl2.data.hindsight_replay_buffer import HindsightReplayBuffer
 from jaxrl2.evaluation import evaluate
@@ -43,7 +44,7 @@ import time
 import flax
 from jaxrl2.noise import OrnsteinUhlenbeckActionNoise
 import rospy
-from leo.leo_env import LeoEnv
+from leo_env import LeoEnv
 flax.config.update('flax_use_orbax_checkpointing', True)
     # ML config
 import jax
@@ -52,6 +53,17 @@ jax.config.update("jax_debug_nans", True)
 
 os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"]="false"
 
+config = ml_collections.ConfigDict()
+config.actor_lr = 3e-4
+config.hidden_dims = (256, 256)
+config.cnn_features = (32, 64, 128, 256)
+config.cnn_filters = (3, 3, 3, 3)
+config.cnn_strides = (2, 2, 2, 2)
+config.cnn_padding = "VALID"
+config.latent_dim = 50
+config.encoder = "d4pg"
+config.dropout_rate=0.2
+bc_config = config.to_dict()
 
 config = ml_collections.ConfigDict()
 config.actor_lr = 3e-4
@@ -72,38 +84,64 @@ config.tau = 0.005
 config.critic_reduction = "min"
 config.share_encoder = False
 sac_config = config.to_dict()
-checkpoint_path="/workspaces/ROS1/carla-rl/checkpoints/iql_checkpoint/checkpoint_1"
+checkpoint_path="/workspaces/carla-rl/checkpoints/leo_bc/checkpoint_70"
+
+
 
 def load_checkpoint(agent, checkpoint_path):
     """Load agent parameters from checkpoint."""
     state_dict = {
         'actor_params': agent._actor,
-        'critic_params': agent._critic,
-        # 'target_critic_params': agent._target_critic_params,
-        # 'temp': agent._temp,
-        # 'rng': agent._rng,
-        # Add any other numerical state you need to save
     }
     state_dict = checkpoints.restore_checkpoint(
         ckpt_dir=checkpoint_path,
         target=state_dict
     )
 
-    # Update agent parameters
-    # breakpoint()
     agent._actor = state_dict['actor_params']
-    agent._critic = state_dict['critic_params'] 
-    # agent._target_critic_params = state_dict['target_critic_params']
-    # agent._temp = state_dict['temp']
-    # agent._rng = state_dict['rng']
     
     return agent
+
+
+image_size=64
+def initialize_spaces():
+    """Initialize the replay buffer with proper spaces"""
+    image_space = gym.spaces.Box(
+        low=-1.0,
+        high=1.0,
+        shape=(image_size,image_size,3,1),
+        dtype=np.float32,
+    )
+    vec_space = gym.spaces.Box(
+        low=-5.1,
+        high=5.1,
+        shape=(4,),
+        dtype=np.float32,
+    )
+    action_space = gym.spaces.Box(
+        low=np.array([-1.0, -1.0]),
+        high=np.array([1.0, 1.0]),
+        dtype=np.float32
+    )
+    observation_space = gym.spaces.Dict({"pixels": image_space, "vector": vec_space})
+    return action_space,observation_space
 def main(_):
 
     # Create environment
     # carla_config["env_config"]["carla"]["town"]="Town07"
+    heading=np.pi
+
+    action_space,observation_space=initialize_spaces()
+    # Initialize agent and replay buffer
+    agent = PixelResNetBCLearner(
+        0, 
+        observation_space.sample(), 
+        action_space.sample(), 
+        # num_qs=10,
+        **bc_config
+    )
     rospy.init_node("SAC_TRAINING", anonymous=False)
-    env = LeoEnv()
+    env = LeoEnv(target_heading=np.deg2rad(90))
     rate = rospy.Rate(env.RATE)
     env = FrameStack(env=env, num_stack=1,stacking_key="pixels")
     env = TimeLimit(env,max_episode_steps=12000)
@@ -112,15 +150,6 @@ def main(_):
     env.unwrapped.target_speed=100
     np.random.seed(42)
     random.seed(42)
-
-    # Initialize agent and replay buffer
-    agent = PixelResNetIQLLearner(
-        0, 
-        env.observation_space.sample(), 
-        env.action_space.sample(), 
-        # num_qs=10,
-        **sac_config
-    )
     agent = load_checkpoint(agent, checkpoint_path)
 
     # Track success metrics
@@ -130,7 +159,7 @@ def main(_):
     distance_to_goal_history = deque(maxlen=100)  # Track last 100 episodes
     eval_distance_to_goal_history = deque(maxlen=100)  # Track last 100 episodes
     # Main training loop
-    observation, info, done = *env.reset(), False
+    eval_obs, info, done = *env.reset(), False
     training_start_time = time.time()
 
     # Run evaluation
@@ -138,6 +167,8 @@ def main(_):
     eval_rewards = []
     eval_dists = []
     eval_slack = []
+    headings=[]
+    speeds=[]
     n_eval_episodes=10
     for _ in range(n_eval_episodes):
         eval_obs, eval_info = env.reset()
@@ -146,17 +177,19 @@ def main(_):
         
         while not eval_done:
             target=4.5
-            vecs=observation["vector"]
+            vecs=eval_obs["vector"]
             current_velocity=env.unwrapped.speed
             current_heading=env.unwrapped.current_heading
+            headings.append(current_heading)
+            speeds.append(current_velocity)
             # breakpoint()
-            # if (current_heading - heading)<np.deg2rad(10):
-            #         truncate_steps=int(1e5) #break loop
-            #         print(np.rad2deg(current_heading),np.rad2deg(heading))
-            vecs[2] = np.clip(current_velocity/(target+1e-8), 0.0, 5.1)
-            vecs[3]= np.clip(current_heading/(0+1e-8),-5.1,5.1) 
+            # vecs[2] = np.clip(current_velocity/(target+1e-8), 0.0, 1.1)
+            # print(vecs[2])
+            # vecs[3]= np.cos(abs(current_heading-heading))
             # vecs[4]= np.clip(heading/np.pi,-5.1,5.1) 
-            eval_action = agent.eval_actions(eval_obs)  # No exploration
+            eval_obs["vector"]=vecs
+            eval_action = agent.sample_actions(eval_obs)  # No exploration
+            print(eval_action)
             eval_obs, eval_reward, eval_done, eval_truncated, eval_info = env.step(eval_action)
             episode_reward += eval_reward
             
@@ -167,7 +200,9 @@ def main(_):
                     eval_dists.append(float(eval_info["distance_completed"]))
                 if "slack" in eval_info:
                     eval_slack.append(float(eval_info["slack"]))
-        
+            print(f"\rCurrent heading {np.rad2deg(current_heading)} Target Heading {np.rad2deg(heading)} {current_velocity}", end="")
+            sys.stdout.flush()
+
         eval_rewards.append(episode_reward)
         
     # Compute evaluation metrics
@@ -189,6 +224,8 @@ def main(_):
     print(eval_info)
     training_duration = time.time() - training_start_time
     print(f"\nTraining completed in {training_duration/3600:.2f} hours")
+    with open(f"bc_test_results_{random.randint(0,int(1e5))}.pkl", "wb") as f:
+        pickle.dump(dict(eval_info), f)
     # print(f"Logs saved to: {logger.log_dir}")
 
 if __name__ == "__main__":

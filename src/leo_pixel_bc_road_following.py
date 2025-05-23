@@ -69,7 +69,7 @@ flags.DEFINE_integer("eval_episodes", 5, "Number of episodes used for evaluation
 flags.DEFINE_integer("log_interval", 1000, "Logging interval.")
 flags.DEFINE_integer("eval_interval", int(1), "Eval interval.")
 flags.DEFINE_integer("batch_size", 64, "Mini batch size.")
-flags.DEFINE_integer("epochs", int(70), "Number of training steps.")
+flags.DEFINE_integer("epochs", int(30), "Number of training steps.")
 flags.DEFINE_integer(
     "start_training", int(1e3), "Number of training steps to start training."
 )
@@ -203,6 +203,7 @@ def update(expert_replay_buffers,agent,train_encoder,logger,i,update_func=None,p
 
                 for ix, batch_expert in enumerate(expert_replay_buffer_iterator):
                     # Update the agent with the current batch
+                    # breakpoint()
                     update_info_expert = update_func(batch_expert)
                     
                     # Log metrics

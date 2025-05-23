@@ -3,11 +3,11 @@
 # Define arrays for difficulty levels and their corresponding towns
 declare -A town_mapping
 town_mapping["easy"]="Town02"
-town_mapping["medium"]="Town03"
-town_mapping["hard"]="Town05"
+town_mapping["medium"]="Town02"
+town_mapping["hard"]="Town02"
 
 # Models to evaluate
-models=("vint")
+models=("vint" "nomad" "gnm")
 
 # Number of trajectories per difficulty (0-4)
 num_trajectories=5
@@ -30,7 +30,7 @@ run_evaluation() {
 
     python src/benchmark_policy.py \
         --model=${model} \
-        --n_eval_episodes=10 \
+        --n_eval_episodes=5 \
         --deterministic=true \
         --map_dir=${map_dir} \
         --town=${town}

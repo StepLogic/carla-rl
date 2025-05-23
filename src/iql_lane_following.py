@@ -67,6 +67,7 @@ config.cosine_decay = True
 config.tau = 0.005
 config.critic_reduction = "min"
 config.share_encoder = True
+config.num_qs = 10
 sac_config = config.to_dict()
 
 
@@ -256,7 +257,7 @@ def main(_):
         
     
     # Print final training statistics
-    save_checkpoint(agent,f"checkpoints/final_iql",1)
+    save_checkpoint(agent,f"checkpoints/leo_final_iql",1)
     training_duration = time.time() - training_start_time
     print(f"\nTraining completed in {training_duration/3600:.2f} hours")
     print(f"Logs saved to: {logger.log_dir}")

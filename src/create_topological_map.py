@@ -477,12 +477,9 @@ if __name__ == "__main__":
 
     if user_defined_trajectories:
        for difficult,trajectories in user_defined_trajectories.items():
-           # print(trajectories)
            for trajectory in trajectories.values():
-               # breakpoint()
                location=trajectory[0]["location"]
                origin=carla.Location(x=location[0],y=location[1],z=location[2])
                location=trajectory[-1]["location"]
                destination=carla.Location(x=location[0],y=location[1],z=location[2])
-            #    print(origin,destination)
                collect_basic_agent_data(origin,destination,difficulty=difficult)

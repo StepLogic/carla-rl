@@ -54,21 +54,20 @@ config.actor_lr = 3e-4
 config.critic_lr = 3e-4
 config.temp_lr = 3e-4
 config.hidden_dims = (256, 256)
-config.cnn_features = (32, 64, 128, 256)
+config.cnn_features = (8, 16, 32, 64)
 config.cnn_filters = (3, 3, 3, 3)
 config.cnn_strides = (2, 2, 2, 2)
 config.cnn_padding = "VALID"
 config.latent_dim = 50
-config.encoder = "d4pg"
+config.encoder = "resnet"
 config.discount = 0.98
 config.tau = 0.005
 config.init_temperature = 1.0
-# config.target_entropy = 0.1
+
 config.backup_entropy = True
-config.num_qs=10
+config.num_qs=2
 config.critic_reduction = "mean"
 sac_config = config.to_dict()
-
 
 
 FLAGS = flags.FLAGS
@@ -80,14 +79,14 @@ flags.DEFINE_integer("eval_episodes", 5, "Number of episodes used for evaluation
 flags.DEFINE_integer("log_interval", 1000, "Logging interval.")
 flags.DEFINE_integer("eval_interval", int(1.5e5), "Eval interval.")
 flags.DEFINE_integer("batch_size", 128, "Mini batch size.")
-flags.DEFINE_integer("max_steps", int(2e6), "Number of training steps.")
+flags.DEFINE_integer("max_steps", int(3e6), "Number of training steps.")
 flags.DEFINE_integer(
     "start_training", int(1e3), "Number of training steps to start training."
 )
 flags.DEFINE_integer("image_size", 64, "Image size.")
 flags.DEFINE_integer("num_stack", 3, "Stack frames.")
 flags.DEFINE_integer(
-    "replay_buffer_size", int(5e5), "Number of training steps to start training."
+    "replay_buffer_size", int(1e6), "Number of training steps to start training."
 )
 flags.DEFINE_integer(
     "action_repeat", None, "Action repeat, if None, uses 2 or PlaNet default values."
@@ -171,14 +170,34 @@ def main(_):
     epsilon: float = 1e-8,
 
 
-    return_rms = RunningMeanStd(shape=())
-    discounted_reward: np.array = np.array([0.0])
+    # return_rms = RunningMeanStd(shape=())
+    # discounted_reward: np.array = np.array([0.0])
     gamma = gamma
     epsilon = epsilon
     env=None
     # _towns=['Town04',"Town03","Town01"]
-    _towns=["Town01","Town15","Town07"]
+    _towns=["Town15","Town01"]
+    # Available CARLA weather presets
+    CARLA_WEATHERS = [
+        "Default",           # 0 - Default
+        "ClearNoon",         # 1 - Clear sky, noon sun position
+        "CloudyNoon",        # 2 - Cloudy sky, noon sun position
+        "WetNoon",           # 3 - Wet road surfaces, noon sun position
+        "WetCloudyNoon",     # 4 - Wet road surfaces, cloudy sky, noon sun position
+        "MidRainyNoon",      # 5 - Medium rain, noon sun position
+        "HardRainNoon",      # 6 - Heavy rain, noon sun position
+        "SoftRainNoon",      # 7 - Soft rain, noon sun position
+        "ClearSunset",       # 8 - Clear sky, sunset sun position
+        "CloudySunset",      # 9 - Cloudy sky, sunset sun position
+        "WetSunset",         # 10 - Wet road surfaces, sunset sun position
+        "WetCloudySunset",   # 11 - Wet road surfaces, cloudy sky, sunset sun position
+        "MidRainSunset",     # 12 - Medium rain, sunset sun position
+        "HardRainSunset",    # 13 - Heavy rain, sunset sun position
+        "SoftRainSunset"     # 14 - Soft rain, sunset sun position
+    ]
+
     towns=itertools.cycle(_towns)
+    weather=itertools.cycle(CARLA_WEATHERS)
     def reset_env(eval_town=False):
         nonlocal env
         if not env is None:
@@ -188,6 +207,7 @@ def main(_):
         else:    
             carla_config["env_config"]["carla"]["town"]=next(towns)
         # config["env_config"]["carla"]["start_server"]=False
+        carla_config["env_config"]["experiment"]["weather"]=next(weather)
         env = CarlaGoalEnv(carla_config["env_config"])
         env = FrameStack(env=env, num_stack=1, stacking_key="pixels")
         env = TimeLimit(env, max_episode_steps=3500)
@@ -197,7 +217,7 @@ def main(_):
     mean = np.zeros(action_dim)
     sigma = .1* np.ones(action_dim)
     noise = OrnsteinUhlenbeckActionNoise(mean=mean, sigma=sigma)
-    timelimit=100
+    timelimit=int(0.3e3)
     env=reset_env()
     # Initialize logger
     logger = Logger(log_dir="./logs",prefix="SAC")
@@ -210,7 +230,7 @@ def main(_):
     random.seed(FLAGS.seed)
 
     # Initialize agent and replay buffer
-    agent = DrQLearner(
+    agent = PixelResNetDrQLearner(
         0, 
         env.observation_space.sample(), 
         env.action_space.sample(), 
@@ -237,7 +257,7 @@ def main(_):
 
     replay_buffer.seed(FLAGS.seed)
     replay_buffer_iterator = replay_buffer.get_iterator(
-        sample_args={"batch_size": int(FLAGS.batch_size/4)}
+        sample_args={"batch_size": FLAGS.batch_size}
     )
     # expert_replay_buffer_iterators=[]
     # expert_buffer_iterator=None
@@ -268,7 +288,7 @@ def main(_):
         smoothing=0.1,
         disable=not FLAGS.tqdm,
     ):
-        if i>=FLAGS.start_training:
+        if i<=FLAGS.start_training:
             action = env.action_space.sample()
         else:
             action = agent.sample_actions(observation)
@@ -286,10 +306,10 @@ def main(_):
             if isinstance(v,(int,float)): 
                 aux_data[k].append(np.mean(np.array([v])))
         # normalize_returns 
-        discounted_reward =  discounted_reward *  gamma * mask + float(reward)       
-        return_rms.update( discounted_reward)
+        # discounted_reward =  discounted_reward *  gamma * mask + float(reward)       
+        # return_rms.update( discounted_reward)
         # We don't (reward -  return_rms.mean) see https://github.com/openai/baselines/issues/538
-        normalized_reward = reward / np.sqrt( return_rms.var +  epsilon)
+        # normalized_reward = reward / np.sqrt( return_rms.var +  epsilon)
         # Store transition in replay buffer
         replay_buffer.insert(
             dict(
@@ -342,7 +362,7 @@ def main(_):
                 logger.log_episode(episode_info, i)
                 if episodes_per_environment > 0 and episodes_per_environment % timelimit == 0:
                     if town_count%len(_towns)==0:
-                        timelimit=min(timelimit+100,1000)
+                        timelimit=max(timelimit-10,int(10))
                         
                     # else:
                         # timelimit+=100
@@ -368,7 +388,7 @@ def main(_):
         if i >= FLAGS.start_training:
             # for i in 
             batch = next(replay_buffer_iterator)
-            update_info = agent.update(batch,utd_ratio=8) #prevent entropy from dying too quickly
+            update_info = agent.update(batch) #prevent entropy from dying too quickly
             # indices = batch.get('indices', None)
     
             # if indices is not None:
@@ -395,22 +415,21 @@ def main(_):
             # logger.print_status(i, FLAGS.max_steps)
         # Periodic evaluation
         if i % FLAGS.eval_interval == 0:
-            # Save replay buffer if requested
-            if FLAGS.save_buffer:
-                dataset_folder = os.path.join("datasets")
-                os.makedirs(dataset_folder, exist_ok=True)
-                dataset_file = os.path.join(dataset_folder, f"img_goal_ds")
-                with open(dataset_file, "wb") as f:
-                    pickle.dump(replay_buffer, f)
+            # # Save replay buffer if requested
+            # if FLAGS.save_buffer:
+            #     dataset_folder = os.path.join("datasets")
+            #     os.makedirs(dataset_folder, exist_ok=True)
+            #     dataset_file = os.path.join(dataset_folder, f"img_goal_ds")
+            #     with open(dataset_file, "wb") as f:
+            #         pickle.dump(replay_buffer, f)
             
-            # Run evaluation
+            # # Run evaluation
             eval_successes = []
             eval_rewards = []
             eval_dists = []
             eval_slack = []
             env=reset_env(True)
-            for _ in range(FLAGS.eval_episodes):
-               
+            for _ in range(FLAGS.eval_episodes):               
                 eval_obs, eval_info = env.reset()
                 eval_done = False
                 episode_reward = 0
@@ -449,17 +468,17 @@ def main(_):
             # dataset_file = os.path.join(dataset_folder, f"lane_following_buffer")
             # with open(dataset_file, "wb") as f:
             #     pickle.dump(replay_buffer, f)
-            logger.log_eval(eval_info, i)
+            # logger.log_eval(eval_info, i)
             logger.print_status(i, FLAGS.max_steps)
     
     # Print final training statistics
     save_checkpoint(agent,f"checkpoints/final_drq",1)
-    # if FLAGS.save_buffer:
-    dataset_folder ="datasets"
-    os.makedirs(dataset_folder, exist_ok=True)
-    dataset_file = os.path.join(dataset_folder, f"lane_following_buffer")
-    with open(dataset_file, "wb") as f:
-        pickle.dump(replay_buffer, f)
+    # # if FLAGS.save_buffer:
+    # dataset_folder ="datasets"
+    # os.makedirs(dataset_folder, exist_ok=True)
+    # dataset_file = os.path.join(dataset_folder, f"lane_following_buffer")
+    # with open(dataset_file, "wb") as f:
+    #     pickle.dump(replay_buffer, f)
     training_duration = time.time() - training_start_time
     print(f"\nTraining completed in {training_duration/3600:.2f} hours")
     print(f"Logs saved to: {logger.log_dir}")

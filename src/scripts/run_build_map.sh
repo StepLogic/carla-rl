@@ -5,16 +5,16 @@ declare -A town_mapping
 town_mapping["easy"]="Town02"
 town_mapping["medium"]="Town02"
 town_mapping["hard"]="Town02"
-
+town_mapping["trajectories"]="Town02"
 # Models to evaluate
-models=("PixelBCLearner" "DrQLearner") #"DrQLearner"
+models=("DrQLearner" "PixelBCLearner") #"DrQLearner"
 declare -A checkpoints
-checkpoints["PixelBCLearner"]="/home/robotlab/scratch/carla-rl/best_models/final_bc/checkpoint_49"
-checkpoints["DrQLearner"]="/home/robotlab/scratch/carla-rl/best_models/model-sac-16/checkpoint_1650000"
+checkpoints["PixelBCLearner"]="/home/robotlab/scratch/carla-rl/best_models/final_bc/checkpoint_57"
+checkpoints["DrQLearner"]="/home/robotlab/scratch/carla-rl/best_models/final_drq/checkpoint_1"
 
 
 # Number of trajectories per difficulty (0-4)
-num_trajectories=5
+num_trajectories=1
 
 # Function to run evaluation for a specific configuration
 run_evaluation() {
@@ -47,7 +47,7 @@ run_evaluation() {
 
 # Main execution loop
 for model in "${models[@]}"; do
-    for difficulty in "easy" "medium" "hard"; do
+    for difficulty in "easy" "medium" "hard" "trajectories"; do
         for ((trajectory=0; trajectory<num_trajectories; trajectory++)); do
             run_evaluation "$difficulty" "$trajectory" "$model"
         done

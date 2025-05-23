@@ -502,13 +502,13 @@
         
 #         displacement=np.dot(carla_location_to_np_array(hero_location)-carla_location_to_np_array(self.last_location),goal_loc/np.linalg.norm(goal_loc))
 #         self.distance_travelled_toward_goal-=displacement
-#         delta_distance = float(np.sqrt(np.square(hero_location.x - self.last_location.x) + \
+#         self.delta_distance = float(np.sqrt(np.square(hero_location.x - self.last_location.x) + \
 #                             np.square(hero_location.y - self.last_location.y)))
-#         self.distance_travelled += delta_distance
+#         self.distance_travelled += self.delta_distance
 #         imu = sensor_data['imu'][1]
 #         self.heading = sensor_data['goal'][1][-1]
-#         # print("delta_distance",delta_distance)
-#         self.distances.append(delta_distance)
+#         # print("self.delta_distance",self.delta_distance)
+#         self.distances.append(self.delta_distance)
 #         # print("compass",np.rad2deg(imu[-1]),np.rad2deg(self.heading))
 #         # vehicle_transform = hero.get_transform()
 #         # vehicle_yaw = vehicle_transform.rotation.yaw
@@ -533,9 +533,9 @@
 #         # reward += 0.1 * heading_reward
 
 #         # # Update distance traveled
-#         # delta_distance = float(np.sqrt(np.square(hero_location.x - self.last_location.x) + \
+#         # self.delta_distance = float(np.sqrt(np.square(hero_location.x - self.last_location.x) + \
 #         #                     np.square(hero_location.y - self.last_location.y)))
-#         # self.distance_travelled += delta_distance
+#         # self.distance_travelled += self.delta_distance
 #         # reward=displacement
 #         # yaw_diff_rad=0.0
 #         # if not waypoint is None:
@@ -553,7 +553,7 @@
 #         reward=0.0
 #         if hero_velocity < self.target_speed:
 #             # if self.heading
-#             # reward += np.cos(imu[-1]-self.heading)*delta_distance
+#             # reward += np.cos(imu[-1]-self.heading)*self.delta_distance
 #             reward -= displacement 
 #             # re   
 #         # else:
@@ -728,7 +728,7 @@ class JAXMappingExperiments(BaseExperiment):
         self.steer = 0.0
         self.throttle = 0.0
         # self.target_speed = random.uniform(3.0,10.0)
-        self.target_speed = 6.0
+        self.target_speed = random.uniform(5.0,10.0)
         self.velocity=0.0
         self.current_heading=0.0
         self.goal_location=None
@@ -736,6 +736,8 @@ class JAXMappingExperiments(BaseExperiment):
         self.lane_invasion_count=0
         # self.target_speed = random.uniform(1.0,self.config["others"]["target_speed"])
         self.info=dict()
+        self.delta_distance=0.0
+
     def set_goal(self,goal,heading,location):
         self.goal_location=location
     # def get_action_space(self):
@@ -793,9 +795,7 @@ class JAXMappingExperiments(BaseExperiment):
     # Remove the get_actions method since we're using continuous actions
     def get_observation(self, sensor_data, core):
         """Function to do all the post processing of observations (sensor data).
-
         :param sensor_data: dictionary {sensor_name: sensor_data}
-
         Should return a tuple or list with two items, the processed observations,
         as well as a variable with additional information about such observation.
         The information variable can be empty
@@ -804,44 +804,36 @@ class JAXMappingExperiments(BaseExperiment):
         images,goal = self.get_img_obs(sensor_data, core)
         return {"pixels":images, "vector":vecs,"goal":goal}, self.info
 
+
     def get_vec_obs(self, sensor_data, core):
         # breakpoint()
         heading=sensor_data["goal_heading"][-1][-1]
         imu=sensor_data["imu"][-1][-1]
         vec = np.zeros(4)
-        vec[0] = self.steer / self.max_steer
-        vec[1] = self.throttle / self.max_throttle
+        vec[0] = self.prev_steer / self.max_steer
+        vec[1] = self.prev_throttle / self.max_throttle
         hero = core.hero
         wp=core.map.get_waypoint(hero.get_transform().location,project_to_road=True) 
-        # vec[2] = np.clip(self.get_speed(hero)/(self.target_speed+1e-8), 0.0, 1.0)
-        if self.target_speed == 0:
-            vec[2] = 0.0 if self.get_speed(hero) < 0.1 else 1.0  # Only 0 if almost stopped
+        vec[2] = np.clip(self.get_speed(hero)/self.target_speed, 0.0, 1.0)
+
+        current_forward_vector = carla_location_to_np_array(core.hero.get_transform().get_forward_vector())
+        # breakpoint()
+        destination=core.destination
+        if isinstance(destination,carla.Transform):
+            correct_forward_vector = carla_location_to_np_array(core.destination.get_forward_vector())
         else:
-            vec[2] = np.clip(self.get_speed(hero)/self.target_speed, 0.0, 1.0)
-        # vec[3] = self.time_idle / self.max_time_idle
+            correct_forward_vector = carla_location_to_np_array(core.destination.transform.get_forward_vector())
+        self.delta_angle=np.dot(current_forward_vector, correct_forward_vector)
+        vec[3] = self.delta_angle
         # if self.explore_mode:
-        #     vec[3]= -1.0
-        # else:
-            # if not wp.is_junction:
-            
-        # vec[3]= np.clip((imu+1e-8)/(heading+1e-8),-1.0,1.0)
-        vec[3]=np.cos(abs(imu-heading))
-        # print(np.cos(imu-heading))
-            # else:
-            #     wp=core.map.get_waypoint(core.hero.get_transform().location,project_to_road=True) 
-            #     if not wp is None:
-            #         current_forward_vector=carla_location_to_np_array(core.hero.get_transform().get_forward_vector())
-            #         correct_forward_vector=carla_location_to_np_array(wp.transform.get_forward_vector())
-            #         vec[3] = np.dot(current_forward_vector,correct_forward_vector)
-            #     else:
-            #         vec[3] = -1
+        #     vec[3] = -1.0
 
         if self.prev_vec_0 is None:
             self.prev_vec_0 = vec
             self.prev_vec_1 = self.prev_vec_0
             self.prev_vec_2 = self.prev_vec_1
 
-        vecs = vec  #add gaussian noise
+        vecs = vec 
 
         if self.frame_stack >= 2:
             vecs = np.concatenate([self.prev_vec_0, vecs], axis=0)
@@ -856,10 +848,8 @@ class JAXMappingExperiments(BaseExperiment):
         self.velocity=self.get_speed(hero)
         self.current_heading=imu
         vecs=np.nan_to_num(vecs,nan=1e-8)
-        # return vecs
-        self.velocity=self.get_speed(hero)
-        self.current_heading=imu
         return vecs
+    
     def get_img_obs(self, sensor_data, core):
         image = post_process_image(sensor_data['rgb'][1], normalized = True,crop=False, grayscale = False,image_size=self.image_size)
         goal = post_process_image(sensor_data['goal'][1][0], normalized = True,crop=False, grayscale = False,image_size=self.image_size)
@@ -927,77 +917,123 @@ class JAXMappingExperiments(BaseExperiment):
         return done
 
     def compute_reward(self, sensor_data, core):
+        """
+        Compute the reward for RL training based on vehicle performance.
+        
+        Args:
+            sensor_data: Dictionary containing sensor readings
+            core: Core simulation object containing hero vehicle and map
+            
+        Returns:
+            float: Calculated reward value
+        """
+        # Define reward component weights
+        WEIGHTS = {
+            'speed': 0.6,
+            'direction': 0.2,
+            'action_smoothness': 0.1,
+            'time_penalty': 0.09,
+            'collision_penalty': 1.0,  # Still the largest penalty but scaled down
+            'lane_departure_penalty': 1.0,
+            'goal_reached_bonus': 1.0
+        }
+        
+        # Get vehicle and sensor data
         hero = core.hero
-        heading=sensor_data["goal_heading"][-1][-1]
-        imu=sensor_data["imu"][-1][-1]
-        # delta_heading=np.clip(abs(imu-heading),0,np.pi)
-        # angle_factor=max(1-min(delta_heading/self.max_angle_deviation,1.0),1e-3)
-        # heading=np.nan_to_num(math.cos(delta_heading),0)
-        # Hero-related variables
+        target_heading = np.nan_to_num(sensor_data["goal_heading"][-1][-1])
+        current_heading = np.nan_to_num(sensor_data["imu"][-1][-1])
         hero_location = hero.get_location()
         hero_velocity = self.get_speed(hero)
-
-        # Initialize last location
-        if self.last_location == None:
+        
+        # Initialize tracking variables if needed
+        if not hasattr(self, 'last_location') or self.last_location is None:
             self.last_location = hero_location
-        if self.last_heading == None:
-            self.last_heading = heading
-        # Compute deltas
-        delta_distance = float(np.sqrt(np.square(hero_location.x - self.last_location.x) + \
+            self.distance_travelled = 0.0
+            self.distance_completed=0.0
+        
+        # Compute distance moved since last step
+        self.delta_distance = float(np.sqrt(np.square(hero_location.x - self.last_location.x) + 
                             np.square(hero_location.y - self.last_location.y)))
         
-
-        # distance_travelled=self.distance_travelled+(delta_distance)
-        # Update variables
+        # Calculate direction alignment using the angle between current and target heading
+        heading_diff = abs(current_heading - target_heading)
+        
+        # Update distance traveled (only count distance in the right direction)
+        direction_factor = np.cos(heading_diff)
+        forward_distance = self.delta_distance * direction_factor
+        self.distance_travelled += self.delta_distance
+        # self.distance_completed += forward_distance
+        
+        # Update tracking variables for next step
         self.last_location = hero_location
-        self.last_velocity = hero_velocity
-
-        # Reward if going forward
-        # if hero_velocity < self.target_speed  and hero_velocity > 1.0:
-        #     reward = delta_distance
-        # # print(np.rad2deg(imu -heading),np.rad2deg(heading),np.rad2deg(imu),np.exp(-abs(imu-heading))*0.5 )
         
-        # # reward = min(abs(self.target_speed-hero_velocity))
-        # else:
-        #     reward = -1e-2
-        # print(reward)
-        # if hero_velocity < self.target_speed and hero_velocity < self.target_speed:
-        #     # print(heading/5)
-        #     reward += heading*1e-3
-        reward = 1e-2*((self.target_speed-hero_velocity)**2 + 1e-1*(imu-heading)**2 + 1e-1*np.sum(np.array([self.prev_steer,self.prev_throttle]-np.array([self.steer,self.throttle])))**2)
-
-        max_speed_error = self.target_speed**2
-        max_heading_error = heading**2
-        max_action_error = np.sum(self.get_action_space().low-self.get_action_space().high)**2
+        # ===== Calculate Reward Components =====
         
-
-        min_reward = 1e-2 * (max_speed_error + 1e-1*max_heading_error+1e-1*max_action_error)
-        max_reward = 0
+        # 1. Speed component: how close to target speed
+        speed_factor=hero_velocity / self.target_speed
+        normalized_speed = np.clip(speed_factor, 0, 1.0)
+        speed_reward = normalized_speed
         
-        # Normalize to [0,1]
-        # reward = (reward - min_reward) / (max_reward - min_reward) #scale
-        # or 
-        reward = -reward/min_reward
-        self.distance_travelled += delta_distance    
-
-        if self.done_falling:
-            reward += -10.0
-        if self.done_dist:
-            # print("Max dist travelled")
-            reward += 10.0
-        # if self.done_time_idle:
-        #     # print("Done idle")
-        #     reward += -1.0
-        if self.collision:
-            print('collision')
-            reward += -10.0
-        # if self.diff_lane:
-            print('Lane Invasion')
-            reward += -10.0
+        # 2. Direction component: alignment with target heading
+        direction_reward = max(direction_factor, 0)  # Only reward positive alignment
+        
+        # 3. Action smoothness component (steer is set elsewhere)
+        action_smoothness_reward = -abs(self.steer)  # Penalize large steering actions
+        
+        # ===== Combine Reward Components =====
+        reward = 0.0
+        
+        # Add positive components
+        if speed_factor<1.0:
+         reward += WEIGHTS['speed'] * speed_reward
+        
+        # Add direction reward only in non-exploration mode
+        # if not self.explore_mode:
+        reward += WEIGHTS['direction'] * direction_reward
+        
+        # Add action smoothness
+        reward += WEIGHTS['action_smoothness'] * action_smoothness_reward
+        
+        # Apply time penalty to encourage efficiency
+        reward -= WEIGHTS['time_penalty']
+        
+        # # Apply penalties
+        # if self.done_speed:  # Vehicle stopped when it shouldn't
+        #     # print("Too Fast")
+        #     reward -= WEIGHTS['collision_penalty']
+            
+        if self.collision:   # Vehicle collided with something
+            # print("Collision")
+            reward -= WEIGHTS['collision_penalty']
+            
+        if self.diff_lane:   # Vehicle left its lane
+            # print("Diff lane")
+            reward -= WEIGHTS['lane_departure_penalty']
+        
+        # Add bonus for reaching target distance
+        if self.done_dist:   # Reached target distance
+            # print("Done")
+            reward += WEIGHTS['goal_reached_bonus']
+        
+        # Ensure reward is numerically stable
+        reward = np.nan_to_num(reward, nan=0.0)
+        
+        # Store info for logging
+        self.info.update({
+            'speed_reward': speed_reward,
+            'direction_reward': direction_reward,
+            'action_smoothness_reward': action_smoothness_reward,
+            'self.delta_distance': self.delta_distance,
+            'forward_distance': forward_distance,
+            'total_reward': reward
+        })
+        
+        # Store reward for logging
         self.rewards.append(reward)
-
+        
+        # Update previous actions for potential future smoothness calculation
         self.prev_steer = self.steer
-        self.prev_throttle = self.throttle
+        self.prev_throttle =self.throttle
         return reward
 
 config = {

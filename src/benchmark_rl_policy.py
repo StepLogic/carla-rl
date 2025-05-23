@@ -25,7 +25,7 @@ os.environ["XLA_PYTHON_CLIENT_ALLOCATOR"]="platform"
 config = ml_collections.ConfigDict()
 config.actor_lr = 3e-4
 config.hidden_dims = (256, 256)
-config.cnn_features = (32, 64, 128, 256)
+config.cnn_features = (8, 16, 32, 64)
 config.cnn_filters = (3, 3, 3, 3)
 config.cnn_strides = (2, 2, 2, 2)
 config.cnn_padding = "VALID"
@@ -40,7 +40,7 @@ config.actor_lr = 3e-4
 config.critic_lr = 3e-4
 config.temp_lr = 3e-4
 config.hidden_dims = (256, 256)
-config.cnn_features = (32, 64, 128, 256)
+config.cnn_features = (8, 16, 32, 64)
 config.cnn_filters = (3, 3, 3, 3)
 config.cnn_strides = (2, 2, 2, 2)
 config.cnn_padding = "VALID"
@@ -104,7 +104,6 @@ def eval_environment(agent, env, n_eval_episodes=10, deterministic=True):
         env.unwrapped.set_destination_transform(goal_location)
 
         route_plannner = GlobalRoutePlanner(env.unwrapped.core.map, 2.0)
-    
         prev_waypoint = None
         try:
             trace = route_plannner.trace_route(start_location, goal_location)
@@ -114,36 +113,34 @@ def eval_environment(agent, env, n_eval_episodes=10, deterministic=True):
                 shortest_distance_along_road += prev_waypoint.transform.location.distance(wp.transform.location)
                 prev_waypoint = wp
         except:
-            shortest_distance_along_road = 1
-
-    for _ in range(n_eval_episodes):
+                if shortest_distance_along_road <= 2.0:
+                    shortest_distance_along_road=start_location.distance(goal_location)
+    termination_budget=10
+    while termination_budget>0:
         observation, info = env.reset()
         done = False
         episode_reward = 0
         episode_length = 0
-        heading = 0 + 1e-8
-        
+        # heading = 0 + 1e-8
         while not done:
             truncate_steps += 1
-            target = 3.0
-            vecs = observation["vector"]
-            current_velocity = env.unwrapped.experiment.velocity
-            
-            vecs[2] = np.clip(current_velocity/(target+1e-8), 0.0, 5.1)
-            observation["vector"] = vecs
-            
-            action_dist = agent.action_dist(filter_observations(observation))
-            action = action_dist.mode()
-            
+            vecs=observation["vector"]
+            vecs[3]=-1.0
+            observation["vector"]=vecs
+            action = agent.eval_actions(filter_observations(observation))
             observation, reward, done, truncated, info = env.step(action)
+
+            # action = action_dist.mode()
+            
+            # observation, reward, done, truncated, info = env.step(action)
             episode_reward += reward
             episode_length += 1
             done = done or truncated
             
             if done:
+                
                 episode_rewards.append(episode_reward)
                 episode_lengths.append(episode_length)
-                
                 if "is_success" in info:
                     success_rate.append(float(info["is_success"]))
                 else:
@@ -151,14 +148,12 @@ def eval_environment(agent, env, n_eval_episodes=10, deterministic=True):
                     
                 if "distance_completed" in info:
                     distance_completed.append(float(info["distance_completed"]))
-                    
-                if "distance_completed" in info:
-                    agent_distance_completed = float(info["distance_completed"])
-                    S = int(info.get("is_success", 0))
-                    _spl = S*(shortest_distance_along_road)/max(shortest_distance_along_road, agent_distance_completed)
-                    SPL.append(_spl)
-                    print("==================SPL===============", _spl, SPL)
-                    
+
+                if "is_success" in info:
+                    termination_budget=0
+                else:
+                    termination_budget-=1
+                env.unwrapped.set_start_transform(env.unwrapped.last_position.location)
                 if "slack" in info:
                     slack_values.append(float(info["slack"]))
 
@@ -171,7 +166,9 @@ def eval_environment(agent, env, n_eval_episodes=10, deterministic=True):
         "mean_length": np.mean(episode_lengths),
         "std_length": np.std(episode_lengths),
         "max_SPL": np.nan_to_num(np.mean(SPL), nan=0),
-        "mean_distance_per_step": dataset.get("mean_distance_per_step", 1.0)
+        "mean_distance_per_step": dataset.get("mean_distance_per_step", 1.0),
+        "distance_completed":distance_completed,
+        "shortest_distance_along_road":shortest_distance_along_road
     }
     
     if success_rate:
@@ -200,7 +197,7 @@ def eval_environment(agent, env, n_eval_episodes=10, deterministic=True):
 
 def main(_):
     env = CarlaEvalEnv(start_server=True, town=FLAGS.town)
-    env = TimeLimit(env, max_episode_steps=2500)
+    env = TimeLimit(env, max_episode_steps=int(2e4))
     env = FrameStack(env=env, num_stack=1, stacking_key="pixels")
     env = RecordEpisodeStatistics(env)
 
@@ -232,7 +229,8 @@ def main(_):
     print("\nEvaluation Results:")
     print("=" * 50)
     for key, value in stats.items():
-        print(f"{key}: {value:.4f}")
+        if not isinstance(value,list):
+            print(f"{key}: {value:.4f}")
     print("=" * 50)
 
 if __name__ == "__main__":

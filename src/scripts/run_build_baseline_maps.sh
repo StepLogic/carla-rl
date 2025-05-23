@@ -14,38 +14,26 @@ num_trajectories=5
 
 # Function to run evaluation for a specific configuration
 run_evaluation() {
-    local difficulty=$1
-    local trajectory=$2
-    local model=$3
-    local town=${town_mapping[$difficulty]}
-    local map_dir="evaluation_trajectory/${difficulty}/${trajectory}"
+    local model=$1
+
+    local map_dir="full_trajectory"
 
     echo "Running evaluation for:"
-    echo "- Difficulty: ${difficulty}"
-    echo "- Town: ${town}"
-    echo "- Trajectory: ${trajectory}"
     echo "- Model: ${model}"
     echo "- Map Directory: ${map_dir}"
     echo "-----------------------------------"
 
-    python src/benchmark_policy.py \
+    python src/build_baseline_maps.py \
         --model=${model} \
-        --n_eval_episodes=5 \
-        --deterministic=true \
-        --map_dir=${map_dir} \
-        --town=${town}
+        --map_dir=${map_dir} 
 
-    echo "Evaluation complete for ${difficulty}/${trajectory}/${model}"
+    echo "Build complete for ${model}"
     echo "==================================="
 }
 
 # Main execution loop
 for model in "${models[@]}"; do
-    for difficulty in "easy" "medium" "hard" "trajectories"; do
-        for ((trajectory=0; trajectory<num_trajectories; trajectory++)); do
-            run_evaluation "$difficulty" "$trajectory" "$model"
-        done
-    done
+    run_evaluation "$model"
 done
 
 echo "All evaluations completed successfully!"

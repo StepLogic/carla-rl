@@ -30,6 +30,7 @@ class VehiclePIDController:
         max_throttle=0.75,
         max_brake=0.3,
         max_steering=0.8,
+        dt=0.1
     ):
         """
         Constructor method.
@@ -53,13 +54,13 @@ class VehiclePIDController:
             'K_P': 1.95,
             'K_D': 0.01,
             'K_I': 1.4,
-            'dt': 0.1,
+            'dt': dt,
         }
         args_longitudinal={
                 'K_P': 1.0,
                 'K_D': 0,
                 'K_I': 1.0,
-                'dt': 0.1,
+                'dt': dt,
             }
 
         self.max_brake = max_brake
@@ -311,9 +312,9 @@ class SetPointAgent():
         self._vehicle = vehicle
         self._world = self._vehicle.get_world()
         self._map = self._world.get_map()
-
-        # Sets up PID controllers.
         dt = self._vehicle.get_world().get_settings().fixed_delta_seconds
+        # Sets up PID controllers.
+        # dt = self._vehicle.get_world().get_settings().fixed_delta_seconds
         # lateral_control_dict = lateral_control_dict.copy()
         # lateral_control_dict.update({"dt": dt})
 
@@ -321,14 +322,14 @@ class SetPointAgent():
         # longitudinal_control_dict.update({"dt": dt})
 
         self._vehicle_controller = VehiclePIDController(
-            vehicle=self._vehicle
+            vehicle=self._vehicle,dt=dt
         )
 
         # Sets agent's hyperparameters.
         self._setpoint_index = setpoint_index
         self._replan_every_steps = replan_every_steps
         self._fixed_delta_seconds_between_setpoints = fixed_delta_seconds_between_setpoints or self._vehicle_controller.dt
-
+        assert self._fixed_delta_seconds_between_setpoints==dt
         # Inits agent's buffer of setpoints.
         self._setpoints_buffer = None
         self._steps_counter = 0
@@ -337,7 +338,8 @@ class SetPointAgent():
     def run_step(self,waypoints):
 
         # Current measurements used for local2world2local transformations.
-        waypoints=np.array([*waypoints.tolist(),0.0])
+        # waypoints=np.array([*waypoints.tolist(),0.0])
+        waypoints=np.insert(waypoints,2,0,axis=-1)
         transform=self._vehicle.get_transform()
         current_location = carla_location_to_np_array(transform.location)
         current_rotation = carla_rotation_to_np_array(transform.rotation)
@@ -352,10 +354,12 @@ class SetPointAgent():
         )
 
         # Refreshes buffer.
-        self._setpoints_buffer = predicted_plan_world[0]
+        self._setpoints_buffer = predicted_plan_world
+        # breakpoint()
+        # print(self._setpoints_buffer)
         # else:
-            # Pops first setpoint from the buffer.
-            # self._setpoints_buffer = self._setpoints_buffer
+        #     # Pops first setpoint from the buffer.
+        #     self._setpoints_buffer = self._setpoints_buffer
 
         # Registers setpoints for rendering.
         # self._environment.unwrapped.simulator.sensor_suite.get(
@@ -369,14 +373,13 @@ class SetPointAgent():
         self._steps_counter += 1
         # Calculates target speed by averaging speed in the `setpoint_index` window.
         target_speed = np.linalg.norm(
-            # np.diff(self._setpoints_buffer[0], axis=0),
-            waypoints,
-            # axis=1,
+            np.diff(self._setpoints_buffer, axis=0),
+            axis=1,
         ).mean() / (self._fixed_delta_seconds_between_setpoints)
 
         # Converts plan to PID controller setpoint.
         # breakpoint()
-        setpoint = self._map.get_waypoint(ndarray_to_location(self._setpoints_buffer),project_to_road=False)
+        setpoint = self._map.get_waypoint(ndarray_to_location(self._setpoints_buffer[0]),project_to_road=False)
         # draw_waypoints( self._world,[setpoint])
         # print("waypoint",np.arctan2(waypoints[1],waypoints[0]))
         # Avoids getting stuck when spawned.
@@ -386,7 +389,7 @@ class SetPointAgent():
             return 0.0 ,0.0
         # Run PID step.
         control = self._vehicle_controller.run_step(
-            target_speed=np.clip(target_speed*3.6,0.0,8.0),  # PID controller expects speed in km/h!
+            target_speed=target_speed*3.6,  # PID controller expects speed in km/h!
             waypoint=setpoint,
         )
         return control

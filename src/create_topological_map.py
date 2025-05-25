@@ -396,7 +396,7 @@ class JunctionTrajectoryAgent(BasicAgent):
 
 def collect_basic_agent_data(origin,destination,difficulty="easy"):
     
-    env = CarlaEvalEnv(use_rgb=True,town="Town01",start_server=True,max_dist=100,image_size=96)
+    env = CarlaEvalEnv(use_rgb=True,town="Town02",start_server=True,max_dist=100,image_size=96)
     env = FrameStack(env=env, num_stack=1, stacking_key="pixels")
     env = FrameStack(env=env, num_stack=1, stacking_key="goal")
     # env = TimeLimit(env, max_episode_steps=2500)
@@ -449,7 +449,8 @@ def collect_basic_agent_data(origin,destination,difficulty="easy"):
     
     while not done:
             obs=(observation["pixels"][...,0]*255).astype(np.uint8)
-            Image.fromarray(obs).save(f"{map_dir}/{step}.jpg")
+            # cv2.cvtColor(obs,cv2.COLOR_BGR2RGB)
+            cv2.imwrite(f"{map_dir}/{step}.jpg",obs)
             control = agent.run_step()
             action = np.array([control.steer, control.throttle])
             next_observation, reward, done, truncated, info = env.step(action)

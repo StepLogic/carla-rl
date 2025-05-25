@@ -1,4 +1,3 @@
-# %%
 from collections import defaultdict, deque
 import os
 import pickle
@@ -17,23 +16,25 @@ from navigation_policies.baseline_policies.vint_policy import ViNT_Policy
 from agent_wrapper import SetPointAgent
 
 
+# task
+# tune pid controller
+# fix
+
 os.environ['XLA_FLAGS']="--xla_gpu_enable_command_buffer="
 os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"]="false"
 os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"]=".20"
 os.environ["XLA_PYTHON_CLIENT_ALLOCATOR"]="platform"
 # Define flags
-# FLAGS = flags.FLAGS
-# # flags.DEFINE_string("checkpoint_path", None, "Path to the checkpoint directory")
-#  DEFINE_enum('model', 'nomad', ['nomad', 'gnm','vint'], 'Model type')
-#  DEFINE_integer("n_eval_episodes", 5, "Number of evaluation episodes")
-#  DEFINE_boolean("deterministic", True, "Whether to use deterministic actions")
-# flags.DEFINE_string("map_dir", None, "Whether to use deterministic actions")
-# flags.DEFINE_string("town", "Town01", "Town Name")
+FLAGS = flags.FLAGS
+# flags.DEFINE_string("checkpoint_path", None, "Path to the checkpoint directory")
+flags.DEFINE_enum('model', 'nomad', ['nomad', 'gnm','vint'], 'Model type')
+flags.DEFINE_integer("n_eval_episodes", 5, "Number of evaluation episodes")
+flags.DEFINE_boolean("deterministic", True, "Whether to use deterministic actions")
+flags.DEFINE_string("map_dir", None, "Whether to use deterministic actions")
+flags.DEFINE_string("town", "Town01", "Town Name")
 
-
-# %%
-
-def map_environment(model_type,env,map_dir=None,n_eval_episodes=10, deterministic=True):
+def evaluate_policy(model_type,env, n_eval_episodes=10, deterministic=True):
+    """Evaluate the agent for n_eval_episodes."""
     episode_rewards = []
     episode_lengths = []
     success_rate = []
@@ -50,9 +51,9 @@ def map_environment(model_type,env,map_dir=None,n_eval_episodes=10, deterministi
         "vint":ViNT_Policy
     }
     default_checkpointts={
-        "gnm":"/home/kojogyaase/Projects/Research/carla-rl/dependencies/navigation_policies/navigation_policies/pretrained_models/gnm.pth",
-        "nomad":"/home/kojogyaase/Projects/Research/carla-rl/dependencies/navigation_policies/navigation_policies/pretrained_models/nomad.pth",
-        "vint":"/home/kojogyaase/Projects/Research/carla-rl/dependencies/navigation_policies/navigation_policies/pretrained_models/vint.pth"
+        "gnm":"/home/robotlab/scratch/carla-rl/dependencies/navigation_policies/navigation_policies/pretrained_models/gnm.pth",
+        "nomad":"/home/robotlab/scratch/carla-rl/dependencies/navigation_policies/navigation_policies/pretrained_models/nomad.pth",
+        "vint":"/home/robotlab/scratch/carla-rl/dependencies/navigation_policies/navigation_policies/pretrained_models/vint.pth"
     }
     MODEL=models[model_type]
     checkpoint_path=default_checkpointts[model_type]
@@ -65,16 +66,16 @@ def map_environment(model_type,env,map_dir=None,n_eval_episodes=10, deterministi
         episode_length = 0
         goal_location=None
         shortest_distance_along_road=1e-8
-        if map_dir is None:
+        if FLAGS.map_dir is None:
             if model_type != "nomad":
                 raise ValueError("Only NoMaD can explore")
             agent = MODEL(ckpt_path=checkpoint_path,mode="explore")
         else:
-            agent = MODEL(ckpt_path=checkpoint_path,mode="navigate",skip_index=skip_index ,map_dir=map_dir)
+            agent = MODEL(ckpt_path=checkpoint_path,mode="navigate",skip_index=skip_index ,map_dir=FLAGS.map_dir)
             print(f"Using {len(agent.topomap)} Nodes")
             # map_dir="/home/kojogyaase/Projects/Research/carla-rl/topomap"
             shortest_distance_along_road=None
-            with open(f'{map_dir}/aux.pkl', 'rb') as handle:
+            with open(f'{FLAGS.map_dir}/aux.pkl', 'rb') as handle:
                 dataset=pickle.load(handle)
                 # breakpoint()
                 start_location=ndarray_to_location(dataset["start"])
@@ -97,7 +98,14 @@ def map_environment(model_type,env,map_dir=None,n_eval_episodes=10, deterministi
                     shortest_distance_along_road=start_location.distance(goal_location)
                 # assert shortest_distance_along_road>1.0
         # breakpoint()
+        # print("shortest_distance_along_roads is",shortest_distance_along_road)
         observation, info = env.reset()
+        # if not FLAGS.map_dir is None:
+        #     goal=np.asarray(agent.topomap[agent.goal_node])
+        #     print("Goal Node",agent.goal_node)
+        #     # cv2.imwrite("goal.jpg",goal)
+        #     env.unwrapped.set_goal(goal,0.0,goal_location)
+     
         spAgent=SetPointAgent(env.unwrapped.core.hero)
         while not done:
             waypoints = np.array(agent.eval_action(observation["pixels"]))
@@ -147,7 +155,8 @@ def map_environment(model_type,env,map_dir=None,n_eval_episodes=10, deterministi
                 #     # breakpoint()
                 #     print("=================Skip Index==============",skip_index,l,SPL_per_skip_frame)
                 #     SPL = []
-
+    # breakpoint()
+    # Compute statistics
     stats = {
         "mean_reward": np.mean(episode_rewards),
         "std_reward": np.std(episode_rewards),
@@ -172,36 +181,35 @@ def map_environment(model_type,env,map_dir=None,n_eval_episodes=10, deterministi
         "experiment_results":stats,
         "SPLs":SPL_per_skip_frame,
     })
-    if map_dir:
-        difficulty=map_dir.split("/")[-2]
-        name=map_dir.split("/")[-1] or model_type
-        path=f"results/{model_type}/{difficulty}"
-        os.makedirs(path,exist_ok=True)
-        with open(f"{path}/{name}_test_results.pkl", "wb") as f:
-            pickle.dump(dict(data), f)
+    difficulty=FLAGS.map_dir.split("/")[-2]
+    name=FLAGS.map_dir.split("/")[-1] or model_type
+    path=f"results/{model_type}/{difficulty}"
+    os.makedirs(path,exist_ok=True)
+    with open(f"{path}/{name}_test_results.pkl", "wb") as f:
+        pickle.dump(dict(data), f)
     return stats
 
+def main(_):
+    # Create and wrap environment
+    env = CarlaEvalEnv(start_server=True,town=FLAGS.town)
+    env = TimeLimit(env, max_episode_steps=int(2e4))
+    env = FrameStack(env=env, num_stack=1, stacking_key="pixels")
+    env = FrameStack(env=env, num_stack=1, stacking_key="goal")
+    env = RecordEpisodeStatistics(env)
 
 
-# %%
-os.environ['CARLA_ROOT']="/home/kojogyaase/Apps/CARLA_0.9.15"
-env = CarlaEvalEnv(start_server=False,town="Town01")
-env = TimeLimit(env, max_episode_steps=int(2e4))
-env = FrameStack(env=env, num_stack=1, stacking_key="pixels")
-env = FrameStack(env=env, num_stack=1, stacking_key="goal")
-env = RecordEpisodeStatistics(env)
+    # Initialize agent
+    # kwargs = dict(FLAGS.config)
 
-# %%
-# Initialize agent
-def run_agent():
-    stats = map_environment(
-        "nomad",
+    # Evaluate
+    stats = evaluate_policy(
+        FLAGS.model,
         env,
-        # map_dir="/home/kojogyaase/Projects/Research/carla-rl/evaluation_trajectory/trajectories/0/",
-        n_eval_episodes=10,
-        deterministic=False
+        n_eval_episodes=FLAGS.n_eval_episodes,
+        deterministic=FLAGS.deterministic
     )
-
+    
+    # Print results
     print("\nEvaluation Results:")
     print("=" * 50)
     for key, value in stats.items():
@@ -209,9 +217,6 @@ def run_agent():
             print(f"{key}: {value:.4f}")
     print("=" * 50)
 
-
-# %%
-# app.run(run_agent)
-run_agent()
-
-
+if __name__ == "__main__":
+    # flags.mark_flag_as_required("checkpoint_path")
+    app.run(main)

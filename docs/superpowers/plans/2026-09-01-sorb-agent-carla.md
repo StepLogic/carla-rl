@@ -68,12 +68,30 @@ SCRIPT = pathlib.Path("run_sorb_agent.sh")
 
 
 def exports():
-    """Parse `export NAME=value` pairs from the run script."""
-    text = SCRIPT.read_text()
+    """Parse `export NAME=value` pairs from the run script.
+
+    Handles SEVERAL pairs on one `export` line -- the script groups related
+    settings that way (`export GOAL_DIST_MIN=2.0 GOAL_DIST_START=30.0 ...`),
+    and a parser that took only the first would silently drop the rest and
+    make the tests below pass vacuously or KeyError.
+    """
     out = {}
-    for m in re.finditer(r"^export\s+([A-Z_]+)=([^\s#]+)", text, re.M):
-        out[m.group(1)] = m.group(2).strip('"')
+    for line in SCRIPT.read_text().splitlines():
+        m = re.match(r"^export\s+(.*)", line)
+        if not m:
+            continue
+        body = m.group(1).split("#")[0]          # drop trailing comments
+        for pair in re.finditer(r"([A-Z_]+)=(\S+)", body):
+            out[pair.group(1)] = pair.group(2).strip('"')
     return out
+
+
+def test_parser_reads_every_pair_on_a_shared_export_line():
+    """Guards the parser itself: a silent miss makes every test below vacuous."""
+    e = exports()
+    for name in ("GOAL_DIST_MIN", "GOAL_DIST_START", "GOAL_DIST_TARGET",
+                 "MAX_STEER", "MAX_THROTTLE", "ENV_TOWNS"):
+        assert name in e, f"{name} was not parsed from the run script"
 
 
 def test_script_exists():
@@ -273,7 +291,7 @@ done
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `chmod +x run_sorb_agent.sh && bash -n run_sorb_agent.sh && PYTHONPATH=src python -m pytest tests/test_sorb_config.py -v`
-Expected: PASS, 9 tests.
+Expected: PASS, 10 tests.
 
 - [ ] **Step 5: Commit**
 
@@ -509,8 +527,8 @@ def test_goal_relabelled_obs_rewrites_only_the_goal_key():
               "action_history": np.zeros((4, 2))}
     out = goal_relabelled_obs(base, fields, (3.0, 4.0), fake_goal_block)
     np.testing.assert_allclose(out["goal"][:2], [3.0, 4.0])
-    np.testing.assert_array_equal(out["latent"], base["latent"]), (
-        "the latent is what the camera SAW and must not change with the goal")
+    # The latent is what the camera SAW and must not change with the goal.
+    np.testing.assert_array_equal(out["latent"], base["latent"])
 
 
 def test_goal_relabelled_obs_does_not_mutate_the_input():

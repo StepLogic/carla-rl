@@ -54,3 +54,43 @@ def value_to_steps(v, step_cost=STEP_COST_DEFAULT):
     if step_cost <= 0:
         raise ValueError(f"step_cost must be positive, got {step_cost}")
     return np.maximum(0.0, -np.asarray(v, np.float64) / step_cost)
+
+
+# MEASURED over 75 recorded eval episodes: 0.283 m per step (median, max 0.327)
+# at ~11 km/h on a 0.1 s timestep.
+METRES_PER_STEP = 0.283
+H_METRES = 30.0
+H_STEPS = H_METRES / METRES_PER_STEP        # 106.0
+
+
+def goal_relabelled_obs(base_obs, fields, goal_pos, goal_block_fn):
+    """Copy `base_obs` with its goal block recomputed for `goal_pos`.
+
+    NO SIMULATOR NEEDED. The VAE latent is what the camera saw at this state
+    and is independent of which goal the step is credited to, so only the 12-d
+    goal block is rebuilt -- through the wrapper's OWN transform, so relabelled
+    observations cannot drift from on-policy ones. Same contract as
+    EpisodeRelabelBuffer._relabelled.
+    """
+    out = dict(base_obs)
+    out["goal"] = goal_block_fn({**fields, "goal_pos": goal_pos})
+    return out
+
+
+def edge_reject_mask(cost_steps, spread, max_steps=H_STEPS, tau=None):
+    """True where an edge must NOT enter the graph.
+
+    Two independent reasons:
+      * beyond H -- V was trained only on goals within the horizon, so a longer
+        query is extrapolation and unclipped extrapolation is how the critic
+        left its provable range entirely;
+      * critics disagree -- the cheapest available off-distribution signal.
+
+    `tau` of None disables the disagreement test, for when no spread
+    distribution has been observed yet to set it from.
+    """
+    cost_steps = np.asarray(cost_steps, np.float64)
+    reject = cost_steps > max_steps
+    if tau is not None:
+        reject = reject | (np.asarray(spread, np.float64) > tau)
+    return reject

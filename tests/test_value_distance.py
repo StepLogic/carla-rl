@@ -73,3 +73,59 @@ def test_batch_entries_are_independent():
     v = pessimistic_value(q)
     assert v[0] == pytest.approx(-1.0, abs=1e-5)
     assert v[1] == pytest.approx(-20.0, abs=1e-5)
+
+
+from vae_nav.value_distance import (H_STEPS, edge_reject_mask,
+                                    goal_relabelled_obs)
+
+
+def fake_goal_block(fields):
+    """Stand-in for VAEGoalWrapper.goal_block: only the goal offset matters."""
+    d = np.asarray(fields["goal_pos"], np.float64) - np.asarray(
+        fields["hero_pos"], np.float64)
+    return np.concatenate([d, np.zeros(10)]).astype(np.float32)
+
+
+def test_goal_relabelled_obs_rewrites_only_the_goal_key():
+    base = {"latent": np.arange(4, dtype=np.float32),
+            "goal": np.zeros(12, np.float32)}
+    fields = {"hero_pos": (0.0, 0.0), "hero_yaw": 0.0,
+              "action_history": np.zeros((4, 2))}
+    out = goal_relabelled_obs(base, fields, (3.0, 4.0), fake_goal_block)
+    np.testing.assert_allclose(out["goal"][:2], [3.0, 4.0])
+    # The latent is what the camera SAW and must not change with the goal.
+    np.testing.assert_array_equal(out["latent"], base["latent"])
+
+
+def test_goal_relabelled_obs_does_not_mutate_the_input():
+    base = {"latent": np.zeros(4, np.float32), "goal": np.zeros(12, np.float32)}
+    fields = {"hero_pos": (0.0, 0.0), "hero_yaw": 0.0,
+              "action_history": np.zeros((4, 2))}
+    goal_relabelled_obs(base, fields, (1.0, 1.0), fake_goal_block)
+    assert base["goal"].sum() == 0.0, "caller's dict was mutated"
+
+
+def test_h_steps_matches_the_measured_traversal_rate():
+    """30 m at the measured 0.283 m/step."""
+    assert H_STEPS == pytest.approx(30.0 / 0.283, rel=0.01)
+
+
+def test_edges_beyond_the_horizon_are_rejected():
+    cost = np.array([50.0, 105.0, 107.0, 300.0])
+    spread = np.zeros(4)
+    rej = edge_reject_mask(cost, spread, max_steps=H_STEPS, tau=1.0)
+    assert list(rej) == [False, False, True, True], (
+        "V is only trained on goals within H; beyond it every query is "
+        "extrapolation, which is how q reached -280 against a -200 floor")
+
+
+def test_edges_with_disagreeing_critics_are_rejected():
+    cost = np.array([10.0, 10.0])
+    spread = np.array([0.1, 9.0])
+    assert list(edge_reject_mask(cost, spread, H_STEPS, tau=1.0)) == [False, True]
+
+
+def test_rejection_reasons_compose():
+    cost = np.array([500.0])
+    spread = np.array([99.0])
+    assert edge_reject_mask(cost, spread, H_STEPS, 1.0)[0]

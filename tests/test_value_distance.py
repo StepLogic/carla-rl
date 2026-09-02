@@ -140,8 +140,10 @@ class StubCritic:
     def __init__(self, q):
         self._q = q
         self.params = {"dummy": 0}
+        self.seen_actions = None
 
     def apply_fn(self, variables, observations, actions):
+        self.seen_actions = np.asarray(actions)
         return self._q
 
 
@@ -155,7 +157,10 @@ class StubAgent:
 
     def eval_actions(self, observations):
         n = len(next(iter(observations.values())))
-        return np.zeros((n, self._action_dim), np.float32)
+        # Non-zero, batch-index-dependent values to catch bugs in action passing
+        actions = np.arange(n * self._action_dim, dtype=np.float32).reshape(n, self._action_dim) + 1.0
+        self.seen_actions = actions.copy()
+        return actions
 
 
 def test_critic_quantiles_returns_the_ensemble_shape():
@@ -187,3 +192,24 @@ def test_edge_cost_steps_is_pessimistic_not_mean():
     cost, _ = edge_cost_steps(agent, obs, step_cost=0.1)
     mean_cost = -np.mean(q) / 0.1
     assert cost[0] > mean_cost, "must over-estimate distance, never under"
+
+
+def test_edge_cost_steps_passes_policy_actions_to_critic():
+    """V(s) = Q(s, pi(s)): critic must receive the policy's actions, not zeros.
+
+    Verifies that edge_cost_steps obtains actions from agent.eval_actions()
+    and passes those exact actions to the critic. A bug using wrong actions,
+    zeros, None, or batch-mismatched shapes would not fail without this test.
+    Uses batch size > 1 to catch batch-broadcasting bugs.
+    """
+    q = make_q([-5.0, -8.0, -10.0])  # batch size 3
+    agent = StubAgent(q, action_dim=2)
+    obs = {"latent": np.zeros((3, 4), np.float32),
+           "goal": np.zeros((3, 12), np.float32)}
+
+    # Call edge_cost_steps, which internally calls eval_actions and critic_quantiles
+    cost, spread = edge_cost_steps(agent, obs, step_cost=0.1)
+
+    # Verify the actions received by the critic match what eval_actions produced
+    np.testing.assert_array_equal(agent._critic.seen_actions, agent.seen_actions,
+                                  err_msg="critic must receive policy actions from eval_actions")

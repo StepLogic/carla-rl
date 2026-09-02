@@ -103,3 +103,32 @@ def test_gate_report_is_json_serialisable():
     dist = np.array([3.0, 10.0, 25.0])
     true = dist / 0.283
     json.dumps(gate_report(true, true, dist, -0.1 * true))
+
+
+def test_collect_pairs_keeps_only_successful_episodes():
+    """Realised steps exist only where the goal was reached.
+
+    An episode that timed out has no ground-truth distance -- counting its
+    length as the true distance would teach the gate that failures are simply
+    long journeys.
+    """
+    from validate_value_distance import pairs_from_episodes
+
+    episodes = [
+        {"arrived": True, "steps": 80, "goal_dist_m": 22.0, "v0": -8.0},
+        {"arrived": False, "steps": 300, "goal_dist_m": 28.0, "v0": -30.0},
+        {"arrived": True, "steps": 30, "goal_dist_m": 8.0, "v0": -3.0},
+    ]
+    pred, true, dist, v = pairs_from_episodes(episodes, step_cost=0.1)
+    assert list(true) == [80.0, 30.0]
+    assert list(dist) == [22.0, 8.0]
+    np.testing.assert_allclose(pred, [80.0, 30.0], atol=1e-6)
+
+
+def test_collect_pairs_returns_empty_arrays_when_nothing_arrived():
+    from validate_value_distance import pairs_from_episodes
+
+    pred, true, dist, v = pairs_from_episodes(
+        [{"arrived": False, "steps": 300, "goal_dist_m": 20.0, "v0": -30.0}],
+        step_cost=0.1)
+    assert len(pred) == len(true) == len(dist) == len(v) == 0

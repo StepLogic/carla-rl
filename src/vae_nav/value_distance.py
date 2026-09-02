@@ -94,3 +94,28 @@ def edge_reject_mask(cost_steps, spread, max_steps=H_STEPS, tau=None):
     if tau is not None:
         reject = reject | (np.asarray(spread, np.float64) > tau)
     return reject
+
+
+def critic_quantiles(agent, observations, actions):
+    """Raw ensemble quantiles for a batch. -> (num_qs, B, n_q).
+
+    Reaches into `agent._critic` because jaxrl2's Agent base exposes only
+    eval_actions; the critic has no public accessor. Kept in one place so the
+    coupling is visible rather than scattered through the harness.
+    """
+    critic = agent._critic
+    qs = critic.apply_fn({"params": critic.params}, observations, actions)
+    return np.asarray(qs, np.float64)
+
+
+def edge_cost_steps(agent, observations, step_cost=STEP_COST_DEFAULT,
+                    percentile=PESSIMISM_PERCENTILE):
+    """Edge weight in STEPS, plus ensemble disagreement, for a batch.
+
+    V(s) = Q(s, pi(s)): the value of the state under the policy that will
+    actually be asked to traverse the edge, not under an arbitrary action.
+    """
+    actions = agent.eval_actions(observations)
+    q = critic_quantiles(agent, observations, actions)
+    v = pessimistic_value(q, percentile)
+    return value_to_steps(v, step_cost), ensemble_spread(q)

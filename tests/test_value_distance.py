@@ -129,3 +129,61 @@ def test_rejection_reasons_compose():
     cost = np.array([500.0])
     spread = np.array([99.0])
     assert edge_reject_mask(cost, spread, H_STEPS, 1.0)[0]
+
+
+from vae_nav.value_distance import critic_quantiles, edge_cost_steps
+
+
+class StubCritic:
+    """Mimics a Flax TrainState carrying the quantile ensemble."""
+
+    def __init__(self, q):
+        self._q = q
+        self.params = {"dummy": 0}
+
+    def apply_fn(self, variables, observations, actions):
+        return self._q
+
+
+class StubAgent:
+    """Enough of a TQC agent for the query path, with no JAX involved."""
+
+    def __init__(self, q, action_dim=2):
+        self._critic = StubCritic(q)
+        self._action_dim = action_dim
+        self.seen_actions = None
+
+    def eval_actions(self, observations):
+        n = len(next(iter(observations.values())))
+        return np.zeros((n, self._action_dim), np.float32)
+
+
+def test_critic_quantiles_returns_the_ensemble_shape():
+    q = make_q([-4.0, -8.0])
+    agent = StubAgent(q)
+    obs = {"latent": np.zeros((2, 4), np.float32),
+           "goal": np.zeros((2, 12), np.float32)}
+    out = critic_quantiles(agent, obs, agent.eval_actions(obs))
+    assert out.shape == (NUM_QS, 2, N_Q)
+
+
+def test_edge_cost_steps_converts_to_steps():
+    """V = -10.6 must come back as ~106 steps, i.e. exactly H."""
+    q = make_q([-10.6])
+    agent = StubAgent(q)
+    obs = {"latent": np.zeros((1, 4), np.float32),
+           "goal": np.zeros((1, 12), np.float32)}
+    cost, spread = edge_cost_steps(agent, obs, step_cost=0.1)
+    assert cost[0] == pytest.approx(106.0, abs=0.5)
+    assert spread[0] == pytest.approx(0.0, abs=1e-6)
+
+
+def test_edge_cost_steps_is_pessimistic_not_mean():
+    q = np.zeros((NUM_QS, 1, N_Q), np.float32)
+    q[..., :] = np.linspace(-20.0, 0.0, N_Q)
+    agent = StubAgent(q)
+    obs = {"latent": np.zeros((1, 4), np.float32),
+           "goal": np.zeros((1, 12), np.float32)}
+    cost, _ = edge_cost_steps(agent, obs, step_cost=0.1)
+    mean_cost = -np.mean(q) / 0.1
+    assert cost[0] > mean_cost, "must over-estimate distance, never under"

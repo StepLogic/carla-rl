@@ -108,14 +108,36 @@ def critic_quantiles(agent, observations, actions):
     return np.asarray(qs, np.float64)
 
 
+def edge_cost_and_value(agent, observations, step_cost=STEP_COST_DEFAULT,
+                        percentile=PESSIMISM_PERCENTILE):
+    """Edge weight in STEPS, ensemble disagreement, and the raw V, for a batch.
+
+    V(s) = Q(s, pi(s)): the value of the state under the policy that will
+    actually be asked to traverse the edge, not under an arbitrary action.
+
+    UNITS: returns (cost_steps, spread, v_pess). `cost_steps` is in steps;
+    `spread` and `v_pess` are both in V-units, not steps -- see the module
+    docstring. `v_pess` is the raw, UNCLAMPED pessimistic V (it may be
+    positive), unlike `cost_steps` which is clamped at zero by
+    `value_to_steps`. Callers that need the true V rather than its lossy
+    steps round-trip must read `v_pess`, not reconstruct it from `cost_steps`.
+    """
+    actions = agent.eval_actions(observations)
+    q = critic_quantiles(agent, observations, actions)
+    v_pess = pessimistic_value(q, percentile)
+    return value_to_steps(v_pess, step_cost), ensemble_spread(q), v_pess
+
+
 def edge_cost_steps(agent, observations, step_cost=STEP_COST_DEFAULT,
                     percentile=PESSIMISM_PERCENTILE):
     """Edge weight in STEPS, plus ensemble disagreement, for a batch.
 
     V(s) = Q(s, pi(s)): the value of the state under the policy that will
     actually be asked to traverse the edge, not under an arbitrary action.
+
+    UNITS: returns (cost_steps, spread). `cost_steps` is in steps; `spread`
+    is in V-units, not steps -- see the module docstring.
     """
-    actions = agent.eval_actions(observations)
-    q = critic_quantiles(agent, observations, actions)
-    v = pessimistic_value(q, percentile)
-    return value_to_steps(v, step_cost), ensemble_spread(q)
+    cost_steps, spread, _v_pess = edge_cost_and_value(agent, observations,
+                                                       step_cost, percentile)
+    return cost_steps, spread

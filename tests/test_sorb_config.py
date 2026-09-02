@@ -10,6 +10,8 @@ import pathlib
 
 import pytest
 
+from vae_nav.value_distance import H_METRES, METRES_PER_STEP, STEP_COST_DEFAULT
+
 SCRIPT = pathlib.Path("run_sorb_agent.sh")
 
 
@@ -66,12 +68,36 @@ def test_horizon_is_reachable_within_the_step_cap():
     """H must be traversable with headroom, or episodes time out for reasons
     unrelated to the policy."""
     e = exports()
-    metres_per_step = 0.283          # MEASURED over 75 recorded eval episodes
-    steps_for_h = float(e["GOAL_DIST_TARGET"]) / metres_per_step
+    steps_for_h = float(e["GOAL_DIST_TARGET"]) / METRES_PER_STEP
     assert int(e["TTG_MAX_STEPS"]) >= 2.0 * steps_for_h, (
         f"cap {e['TTG_MAX_STEPS']} gives only "
         f"{int(e['TTG_MAX_STEPS']) / steps_for_h:.1f}x the {steps_for_h:.0f} "
         "steps a goal at H needs under perfect driving")
+
+
+def test_goal_dist_target_matches_the_trained_horizon():
+    """H_METRES (used to derive H_STEPS, the graph's extrapolation cutoff) must
+    be the SAME 30 m the run script actually trains on. If GOAL_DIST_TARGET
+    drifted apart from H_METRES, edge_reject_mask would keep admitting edges
+    the critic was never trained to judge -- an optimistic, silent drift."""
+    e = exports()
+    assert float(e["GOAL_DIST_TARGET"]) == H_METRES
+
+
+def test_step_cost_matches_the_value_distance_module():
+    """STEP_COST here and STEP_COST_DEFAULT in vae_nav.value_distance convert
+    V to steps; if they diverged, every edge weight would be off by the
+    ratio between them."""
+    e = exports()
+    assert float(e["STEP_COST"]) == STEP_COST_DEFAULT
+
+
+def test_tqc_kappa_is_pinned():
+    """If TQC_KAPPA were ever unset, build_agent falls back to tqc_kappa(),
+    which derives K_GOAL/10 = 60 -- the exact 'critic silently stops
+    learning' failure this project already hit once."""
+    e = exports()
+    assert float(e["TQC_KAPPA"]) == 1.0
 
 
 def test_curriculum_is_inert():

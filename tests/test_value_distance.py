@@ -106,8 +106,10 @@ def test_goal_relabelled_obs_does_not_mutate_the_input():
 
 
 def test_h_steps_matches_the_measured_traversal_rate():
-    """30 m at the measured 0.283 m/step."""
-    assert H_STEPS == pytest.approx(30.0 / 0.283, rel=0.01)
+    """30 m at the measured 0.283 m/step. Expected value stated independently
+    of the implementation (106 steps), not derived from the same division it
+    is meant to check."""
+    assert H_STEPS == pytest.approx(106.0, abs=0.5)
 
 
 def test_edges_beyond_the_horizon_are_rejected():
@@ -131,7 +133,8 @@ def test_rejection_reasons_compose():
     assert edge_reject_mask(cost, spread, H_STEPS, 1.0)[0]
 
 
-from vae_nav.value_distance import critic_quantiles, edge_cost_steps
+from vae_nav.value_distance import (critic_quantiles, edge_cost_and_value,
+                                    edge_cost_steps)
 
 
 class StubCritic:
@@ -213,3 +216,36 @@ def test_edge_cost_steps_passes_policy_actions_to_critic():
     # Verify the actions received by the critic match what eval_actions produced
     np.testing.assert_array_equal(agent._critic.seen_actions, agent.seen_actions,
                                   err_msg="critic must receive policy actions from eval_actions")
+
+
+def test_edge_cost_and_value_matches_edge_cost_steps():
+    """edge_cost_steps must be a thin wrapper: same cost, same spread."""
+    q = make_q([-10.6, -25.0])
+    agent = StubAgent(q)
+    obs = {"latent": np.zeros((2, 4), np.float32),
+           "goal": np.zeros((2, 12), np.float32)}
+    cost, spread = edge_cost_steps(agent, obs, step_cost=0.1)
+    cost2, spread2, _v = edge_cost_and_value(agent, obs, step_cost=0.1)
+    np.testing.assert_allclose(cost, cost2)
+    np.testing.assert_allclose(spread, spread2)
+
+
+def test_edge_cost_and_value_returns_the_raw_unclamped_v():
+    """v_pess must be the critic's actual value, including POSITIVE V -- the
+    exact case value_to_steps clamps away. A caller reconstructing V from
+    cost_steps (v = -cost * step_cost) would silently read 0.0 here instead
+    of the true, positive value; that is the bug this function exists to
+    close."""
+    q = make_q([2.5, -12.0])
+    agent = StubAgent(q)
+    obs = {"latent": np.zeros((2, 4), np.float32),
+           "goal": np.zeros((2, 12), np.float32)}
+    cost, _spread, v_pess = edge_cost_and_value(agent, obs, step_cost=0.1)
+    np.testing.assert_allclose(v_pess, [2.5, -12.0], atol=1e-5)
+    # cost_steps is still clamped at zero for the positive-V sample.
+    assert cost[0] == pytest.approx(0.0, abs=1e-6)
+    # Reconstructing V from cost would lose the positive value entirely.
+    reconstructed = -cost[0] * 0.1
+    assert reconstructed != pytest.approx(v_pess[0]), (
+        "this only demonstrates the round-trip IS lossy; v_pess itself must "
+        "not be")

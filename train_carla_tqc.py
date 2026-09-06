@@ -178,6 +178,11 @@ def build_agent(observation_space, action_space, seed):
                       **kwargs)
 
 
+# Shared across every TRAINING env rebuild -- see the note in make_env.
+# None until the explore arm asks for it, so the goal arm never builds one.
+_EXPLORE_NOVELTY = None
+
+
 def make_env(town, seed, latent_source, eval_mode=False, port=None):
     """One env, one town, one server. Wrapper order is shared with eval."""
     from rlib_integration.carla_env import CarlaEnv
@@ -239,8 +244,31 @@ def make_env(town, seed, latent_source, eval_mode=False, port=None):
         from vae_nav.image_novelty import ImageNoveltyBuffer
         from vae_nav.lane_explore_reward import (LANE_EXPLORE_MAX_STEPS,
                                                  LaneExploreReward)
-        novelty = (ImageNoveltyBuffer()
-                   if os.environ.get("K_NOVELTY", "0.2") != "0" else None)
+        # THE BUFFER MUST OUTLIVE THE ENV, NOT JUST THE EPISODE.
+        #
+        # NOVELTY_PERSIST=1 stops it clearing on env.reset(). It cannot stop
+        # the buffer OBJECT being replaced, and make_env is called again for
+        # every eval env and on any env rebuild -- so a fresh buffer here threw
+        # the memory away roughly every eval. MEASURED before this fix: it grew
+        # 52 -> 1259, reset to 35, grew to 1130, reset to 9, grew to 1358,
+        # reset. Three wipes in 480 episodes.
+        #
+        # That silently removed the whole mechanism this arm depends on: turn
+        # diversity comes from the critic preferring a branch whose road is
+        # unseen, and "unseen" only means anything if the memory survives.
+        #
+        # Eval envs get their OWN buffer: sharing the training memory would let
+        # eval inherit whatever the policy happened to have explored, so two
+        # evals of the same checkpoint would not score the same.
+        novelty = None
+        if os.environ.get("K_NOVELTY", "0.2") != "0":
+            if eval_mode:
+                novelty = ImageNoveltyBuffer()
+            else:
+                global _EXPLORE_NOVELTY
+                if _EXPLORE_NOVELTY is None:
+                    _EXPLORE_NOVELTY = ImageNoveltyBuffer()
+                novelty = _EXPLORE_NOVELTY
         env = LaneExploreReward(env, novelty=novelty, encoder=latent_source)
         env = ExploreObsWrapper(env, source=latent_source)
         # The explorer's own step cap, not MAX_EPISODE_STEPS: the goal arm's

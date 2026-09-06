@@ -197,3 +197,27 @@ def test_works_at_the_mobilenet_embedding_width():
         b.observe(rng.normal(size=384).astype(np.float32))
     assert len(b) > 1
     assert -1.0 <= b.max_similarity(rng.normal(size=384).astype(np.float32)) <= 1.0
+
+
+def test_persist_flag_cannot_survive_object_replacement():
+    """THE BUG THIS PROJECT SHIPPED, stated as a test.
+
+    NOVELTY_PERSIST=1 stops the buffer clearing on env.reset(). It cannot stop
+    the buffer OBJECT being replaced -- and make_env constructed a fresh one on
+    every eval env and every env rebuild. MEASURED in the live run: the buffer
+    grew 52 -> 1259, reset to 35, grew to 1130, reset to 9, grew to 1358, reset
+    -- three wipes in 480 episodes, silently removing the mechanism the explore
+    arm depends on.
+
+    The fix is a buffer that outlives make_env, not a flag.
+    """
+    a = ImageNoveltyBuffer(persist=True)
+    a.observe(emb(1.0))
+    assert len(a) == 1
+    a.reset()
+    assert len(a) == 1, "persist must survive reset()"
+
+    # But a NEW object starts empty however the flag is set -- persistence is a
+    # property of the object's lifetime, not of the flag.
+    b = ImageNoveltyBuffer(persist=True)
+    assert len(b) == 0

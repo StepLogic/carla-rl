@@ -139,6 +139,9 @@ class LaneExploreReward(Wrapper):
         if rgb is None:
             return 0.0, None
         emb = self.encoder.latent(rgb)
+        # Handed up so ExploreObsWrapper does not encode the SAME frame a
+        # second time. Two passes would cost ~2.7 ms/step for one image.
+        info["latent_emb"] = emb
         raw, admitted = self.novelty.observe(emb)
         bonus = self.k_novelty * float(np.clip(raw, 0.0, 1.0))
         # Published so the observation wrapper can use the SAME value. It must

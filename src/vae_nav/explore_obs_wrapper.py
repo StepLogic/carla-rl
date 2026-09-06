@@ -125,9 +125,13 @@ class ExploreObsWrapper(ObservationWrapper):
 
     def observation(self, obs):
         info = self._last_info
-        rgb = info.get("rgb")
-        latent = (self.source.latent(rgb) if rgb is not None
-                  else np.zeros(self.source.latent_dim, np.float32))
+        # Reuse the embedding the reward wrapper already computed for the
+        # novelty query; only encode ourselves if it is absent.
+        latent = info.get("latent_emb")
+        if latent is None:
+            rgb = info.get("rgb")
+            latent = (self.source.latent(rgb) if rgb is not None
+                      else np.zeros(self.source.latent_dim, np.float32))
         block = explore_block({
             "displacement": self.reckoner.pos - self._start,
             "yaw": self.reckoner.yaw,

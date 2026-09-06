@@ -203,3 +203,93 @@ def test_env_done_is_discarded():
     """FakeEnv returns done=True every step; only our rules may end it."""
     out = run([{}, {}, {}])
     assert all(term is False for _r, term, _t, _i in out)
+
+
+# -- novelty in the reward -------------------------------------------------
+
+class StubEncoder:
+    """Maps a frame to an embedding by its mean pixel -- distinct frames,
+    distinct embeddings, no torch needed."""
+
+    def latent(self, rgb):
+        v = np.zeros(8, np.float32)
+        v[int(np.asarray(rgb).mean()) % 8] = 1.0
+        return v
+
+
+def run_novel(frames, persist=False, k=0.2):
+    from vae_nav.image_novelty import ImageNoveltyBuffer
+    steps = [{"rgb": np.full((4, 4, 3), f, np.uint8)} for f in frames]
+    buf = ImageNoveltyBuffer(admit_sim=0.9, persist=persist)
+    env = LaneExploreReward(FakeEnv(steps), max_steps=1000,
+                            novelty=buf, encoder=StubEncoder(), k_novelty=k)
+    env.reset()
+    out = []
+    for _ in range(len(steps)):
+        _o, r, _term, _tr, info = env.step(np.zeros(2, np.float32))
+        out.append((r, info))
+    return env, buf, out
+
+
+def test_a_new_view_pays_the_bonus():
+    _e, _b, out = run_novel([10])
+    r, info = out[0]
+    assert info["novelty_bonus"] == pytest.approx(0.2), "clipped to 1.0 then scaled"
+    assert r == pytest.approx(0.2 - BASE_PENALTY)
+
+
+def test_empty_buffer_spike_is_clipped_not_paid_raw():
+    """Raw novelty is 2.0 on an empty buffer.
+
+    Paying that unclipped would give a large one-off spike on the first step of
+    every episode -- farmable by resetting rather than exploring.
+    """
+    _e, _b, out = run_novel([10], k=1.0)
+    assert out[0][1]["novelty_bonus"] == pytest.approx(1.0), "not 2.0"
+
+
+def test_revisiting_a_seen_view_pays_nothing():
+    _e, _b, out = run_novel([10, 10, 10])
+    assert out[0][1]["novelty_bonus"] > 0.0
+    for r, info in out[1:]:
+        assert info["novelty_bonus"] == pytest.approx(0.0, abs=1e-6)
+
+
+def test_a_stationary_car_cannot_farm_novelty():
+    """The view stops changing, so max-similarity goes to 1 and the bonus dies."""
+    _e, _b, out = run_novel([7] * 30)
+    assert sum(i["novelty_bonus"] for _r, i in out[1:]) == pytest.approx(0.0, abs=1e-6)
+
+
+def test_bonus_ceiling_stays_under_the_progress_term():
+    """THE SAFETY BOUND the peer paid for.
+
+    Forward progress pays ~0.283/step at speed. If the novelty ceiling exceeded
+    that, driving tight circles through fresh headings would beat driving.
+    """
+    from vae_nav.lane_explore_reward import K_NOVELTY
+    assert K_NOVELTY * 1.0 < 0.283
+
+
+def test_memory_resets_each_episode_by_default():
+    _e, buf, _o = run_novel([1, 2, 3], persist=False)
+    assert len(buf) > 0
+    _o2, _i2 = _e.reset()
+    assert len(buf) == 0
+
+
+def test_persistence_is_what_enables_cross_episode_turn_diversity():
+    """Without it every episode starts blank, every branch looks equally
+    unseen, and there is no reason to pick a different exit than last time."""
+    _e, buf, _o = run_novel([1, 2, 3], persist=True)
+    n = len(buf)
+    assert n > 0
+    _e.reset()
+    assert len(buf) == n, "persisting memory must survive the episode boundary"
+
+
+def test_novelty_is_off_without_an_encoder():
+    env = LaneExploreReward(FakeEnv([{}]), max_steps=10)
+    env.reset()
+    _o, _r, _t, _tr, info = env.step(np.zeros(2, np.float32))
+    assert info["novelty_bonus"] == 0.0

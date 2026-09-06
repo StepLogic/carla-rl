@@ -109,6 +109,7 @@ class LaneExploreReward(Wrapper):
         self.k_novelty = float(k_novelty)
         self._t = 0
         self._prev_pos = None
+        self._last_raw = 0.0
         _nov = ("off" if novelty is None or encoder is None
                 else f"k={self.k_novelty} persist={novelty.persist}")
         print(f"[LaneExplore] goal-free upstream lane reward | "
@@ -131,6 +132,7 @@ class LaneExploreReward(Wrapper):
         reward -- it would pay a large one-off spike on the first step of every
         episode, which the agent can farm by resetting rather than exploring.
         """
+        self._last_raw = 0.0
         if self.novelty is None or self.encoder is None:
             return 0.0, None
         rgb = info.get("rgb")
@@ -139,6 +141,10 @@ class LaneExploreReward(Wrapper):
         emb = self.encoder.latent(rgb)
         raw, admitted = self.novelty.observe(emb)
         bonus = self.k_novelty * float(np.clip(raw, 0.0, 1.0))
+        # Published so the observation wrapper can use the SAME value. It must
+        # not re-query the buffer: observe() has already admitted this frame,
+        # so a second query would compare it against itself and read 0.
+        self._last_raw = float(np.clip(raw, 0.0, 1.0))
         return bonus, admitted
 
     def reset(self, **kwargs):
@@ -214,6 +220,7 @@ class LaneExploreReward(Wrapper):
         info["lane_explore_fatal_lane"] = fatal_lane
         info["lane_explore_step"] = self._t
         info["novelty_bonus"] = novelty_bonus
+        info["novelty_raw"] = self._last_raw
         info["novelty_admitted"] = admitted
         if self.novelty is not None:
             info["novelty_buffer"] = len(self.novelty)

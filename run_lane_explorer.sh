@@ -83,6 +83,10 @@ export CHAIN_MAX_GOALS=1
 # UNFITTED starting points for vehicle.micro.microlino. Run
 # dead_reckoning.calibrate() on the first recorded trace before trusting any
 # drift figure -- an unfitted gain manufactures drift that looks like physics.
+# Pose for the visit ring: TRUE (privileged) during training. Dead reckoning
+# stays wired and its drift is still reported, so the non-privileged arm remains
+# available as an ablation -- it just is not what training runs on.
+export EXPLORE_POSE=true
 export DR_WHEELBASE_M=1.5
 export DR_MAX_STEER_RAD=1.22
 

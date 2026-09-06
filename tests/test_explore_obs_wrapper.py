@@ -1,4 +1,4 @@
-"""Explore observation: two memories, dead-reckoned pose, no goal."""
+"""Explore observation: two memories, selectable pose, no goal."""
 import gymnasium as gym
 import numpy as np
 import pytest
@@ -45,8 +45,10 @@ class FakeEnv(gym.Env):
         return np.zeros(2, np.float32), 0.0, False, False, self._info()
 
 
-def make(profile, **kw):
-    return ExploreObsWrapper(FakeEnv(profile, **kw), StubSource())
+def make(profile, pose="dead_reckoned", **kw):
+    """Default to dead_reckoned here: most of these tests drive the estimator
+    from a scripted (speed, steer) profile, and true pose would ignore it."""
+    return ExploreObsWrapper(FakeEnv(profile, **kw), StubSource(), pose=pose)
 
 
 # -- layout ---------------------------------------------------------------
@@ -92,7 +94,7 @@ def test_displacement_is_relative_not_absolute():
 # -- dead reckoning -------------------------------------------------------
 
 def test_pose_advances_from_proprioception():
-    env = make([(36.0, 0.0)] * 11)          # 10 m/s
+    env = make([(36.0, 0.0)] * 11, pose="dead_reckoned")   # 10 m/s
     env.reset()
     for _ in range(10):
         obs, *_ = env.step(np.zeros(2, np.float32))
@@ -161,7 +163,7 @@ def test_novelty_is_read_from_info_not_recomputed():
 
 
 def test_visited_set_resets_between_episodes():
-    env = make([(36.0, 0.0)] * 40)
+    env = make([(36.0, 0.0)] * 40, pose="dead_reckoned")
     env.reset()
     for _ in range(20):
         env.step(np.zeros(2, np.float32))
@@ -179,3 +181,47 @@ def test_missing_rgb_gives_a_zero_latent_rather_than_crashing():
     env = ExploreObsWrapper(NoRGB([(10.0, 0.0)] * 3), StubSource())
     obs, _i = env.reset()
     assert np.allclose(obs["latent"], 0.0)
+
+
+# -- privileged (true) pose, the training default -------------------------
+
+def test_true_pose_is_the_default():
+    """Privileged during training is a deliberate choice, not an oversight."""
+    from vae_nav.explore_obs_wrapper import EXPLORE_POSE
+    assert EXPLORE_POSE == "true"
+
+
+def test_true_pose_follows_the_simulator_not_the_estimator():
+    """The estimator says 1 m/step; truth says the car never moves."""
+    true = [np.zeros(2) for _ in range(20)]
+    env = make([(36.0, 0.0)] * 20, pose="true", true_path=true)
+    env.reset()
+    for _ in range(10):
+        obs, *_ = env.step(np.zeros(2, np.float32))
+    assert np.allclose(obs["explore"][:2], 0.0, atol=1e-9), (
+        "displacement tracked the estimator, not the simulator")
+
+
+def test_true_pose_ring_is_immune_to_estimator_drift():
+    """THE REASON FOR THE SWITCH.
+
+    On the dead-reckoned run the estimate reached 36 m of error over 312 steps
+    once the policy drove far enough to turn -- 72 cells at the 0.5 m grid,
+    against a ring reaching 3 m. Under true pose that failure cannot occur.
+    """
+    true = [np.array([i * 1.0, 0.0]) for i in range(40)]
+    env = make([(36.0, 0.6)] * 40, pose="true", true_path=true)  # estimator turns hard
+    env.reset()
+    for _ in range(30):
+        obs, *_ = env.step(np.zeros(2, np.float32))
+    assert obs["explore"][0] * POS_SCALE_M == pytest.approx(29.0, abs=1.5)
+    assert obs["explore"][4:4 + N_SLOTS].max() > 0.0
+
+
+def test_drift_is_still_reported_under_true_pose():
+    """The non-privileged arm stays measurable and available."""
+    true = [np.zeros(2) for _ in range(12)]
+    env = make([(36.0, 0.0)] * 12, pose="true", true_path=true)
+    env.reset()
+    _o, _r, _t, _tr, info = env.step(np.zeros(2, np.float32))
+    assert info["dr_drift"]["position_m"] > 0.0

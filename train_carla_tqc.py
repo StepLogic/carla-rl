@@ -923,6 +923,28 @@ def main():
                         and not k.startswith("mark:"))
                     print(f"[Why {total_eps:5d}] {hist}  | goals "
                           f"{CURR_MIN:.1f}-{curr_max:.1f}m", flush=True)
+                    # THE TWO UNCALIBRATED NUMBERS IN THE EXPLORE ARM.
+                    #
+                    # admit_rate: the novelty threshold (0.9) was calibrated on
+                    # SYNTHETIC images, and road frames are far more
+                    # self-similar. A rate near 0 means the buffer never grows
+                    # and the bonus is inert; near 1 means everything is stored
+                    # and max-similarity saturates. Either way the reward term
+                    # is not doing what it looks like it is doing.
+                    #
+                    # drift: DR_WHEELBASE_M and DR_MAX_STEER_RAD have never been
+                    # fitted for this vehicle, and an unfitted gain manufactures
+                    # drift that looks like physics. If this grows fast, the
+                    # visit ring is being queried in a frame that no longer
+                    # matches where the vehicle is.
+                    if os.environ.get("LANE_EXPLORE", "0") == "1":
+                        _d = fi.get("dr_drift") or {}
+                        print(f"[Explore {total_eps:5d}] "
+                              f"novelty_buf={fi.get('novelty_buffer', 0)} "
+                              f"novelty_raw={fi.get('novelty_raw', 0.0):.3f} "
+                              f"drift_m={_d.get('position_m', float('nan')):.2f} "
+                              f"drift_rad={_d.get('heading_rad', float('nan')):.3f} "
+                              f"over {_d.get('steps', 0)} steps", flush=True)
                     if split:
                         print(f"[Who {total_eps:5d}] {split}  | "
                               f"orc_eps={ep_by_driver['orc']} "

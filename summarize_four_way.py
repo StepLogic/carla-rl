@@ -82,10 +82,14 @@ def render(rows):
     if not rows:
         return "no results found"
 
-    bands = sorted({r.get("band", "default") for r in rows}, key=_band_key)
+    goal_rows = [r for r in rows if r.get("mode", "goal") == "goal"]
+    explore_rows = [r for r in rows if r.get("mode") == "explore"]
+
+    bands = sorted({r.get("band", "default") for r in goal_rows}, key=_band_key)
     lines = []
     for band in bands:
-        here = sorted((r for r in rows if r.get("band", "default") == band),
+        here = sorted((r for r in goal_rows
+                       if r.get("band", "default") == band),
                       key=lambda r: ORDER.get(r.get("arm", ""), 99))
         in_dist = all(r.get("in_distribution", True) for r in here)
         tag = ("in-distribution" if in_dist
@@ -96,6 +100,21 @@ def render(rows):
         if missing:
             lines.append("  MISSING: " + ", ".join(sorted(missing))
                          + " -- no checkpoint")
+        lines.append("")
+
+    if explore_rows:
+        # THE OTHER HALF OF A GATED POLICY. Reporting only the goal half can
+        # show an arm as better while its explore behaviour has degraded, which
+        # is exactly what the second training run did: goal episodes improved
+        # while explore return fell from 62.5 to 40.1 over the same period.
+        # Success is absent here by construction -- the goal block is zeroed in
+        # explore mode, so arrival is measured against a goal the policy cannot
+        # see. Read ep_len and the return-bearing columns instead.
+        lines += ["EXPLORE half (gated arms only; no goal, so no bands "
+                  "and no success)", HEADER]
+        lines += [format_row(r) for r in
+                  sorted(explore_rows,
+                         key=lambda r: ORDER.get(r.get("arm", ""), 99))]
         lines.append("")
 
     lines += FOOTNOTES

@@ -306,10 +306,18 @@ def make_env(town, seed, latent_source, eval_mode=False, port=None):
         env = GatedReward(
             env,
             explore_prob=float(os.environ.get("EXPLORE_PROB", 0.5)),
-            # EVAL FORCES GOAL MODE. Letting the bit be drawn during evaluation
-            # would report a success rate averaged over two different tasks,
-            # one of which has no goal and cannot succeed at reaching it.
-            force_mode=GOAL if eval_mode else None,
+            # EVAL FORCES A MODE, GOAL BY DEFAULT. Letting the bit be drawn
+            # during evaluation would report a success rate averaged over two
+            # different tasks, one of which has no goal and cannot succeed at
+            # reaching it.
+            #
+            # EVAL_FORCE_MODE=0 EVALUATES THE EXPLORE HALF INSTEAD, which a
+            # gated arm needs: it is supposed to serve BOTH modes, so measuring
+            # only the goal half can report an arm as better while its explore
+            # behaviour has degraded, invisibly. Success is meaningless in that
+            # mode and the harness refuses to report it.
+            force_mode=(int(os.environ.get("EVAL_FORCE_MODE", GOAL))
+                        if eval_mode else None),
             max_steps=int(os.environ.get("GATED_EXPLORE_MAX_STEPS", 500)),
             seed=seed)
         env = VAEGoalWrapper(env, source=latent_source)

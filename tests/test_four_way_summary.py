@@ -196,3 +196,39 @@ def test_a_band_missing_an_arm_says_so_within_that_band():
 def test_unbanded_rows_still_render():
     # Backwards compatibility with results written before bands existed.
     assert "band default" in render([_arm("gated")])
+
+
+# ----------------------------------------------------- the explore half ----
+
+def _explore(arm):
+    row = _arm(arm, goal_conditioned=False, success=None, steps_median=None,
+               n_arrived=0, episode_len_mean=272.5, q_bias_steps=None,
+               q_corr=None, q_n=0)
+    row["mode"] = "explore"
+    row["band"] = "n/a"
+    return row
+
+
+def test_the_explore_half_gets_its_own_table():
+    # Reporting only the goal half can show an arm as better while its explore
+    # behaviour has degraded -- which is what the second run actually did.
+    out = render(BANDED + [_explore("gated"), _explore("gated_her")])
+    assert "EXPLORE half" in out
+
+
+def test_explore_rows_do_not_appear_in_the_band_tables():
+    out = render(BANDED + [_explore("gated")])
+    band_section = out.split("EXPLORE half")[0]
+    assert band_section.count("gated ") >= 1
+    # The explore row's distinctive episode length must not leak into a band.
+    assert "272.5" not in band_section
+
+
+def test_the_explore_table_says_success_does_not_apply():
+    out = render([_explore("gated")])
+    header_line = out.split("EXPLORE half")[1].splitlines()[0]
+    assert "no success" in header_line
+
+
+def test_goal_only_output_is_unchanged_without_explore_rows():
+    assert "EXPLORE half" not in render(BANDED)

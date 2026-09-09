@@ -115,10 +115,27 @@ run_arm() {
         --episodes "$EPISODES" --seed "$EVAL_SEED" \
         --max-steps "$EVAL_MAX_STEPS" \
         --goal-conditioned "$goal_conditioned" \
-        --goal-min "$lo" --goal-max "$hi" \
+        --goal-min "$lo" --goal-max "$hi" --mode goal \
         --out "$OUT_DIR/${name}__${lo}-${hi}m.json" \
       || echo "[Arm $name band ${lo}-${hi}m] FAILED" >&2
   done
+
+  # THE EXPLORE HALF, for gated arms only. A gated policy is supposed to serve
+  # BOTH modes, and measuring only the goal half can report an arm as better
+  # while its explore behaviour has degraded -- which is exactly what the second
+  # training run showed, its explore return falling from 62.5 to 40.1 while its
+  # goal half improved. Reporting one without the other would be misleading.
+  #
+  # ONCE, NOT PER BAND: explore mode has no goal, so distance bands are
+  # meaningless there.
+  if [ "${4:-0}" = "1" ]; then
+    echo "=== arm: $name  EXPLORE half  ($ckpt) ==="
+    python -u eval_arm.py --arm "$name" --ckpt "$ckpt" \
+        --episodes "$EPISODES" --seed "$EVAL_SEED" \
+        --max-steps "$EVAL_MAX_STEPS" --mode explore \
+        --out "$OUT_DIR/${name}__explore.json" \
+      || echo "[Arm $name explore] FAILED" >&2
+  fi
 }
 
 # 1. GOAL-ONLY: the shaped lane-follow reward, 144-d.
@@ -137,7 +154,7 @@ run_arm() {
          GATED_GOAL_MAX_STEPS=1000 GATED_EXPLORE_MAX_STEPS=500 \
          LANE_INVASION_NOOP=1 DISCOUNT=1.0 EXPLORE_DISCOUNT=0.99 \
          EXPLORE_PROB=0.5 GOAL_BATCH_FRAC=0.5 TQC_KAPPA=1.0
-  run_arm gated "${CKPT_GATED:-checkpoints/carla_gated/checkpoint_350000.pkl}" 1 )
+  run_arm gated "${CKPT_GATED:-checkpoints/carla_gated/checkpoint_350000.pkl}" 1 1 )
 
 # 4. GATED + HINDSIGHT: identical environment to arm 3. ONLY the checkpoint
 #    differs, which is what isolates relabelling from the gate itself.
@@ -146,7 +163,7 @@ run_arm() {
          GATED_GOAL_MAX_STEPS=1000 GATED_EXPLORE_MAX_STEPS=500 \
          LANE_INVASION_NOOP=1 DISCOUNT=1.0 EXPLORE_DISCOUNT=0.99 \
          EXPLORE_PROB=0.5 GOAL_BATCH_FRAC=0.5 TQC_KAPPA=1.0
-  run_arm gated_her "${CKPT_GATED_HER:-checkpoints/carla_gated_her/checkpoint_350000.pkl}" 1 )
+  run_arm gated_her "${CKPT_GATED_HER:-checkpoints/carla_gated_her/checkpoint_350000.pkl}" 1 1 )
 
 echo
 echo "=== FOUR-WAY COMPARISON ==="

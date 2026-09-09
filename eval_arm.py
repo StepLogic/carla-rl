@@ -62,7 +62,21 @@ def main():
     ap.add_argument("--goal-max", type=float, default=None,
                     help="goal distance band in metres. Bands beyond 20 m are "
                          "EXTRAPOLATION: training is pinned to 5-20 m.")
+    ap.add_argument("--mode", choices=("goal", "explore"), default="goal",
+                    help="which half of a GATED arm to evaluate. A gated arm "
+                         "serves both, so measuring only the goal half can "
+                         "report it as better while its explore behaviour has "
+                         "degraded, invisibly.")
     args = ap.parse_args()
+
+    # Must precede the config import, like every other flag in this trainer.
+    os.environ["EVAL_FORCE_MODE"] = "1" if args.mode == "goal" else "0"
+    if args.mode == "explore":
+        # SUCCESS IS NOT DEFINED IN EXPLORE MODE, whatever the caller asked for.
+        # The goal block is zeroed there, so arrival would be measured against a
+        # goal the policy cannot see -- the same meaningless zero the goal-free
+        # arm reports. Overridden here rather than trusted to the caller.
+        args.goal_conditioned = 0
 
     # THE BAND MUST BE SET BEFORE THE CONFIG IS IMPORTED, because the goal
     # sampler reads these at import like everything else in this trainer.
@@ -161,7 +175,9 @@ def main():
             else "default")
     out = {
         "arm": args.arm,
-        "band": band,
+        "mode": args.mode,
+        # Explore mode has no goal, so distance bands do not apply to it.
+        "band": band if args.mode == "goal" else "n/a",
         # Training is pinned to 5-20 m, so anything beyond it is extrapolation
         # and is expected to be weak. Recorded per row so a reader cannot mistake
         # an extrapolation number for an in-distribution one.

@@ -285,6 +285,11 @@ evaluation trajectories.
   adds roughly 2.3 GB.
 - Gate launches on about 6000 MiB free, polled. Six run scripts already
   implement this pattern; reuse it rather than writing a seventh.
+- Take the CARLA port lock. Seventeen run scripts hold
+  `/tmp/carla_rl_port2000.lock` for their lifetime through a non-blocking lock
+  and refuse to start if it is held, so any two CARLA jobs on this machine are
+  mutually exclusive. Three sessions share the one card and only one can hold it
+  at a time, so a long run is something to schedule rather than launch.
 - A free-memory check is necessary but not sufficient. JAX can still fail while
   instantiating a CUDA command buffer, which no byte count predicts. The
   goal-free run script already disables that allocation through an XLA flag and
@@ -338,6 +343,13 @@ None should be fixed inside this work.
    the core state wrapper does publish speed into the info dictionary, so the
    reckoner receives a real value. Only the observation lacks it. Anyone widening
    this bug report should not claim the reckoner is starved.
+
+   **This is a decision, not a patch, and it belongs to the user rather than to
+   any agent.** Adding a speed channel widens the 21-value explore block, which
+   changes the observation shape, which makes the explorer's existing checkpoint
+   unloadable. The loader refuses mismatched pytrees loudly and by design. So
+   the real cost is retraining the explorer arm from scratch, not adding a slot.
+   Nobody should apply this fix without that trade being put to the user first.
 2. **`src/configs/goal_conditioned_env_config.py` is dead code.** It is 1831
    lines, modified in the working tree, and imported by nothing.
 3. **Most of the working stack is untracked**, including the goal wrapper and

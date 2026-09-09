@@ -21,6 +21,8 @@
 - Tests run by path; there is no `pytest.ini` and no `conftest.py`. Use `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest tests/<file> -v`.
 - Never gate a launch on an exact process name. The CARLA binary name is 23 characters and the kernel truncates the comm field to 15, so exact-name matching can never succeed. Use `pgrep -f '[C]arlaUE4-Linux-Shipping'`, and never place that pattern unbracketed inside a long-running command.
 - Gate GPU launches on about 6000 MiB free, polled, reusing the existing pattern. Do not gate on process names.
+- **Take the CARLA port lock.** Seventeen run scripts already hold `/tmp/carla_rl_port2000.lock` for their lifetime through a non-blocking `flock` on file descriptor 200, refusing to start if another job holds it. The gated run script must do the same. Any two CARLA jobs on this machine are mutually exclusive, so a gated run and any lane run cannot overlap.
+- **Three sessions share one card.** Our floor is about 5.1 GB, and another user's Habitat jobs take about 4.8 GB per stage on the same 12.3 GB card. Only one holder at a time once their training is up. Treat a long GPU task as something to schedule, not something to launch.
 
 ---
 
@@ -920,6 +922,22 @@ instantiating a CUDA command buffer, which no byte count predicts) and
 
 Reuse the polled VRAM gate at about 6000 MiB free. Use
 `pgrep -f '[C]arlaUE4-Linux-Shipping'` for cleanup and never an exact name match.
+
+Take the port lock exactly as the other seventeen scripts do, near the top and
+before anything else:
+
+```bash
+LOCK=/tmp/carla_rl_port2000.lock
+exec 200>"$LOCK"
+if ! flock -n 200; then
+  echo "REFUSING TO START: another CARLA job holds $LOCK." >&2
+  exit 1
+fi
+```
+
+Non-blocking on purpose. A gated run that waited on the lock would sit holding
+its VRAM reservation while another job ran, which is the deadlock this
+convention avoids. Refuse and exit instead.
 
 Set the two episode caps explicitly and adjacently, with a comment that they
 differ on purpose and that the goal cap being the larger one is why goal rows

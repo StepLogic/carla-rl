@@ -34,12 +34,32 @@ def _to_numpy(tree):
 
 
 def agent_state(agent):
-    """The three parameter pytrees, as numpy. Safe to pickle anywhere."""
+    """The parameter pytrees, as numpy. Safe to pickle anywhere.
+
+    A GATED agent carries three tensors a plain one does not: the explore
+    critic, its target, and the explore temperature. They are written only when
+    present, so a plain checkpoint keeps exactly the keys it has always had and
+    stays readable by everything that reads one today.
+    """
     state = {"actor": _to_numpy(agent._actor.params),
              "critic": _to_numpy(agent._critic.params)}
     temp = getattr(agent, "_temp", None)
     if temp is not None:
         state["temp"] = _to_numpy(temp.params)
+
+    critic_e = getattr(agent, "_critic_e", None)
+    if critic_e is not None:
+        state["critic_e"] = _to_numpy(critic_e.params)
+        # The explore target is saved explicitly rather than derived from the
+        # online critic on load. The two diverge by design between soft updates,
+        # and a resume that silently reset the target to the online parameters
+        # would restart the smoothing this agent depends on.
+        target_e = getattr(agent, "_target_critic_e_params", None)
+        state["target_critic_e"] = _to_numpy(
+            target_e if target_e is not None else critic_e.params)
+    temp_e = getattr(agent, "_temp_e", None)
+    if temp_e is not None:
+        state["temp_e"] = _to_numpy(temp_e.params)
     return state
 
 
@@ -75,6 +95,35 @@ def load_agent_state(agent, state):
         agent._target_critic_params = state["critic"]
     elif hasattr(agent, "_target_critic"):
         agent._target_critic = agent._target_critic.replace(params=state["critic"])
+
+    # ---- the gated half -------------------------------------------------
+    #
+    # Three cases, and the asymmetry is deliberate.
+    #
+    # gated -> plain: the extra keys are IGNORED, not an error. Evaluation
+    #   harnesses build a plain agent, and refusing here would mean a gated
+    #   checkpoint could never be evaluated by them.
+    # gated -> gated: full restore, both critics and both targets.
+    # plain -> gated: WARM START. The explore critic has no counterpart and is
+    #   left at its initialisation. It must NOT be filled from the goal critic:
+    #   that critic is fitted to a return an order of magnitude larger, so
+    #   seeding the explore critic with it starts training from a confidently
+    #   wrong value function rather than an uninformed one.
+    gated_agent = getattr(agent, "_critic_e", None) is not None
+    gated_state = "critic_e" in state
+    if gated_agent and gated_state:
+        agent._critic_e = _swap(agent._critic_e, state["critic_e"], "critic_e")
+        agent._target_critic_e_params = state.get("target_critic_e",
+                                                  state["critic_e"])
+        if "temp_e" in state and getattr(agent, "_temp_e", None) is not None:
+            agent._temp_e = _swap(agent._temp_e, state["temp_e"], "temp_e")
+    elif gated_agent and not gated_state:
+        print("[policy_io] WARM START: this checkpoint has no explore critic, "
+              "so the actor and goal critic were restored and the EXPLORE "
+              "CRITIC was left at its initialisation. Expect its value "
+              "estimates to be meaningless until it has trained; damp the "
+              "explore-mode actor gradient (explore_actor_warmup) or the actor "
+              "will follow a critic that knows nothing.")
     return agent
 
 

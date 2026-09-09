@@ -11,11 +11,14 @@ WHY TWO CRITICS HERE. The answer DEPENDS ON THE GOAL REWARD, and both cases are
 live in this repo, selected by GATED_GOAL_REWARD.
 
   sorb (default)  The goal arm pays -1 per step until arrival and runs at
-                  gamma = 1.0, so its Q IS the cost-to-go in steps. The explore
-                  arm pays a lane-progress bonus at gamma = 0.99. The discounts
-                  genuinely differ and the returns differ in SIGN, so one critic
-                  could not serve both even at equal scale. This is the Habitat
-                  peer's rationale, and under this reward it does transfer.
+                  gamma = 1.0, so its Q IS the cost-to-go in steps, bounded in
+                  [-step_cost * cap, 0]. The explore arm pays a lane-progress
+                  bonus at gamma = 0.99 and is bounded only by its own discount.
+                  The discounts genuinely differ, so one critic could not serve
+                  both even at equal scale, and an undiscounted critic fitted to
+                  the explore arm would have no bounded fixed point at all. This
+                  is the Habitat peer's rationale, and under this reward it does
+                  transfer.
 
   shaped          The goal arm pays delta_distance + projected_distance and both
                   arms run at 0.99. The discounts are then EQUAL and the
@@ -30,8 +33,9 @@ is why the reasoning is spelled out per case rather than stated once.
 
 gamma = 1.0 IS ONLY SAFE BECAUSE EVERY EPISODE ENDS. Under sorb the goal return
 is bounded in [-step_cost * max_steps, 0] by construction, and the goal critic
-is clipped to that window. The clip is PER CRITIC: the explore critic's targets
-are positive and must never see it.
+is clipped to that window. The clip is PER CRITIC, and the explore critic must
+never see it: that window is derived from the GOAL arm's reward and episode cap
+and says nothing about the explore arm's range.
 
 MASKED LOSSES, NEVER A PER-SAMPLE DISCOUNT. Each critic computes its target for
 every row at its OWN scalar discount and then zeroes the off-mode rows out of
@@ -102,9 +106,13 @@ def _masked_critic_update(key, actor, critic, target_critic_params, temp, batch,
     than merely unlikely.
 
     THEY CANNOT COME FROM THE GLOBAL TQC_TARGET_MIN/MAX. Those are read at
-    import in critic_updater and baked into every trace, so they would also clip
-    the EXPLORE critic -- whose targets are POSITIVE -- to zero, silently
-    destroying it. The explore critic passes None here and is left unclipped.
+    import in critic_updater and baked into every trace, so they would impose
+    the GOAL arm's window on the EXPLORE critic too. That window is derived from
+    the goal reward and the goal episode cap and has no bearing on the explore
+    arm's range, so it would be an arbitrary constraint on a critic it was not
+    computed for -- loose today, and able to bind silently in either direction
+    once the explore policy starts earning progress. The explore critic passes
+    None here and is left unclipped.
     """
     target_critic = critic.replace(params=target_critic_params)
     dist = actor.apply_fn({"params": actor.params}, batch["next_observations"])
@@ -143,7 +151,12 @@ def _masked_critic_update(key, actor, critic, target_critic_params, temp, batch,
         # blended number looks like a healthy critic while hiding a starved one.
         return loss, {"critic_loss": loss,
                       "q": masked_mean(q_row, mask),
-                      "td_errors": masked_mean(td, mask)}
+                      "td_errors": masked_mean(td, mask),
+                      # The trainer's [Critic] line reads this exact key and
+                      # prints nan when it is missing, which reads as a broken
+                      # actor rather than as absent telemetry. It cost a
+                      # diagnostic detour in the first live run.
+                      "target_actor_entropy": masked_mean(-next_log_probs, mask)}
 
     grads, info = jax.grad(critic_loss_fn, has_aux=True)(critic.params)
     return critic.apply_gradients(grads=grads), info
@@ -222,9 +235,21 @@ def _gated_update_jit(rng, actor, critic, target_critic_params, temp,
         backup_entropy, top_quantiles_to_drop, kappa, m_goal,
         value_floor=value_floor, value_ceiling=value_ceiling)
 
-    # EXPLORE CRITIC: UNBOUNDED, deliberately. Its targets are POSITIVE and its
-    # discount is 0.99, so it has a bounded fixed point of its own and the goal
-    # critic's [-N, 0] window would clip every one of its targets to zero.
+    # EXPLORE CRITIC: UNBOUNDED, deliberately.
+    #
+    # THE REASON IS THE WINDOW'S PROVENANCE, NOT THE SIGN OF THE RETURNS. An
+    # earlier version of this comment said the explore targets are positive and
+    # would therefore be clipped to zero. Measured early in training they are
+    # NEGATIVE (about -63 over ~180 steps), dominated by the steer-change
+    # penalty before the policy earns any progress -- so that specific argument
+    # was wrong.
+    #
+    # The correct reason: [-step_cost * goal_max_steps, 0] is derived from the
+    # GOAL arm's reward and episode cap, and says nothing about the explore
+    # arm's range. The explore arm is discounted at 0.99, so its return is
+    # bounded by its own geometry and needs no external clip; imposing the goal
+    # arm's window on it would be an arbitrary constraint that happens to be
+    # loose today and could silently bind later, in either direction.
     rng, key_e = jax.random.split(rng)
     new_critic_e, info_e = _masked_critic_update(
         key_e, actor, critic_e, target_critic_e_params, temp_e, batch,
@@ -319,7 +344,7 @@ class GatedTQCLearner(TQCLearner):
               f"target_entropy_e={self.target_entropy_e} "
               f"explore_actor_warmup={self.explore_actor_warmup}")
         print(f"[Gated] goal critic target clip {bounds}; "
-              f"explore critic UNCLIPPED (its targets are positive)")
+              f"explore critic UNCLIPPED (its range is its own, not the goal arm's)")
         if self.discount >= 1.0 and self.value_floor is None:
             print("[Gated] WARNING: discount=1.0 with NO value floor. V(s) = "
                   "-c + V(s') has no bounded fixed point on a state the agent "

@@ -1134,6 +1134,31 @@ def main():
                         print(f"[Critic{total_eps:5d}] q={q:10.2f} "
                               f"critic_loss={cl:12.2f} td={td:9.3f} "
                               f"actor_entropy={ent:7.3f}{flag}", flush=True)
+                        if GATED:
+                            # THE SECOND CRITIC IS INVISIBLE IN THE LINE ABOVE,
+                            # which reports only the goal critic. A starved or
+                            # diverging explore critic would leave no trace.
+                            #
+                            # WHAT GOOD LOOKS LIKE under SORB: goal q descends
+                            # toward -(steps to goal), so it should approach the
+                            # goal `ret` in the [GatedEp] line. If it sits near
+                            # zero while ret is -500, the goal critic has not
+                            # learnt the scale. Per-mode entropy falling toward
+                            # the target (-2) is normal; collapsing far below it
+                            # means that mode's policy has stopped exploring.
+                            _g = last_update_info
+                            print(f"[CriticE{total_eps:4d}] "
+                                  f"q_e={_g.get('q_e', float('nan')):10.2f} "
+                                  f"critic_loss_e="
+                                  f"{_g.get('critic_loss_e', float('nan')):10.2f} "
+                                  f"td_e={_g.get('td_errors_e', float('nan')):8.3f} "
+                                  f"| ent_goal="
+                                  f"{_g.get('entropy_goal', float('nan')):7.3f} "
+                                  f"ent_explore="
+                                  f"{_g.get('entropy_explore', float('nan')):7.3f} "
+                                  f"frac_goal="
+                                  f"{_g.get('frac_goal', float('nan')):.2f}",
+                                  flush=True)
                     print(f"[Ep {total_eps:5d}] step={step:7d} town={venv.names[i]:8s} "
                           f"success={np.mean(recent['success']):.3f} "
                           f"collision={np.mean(recent['collision']):.3f} "

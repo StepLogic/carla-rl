@@ -9,11 +9,22 @@ clipping adds information rather than bias.
 
 WHY THEY MUST BE PER CRITIC, which is the whole point of this file. The obvious
 route is the existing TQC_TARGET_MIN/TQC_TARGET_MAX in critic_updater.py. Those
-are read at module import and baked into every trace, so they would clip the
-EXPLORE critic too -- and the explore critic's targets are POSITIVE. A [-1000, 0]
-window would flatten every one of them to zero, leaving a critic that has learnt
-nothing while its loss curve looks entirely healthy. That is the failure this
-file exists to make impossible.
+are read at module import and baked into every trace, so they would impose the
+GOAL arm's window on the EXPLORE critic too. That window is derived from the
+goal reward and the goal episode cap and says nothing about the explore arm's
+range, so it is an arbitrary constraint on a critic it was not computed for --
+and one that binds SILENTLY, leaving a critic that has learnt nothing behind an
+entirely healthy-looking loss curve.
+
+A NOTE ON DIRECTION, because the first live run corrected me. I originally
+justified this by saying the explore targets are positive and would be flattened
+to zero. Measured early in training they are NEGATIVE, about -63 over ~180
+steps, dominated by the steer-change penalty before the policy earns any
+progress. The [-1000, 0] window happens to be loose in that regime. The argument
+for keeping the critics separate does not depend on today's sign, which is
+exactly why it is stated in terms of provenance instead. The test below still
+drives the explore critic with positive rewards, because a bound that is loose
+today must not become binding when the sign flips.
 """
 import os
 import sys

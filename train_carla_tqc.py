@@ -187,10 +187,33 @@ def build_agent(observation_space, action_space, seed):
         # reward produces returns of order 100 and the goal-free arm's order
         # 10, and kappa above is derived from the reward scale. One critic
         # fitted to both is dominated by the larger.
+        # VALUE BOUNDS FOR THE GOAL CRITIC, DERIVED FROM THE REWARD so the two
+        # cannot disagree. Under the SORB minimum-time reward every goal return
+        # lies in [-step_cost * max_steps, 0] BY CONSTRUCTION: every step pays
+        # -step_cost, arrival pays 0, and the episode cannot exceed max_steps.
+        # A target outside that is unrealisable, not merely unlikely, so
+        # clipping adds information rather than bias -- and it is what makes
+        # gamma=1.0 safe, since V(s) = -c + V(s') has no bounded fixed point on
+        # a state the agent never escapes.
+        #
+        # NOT the global TQC_TARGET_MIN/MAX: those are read at import in
+        # critic_updater and would clip the EXPLORE critic's positive targets
+        # to zero as well.
+        floor = ceiling = None
+        if os.environ.get("GATED_GOAL_REWARD", "sorb").lower() == "sorb":
+            step_cost = float(os.environ.get("STEP_COST", 1.0))
+            goal_cap = int(os.environ.get("GATED_GOAL_MAX_STEPS", 1000))
+            floor = -step_cost * goal_cap
+            ceiling = 0.0
         kwargs.update(
             discount_e=float(os.environ.get("EXPLORE_DISCOUNT",
                                             kwargs["discount"])),
             explore_actor_warmup=int(os.environ.get("EXPLORE_ACTOR_WARMUP", 0)),
+            value_floor=float(os.environ.get("TQC_VALUE_FLOOR", floor))
+            if (floor is not None or "TQC_VALUE_FLOOR" in os.environ) else None,
+            value_ceiling=float(os.environ.get("TQC_VALUE_CEILING", ceiling))
+            if (ceiling is not None or "TQC_VALUE_CEILING" in os.environ)
+            else None,
         )
         return GatedTQCLearner(seed, observation_space.sample(),
                                action_space.sample(), **kwargs)

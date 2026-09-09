@@ -14,24 +14,31 @@ be compared.
 
 THE TWO REWARDS ARE NOT ON THE SAME SCALE, AND THAT IS THE POINT OF TWO CRITICS.
 
-    goal mode     LaneFollowReward: delta_distance + projected_distance,
-                  speed-gated, plus terminal penalties. Returns of order 100.
-    explore mode  the goal-free half: |displacement| or lane projection, base
-                  penalty, steer-change, terminal penalties. Returns of order 10.
+    goal mode, "sorb" (DEFAULT)  minimum time: -STEP_COST every step, 0 on
+                  arrival. Return is -(steps to goal), in [-step_cost*cap, 0].
+    goal mode, "shaped"          LaneFollowReward's delta_distance +
+                  projected_distance, speed-gated. Returns of order +100.
+    explore mode  the goal-free half: lane projection, base penalty,
+                  steer-change, terminal penalties. Returns of order +10.
 
-A single critic fitted to both would be dominated by the larger. The gated
-learner therefore keeps one critic per mode, and this wrapper's only job is to
-say which mode a transition belongs to.
+A single critic fitted to any of these pairings would be dominated by one side.
 
-THE REASON IS RETURN SCALE, NOT DISCOUNT -- correcting a rationale imported from
-the Habitat peer that does NOT hold here. There, goal mode runs gamma=1 against
-explore's 0.99, so the two critics fit different horizons. In CARLA both lane
-arms run gamma=0.99: run_lanefollow.sh never sets DISCOUNT and inherits
-train_carla_tqc.py's 0.99 default, and run_lanefollow_nogoal.sh sets 0.99
-explicitly. gamma=1.0 belongs to the TIME_TO_GOAL arm alone (run_timetogoal.sh).
-So two critics are still right, but because the returns differ by an order of
-magnitude and TQC's kappa is derived from that scale -- not because the horizons
-differ.
+WHY TWO CRITICS -- THE ANSWER DEPENDS ON WHICH GOAL REWARD IS SELECTED, and an
+earlier version of this docstring asserted one case as though it were the only
+one. Both are recorded here because the file supports both.
+
+  under "sorb"    The goal arm runs gamma=1.0 (its Q must read as time) and the
+                  explore arm 0.99. The discounts differ AND the returns differ
+                  in SIGN, so one critic could not serve both even at equal
+                  scale. This is the Habitat peer's rationale, and under this
+                  reward it DOES transfer.
+
+  under "shaped"  Both arms run gamma=0.99 -- run_lanefollow.sh never sets
+                  DISCOUNT and inherits the trainer's 0.99, run_lanefollow_nogoal.sh
+                  sets it explicitly. The horizons are then identical and the
+                  Habitat rationale does NOT apply; the split is justified by
+                  return SCALE alone, order 100 against order 10, and by TQC's
+                  kappa being derived from that scale.
 
 WHAT IS DELIBERATELY SHARED: the observation shape. In explore mode the goal
 block is ZEROED rather than removed, because one actor cannot take two different
@@ -53,6 +60,48 @@ from vae_nav.lane_explore_reward import (BASE_PENALTY, COLLISION_PENALTY,
 
 GOAL, EXPLORE = 1, 0
 EXPLORE_PROB = float(os.environ.get("EXPLORE_PROB", 0.5))
+
+# ---- THE GOAL ARM'S REWARD --------------------------------------------------
+#
+# "sorb" (default): MINIMUM TIME. -STEP_COST every step, 0 on arrival. The
+# critic then IS the cost-to-go -- Q = -(steps to goal) -- which is the reading
+# a topological map builder needs, and which no shaped reward provides. Matches
+# the Habitat peer's gated point-goal arm.
+#
+# "shaped": the original LaneFollowReward shape, delta_distance +
+# projected_distance, kept so the two can be compared without a code change.
+#
+# THREE THINGS FOLLOW FROM CHOOSING sorb, AND ALL THREE ARE LOAD-BEARING.
+#
+# 1. THE GOAL CRITIC MUST RUN AT gamma = 1.0. At 0.99 the horizon is
+#    1/(1-gamma) = 100 steps, so Q saturates near -100 and cannot separate a
+#    400-step goal from a 1000-step one -- measured in this repo at 0.18 apart.
+#    The whole point of a minimum-time reward is that Q reads as time, and 0.99
+#    destroys exactly that. The explore critic stays at 0.99.
+#
+# 2. THIS REVIVES THE HABITAT TWO-CRITIC RATIONALE, which the shaped reward did
+#    not. Under "shaped" both arms ran at 0.99 and the split was justified by
+#    return SCALE alone. Under "sorb" the discounts genuinely differ, 1.0
+#    against 0.99, and one critic could not serve both even at equal scale.
+#
+# 3. gamma = 1.0 HAS NO BOUNDED FIXED POINT on a state the agent never escapes,
+#    so the goal critic needs value bounds. They are applied PER CRITIC in the
+#    gated learner, never through the global TQC_TARGET_MIN/MAX: those are
+#    module-level in critic_updater and would clip the explore critic's
+#    POSITIVE targets to zero, silently destroying it.
+#
+# WHY COLLISIONS DO NOT END A GOAL EPISODE HERE. With a per-step cost and a
+# TERMINAL collision, crashing stops the meter, so crashing on step one is
+# optimal. Letting the episode continue removes the escape entirely: a car that
+# hits a wall and cannot recover simply pays the full bill. The penalty for
+# crashing IS the time it costs, and it needs no coefficient. This mirrors
+# time_to_goal_reward.py, which learned it the hard way.
+GOAL_REWARD_KIND = os.environ.get("GATED_GOAL_REWARD", "sorb").lower()
+if GOAL_REWARD_KIND not in ("sorb", "shaped"):
+    raise ValueError(f"GATED_GOAL_REWARD={GOAL_REWARD_KIND!r} is not sorb|shaped")
+STEP_COST = float(os.environ.get("STEP_COST", 1.0))
+GOAL_MAX_STEPS = int(os.environ.get("GATED_GOAL_MAX_STEPS", 1000))
+WEDGE_TRUNCATE = os.environ.get("WEDGE_TRUNCATE", "1") == "1"
 # Terminal penalties for the GOAL arm, matching LaneFollowReward's defaults.
 LF_K_LANE = float(os.environ.get("LF_K_LANE", 1.0))
 LF_K_COLLISION = float(os.environ.get("LF_K_COLLISION", 1.0))
@@ -82,6 +131,39 @@ def goal_reward(info, delta_mode="positive"):
     if info.get("is_success"):
         r += LF_K_GOAL_BONUS
     return float(np.nan_to_num(r, nan=0.0))
+
+
+def goal_reward_sorb(info, t, max_steps=GOAL_MAX_STEPS, step_cost=STEP_COST,
+                     wedge_truncate=WEDGE_TRUNCATE):
+    """Minimum time. Returns (reward, terminated, truncated).
+
+    Mirrors time_to_goal_reward.TimeToGoalReward exactly, as a pure function of
+    one step's info plus the step index, so the gated wrapper can select it per
+    episode without swapping wrapper objects.
+
+    ONLY ARRIVAL TERMINATES (and a wedge, billed exactly). The env's own `done`
+    -- idle, falling, distance, lane invasion, collision, speed, wrong direction
+    -- is deliberately discarded, because with a per-step cost any terminal
+    failure stops the meter and becomes an escape.
+    """
+    # THE ENV'S OWN ARRIVAL FLAG, not a recomputed distance: the env resamples
+    # the goal the moment it is reached, so recomputing here reports zero
+    # successes against a goal that has already moved.
+    reached = bool(info.get("arrived", False) or info.get("is_success", False))
+    wedged = wedge_truncate and bool(info.get("wedged", False))
+
+    if reached:
+        return 0.0, True, False, True
+    if wedged:
+        # THE BILL IS EXACT, NOT A PENALTY: this step plus every step left on
+        # the clock, so the episode's return is exactly -step_cost * max_steps,
+        # identical to simulating the frozen frames. Ending early is worth
+        # precisely nothing, so a wedge is not an escape. TERMINATED, so the
+        # critic does not bootstrap an unbounded gamma=1 chain from a state the
+        # agent never leaves.
+        remaining = max(0, int(max_steps) - int(t))
+        return -step_cost * (1 + remaining), True, False, False
+    return -step_cost, False, int(t) >= int(max_steps), False
 
 
 def explore_reward(info, disp):
@@ -116,18 +198,32 @@ class GatedReward(Wrapper):
     """Draw a mode per episode; return that mode's reward and termination."""
 
     def __init__(self, env, explore_prob=EXPLORE_PROB, force_mode=None,
-                 max_steps=500, delta_mode="positive", seed=0):
+                 max_steps=500, delta_mode="positive", seed=0,
+                 goal_kind=GOAL_REWARD_KIND, goal_max_steps=GOAL_MAX_STEPS,
+                 step_cost=STEP_COST, wedge_truncate=WEDGE_TRUNCATE):
         super().__init__(env)
         self.explore_prob = float(explore_prob)
         self.force_mode = force_mode
         self.max_steps = int(max_steps)
         self.delta_mode = delta_mode
+        self.goal_kind = str(goal_kind).lower()
+        self.goal_max_steps = int(goal_max_steps)
+        self.step_cost = float(step_cost)
+        self.wedge_truncate = bool(wedge_truncate)
         self._rng = np.random.default_rng(seed)
         self.mode = GOAL
         self._t = 0
         self._prev = np.zeros(2)
+        if self.goal_kind == "sorb":
+            lo = -self.step_cost * self.goal_max_steps
+            print(f"[Gated] goal=SORB minimum-time step_cost={self.step_cost} "
+                  f"goal_max_steps={self.goal_max_steps} "
+                  f"-> goal return in [{lo:.1f}, 0.0]; only arrival terminates. "
+                  f"REQUIRES DISCOUNT=1.0 for the goal critic.")
+        else:
+            print(f"[Gated] goal=SHAPED (delta+projected), returns ~order 100")
         print(f"[Gated] explore_prob={self.explore_prob} "
-              f"force_mode={self.force_mode} max_steps={self.max_steps} "
+              f"force_mode={self.force_mode} explore_max_steps={self.max_steps} "
               f"progress={PROGRESS_MODE}")
 
     def reset(self, **kwargs):
@@ -149,7 +245,16 @@ class GatedReward(Wrapper):
         disp = pos - self._prev
         self._prev = pos
 
-        if self.mode == GOAL:
+        if self.mode == GOAL and self.goal_kind == "sorb":
+            # MINIMUM TIME. The env's own `done` is discarded on purpose: with a
+            # per-step cost, any terminal failure stops the meter and crashing
+            # immediately becomes optimal. Only arrival ends the episode, so a
+            # car that hits a wall simply pays the remaining bill.
+            reward, terminated, truncated, arrived = goal_reward_sorb(
+                info, self._t, self.goal_max_steps, self.step_cost,
+                self.wedge_truncate)
+            info["is_success"] = arrived
+        elif self.mode == GOAL:
             reward = goal_reward(info, self.delta_mode)
             terminated = bool(term)          # the env's own goal-arm rules
             truncated = bool(trunc)

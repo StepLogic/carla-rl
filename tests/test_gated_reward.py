@@ -55,9 +55,12 @@ class _StubEnv(gym.Env):
 
 
 def _wrap(force_mode=None, info=None, max_steps=5, done_from_env=False,
-          explore_prob=0.5, seed=0):
+          explore_prob=0.5, seed=0, goal_kind="sorb", goal_max_steps=10,
+          step_cost=1.0):
     return GatedReward(_StubEnv(info, done_from_env), explore_prob=explore_prob,
-                       force_mode=force_mode, max_steps=max_steps, seed=seed)
+                       force_mode=force_mode, max_steps=max_steps, seed=seed,
+                       goal_kind=goal_kind, goal_max_steps=goal_max_steps,
+                       step_cost=step_cost)
 
 
 ACT = np.zeros(2, np.float32)
@@ -159,11 +162,22 @@ def test_off_road_terminates_in_explore_mode():
     assert w.step(ACT)[2] is True
 
 
-def test_goal_mode_honours_the_env_termination():
-    # Goal mode does NOT re-derive: the env's own goal-arm rules stand.
-    w = _wrap(GOAL, done_from_env=True)
+def test_shaped_goal_mode_honours_the_env_termination():
+    # Under the SHAPED reward, goal mode does not re-derive: the env's own
+    # goal-arm rules stand.
+    w = _wrap(GOAL, done_from_env=True, goal_kind="shaped")
     w.reset()
     assert w.step(ACT)[2] is True
+
+
+def test_sorb_goal_mode_DISCARDS_the_env_termination():
+    # THE OPPOSITE, AND DELIBERATELY SO. With a per-step cost, any terminal
+    # failure stops the meter, so crashing on step one would be optimal.
+    # Letting the episode continue removes the escape: a car that hits a wall
+    # simply pays the remaining bill. The penalty for crashing IS the time.
+    w = _wrap(GOAL, done_from_env=True, goal_kind="sorb")
+    w.reset()
+    assert w.step(ACT)[2] is False
 
 
 def test_explore_mode_truncates_at_max_steps():
@@ -192,7 +206,8 @@ def test_the_step_counter_resets_between_episodes():
 
 def test_reward_is_finite_and_published_in_both_modes():
     for mode in (GOAL, EXPLORE):
-        w = _wrap(mode, {"delta_distance": 1.0, "projected_distance": 0.5})
+        w = _wrap(mode, {"delta_distance": 1.0, "projected_distance": 0.5},
+                  goal_kind="shaped")
         w.reset()
         _, reward, _, _, info = w.step(ACT)
         assert np.isfinite(reward), mode
@@ -203,7 +218,7 @@ def test_a_nan_in_the_info_does_not_propagate_into_the_reward():
     # nan_to_num is applied on purpose; a single nan would poison the critic
     # target and, through the shared encoder, the actor as well.
     w = _wrap(GOAL, {"delta_distance": float("nan"),
-                     "projected_distance": float("nan")})
+                     "projected_distance": float("nan")}, goal_kind="shaped")
     w.reset()
     assert np.isfinite(w.step(ACT)[1])
 
@@ -213,7 +228,7 @@ def test_the_two_modes_do_not_return_the_same_reward():
     info = {"delta_distance": 5.0, "projected_distance": 5.0}
     rewards = []
     for mode in (GOAL, EXPLORE):
-        w = _wrap(mode, info)
+        w = _wrap(mode, info, goal_kind="shaped")
         w.reset()
         rewards.append(w.step(ACT)[1])
     assert rewards[0] != rewards[1], rewards

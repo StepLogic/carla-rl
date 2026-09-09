@@ -7,15 +7,31 @@ temperature; the batch carries both modes and each critic's loss is MASKED down
 to its own rows. This is multi-task SAC with a task indicator, not a scalarised
 sum of two rewards.
 
-WHY TWO CRITICS HERE -- AND IT IS NOT THE HABITAT REASON. The peer's Habitat
-agent split its critics because the discounts differed, 1.0 for a minimum-time
-goal reward against 0.99 for a coverage bonus. That rationale does NOT transfer:
-both CARLA lane arms run at 0.99 (run_lanefollow.sh never sets DISCOUNT and
-inherits the trainer's 0.99; run_lanefollow_nogoal.sh sets it explicitly). The
-reason here is RETURN SCALE. The goal arm's shaped reward produces returns of
-order 100 and the goal-free arm's of order 10, and the Huber knee `kappa` is
-derived from the reward scale. A single critic fitted to both is dominated by
-the larger and the small-scale mode is fitted as noise around it.
+WHY TWO CRITICS HERE. The answer DEPENDS ON THE GOAL REWARD, and both cases are
+live in this repo, selected by GATED_GOAL_REWARD.
+
+  sorb (default)  The goal arm pays -1 per step until arrival and runs at
+                  gamma = 1.0, so its Q IS the cost-to-go in steps. The explore
+                  arm pays a lane-progress bonus at gamma = 0.99. The discounts
+                  genuinely differ and the returns differ in SIGN, so one critic
+                  could not serve both even at equal scale. This is the Habitat
+                  peer's rationale, and under this reward it does transfer.
+
+  shaped          The goal arm pays delta_distance + projected_distance and both
+                  arms run at 0.99. The discounts are then EQUAL and the
+                  Habitat rationale does NOT apply; the split is justified by
+                  RETURN SCALE alone, order 100 against order 10, and by the
+                  Huber knee `kappa` being derived from that scale. A single
+                  critic fitted to both is dominated by the larger.
+
+An earlier version of this file asserted the second case unconditionally. That
+was correct for the shaped reward and wrong the moment the reward changed, which
+is why the reasoning is spelled out per case rather than stated once.
+
+gamma = 1.0 IS ONLY SAFE BECAUSE EVERY EPISODE ENDS. Under sorb the goal return
+is bounded in [-step_cost * max_steps, 0] by construction, and the goal critic
+is clipped to that window. The clip is PER CRITIC: the explore critic's targets
+are positive and must never see it.
 
 MASKED LOSSES, NEVER A PER-SAMPLE DISCOUNT. Each critic computes its target for
 every row at its OWN scalar discount and then zeroes the off-mode rows out of
@@ -75,8 +91,21 @@ def _mode_mask(batch):
 
 def _masked_critic_update(key, actor, critic, target_critic_params, temp, batch,
                           discount, backup_entropy, top_quantiles_to_drop,
-                          kappa, mask):
-    """One critic's update, restricted to the rows `mask` selects."""
+                          kappa, mask, value_floor=None, value_ceiling=None):
+    """One critic's update, restricted to the rows `mask` selects.
+
+    value_floor / value_ceiling clip this critic's TARGET only, and are applied
+    PER CRITIC. Under the SORB minimum-time reward the goal critic runs at
+    gamma = 1.0, where V(s) = -c + V(s') has no bounded fixed point on a state
+    the agent never escapes; the bound makes the return range explicit
+    ([-step_cost * max_steps, 0]) so a target outside it is unrealisable rather
+    than merely unlikely.
+
+    THEY CANNOT COME FROM THE GLOBAL TQC_TARGET_MIN/MAX. Those are read at
+    import in critic_updater and baked into every trace, so they would also clip
+    the EXPLORE critic -- whose targets are POSITIVE -- to zero, silently
+    destroying it. The explore critic passes None here and is left unclipped.
+    """
     target_critic = critic.replace(params=target_critic_params)
     dist = actor.apply_fn({"params": actor.params}, batch["next_observations"])
     next_actions, next_log_probs = dist.sample_and_log_prob(seed=key)
@@ -97,6 +126,10 @@ def _masked_critic_update(key, actor, critic, target_critic_params, temp, batch,
         alpha=alpha,
         next_log_probs=next_log_probs,
     )
+    # Applied to the TARGET only, never to the prediction: the prediction must
+    # stay free to be wrong so the loss can pull it back.
+    if value_floor is not None or value_ceiling is not None:
+        target = jnp.clip(target, value_floor, value_ceiling)
 
     def critic_loss_fn(params):
         qs = critic.apply_fn({"params": params}, batch["observations"],
@@ -154,13 +187,15 @@ def _gated_actor_update(key, actor, critic, critic_e, temp, temp_e, batch,
 @functools.partial(
     jax.jit,
     static_argnames=("backup_entropy", "top_quantiles_to_drop", "kappa",
-                     "target_entropy", "target_entropy_e",
-                     "enable_update_temperature", "augument", "share_encoder"))
+                     "target_entropy", "target_entropy_e", "value_floor",
+                     "value_ceiling", "enable_update_temperature", "augument",
+                     "share_encoder"))
 def _gated_update_jit(rng, actor, critic, target_critic_params, temp,
                       critic_e, target_critic_e_params, temp_e,
                       batch, discount, discount_e, tau, explore_actor_w,
                       target_entropy, target_entropy_e, backup_entropy,
                       top_quantiles_to_drop, kappa,
+                      value_floor=None, value_ceiling=None,
                       enable_update_temperature=True, augument=True,
                       share_encoder=True):
     if share_encoder:
@@ -181,10 +216,15 @@ def _gated_update_jit(rng, actor, critic, target_critic_params, temp,
     m_explore = 1.0 - m_goal
 
     rng, key_g = jax.random.split(rng)
+    # GOAL CRITIC: bounded, because under the SORB reward it runs at gamma=1.0.
     new_critic, info_g = _masked_critic_update(
         key_g, actor, critic, target_critic_params, temp, batch, discount,
-        backup_entropy, top_quantiles_to_drop, kappa, m_goal)
+        backup_entropy, top_quantiles_to_drop, kappa, m_goal,
+        value_floor=value_floor, value_ceiling=value_ceiling)
 
+    # EXPLORE CRITIC: UNBOUNDED, deliberately. Its targets are POSITIVE and its
+    # discount is 0.99, so it has a bounded fixed point of its own and the goal
+    # critic's [-N, 0] window would clip every one of its targets to zero.
     rng, key_e = jax.random.split(rng)
     new_critic_e, info_e = _masked_critic_update(
         key_e, actor, critic_e, target_critic_e_params, temp_e, batch,
@@ -234,9 +274,18 @@ class GatedTQCLearner(TQCLearner):
     def __init__(self, seed, observations, actions, discount_e: float = 0.99,
                  init_temperature_e: Optional[float] = None,
                  target_entropy_e: Optional[float] = None,
-                 explore_actor_warmup: int = 0, **kwargs):
+                 explore_actor_warmup: int = 0,
+                 value_floor: Optional[float] = None,
+                 value_ceiling: Optional[float] = None, **kwargs):
         super().__init__(seed, observations, actions, **kwargs)
 
+        # GOAL CRITIC ONLY. Under the SORB minimum-time reward the goal return
+        # lies in [-step_cost * max_steps, 0] BY CONSTRUCTION, so a target
+        # outside that is unrealisable and clipping adds information rather than
+        # bias. The explore critic is never clipped -- see _gated_update_jit.
+        self.value_floor = None if value_floor is None else float(value_floor)
+        self.value_ceiling = (None if value_ceiling is None
+                              else float(value_ceiling))
         self.discount_e = float(discount_e)
         self.target_entropy_e = (float(self.target_entropy)
                                  if target_entropy_e is None
@@ -261,11 +310,21 @@ class GatedTQCLearner(TQCLearner):
         self._temp_e = sibling._temp
         del sibling
 
+        bounds = ("unbounded" if self.value_floor is None
+                  and self.value_ceiling is None
+                  else f"[{self.value_floor}, {self.value_ceiling}]")
         print(f"[Gated] two critics: discount={self.discount} "
               f"discount_e={self.discount_e} "
               f"target_entropy={self.target_entropy} "
               f"target_entropy_e={self.target_entropy_e} "
               f"explore_actor_warmup={self.explore_actor_warmup}")
+        print(f"[Gated] goal critic target clip {bounds}; "
+              f"explore critic UNCLIPPED (its targets are positive)")
+        if self.discount >= 1.0 and self.value_floor is None:
+            print("[Gated] WARNING: discount=1.0 with NO value floor. V(s) = "
+                  "-c + V(s') has no bounded fixed point on a state the agent "
+                  "never escapes, and a truncated episode bootstraps rather "
+                  "than terminating. Set TQC_VALUE_FLOOR.")
 
     def update(self, batch, utd_ratio: int = None,
                enable_update_temperature: bool = True,
@@ -284,6 +343,7 @@ class GatedTQCLearner(TQCLearner):
             self.discount, self.discount_e, self.tau, explore_actor_w,
             self.target_entropy, self.target_entropy_e, self.backup_entropy,
             self.top_quantiles_to_drop, self.kappa,
+            value_floor=self.value_floor, value_ceiling=self.value_ceiling,
             enable_update_temperature=enable_update_temperature,
             augument=self.augument, share_encoder=self.share_encoder)
 

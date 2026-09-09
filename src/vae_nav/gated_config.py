@@ -89,6 +89,39 @@ def check_gated_run(env=None):
             "goal-mode evaluation collapsing from 40-65% to 15% when the goal "
             "critic received 10-37% of each batch.")
 
+    goal_reward = str(env.get("GATED_GOAL_REWARD", "sorb")).lower()
+    if goal_reward not in ("sorb", "shaped"):
+        raise ValueError(
+            f"GATED_GOAL_REWARD={goal_reward!r} is not sorb|shaped")
+
+    discount = _num(env, "DISCOUNT", 0.99)
+    discount_e = _num(env, "EXPLORE_DISCOUNT", discount)
+
+    if goal_reward == "sorb":
+        # THE SINGLE MOST EXPENSIVE MISCONFIGURATION AVAILABLE HERE.
+        if discount < 1.0:
+            raise ValueError(
+                f"GATED_GOAL_REWARD=sorb requires DISCOUNT=1.0, not {discount}. "
+                "Under -1 per step the critic IS the cost-to-go, and gamma=0.99 "
+                "gives a 1/(1-gamma)=100-step horizon: Q saturates near -100 and "
+                "cannot separate a 400-step goal from a 1000-step one (measured "
+                "0.18 apart in this repo). The run would train, converge, and "
+                "produce a value function that is useless as a distance -- which "
+                "is the one thing the minimum-time reward exists to provide.")
+        if discount_e >= 1.0:
+            raise ValueError(
+                f"EXPLORE_DISCOUNT={discount_e} must be < 1.0. The explore arm "
+                "has no terminal state to bound its return -- it is paid a "
+                "per-step progress bonus and truncates on the clock -- so an "
+                "undiscounted explore return has no bounded fixed point and the "
+                "critic diverges.")
+        step_cost = _num(env, "STEP_COST", 1.0)
+        if step_cost <= 0.0:
+            raise ValueError(
+                f"STEP_COST={step_cost} must be positive. At zero the goal arm "
+                "is paid nothing and every policy is optimal; negative pays the "
+                "agent to drive forever.")
+
     # NOT AN ERROR, BUT WORTH SAYING OUT LOUD. The two arms cap episodes very
     # differently (2000 against 500), so one mode contributes far more rows than
     # the other. That is exactly what the fixed batch composition neutralises.
@@ -101,7 +134,15 @@ def check_gated_run(env=None):
               f"GOAL_BATCH_FRAC={goal_frac:g} fixes batch composition "
               "regardless.")
 
+    if goal_reward == "sorb":
+        step_cost = _num(env, "STEP_COST", 1.0)
+        cap = _num(env, "GATED_GOAL_MAX_STEPS", 1000)
+        print(f"[GatedConfig] goal reward = SORB minimum time, "
+              f"-{step_cost:g}/step, return in [{-step_cost * cap:g}, 0]; "
+              f"goal critic Q reads as -(steps to goal)")
+    else:
+        print("[GatedConfig] goal reward = SHAPED (delta + projected), "
+              "returns ~order 100")
     print(f"[GatedConfig] OK  explore_prob={explore_prob:g} "
           f"goal_frac={goal_frac:g} perception={perception or 'vae'} "
-          f"discount={_num(env, 'DISCOUNT', 0.99):g} "
-          f"discount_e={_num(env, 'EXPLORE_DISCOUNT', 0.99):g}")
+          f"discount={discount:g} discount_e={discount_e:g}")

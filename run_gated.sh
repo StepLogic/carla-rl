@@ -69,11 +69,32 @@ export EXPLORE_PROB=0.5           # strictly between 0 and 1, or one critic
 export GOAL_BATCH_FRAC=0.5        # batch composition FIXED on sample, so the
                                   # env-step skew cannot starve either critic
 export GATED_EXPLORE_MAX_STEPS=500   # the goal-free arm's cap
-# TWO CRITICS, but NOT for the Habitat reason. There the split was a discount
-# mismatch, 1.0 against 0.99. Both lane arms here run at 0.99, so these are
-# equal on purpose; the split is justified by RETURN SCALE, order 100 against
-# order 10, and by the kappa derived from it.
-export DISCOUNT=0.99
+# ---- the goal arm's reward: SORB minimum time --------------------------------
+# -1 per step until arrival, 0 on arrival, as in the Habitat peer. The goal
+# critic then IS the cost-to-go: Q = -(steps to goal). That reading is what a
+# topological map builder needs and no shaped reward provides.
+export GATED_GOAL_REWARD=sorb
+export STEP_COST=1.0
+export GATED_GOAL_MAX_STEPS=1000  # goal return therefore lies in [-1000, 0]
+export WEDGE_TRUNCATE=1           # a wedge ends the episode BILLED EXACTLY for
+                                  # the time it would have burned, so ending
+                                  # early is worth precisely nothing
+
+# TWO CRITICS, and under SORB this IS the Habitat rationale. The discounts
+# genuinely differ and the returns differ in SIGN, so one critic could not serve
+# both even at equal scale.
+#
+# DISCOUNT=1.0 IS REQUIRED, NOT A PREFERENCE. At 0.99 the horizon is
+# 1/(1-gamma) = 100 steps, so Q saturates near -100 and cannot separate a
+# 400-step goal from a 1000-step one -- measured 0.18 apart in this repo. The
+# entire point of a minimum-time reward is that Q reads as time.
+#
+# It is SAFE here only because every episode terminates or truncates, so the
+# undiscounted return is bounded by construction, and the goal critic's target
+# is clipped to that window. The clip is applied PER CRITIC in the learner --
+# never through TQC_TARGET_MIN/MAX, which would clip the explore critic's
+# POSITIVE targets to zero.
+export DISCOUNT=1.0
 export EXPLORE_DISCOUNT=0.99
 # The explore critic starts uninformed. Damping its actor gradient for the
 # first updates stops the actor following a critic that knows nothing.

@@ -66,6 +66,10 @@ from vae_nav.vae_goal_wrapper import VAEGoalWrapper  # noqa: E402
 SEED = int(os.environ.get("SEED", 42))
 MAX_STEPS = int(os.environ.get("MAX_STEPS", 200_000))
 MAX_EPISODE_STEPS = int(os.environ.get("MAX_EPISODE_STEPS", 1000))
+# GATED=1 selects the third ablation arm: one policy serving both the
+# goal-reaching and the goal-free task, switched by a commanded mode bit.
+# Read once here because the replay insert site is on the hot path.
+GATED = os.environ.get("GATED", "0") == "1"
 START_TRAINING = int(os.environ.get("START_TRAINING", 5000))
 EVAL_INTERVAL = int(os.environ.get("EVAL_INTERVAL", 25_000))
 N_EVAL_EPISODES = int(os.environ.get("N_EVAL_EPISODES", 60))
@@ -174,6 +178,22 @@ def build_agent(observation_space, action_space, seed):
           f"n_quantiles={kwargs['num_quantiles']} "
           f"drop_per_net={kwargs['top_quantiles_to_drop_per_net']} "
           f"(truncating {n_drop} of {total}) kappa={kwargs['kappa']:g}")
+    if os.environ.get("GATED", "0") == "1":
+        from vae_nav.gated_tqc_learner import GatedTQCLearner
+        # TWO CRITICS, and NOT for the reason the Habitat agent has two. There
+        # the split was a discount mismatch, 1.0 against 0.99. Both lane arms
+        # here run at 0.99, so EXPLORE_DISCOUNT defaults to the same value and
+        # the split is justified instead by RETURN SCALE: the goal arm's shaped
+        # reward produces returns of order 100 and the goal-free arm's order
+        # 10, and kappa above is derived from the reward scale. One critic
+        # fitted to both is dominated by the larger.
+        kwargs.update(
+            discount_e=float(os.environ.get("EXPLORE_DISCOUNT",
+                                            kwargs["discount"])),
+            explore_actor_warmup=int(os.environ.get("EXPLORE_ACTOR_WARMUP", 0)),
+        )
+        return GatedTQCLearner(seed, observation_space.sample(),
+                               action_space.sample(), **kwargs)
     return TQCLearner(seed, observation_space.sample(), action_space.sample(),
                       **kwargs)
 
@@ -235,6 +255,47 @@ def make_env(town, seed, latent_source, eval_mode=False, port=None):
     # LANE FOLLOWING uses the env's own per-step distance reward instead of the
     # sparse +600 arrival. LANE_FOLLOW=1 selects it; the sparse path is
     # untouched so existing goal-navigation runs are bit-identical.
+    # GATED ARM. One policy serving BOTH the goal-reaching and the goal-free
+    # task, switched by a bit drawn once per episode. Placed before the
+    # goal-reward branches and returning early, for the same reason the
+    # explorer branch is: so no part of the goal-conditioned stack can be
+    # half-applied.
+    #
+    # THIS IS THE THIRD LEG OF THE ABLATION, not a replacement for either arm.
+    # It exists to be compared against carla_lanefollow (goal-only) and
+    # carla_lanefollow_nogoal (goal-free), so everything except the gate is
+    # deliberately identical to the goal arm.
+    if os.environ.get("GATED", "0") == "1":
+        from vae_nav.gated_config import check_gated_run
+        from vae_nav.gated_reward import GOAL, GatedReward
+        from vae_nav.lane_follow_reward import LaneFollowReward
+
+        # Refuse an incoherent run here, before a CARLA server is started and
+        # before any GPU memory is taken.
+        check_gated_run()
+
+        # LaneFollowReward sits BELOW GatedReward and ITS REWARD IS DISCARDED.
+        # It is present for two things GatedReward reads but does not compute:
+        # info["is_success"], which carries the arrival bonus, and the goal
+        # arm's own termination rule, which goal mode honours unchanged. Both
+        # rewards are then pure functions of info, computed side by side.
+        env = LaneFollowReward(env)
+        env = GatedReward(
+            env,
+            explore_prob=float(os.environ.get("EXPLORE_PROB", 0.5)),
+            # EVAL FORCES GOAL MODE. Letting the bit be drawn during evaluation
+            # would report a success rate averaged over two different tasks,
+            # one of which has no goal and cannot succeed at reaching it.
+            force_mode=GOAL if eval_mode else None,
+            max_steps=int(os.environ.get("GATED_EXPLORE_MAX_STEPS", 500)),
+            seed=seed)
+        env = VAEGoalWrapper(env, source=latent_source)
+        # The GOAL arm's cap. GatedReward truncates explore episodes itself at
+        # its own, shorter cap, so the two modes keep the episode lengths their
+        # separate arms use and the comparison stays honest.
+        env = TimeLimit(env, max_episode_steps=MAX_EPISODE_STEPS)
+        return env
+
     # GOAL-FREE EXPLORER. A separate arm entirely: no goal in the reward, no
     # goal in the observation, and its own memory of where it has been. Placed
     # before the goal-reward branches and returning early, so none of the
@@ -439,8 +500,26 @@ def main():
         names=env_towns)
 
     agent = build_agent(venv.observation_space, venv.action_space, SEED)
-    buffer = ReplayBuffer(venv.observation_space, venv.action_space,
-                          int(os.environ.get("REPLAY_CAPACITY", 1_000_000)))
+    _capacity = int(os.environ.get("REPLAY_CAPACITY", 1_000_000))
+    if os.environ.get("GATED", "0") == "1":
+        from vae_nav.mode_split_buffer import ModeSplitBuffer
+        # MODE-STRATIFIED, and the reason is measured rather than theoretical.
+        # A uniformly sampled shared buffer gives each critic whatever share of
+        # the batch the environment happened to produce. The peer measured one
+        # mode reaching ~90% of env steps, the other critic receiving 10-37% of
+        # each batch, and that mode's evaluation collapsing from 40-65% to 15%.
+        # It was starved, not broken.
+        #
+        # THE SKEW RUNS THE OTHER WAY HERE: the goal cap is 2000 steps against
+        # 500 for explore, so GOAL rows dominate. Fixing composition on SAMPLE
+        # rather than correcting a known skew on insert is exactly what makes
+        # the direction irrelevant.
+        buffer = ModeSplitBuffer(
+            venv.observation_space, venv.action_space, _capacity,
+            goal_frac=float(os.environ.get("GOAL_BATCH_FRAC", 0.5)))
+    else:
+        buffer = ReplayBuffer(venv.observation_space, venv.action_space,
+                              _capacity)
 
     # HER IS PER ENV. Environments finish episodes at different times, and a
     # shared relabel buffer would splice transitions from different towns into
@@ -782,7 +861,15 @@ def main():
                 if inf.get("arrived_this_step"):
                     hers[i].end_leg()
             else:
-                buffer.insert(tr)
+                if GATED:
+                    # Routed by the mode this transition was collected under.
+                    # Defaults to GOAL if absent, matching the observation
+                    # wrapper, so a missing GatedReward degrades to the
+                    # familiar single-mode behaviour rather than silently
+                    # filing every row as exploration.
+                    buffer.insert(tr, mode=int(inf.get("mode", 1)))
+                else:
+                    buffer.insert(tr)
 
             if final_infos[i] is not None:
                 ep_done[i] += 1

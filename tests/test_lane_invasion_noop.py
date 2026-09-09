@@ -162,3 +162,22 @@ def test_the_flag_defaults_to_off():
     os.environ.pop("LANE_INVASION_NOOP", None)
     import vae_nav.gated_reward as m
     assert importlib.reload(m).LANE_INVASION_NOOP is False
+
+
+def test_the_banner_states_the_no_op_and_what_survives(capsys):
+    # A setting that changes the reward must be visible on screen. Without it
+    # the only live confirmation is /proc/<pid>/environ.
+    m = _reload(True)
+    m.GatedReward(_StubEnv(), force_mode=m.EXPLORE, max_steps=50, seed=0)
+    out = capsys.readouterr().out
+    assert "LANE INVASION IS A NO-OP" in out
+    assert "OFF-ROAD IS STILL FATAL" in out
+    assert "carla_lanefollow_nogoal" in out
+
+
+def test_the_banner_states_the_penalty_when_the_flag_is_off(capsys):
+    m = _reload(False)
+    m.GatedReward(_StubEnv(), force_mode=m.EXPLORE, max_steps=50, seed=0)
+    out = capsys.readouterr().out
+    assert "lane invasion: penalty" in out
+    assert "junction exemption" in out

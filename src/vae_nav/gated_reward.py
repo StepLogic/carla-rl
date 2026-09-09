@@ -260,6 +260,21 @@ class GatedReward(Wrapper):
         print(f"[Gated] explore_prob={self.explore_prob} "
               f"force_mode={self.force_mode} explore_max_steps={self.max_steps} "
               f"progress={PROGRESS_MODE}")
+        # A SETTING THAT CHANGES THE REWARD MUST SAY SO ON SCREEN. Without this
+        # line the only way to confirm it on a live run is to read
+        # /proc/<pid>/environ, which is exactly the gap that made the
+        # observation banner misleading earlier.
+        if LANE_INVASION_NOOP:
+            print("[Gated] LANE INVASION IS A NO-OP: crossing a marking costs "
+                  "nothing and ends nothing. OFF-ROAD IS STILL FATAL and is "
+                  "now the only term discouraging the explore arm from leaving "
+                  "the road, since its progress term pays the same for "
+                  "circling. NOTE: carla_lanefollow_nogoal was trained WITH "
+                  "the lane penalty, so the explore halves are not directly "
+                  "comparable unless that baseline is retrained.")
+        else:
+            print(f"[Gated] lane invasion: penalty {LANE_DEPARTURE_PENALTY} "
+                  "and terminal, with the junction exemption")
 
     def reset(self, **kwargs):
         out = self.env.reset(**kwargs)

@@ -22,6 +22,17 @@ Must run before JAX is first imported. conftest.py is loaded before any test
 module, which is what makes this the right place for it.
 """
 import os
+import sys
+
+# The repo root, so `import train_carla_tqc` works, and `src`, so `vae_nav`
+# does. Most test files insert `src` themselves; three do not
+# (test_dead_reckoning, test_explore_obs_wrapper, test_explore_reward) and have
+# been failing collection unless the caller happened to set PYTHONPATH. Doing it
+# here once makes `python -m pytest tests/` work with no preamble, which is how
+# the suite is described everywhere it is mentioned.
+_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, _ROOT)
+sys.path.insert(0, os.path.join(_ROOT, "src"))
 
 # setdefault, never assignment: an explicit choice from the caller wins.
 os.environ.setdefault("JAX_PLATFORMS", "cpu")

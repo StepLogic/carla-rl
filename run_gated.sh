@@ -40,7 +40,26 @@ echo "[Lock] acquired $LOCK (pid $$)"
 # take ~4.8 GB per stage. Poll for free memory; NEVER gate on a process name --
 # /proc/PID/comm is capped at 15 chars, so the 23-char CARLA binary name is
 # truncated and an exact-name match can never fire.
-NEED_MB="${NEED_MB:-6000}"
+# 9500, NOT 6000, AND THE OLD FIGURE WAS MEASURED WRONG.
+#
+# The 6000 threshold every script in this repo uses came from an estimate of
+# "CARLA ~2.8 GB before jax, plus ~2.3 GB jax". MEASURED on this run:
+#
+#     CarlaUE4-Linux-Shipping   5448 MiB     (not 2800)
+#     our process total          9221 MiB    (CARLA + jax together)
+#
+# So the real requirement is about 9.2 GB, not 5.1 GB, and a 6000 MiB gate
+# passes on a card that cannot actually hold the run. That is exactly what
+# happened: the gate saw 6066 MiB free, started, and jax then died with
+# RESOURCE_EXHAUSTED trying to allocate 16 MB for a cudnn convolution.
+#
+# CONSEQUENCE WORTH STATING PLAINLY: at 9.2 GB for us and ~4.8 GB for the
+# Habitat jobs on the same 12.3 GB card, the two CANNOT run together. This is a
+# scheduling constraint, not a tuning problem. Waiting is correct; shrinking
+# CARLA's quality level to fit is NOT a free fix, because the frozen
+# autoencoder was trained on frames rendered at this quality and changing it
+# shifts the input distribution out from under it.
+NEED_MB="${NEED_MB:-9500}"
 MAX_WAIT_H="${MAX_WAIT_H:-6}"
 POLL_S="${POLL_S:-60}"
 deadline=$(( $(date +%s) + MAX_WAIT_H * 3600 ))

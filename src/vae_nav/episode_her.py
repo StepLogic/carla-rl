@@ -34,6 +34,10 @@ TWO BUGS INHERITED AS GUARDS -- both were measured in the source repo:
 """
 import numpy as np
 
+# Must match vae_nav.gated_reward and vae_nav.vae_goal_wrapper.
+GOAL, EXPLORE = 1, 0
+MODE_KEY = "mode"
+
 
 class EpisodeRelabelBuffer:
     """Wraps a replay buffer, inserting hindsight copies at episode end.
@@ -52,7 +56,20 @@ class EpisodeRelabelBuffer:
                  k_dist_target_speed=0.0, k_dist_gate_mode="positive",
                  k_speed=0.0, speed_limit_kmh=0.0,
                  k_dist_delta_mode="positive", k_living=0.0,
-                 time_to_goal=False, step_cost=0.1):
+                 time_to_goal=False, step_cost=0.1, gated=False):
+        # GATED=True MAKES EVERY HINDSIGHT ROW A GOAL ROW, which is the whole
+        # point of running HER on the gated arm: explore episodes wander much
+        # further than the goal curriculum allows (measured ~370 steps against
+        # 96), so hindsight goals drawn from them span distances the pinned
+        # 5-20 m curriculum can never produce.
+        #
+        # IT ALSO CHANGES ROUTING, and getting that wrong is silent. The
+        # mode-split buffer reads a row's mode to decide which critic trains on
+        # it. Inserting without one defaults every row to GOAL, so an ungated
+        # HER on a gated run would file every EXPLORE transition as goal data
+        # and collapse the split the buffer exists to guarantee -- the same
+        # starvation failure, inverted. When gated, on-policy rows carry their
+        # OWN mode and only the relabelled copies are forced to GOAL.
         # TIME-TO-GOAL MODE. Every coefficient above belongs to SparseGoalReward
         # and is DEAD when this is on -- the relabelled reward becomes
         # `0 on arrival, -step_cost otherwise`, matching TimeToGoalReward.
@@ -75,6 +92,18 @@ class EpisodeRelabelBuffer:
         # recost.
         self.time_to_goal = bool(time_to_goal)
         self.step_cost = float(step_cost)
+        self.gated = bool(gated)
+        if self.gated and not self.time_to_goal:
+            # Not a preference. The gated arm's on-policy goal rows carry
+            # -step_cost per step and 0 on arrival; sparse relabelled rows would
+            # carry +k_goal on arrival and 0 per step. That is two inconsistent
+            # reward functions over one set of states, at the magnitude this
+            # module's own comments warn about three separate times.
+            raise ValueError(
+                "gated=True requires time_to_goal=True. The gated arm's goal "
+                "reward IS minimum time, so hindsight rows must be recosted the "
+                "same way or the goal critic is fitted to two different reward "
+                "functions over the same states.")
         self.buffer = buffer
         # The wrapper's OWN goal-block transform. See module docstring.
         self.state_fn = state_fn
@@ -185,8 +214,14 @@ class EpisodeRelabelBuffer:
 
     # -- per step ----------------------------------------------------------
     def record(self, transition, fields, pos, hit, lane=False,
-               speed_kmh=0.0, target_speed_kmh=0.0):
-        """Stage one step. `fields` is what state_fn needs, ~100 bytes."""
+               speed_kmh=0.0, target_speed_kmh=0.0, mode=None):
+        """Stage one step. `fields` is what state_fn needs, ~100 bytes.
+
+        `mode` is the gated arm's commanded mode for this transition, 1 for goal
+        and 0 for explore. It routes the ON-POLICY row to the right side of the
+        mode-split buffer. Ignored entirely when gated=False, so the existing
+        point-goal path is unchanged.
+        """
         if not isinstance(hit, (bool, np.bool_)):
             # GUARD (b).
             raise TypeError(
@@ -207,7 +242,12 @@ class EpisodeRelabelBuffer:
         self._target.append(float(target_speed_kmh))
         # The on-policy transition goes in immediately; only the hindsight
         # copies wait for the episode to end.
-        self.buffer.insert(self._clean(transition))
+        #
+        # ROUTED BY ITS OWN MODE when gated. Inserting without one lets the
+        # mode-split buffer default every row to GOAL, which would file every
+        # explore transition as goal data.
+        self._insert(self._clean(transition),
+                     mode if mode is not None else GOAL)
 
     # -- at episode end ----------------------------------------------------
     def _pick_goal(self, i, n, pos):
@@ -254,7 +294,12 @@ class EpisodeRelabelBuffer:
         for (i, tp) in pairs:
             goal = self._pos[tp]
             row = self._relabelled(i, goal, n)
-            self.buffer.insert(row)
+            # EVERY HINDSIGHT ROW IS A GOAL ROW, whatever mode the episode was
+            # flown in. That is the point of running this on the gated arm:
+            # explore episodes wander far further than the goal curriculum
+            # allows, so relabelling them supplies goal data at distances the
+            # curriculum cannot reach.
+            self._insert(row, GOAL)
             inserted += 1
 
         self.last_pairs = pairs
@@ -277,6 +322,18 @@ class EpisodeRelabelBuffer:
         row["next_observations"] = dict(row["next_observations"])
         row["observations"]["goal"] = obs_goal
         row["next_observations"]["goal"] = nxt_goal
+
+        # THE MODE BIT IS FORCED TO GOAL, AND THE ORDER HERE MATTERS. The goal
+        # block is rebuilt from the hindsight goal ABOVE, before the mode is set
+        # below. Reversed, a row relabelled from an explore episode would carry
+        # mode=1 with the zeroed goal block that explore mode wrote, and the
+        # goal critic would be trained on rows whose goal it cannot see -- which
+        # looks like slow learning, not like a bug. The Habitat implementation
+        # this is ported from orders it the same way, in state_fn.
+        if self.gated:
+            row["observations"][MODE_KEY] = np.array([float(GOAL)], np.float32)
+            row["next_observations"][MODE_KEY] = np.array([float(GOAL)],
+                                                          np.float32)
 
         # SPARSE reward, recomputed with the SAME coefficients the env uses.
         # Different coefficients here would make the critic fit two different
@@ -377,6 +434,18 @@ class EpisodeRelabelBuffer:
             # this unreachable, so counting it is a tripwire, not a fallback.
             self.n_free_positives += 1
         return row
+
+    def _insert(self, row, mode):
+        """Insert one row, routed by mode when gated.
+
+        The plain jaxrl2 ReplayBuffer's insert takes no mode argument, so the
+        ungated path must call it exactly as before -- passing one would break
+        every existing run.
+        """
+        if self.gated:
+            self.buffer.insert(row, mode=int(mode))
+        else:
+            self.buffer.insert(row)
 
     @staticmethod
     def _clean(t):

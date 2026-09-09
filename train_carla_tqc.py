@@ -571,8 +571,18 @@ def main():
                 # hindsight rows carry +600 arrivals into a buffer whose
                 # on-policy rows pay 0, and the critic fits two reward
                 # functions over one set of states.
-                time_to_goal=(os.environ.get("TIME_TO_GOAL", "") == "1"),
+                # THE GATED ARM'S GOAL REWARD IS ALSO MINIMUM TIME, under a
+                # different flag. GATED_GOAL_REWARD=sorb pays -STEP_COST per
+                # step and 0 on arrival exactly as TIME_TO_GOAL does, so the
+                # same recosting applies and omitting it here would put +k_goal
+                # arrivals into a buffer whose on-policy rows pay 0.
+                time_to_goal=(os.environ.get("TIME_TO_GOAL", "") == "1"
+                              or (GATED and os.environ.get(
+                                  "GATED_GOAL_REWARD", "sorb").lower() == "sorb")),
                 step_cost=float(os.environ.get("STEP_COST", 0.1)),
+                # Routes on-policy rows by their own mode and forces every
+                # hindsight copy to GOAL.
+                gated=GATED,
                 n_relabel=int(os.environ.get("EPISODE_HER_N", 1)),
                 min_disp=float(os.environ.get("HER_MIN_DISP", GOAL_THRESHOLD)),
                 max_disp=float(os.environ.get("HER_MAX_DISP", np.inf)),
@@ -885,7 +895,12 @@ def main():
                     pos=inf["hero_pos"], hit=bool(inf.get("collision", False)),
                     lane=bool(inf.get("lane_invasion", False)),
                     speed_kmh=float(inf.get("speed_kmh", 0.0) or 0.0),
-                    target_speed_kmh=float(inf.get("target_speed_kmh", 0.0) or 0.0))
+                    target_speed_kmh=float(inf.get("target_speed_kmh", 0.0) or 0.0),
+                    # ROUTES THE ON-POLICY ROW. Without this the relabel buffer
+                    # inserts with no mode and the split buffer defaults every
+                    # row to GOAL, filing every explore transition as goal data.
+                    # Hindsight copies are forced to GOAL inside the buffer.
+                    mode=int(inf.get("mode", 1)))
                 # CLOSE THE LEG ON ARRIVAL. Must come AFTER record(), so the
                 # arriving transition belongs to the leg it completed rather
                 # than opening the next one. Without this a chained episode is

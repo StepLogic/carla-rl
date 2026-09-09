@@ -142,7 +142,10 @@ export INCREMENTAL_ACTIONS=0
 export MAX_STEER=0.5 MAX_THROTTLE=0.6
 export STEER_STEP=0.01 THROTTLE_STEP=0.01
 export OBS_WITH_VECTOR=1          # REQUIRED: BOTH gated rewards are speed-gated
-export EPISODE_HER=0
+# OVERRIDABLE so run_gated_her.sh can flip exactly this one flag and nothing
+# else. The two arms must differ by hindsight alone or the comparison measures
+# the difference between two scripts rather than the effect of relabelling.
+export EPISODE_HER="${EPISODE_HER:-0}"
 export CHAIN_MAX_GOALS=1
 export EXPERT_PROB=0
 export LANE_STRICT=1
@@ -162,7 +165,7 @@ export SHORT_HORIZON=1
 export GOAL_DIST_MIN=5.0 GOAL_DIST_START=20.0 GOAL_DIST_TARGET=20.0
 
 # ---- run ---------------------------------------------------------------------
-export POLICY_FOLDER=carla_gated
+export POLICY_FOLDER="${POLICY_FOLDER:-carla_gated}"
 export MAX_STEPS="${MAX_STEPS:-350000}"
 export RESUME="${RESUME:-1}"
 export TQC_KAPPA=1.0              # returns of order 10; the derived K_GOAL/10

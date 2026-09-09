@@ -138,3 +138,61 @@ def test_the_footnotes_explain_bias_and_correlation_separately():
     assert "q_bias is the mean signed error IN STEPS" in out
     assert "ORDERS states correctly" in out
     assert "ARRIVING episodes only" in out
+
+
+# ------------------------------------------------------ distance bands ----
+
+def _banded(arm, band, in_distribution, **kw):
+    row = _arm(arm, **kw)
+    row["band"] = band
+    row["in_distribution"] = in_distribution
+    return row
+
+
+BANDED = [
+    _banded("goal_only", "5-20m", True), _banded("gated", "5-20m", True),
+    _banded("goal_only", "40-70m", False), _banded("gated", "40-70m", False),
+    _banded("goal_only", "20-40m", False), _banded("gated", "20-40m", False),
+]
+
+
+def test_each_band_gets_its_own_table():
+    # Pooling bands would average an in-distribution result with an
+    # extrapolation one and produce a number describing neither.
+    out = render(BANDED)
+    for band in ("5-20m", "20-40m", "40-70m"):
+        assert f"band {band}" in out
+
+
+def test_bands_are_ordered_nearest_first():
+    out = render(BANDED)
+    pos = [out.index(f"band {b}") for b in ("5-20m", "20-40m", "40-70m")]
+    assert pos == sorted(pos)
+
+
+def test_extrapolation_bands_are_labelled_as_such():
+    # A reader must not mistake an extrapolation number for an in-distribution
+    # one; training is pinned to 5-20 m.
+    out = render(BANDED)
+    head = out.split("band 40-70m")[1].splitlines()[0]
+    assert "EXTRAPOLATION" in head
+
+
+def test_the_training_band_is_labelled_in_distribution():
+    out = render(BANDED)
+    head = out.split("band 5-20m")[1].splitlines()[0]
+    assert "in-distribution" in head
+    assert "EXTRAPOLATION" not in head
+
+
+def test_a_band_missing_an_arm_says_so_within_that_band():
+    # An arm can fail at long range while succeeding at short, so absence has
+    # to be reported per band rather than only globally.
+    out = render([_banded("gated", "40-70m", False)])
+    assert "MISSING:" in out
+    assert "goal_only" in out
+
+
+def test_unbanded_rows_still_render():
+    # Backwards compatibility with results written before bands existed.
+    assert "band default" in render([_arm("gated")])

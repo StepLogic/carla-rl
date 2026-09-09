@@ -89,18 +89,36 @@ sleep 40
 # Each block lists ONLY what differs. Anything not set here is inherited from
 # the shared block above, which is what makes the comparison attributable.
 
+# DISTANCE BANDS. 5-20 m is the training range; everything beyond it is
+# EXTRAPOLATION and is expected to be weak.
+#
+# THEY EXIST BECAUSE 5-20 m SEPARATES NOTHING. In-distribution success saturated
+# at 1.000 for both gated arms within their first evaluation, so a table built on
+# that band shows four numbers all approximately one.
+#
+# AND BECAUSE THEY TEST HINDSIGHT'S ACTUAL CLAIM. Relabelling supplies goal data
+# at distances the pinned curriculum cannot produce. Evaluating only inside the
+# curriculum could not show that benefit even if it were real.
+BANDS="${BANDS:-5-20,20-40,40-70}"
+
 run_arm() {
   local name="$1" ckpt="$2" goal_conditioned="$3"
   if [ ! -f "$ckpt" ]; then
     echo "[Arm $name] SKIPPED: no checkpoint at $ckpt" >&2
     return 0
   fi
-  echo "=== arm: $name ($ckpt) ==="
-  python -u eval_arm.py --arm "$name" --ckpt "$ckpt" \
-      --episodes "$EPISODES" --seed "$EVAL_SEED" \
-      --max-steps "$EVAL_MAX_STEPS" \
-      --goal-conditioned "$goal_conditioned" \
-      --out "$OUT_DIR/$name.json" || echo "[Arm $name] FAILED" >&2
+  local band lo hi
+  for band in ${BANDS//,/ }; do
+    lo="${band%%-*}"; hi="${band##*-}"
+    echo "=== arm: $name  band: ${lo}-${hi}m  ($ckpt) ==="
+    python -u eval_arm.py --arm "$name" --ckpt "$ckpt" \
+        --episodes "$EPISODES" --seed "$EVAL_SEED" \
+        --max-steps "$EVAL_MAX_STEPS" \
+        --goal-conditioned "$goal_conditioned" \
+        --goal-min "$lo" --goal-max "$hi" \
+        --out "$OUT_DIR/${name}__${lo}-${hi}m.json" \
+      || echo "[Arm $name band ${lo}-${hi}m] FAILED" >&2
+  done
 }
 
 # 1. GOAL-ONLY: the shaped lane-follow reward, 144-d.

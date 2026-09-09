@@ -58,7 +58,29 @@ def main():
     ap.add_argument("--out", required=True)
     ap.add_argument("--port", type=int,
                     default=int(os.environ.get("CARLA_PORT", 2000)))
+    ap.add_argument("--goal-min", type=float, default=None)
+    ap.add_argument("--goal-max", type=float, default=None,
+                    help="goal distance band in metres. Bands beyond 20 m are "
+                         "EXTRAPOLATION: training is pinned to 5-20 m.")
     args = ap.parse_args()
+
+    # THE BAND MUST BE SET BEFORE THE CONFIG IS IMPORTED, because the goal
+    # sampler reads these at import like everything else in this trainer.
+    #
+    # WHY BANDS EXIST AT ALL. In-distribution success saturated at 1.000 for
+    # both gated arms within the first evaluation, so a table built on 5-20 m
+    # success shows four numbers that are all approximately one and separate
+    # nothing. Longer bands are extrapolation and are EXPECTED to be weak --
+    # that is what makes them able to discriminate.
+    #
+    # IT ALSO TESTS HINDSIGHT'S ACTUAL CLAIM. Relabelling supplies goal data at
+    # distances the pinned 5-20 m curriculum cannot produce. Evaluating only
+    # inside that curriculum could not show the benefit even if it were real.
+    if args.goal_min is not None:
+        os.environ["GOAL_DIST_MIN"] = str(args.goal_min)
+    if args.goal_max is not None:
+        os.environ["GOAL_DIST_START"] = str(args.goal_max)
+        os.environ["GOAL_DIST_TARGET"] = str(args.goal_max)
 
     import train_carla_tqc as T
     from vae_nav.latent_source import LatentSource
@@ -134,8 +156,16 @@ def main():
     env.close()
 
     goal_conditioned = bool(args.goal_conditioned)
+    band = (f"{args.goal_min:g}-{args.goal_max:g}m"
+            if args.goal_min is not None and args.goal_max is not None
+            else "default")
     out = {
         "arm": args.arm,
+        "band": band,
+        # Training is pinned to 5-20 m, so anything beyond it is extrapolation
+        # and is expected to be weak. Recorded per row so a reader cannot mistake
+        # an extrapolation number for an in-distribution one.
+        "in_distribution": (args.goal_max is None or args.goal_max <= 20.0),
         "checkpoint": args.ckpt,
         "episodes": len(episodes),
         "towns": towns,

@@ -60,22 +60,49 @@ def format_row(r):
             f"{bias:>10} {corr:>7}")
 
 
+def _band_key(band):
+    """Sort bands by their lower bound, so 5-20 precedes 20-40 precedes 40-70."""
+    try:
+        return float(str(band).split("-")[0])
+    except (ValueError, IndexError):
+        return float("inf")
+
+
 def render(rows):
-    """Format the table. ORDERING IS IMPOSED HERE, not inherited.
+    """Format the tables. ORDERING IS IMPOSED HERE, not inherited.
 
     load() also sorts, but ordering is a presentation guarantee and belongs
     with the presenter: rows reaching this function from anywhere else -- a
     test, a notebook, a future caller that globs differently -- must come out
-    specialists first, gated arms after, so the table always reads the same way.
+    specialists first, gated arms after, nearest band first.
+
+    ONE TABLE PER DISTANCE BAND. Pooling bands would average an in-distribution
+    result with an extrapolation one and produce a number describing neither.
     """
     if not rows:
         return "no results found"
-    rows = sorted(rows, key=lambda r: ORDER.get(r.get("arm", ""), 99))
-    lines = [HEADER] + [format_row(r) for r in rows] + [""] + FOOTNOTES
-    missing = [a for a in ORDER if a not in {r.get("arm") for r in rows}]
-    if missing:
+
+    bands = sorted({r.get("band", "default") for r in rows}, key=_band_key)
+    lines = []
+    for band in bands:
+        here = sorted((r for r in rows if r.get("band", "default") == band),
+                      key=lambda r: ORDER.get(r.get("arm", ""), 99))
+        in_dist = all(r.get("in_distribution", True) for r in here)
+        tag = ("in-distribution" if in_dist
+               else "EXTRAPOLATION -- training is pinned to 5-20 m")
+        lines += [f"band {band}  ({tag})", HEADER]
+        lines += [format_row(r) for r in here]
+        missing = [a for a in ORDER if a not in {r.get("arm") for r in here}]
+        if missing:
+            lines.append("  MISSING: " + ", ".join(sorted(missing))
+                         + " -- no checkpoint")
+        lines.append("")
+
+    lines += FOOTNOTES
+    all_missing = [a for a in ORDER if a not in {r.get("arm") for r in rows}]
+    if all_missing:
         lines += ["",
-                  "MISSING ARMS: " + ", ".join(sorted(missing)) + ".",
+                  "MISSING ARMS: " + ", ".join(sorted(all_missing)) + ".",
                   "  A four-way claim cannot be made from a partial table; the",
                   "  absent arms were skipped for want of a checkpoint."]
     return "\n".join(lines)

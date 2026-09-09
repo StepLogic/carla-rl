@@ -190,3 +190,34 @@ def test_identity_records_whether_the_run_was_gated():
     # policy with a plain one.
     m = _reload(**GATED)
     assert _wrapper(m).identity().get("with_mode") is True
+
+
+def test_the_banner_lists_the_mode_key_and_the_total_width(capsys):
+    # CAUGHT IN A LIVE RUN. The space was right but the banner printed only
+    # three keys, so a gated run read on screen as an ordinary
+    # goal-conditioned one. The banner is the single place an operator
+    # confirms the layout, so it must name every key in the space.
+    m = _reload(**GATED)
+    _wrapper(m)
+    out = capsys.readouterr().out
+    assert "'mode': (1,)" in out, out
+    assert "145-d" in out, out
+    assert "GATED" in out, out
+
+
+def test_the_banner_is_unchanged_for_the_goal_free_arm(capsys):
+    m = _reload(OBS_WITH_MODE="0", OBS_WITH_GOAL="0", OBS_WITH_VECTOR="1")
+    _wrapper(m)
+    out = capsys.readouterr().out
+    assert "'mode'" not in out
+    assert "132-d" in out, out
+    assert "GOAL-FREE" in out
+
+
+def test_the_banner_is_unchanged_for_the_goal_conditioned_arm(capsys):
+    m = _reload(OBS_WITH_MODE="0", OBS_WITH_GOAL="1", OBS_WITH_VECTOR="1")
+    _wrapper(m)
+    out = capsys.readouterr().out
+    assert "'mode'" not in out
+    assert "144-d" in out, out
+    assert "GATED" not in out

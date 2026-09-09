@@ -178,11 +178,19 @@ class VAEGoalWrapper(Wrapper):
         if self.with_mode:
             space["mode"] = spaces.Box(0.0, 1.0, (MODE_DIM,), np.float32)
         self.observation_space = spaces.Dict(space)
+        # THE BANNER MUST LIST EVERY KEY IN THE SPACE. It is the one place an
+        # operator confirms the observation layout of a live run, and a gated
+        # run that printed only three keys would read as an ordinary
+        # goal-conditioned one. Pinned by tests/test_gated_obs.py.
+        total = sum(int(np.prod(s.shape)) for s in space.values())
         print("[VAEGoal] obs={"
               + (f"'goal': ({GOAL_DIM},), " if self.with_goal else "")
               + f"'latent': ({self.latent_dim},)"
               + (f", 'vector': ({VECTOR_DIM},)" if self.with_vector else "")
-              + f"}} backend='{self.source.name}'"
+              + (f", 'mode': ({MODE_DIM},)" if self.with_mode else "")
+              + f"}} = {total}-d backend='{self.source.name}'"
+              + ("  [GATED: goal block zeroed in explore mode]"
+                 if self.with_mode else "")
               + ("" if self.with_goal else "  [GOAL-FREE: no goal in the obs]"))
 
     # -- THE transform. HER relabelling calls this, never a second copy. ----

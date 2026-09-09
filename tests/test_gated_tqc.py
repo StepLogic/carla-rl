@@ -254,3 +254,21 @@ def test_encoder_sharing_moves_the_actor_even_under_a_zero_gradient():
     before = _flat(a._actor.params)
     a.update(_batch(mode=0))
     assert not np.array_equal(before, _flat(a._actor.params))
+
+
+def test_the_trainers_printed_keys_are_all_present_and_finite():
+    """The keys train_carla_tqc's [Critic] and [CriticE] lines actually read.
+
+    THIS TEST EXISTS BECAUSE A FIX FAILED SILENTLY. target_actor_entropy was
+    computed inside the masked critic update but never named in the assembled
+    info dict, which is built key by key -- so it was dropped, the trainer fell
+    back to nan, and the log read as a diverged actor for a whole run. Checking
+    that a value is COMPUTED is not the same as checking it is REPORTED.
+    """
+    a = _agent()
+    info = a.update(_batch(mode="mixed"))
+    for key in ("q", "critic_loss", "td_errors", "target_actor_entropy",
+                "q_e", "critic_loss_e", "td_errors_e", "target_actor_entropy_e",
+                "entropy_goal", "entropy_explore", "frac_goal"):
+        assert key in info, f"{key} is dropped before the trainer sees it"
+        assert np.isfinite(float(info[key])), key

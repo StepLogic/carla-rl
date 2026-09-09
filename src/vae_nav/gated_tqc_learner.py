@@ -285,8 +285,15 @@ def _gated_update_jit(rng, actor, critic, target_critic_params, temp,
         **alpha_info,
         "critic_loss": info_g["critic_loss"], "q": info_g["q"],
         "td_errors": info_g["td_errors"],
+        # THE KEY THE TRAINER'S [Critic] LINE PRINTS. Computing it in
+        # _masked_critic_update was not enough: this dict is assembled key by
+        # key, so anything not named here is silently dropped and the trainer
+        # falls back to nan -- which reads as a diverged actor. That is exactly
+        # what happened after the first attempt at this fix.
+        "target_actor_entropy": info_g["target_actor_entropy"],
         "critic_loss_e": info_e["critic_loss"], "q_e": info_e["q"],
         "td_errors_e": info_e["td_errors"],
+        "target_actor_entropy_e": info_e["target_actor_entropy"],
         "frac_goal": m_goal.mean(),
     }
     return (rng, new_actor, new_critic, new_target_params, new_temp,

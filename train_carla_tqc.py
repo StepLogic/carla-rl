@@ -735,7 +735,17 @@ def main():
               "return": deque(maxlen=100), "collision": deque(maxlen=100),
               "success_oracle": deque(maxlen=100),
               "success_policy": deque(maxlen=100),
-              "goals": deque(maxlen=100)}
+              "goals": deque(maxlen=100),
+              # PER-MODE, for the gated arm. A single mean over both modes is
+              # unreadable: the goal arm pays -1 per step (returns of order
+              # -1000) while the explore arm pays a progress bonus (order +10),
+              # so their average is a number describing neither. The gated arm
+              # exists to be compared against two specialists, and a blended
+              # statistic cannot support that comparison.
+              "ret_goal": deque(maxlen=100), "ret_explore": deque(maxlen=100),
+              "len_goal": deque(maxlen=100), "len_explore": deque(maxlen=100),
+              "succ_goal": deque(maxlen=100),
+              "coll_goal": deque(maxlen=100), "coll_explore": deque(maxlen=100)}
     LOG_EVERY = int(os.environ.get("LOG_EVERY_EPISODES", 10))
     total_eps = 0
     # Histogram of WHY episodes end. Without it "return 0.0" is the only
@@ -911,6 +921,25 @@ def main():
                 recent["return"].append(float(fi.get("episode_return", 0.0)))
                 recent["collision"].append(float(bool(fi.get("collision", False))))
                 recent["goals"].append(float(fi.get("goals_reached", 0)))
+
+                if GATED:
+                    # Routed by the mode the episode was actually run under.
+                    # Success is recorded for GOAL episodes ONLY: in explore
+                    # mode it would measure arrival at a goal the policy cannot
+                    # see and is not paid for, which is exactly the meaningless
+                    # zero the goal-free arm reports over 60 episodes.
+                    _ep_len = float(fi.get("episode_length", 0))
+                    _ep_ret = float(fi.get("episode_return", 0.0))
+                    _coll = float(bool(fi.get("collision", False)))
+                    if int(fi.get("mode", 1)) == 1:
+                        recent["ret_goal"].append(_ep_ret)
+                        recent["len_goal"].append(_ep_len)
+                        recent["succ_goal"].append(_succ)
+                        recent["coll_goal"].append(_coll)
+                    else:
+                        recent["ret_explore"].append(_ep_ret)
+                        recent["len_explore"].append(_ep_len)
+                        recent["coll_explore"].append(_coll)
 
                 # Widen the band when the POLICY (never the oracle) is solving
                 # the current one. Requires a fresh window of episodes since
@@ -1120,6 +1149,33 @@ def main():
                              f"({hers[i].stats()['her_paying_frac']:.3f})"
                              if hers else ""),
                           flush=True)
+                    if GATED:
+                        # THE LINE THAT IS ACTUALLY READABLE FOR THIS ARM.
+                        # The [Ep] line above averages over both modes, whose
+                        # returns differ in sign and by two orders of magnitude,
+                        # so its `ret` and `success` describe neither task.
+                        #
+                        # goal ret is in STEPS: under the SORB reward the return
+                        # IS minus the time taken, so -412 means the goal took
+                        # 412 steps or ran out the clock. Success is reported
+                        # for goal episodes ONLY.
+                        def _m(key, default=float("nan")):
+                            return np.mean(recent[key]) if recent[key] else default
+                        n_g, n_e = len(recent["ret_goal"]), len(recent["ret_explore"])
+                        frac_g = n_g / max(1, n_g + n_e)
+                        print(f"[GatedEp{total_eps:5d}] "
+                              f"GOAL   n={n_g:3d} succ={_m('succ_goal'):.3f} "
+                              f"ret={_m('ret_goal'):8.1f} (= -steps) "
+                              f"len={_m('len_goal'):6.1f} "
+                              f"coll={_m('coll_goal'):.3f}", flush=True)
+                        print(f"[GatedEp{total_eps:5d}] "
+                              f"EXPLORE n={n_e:3d} "
+                              f"ret={_m('ret_explore'):8.1f} "
+                              f"len={_m('len_explore'):6.1f} "
+                              f"coll={_m('coll_explore'):.3f} "
+                              f"| episode mix goal={frac_g:.2f} "
+                              f"(batch mix is FIXED at GOAL_BATCH_FRAC "
+                              f"regardless)", flush=True)
                 if hers is not None:
                     hers[i].flush_episode()
 

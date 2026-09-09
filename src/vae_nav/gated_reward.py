@@ -102,6 +102,31 @@ if GOAL_REWARD_KIND not in ("sorb", "shaped"):
 STEP_COST = float(os.environ.get("STEP_COST", 1.0))
 GOAL_MAX_STEPS = int(os.environ.get("GATED_GOAL_MAX_STEPS", 1000))
 WEDGE_TRUNCATE = os.environ.get("WEDGE_TRUNCATE", "1") == "1"
+
+# LANE_INVASION_NOOP=1 MAKES CROSSING A LANE MARKING COST NOTHING AND END
+# NOTHING. Off-road is NOT covered by it and stays fatal -- see below.
+#
+# WHERE IT APPLIES. Goal mode under "sorb" already ignores lane state entirely:
+# the minimum-time reward looks only at arrival and the wedge, so a crossing is
+# already a no-op there and this flag changes nothing. It bites on the EXPLORE
+# half, where a crossing currently costs LANE_DEPARTURE_PENALTY (5.0) and
+# terminates the episode, and on the "shaped" goal reward's lane term.
+#
+# WHAT IT REMOVES, STATED PLAINLY. lane_explore_reward.py's own docstring says
+# the lane-departure penalty is "the ONLY thing discouraging" a car that drives
+# tight circles, because the progress term pays the same for circling as for
+# driving down the road. Turning it off removes that discouragement. OFF_ROAD IS
+# DELIBERATELY LEFT FATAL as the remaining backstop: leaving the drivable
+# surface is not "crossing a lane", and without at least one such term the
+# explore arm has no incentive to stay on the road at all.
+#
+# COMPARABILITY WARNING FOR THE ABLATION. The goal-free baseline
+# (carla_lanefollow_nogoal, checkpoint_350000) was trained WITH the lane penalty
+# active. A gated arm trained without it differs from that baseline by more than
+# the gate, which is the one thing the three-way comparison is supposed to
+# isolate. Either the baseline is retrained with the same setting, or the
+# explore halves are not directly comparable and the writeup has to say so.
+LANE_INVASION_NOOP = os.environ.get("LANE_INVASION_NOOP", "0") == "1"
 # Terminal penalties for the GOAL arm, matching LaneFollowReward's defaults.
 LF_K_LANE = float(os.environ.get("LF_K_LANE", 1.0))
 LF_K_COLLISION = float(os.environ.get("LF_K_COLLISION", 1.0))
@@ -126,7 +151,9 @@ def goal_reward(info, delta_mode="positive"):
         r += d + proj
     if info.get("collision"):
         r -= LF_K_COLLISION
-    if info.get("lane_any") or info.get("off_road"):
+    # Under LANE_INVASION_NOOP a marking crossing is free here too; off-road
+    # still bills, for the same reason it does in explore mode.
+    if info.get("off_road") or (info.get("lane_any") and not LANE_INVASION_NOOP):
         r -= LF_K_LANE
     if info.get("is_success"):
         r += LF_K_GOAL_BONUS
@@ -186,9 +213,17 @@ def explore_reward(info, disp):
         r += progress
     if info.get("collision"):
         r -= COLLISION_PENALTY
-    fatal = lane_departure_is_fatal(
-        bool(info.get("lane_any", False)), info.get("lane_marking_types"),
-        bool(info.get("in_junction", False)), bool(info.get("off_road", False)))
+    if LANE_INVASION_NOOP:
+        # Crossing a marking costs nothing and ends nothing. OFF-ROAD STILL
+        # DOES: it is not a lane crossing, and it is the only term left that
+        # discourages leaving the road, since the progress term pays the same
+        # for circling as for driving down it.
+        fatal = bool(info.get("off_road", False))
+    else:
+        fatal = lane_departure_is_fatal(
+            bool(info.get("lane_any", False)), info.get("lane_marking_types"),
+            bool(info.get("in_junction", False)),
+            bool(info.get("off_road", False)))
     if fatal:
         r -= LANE_DEPARTURE_PENALTY
     return float(np.nan_to_num(r, nan=0.0)), fatal

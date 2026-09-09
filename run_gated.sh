@@ -99,6 +99,20 @@ export WEDGE_TRUNCATE=1           # a wedge ends the episode BILLED EXACTLY for
                                   # the time it would have burned, so ending
                                   # early is worth precisely nothing
 
+# CROSSING A LANE MARKING IS A NO-OP: no penalty, no termination, in either
+# mode. Goal mode under sorb already ignored lane state, so this only changes
+# the explore half, where a crossing previously cost 5.0 and ended the episode.
+#
+# OFF-ROAD IS STILL FATAL and that is deliberate. The explore progress term pays
+# the same for driving in circles as for driving down the road, so with the lane
+# term gone, off-road is the only remaining reason to stay on it.
+#
+# COMPARABILITY: carla_lanefollow_nogoal was trained WITH the lane penalty. Its
+# explore half and this one now differ by more than the gate, so either that
+# baseline is retrained with LANE_INVASION_NOOP=1 or the writeup states that the
+# explore arms are not directly comparable.
+export LANE_INVASION_NOOP=1
+
 # TWO CRITICS, and under SORB this IS the Habitat rationale. The discounts
 # genuinely differ and the returns differ in SIGN, so one critic could not serve
 # both even at equal scale.

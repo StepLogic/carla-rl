@@ -73,6 +73,70 @@ VECTOR_DIM = 4
 # disagree silently.
 WITH_GOAL = os.environ.get("OBS_WITH_GOAL", "1") == "1"
 
+# OBS_WITH_MODE=1 ADDS THE GATED POLICY'S COMMANDED MODE BIT.
+#
+# ITS OWN KEY, NOT A FIFTH SLOT IN `vector`. PixelMultiplexer gives every
+# non-image key its own Dense -> LayerNorm -> tanh projection before
+# concatenating. Appending the bit to `vector` would push a single 0/1 value
+# through a LayerNorm shared with steer, throttle and speed, where it would be
+# partly normalised away. Its own key gives it its own projection, and it leaves
+# the 4-vector layout untouched so existing checkpoints stay readable.
+#
+# THIS FLAG DOES NOT OVERLOAD OBS_WITH_GOAL, and must not be made to. That flag
+# has a load-bearing meaning -- omit the 12-d block, 144 -> 132 -- which
+# run_lanefollow_nogoal.sh and every carla_lanefollow_nogoal checkpoint depend
+# on. Gating needs the goal PRESENT and zeroed, because one actor cannot accept
+# two input shapes. The two flags are orthogonal and the pairing is checked in
+# check_gated_coherence below.
+#
+# COST, STATED PLAINLY: the gated observation is 145-d, which matches neither
+# existing arm (144 goal-conditioned, 132 goal-free). policy_io.load_agent_state
+# will refuse both, correctly. A gated run is therefore FROM SCRATCH, not a
+# fine-tune, and that is the main reason the three-way comparison costs a full
+# training budget.
+WITH_MODE = os.environ.get("OBS_WITH_MODE", "0") == "1"
+MODE_DIM = 1
+
+# Must match vae_nav.gated_reward. Inverting these silently swaps which critic
+# trains on which mode, and nothing downstream would raise.
+GOAL, EXPLORE = 1, 0
+
+
+def check_gated_coherence():
+    """Reject gated configurations that cannot learn. Inert unless gating."""
+    if not WITH_MODE:
+        return
+    if not WITH_GOAL:
+        raise ValueError(
+            "OBS_WITH_MODE=1 requires the goal block (OBS_WITH_GOAL=1). A gated "
+            "policy switches between goal-reaching and goal-free driving. With "
+            "no goal in the observation the mode bit selects between a goal the "
+            "actor cannot see and the same observation again, so the two modes "
+            "are indistinguishable to the network and the gate is decorative. "
+            "Gating zeroes the goal block in explore mode; it does not remove "
+            "it. If you want the goal genuinely absent, that is the SEPARATE "
+            "goal-free arm (OBS_WITH_GOAL=0, OBS_WITH_MODE=0), which is the "
+            "third leg of the ablation rather than a mode of this one.")
+    if not WITH_VECTOR:
+        raise ValueError(
+            "OBS_WITH_MODE=1 requires the vector block (OBS_WITH_VECTOR=1). "
+            "BOTH gated rewards are speed-gated -- they pay progress only below "
+            "target speed -- so a policy that cannot observe its own speed sees "
+            "the gate as an unobservable coin flip and the critic fits noise.")
+
+
+def apply_mode(goal_block, mode):
+    """Zero the goal block in explore mode, in place, and return it.
+
+    ZEROED, NOT OMITTED. One actor cannot accept two input shapes. This is the
+    dead-input cost of gating -- a permanently-zero channel the encoder must
+    learn to ignore -- and measuring it against the separate goal-free arm is
+    precisely why the gated arm exists.
+    """
+    if int(mode) == EXPLORE:
+        goal_block[:] = 0.0
+    return goal_block
+
 
 class VAEGoalWrapper(Wrapper):
     """Publishes {"goal", "latent"} and owns the ONLY goal-block transform."""
@@ -87,6 +151,8 @@ class VAEGoalWrapper(Wrapper):
 
         self.with_vector = WITH_VECTOR
         self.with_goal = WITH_GOAL
+        self.with_mode = WITH_MODE
+        check_gated_coherence()
         if not self.with_goal:
             _goal_reward = (os.environ.get("LANE_FOLLOW", "0") == "1"
                             or os.environ.get("TIME_TO_GOAL", "0") == "1"
@@ -109,6 +175,8 @@ class VAEGoalWrapper(Wrapper):
         if self.with_vector:
             # Bounds match the env's own declaration for this block.
             space["vector"] = spaces.Box(-5.1, 5.1, (VECTOR_DIM,), np.float32)
+        if self.with_mode:
+            space["mode"] = spaces.Box(0.0, 1.0, (MODE_DIM,), np.float32)
         self.observation_space = spaces.Dict(space)
         print("[VAEGoal] obs={"
               + (f"'goal': ({GOAL_DIM},), " if self.with_goal else "")
@@ -198,6 +266,15 @@ class VAEGoalWrapper(Wrapper):
             if v.size < VECTOR_DIM:
                 v = np.pad(v, (0, VECTOR_DIM - v.size))
             out["vector"] = v
+        if self.with_mode:
+            # DEFAULTS TO GOAL. An env without GatedReward below it publishes no
+            # mode, and goal mode leaves the observation exactly as the
+            # ungated arm's -- so a missing wrapper degrades to the familiar
+            # behaviour rather than silently zeroing every goal.
+            mode = int(info.get("mode", GOAL))
+            if self.with_goal:
+                out["goal"] = apply_mode(out["goal"], mode)
+            out["mode"] = np.array([float(mode)], np.float32)
         return out
 
     def reset(self, **kwargs):
@@ -233,6 +310,10 @@ class VAEGoalWrapper(Wrapper):
         ident = self.source.identity()
         ident["goal_dim"] = GOAL_DIM
         ident["n_action_history"] = N_ACTION_HISTORY
+        # Recorded so evaluation cannot silently pair a gated checkpoint with a
+        # plain agent. The shapes differ (145 against 144), so the loader would
+        # refuse anyway, but this names the reason.
+        ident["with_mode"] = self.with_mode
         ident["with_vector"] = bool(self.with_vector)
         ident["with_goal"] = bool(self.with_goal)
         return ident

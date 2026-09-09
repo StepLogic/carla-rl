@@ -16,7 +16,7 @@ import sys
 ORDER = {"goal_only": 0, "goal_free": 1, "gated": 2, "gated_her": 3}
 
 HEADER = (f"{'arm':<12} {'success':>10} {'steps(med)':>11} {'n_arr':>6} "
-          f"{'ep_len':>8} {'timeout':>8}")
+          f"{'ep_len':>8} {'timeout':>8} {'q_bias':>10} {'q_corr':>7}")
 
 FOOTNOTES = [
     "success is n/a for goal_free BY CONSTRUCTION: it measures arrival at a",
@@ -27,6 +27,13 @@ FOOTNOTES = [
     "  critic is trained to predict.",
     "All arms drive the SAME episode set: identical towns and start states from",
     "  a fixed seed, so a difference in the table is not a difference in draw.",
+    "q_bias/q_corr test the critic AS A DISTANCE, which is why the minimum-time",
+    "  reward was chosen at all: under it Q(s0) should equal -(steps taken).",
+    "  q_bias is the mean signed error IN STEPS, so -570 means the critic",
+    "  believes the goal is 570 steps further than it is. q_corr is whether it",
+    "  still ORDERS states correctly -- a badly biased critic can remain usable",
+    "  to a map builder that compares distances rather than reading them.",
+    "  Measured on ARRIVING episodes only: a timeout has no true cost-to-go.",
 ]
 
 
@@ -44,9 +51,13 @@ def format_row(r):
             else f"{r['success']:.3f}")
     med = ("n/a" if r.get("steps_median") is None
            else f"{r['steps_median']:.0f}")
+    bias = ("n/a" if r.get("q_bias_steps") is None
+            else f"{r['q_bias_steps']:+.0f}")
+    corr = "n/a" if r.get("q_corr") is None else f"{r['q_corr']:.2f}"
     return (f"{r['arm']:<12} {succ:>10} {med:>11} {r.get('n_arrived', 0):>6} "
             f"{r.get('episode_len_mean', float('nan')):>8.1f} "
-            f"{r.get('timeout_frac', float('nan')):>8.3f}")
+            f"{r.get('timeout_frac', float('nan')):>8.3f} "
+            f"{bias:>10} {corr:>7}")
 
 
 def render(rows):

@@ -17,11 +17,13 @@ from summarize_four_way import format_row, load, render  # noqa: E402
 
 
 def _arm(arm, goal_conditioned=True, success=0.9, steps_median=90.0,
-         n_arrived=54, episode_len_mean=120.0, timeout_frac=0.05):
+         n_arrived=54, episode_len_mean=120.0, timeout_frac=0.05,
+         q_bias_steps=-12.0, q_corr=0.81, q_n=54):
     return {"arm": arm, "goal_conditioned": goal_conditioned,
             "success": success if goal_conditioned else None,
             "steps_median": steps_median, "n_arrived": n_arrived,
-            "episode_len_mean": episode_len_mean, "timeout_frac": timeout_frac}
+            "episode_len_mean": episode_len_mean, "timeout_frac": timeout_frac,
+            "q_bias_steps": q_bias_steps, "q_corr": q_corr, "q_n": q_n}
 
 
 ALL_FOUR = [_arm("goal_only"), _arm("goal_free", goal_conditioned=False,
@@ -43,8 +45,10 @@ def test_a_goal_conditioned_arm_shows_its_success():
 
 
 def test_steps_show_n_a_when_nothing_arrived():
+    # Asserts the STEPS column specifically. Counting "n/a" occurrences was
+    # brittle: it broke the moment a column was added, for no real reason.
     row = format_row(_arm("gated", steps_median=None, n_arrived=0))
-    assert row.count("n/a") == 1
+    assert row.split()[2] == "n/a"
 
 
 def _arm_column(out):
@@ -101,3 +105,36 @@ def test_load_reads_and_orders_files(tmp_path):
 
 def test_load_on_an_empty_directory_returns_nothing(tmp_path):
     assert load(str(tmp_path)) == []
+
+
+# ------------------------------------------------- critic as a distance ----
+
+def test_the_calibration_columns_are_shown():
+    # These test the claim the whole reward choice rests on: under minimum time
+    # the value IS the negated time to goal.
+    row = format_row(_arm("gated", q_bias_steps=-570.0, q_corr=0.42))
+    assert "-570" in row
+    assert "0.42" in row
+
+
+def test_a_positive_bias_keeps_its_sign():
+    # Sign carries the meaning: negative means the critic thinks the goal is
+    # FURTHER than it is. An unsigned number would lose that.
+    assert "+18" in format_row(_arm("gated", q_bias_steps=18.0))
+
+
+def test_calibration_shows_n_a_when_it_could_not_be_measured():
+    row = format_row(_arm("goal_free", goal_conditioned=False,
+                          steps_median=None, n_arrived=0,
+                          q_bias_steps=None, q_corr=None, q_n=0))
+    assert row.split()[-1] == "n/a"
+    assert row.split()[-2] == "n/a"
+
+
+def test_the_footnotes_explain_bias_and_correlation_separately():
+    # A badly biased critic can still ORDER states correctly, which is all a
+    # map builder needs if it compares distances rather than reading them.
+    out = render(ALL_FOUR)
+    assert "q_bias is the mean signed error IN STEPS" in out
+    assert "ORDERS states correctly" in out
+    assert "ARRIVING episodes only" in out

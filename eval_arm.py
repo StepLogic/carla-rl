@@ -79,9 +79,38 @@ def main():
         state = pickle.load(fh)
     load_agent_state(agent, state.get("agent", state))
 
+    def q_at(observation):
+        """The goal critic's value of this state under the policy's action.
+
+        WHY THIS IS MEASURED AT ALL. Under the SORB minimum-time reward the
+        value IS the negated time to goal, and that reading -- not the success
+        rate -- is why the reward was chosen over a shaped one: a topological
+        map builder consumes the critic as a DISTANCE. A policy can be excellent
+        while its critic is useless as a metric, and nothing else in this
+        harness would notice.
+
+        Returns None for arms whose learner has no goal critic to read.
+        """
+        critic = getattr(agent, "_critic", None)
+        if critic is None:
+            return None
+        try:
+            import jax.numpy as jnp
+            batched = jax.tree_util.tree_map(lambda x: np.asarray(x)[None],
+                                             observation)
+            action = np.asarray(agent.eval_actions(observation))[None]
+            qs = critic.apply_fn({"params": critic.params}, batched, action)
+            return float(jnp.mean(qs))
+        except Exception:  # noqa: BLE001 - telemetry must never fail a run
+            return None
+
+    import jax  # noqa: E402  (only needed for the tree_map above)
+
     successes, steps_to_goal, timeouts, lengths = [], [], 0, []
+    q0, q0_steps = [], []
     for ep in episodes:
         obs, _ = env.reset()
+        q_start = q_at(obs)
         done, n, ok = False, 0, False
         while not done and n < args.max_steps:
             action = agent.eval_actions(obs)
@@ -93,6 +122,13 @@ def main():
         lengths.append(n)
         if ok:
             steps_to_goal.append(n)
+            # CALIBRATION IS ONLY DEFINED ON EPISODES THAT ARRIVED. For a
+            # timeout the true cost-to-go is unknown -- the goal was never
+            # reached -- so including it would compare the critic against a
+            # censored label and flatter or damn it arbitrarily.
+            if q_start is not None:
+                q0.append(q_start)
+                q0_steps.append(float(n))
         elif n >= args.max_steps:
             timeouts += 1
     env.close()
@@ -113,6 +149,18 @@ def main():
         "n_arrived": len(steps_to_goal),
         "episode_len_mean": float(np.mean(lengths)),
         "timeout_frac": timeouts / max(1, len(episodes)),
+        # CRITIC-AS-DISTANCE. Under minimum time Q(s0) should equal -(steps
+        # this episode then took). q_bias is the mean signed error in STEPS, so
+        # -570 means the critic thinks the goal is 570 steps further away than
+        # it is. q_corr is the correlation between predicted and actual: a
+        # critic can be badly biased yet still ORDER states correctly, which is
+        # all a map builder needs if it compares distances rather than reading
+        # them absolutely. Reporting both separates those two failures.
+        "q_bias_steps": (float(np.mean(np.array(q0) + np.array(q0_steps)))
+                         if len(q0) >= 2 else None),
+        "q_corr": (float(np.corrcoef(np.array(q0), -np.array(q0_steps))[0, 1])
+                   if len(q0) >= 2 and np.std(q0) > 0 else None),
+        "q_n": len(q0),
     }
     os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)
     with open(args.out, "w") as fh:
@@ -121,10 +169,16 @@ def main():
     succ = (f"{out['success']:.3f}" if goal_conditioned
             else "n/a (not a goal-conditioned arm)")
     med = ("n/a" if out["steps_median"] is None else f"{out['steps_median']:.0f}")
+    bias = ("n/a" if out["q_bias_steps"] is None
+            else f"{out['q_bias_steps']:+.0f} steps")
+    corr = "n/a" if out["q_corr"] is None else f"{out['q_corr']:.2f}"
     print(f"[Arm {args.arm}] success={succ} "
           f"steps_to_goal_median={med} (n={out['n_arrived']}) "
           f"episode_len_mean={out['episode_len_mean']:.1f} "
           f"timeouts={out['timeout_frac']:.3f} -> {args.out}", flush=True)
+    print(f"[Arm {args.arm}] critic-as-distance: bias={bias} corr={corr} "
+          f"(n={out['q_n']}) -- bias is how far wrong the value is IN STEPS; "
+          f"corr is whether it still ORDERS states correctly", flush=True)
 
 
 if __name__ == "__main__":

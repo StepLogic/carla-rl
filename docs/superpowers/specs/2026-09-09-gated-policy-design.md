@@ -328,6 +328,16 @@ None should be fixed inside this work.
    only below target speed is unlearnable when the policy cannot observe its own
    speed. Both lane arms enable the speed channel; the explorer does not, and no
    comment anywhere justifies the omission.
+
+   Two refinements, confirmed with the peer after this spec was first written.
+   Setting the speed flag would **not** fix it, because the explorer path uses
+   the explore observation wrapper rather than the goal wrapper, and that flag
+   belongs to the goal wrapper. The fix has to add a speed channel to the 21-value
+   explore block, which changes the observation shape and therefore invalidates
+   the explorer's checkpoints. Separately, the dead reckoner is **not** affected:
+   the core state wrapper does publish speed into the info dictionary, so the
+   reckoner receives a real value. Only the observation lacks it. Anyone widening
+   this bug report should not claim the reckoner is starved.
 2. **`src/configs/goal_conditioned_env_config.py` is dead code.** It is 1831
    lines, modified in the working tree, and imported by nothing.
 3. **Most of the working stack is untracked**, including the goal wrapper and

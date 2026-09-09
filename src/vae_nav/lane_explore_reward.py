@@ -75,6 +75,41 @@ LANE_DEPARTURE_PENALTY = float(os.environ.get("LANE_DEPARTURE_PENALTY", 5.0))
 SPEED_PENALTY = float(os.environ.get("LANE_SPEED_PENALTY", 3.0))
 LANE_EXPLORE_MAX_STEPS = int(os.environ.get("LANE_EXPLORE_MAX_STEPS", 500))
 
+# WHAT THE PROGRESS TERM MEASURES.
+#
+#   projected  displacement . wp_forward   -- the LANE's direction (default)
+#   heading    displacement . hero_forward -- the CAR's own direction
+#   raw        |displacement|              -- any motion at all
+#   none       no progress term
+#
+# WHY THE CHOICE MATTERS, AND IT IS NOT A STYLE PREFERENCE.
+#
+# `projected` reads wp_forward, which comes from CARLA's road graph -- PRIVILEGED
+# map information. It is only in the REWARD, never the observation, so the
+# deployed policy does not need it; but it does mean the reward cannot be
+# computed on a robot with no map, and progress is only paid when motion agrees
+# with the lane. That agreement is precisely what makes it a lane-following
+# signal rather than a go-anywhere signal.
+#
+# `heading` needs no map: the car's own yaw is proprioceptive. It pays forward
+# motion regardless of whether that is along the lane.
+#
+# `raw` pays ANY displacement, and that is the dangerous one. |displacement| is
+# maximised by moving fast in any direction whatsoever, so a car driving tight
+# circles earns exactly as much as one driving down the road. This module's own
+# novelty rule was written against the same failure mode -- "a car driving tight
+# circles CAN earn, every heading is a different image" -- and the lane-departure
+# penalty is then the ONLY thing discouraging it.
+#
+# `none` leaves the reward with no positive term at all: every step costs
+# BASE_PENALTY plus steer_change, and the cheapest available outcome is to end
+# the episode. That is a guaranteed suicide incentive, not a risk of one, and it
+# is refused below rather than offered.
+PROGRESS_MODE = os.environ.get("LANE_PROGRESS_MODE", "projected").lower()
+if PROGRESS_MODE not in ("projected", "heading", "raw", "none"):
+    raise ValueError(f"LANE_PROGRESS_MODE={PROGRESS_MODE!r} is not one of "
+                     "projected | heading | raw | none")
+
 # Same set as core_state.py and the config's wedge. Pinned by test.
 ILLEGAL_MARKS = {"Solid", "SolidSolid", "SolidBroken", "Curb", "Grass"}
 
@@ -115,8 +150,15 @@ class LaneExploreReward(Wrapper):
         print(f"[LaneExplore] goal-free upstream lane reward | "
               f"base={BASE_PENALTY} collision={COLLISION_PENALTY} "
               f"lane={LANE_DEPARTURE_PENALTY} speed={SPEED_PENALTY} "
-              f"max_steps={self.max_steps} novelty={_nov} | projection onto "
-              "the LANE, junction crossings forgiven")
+              f"max_steps={self.max_steps} novelty={_nov} "
+              f"progress={PROGRESS_MODE} | junction crossings forgiven")
+        if PROGRESS_MODE == "none":
+            raise ValueError(
+                "LANE_PROGRESS_MODE=none leaves this reward with no positive "
+                "term: every step costs BASE_PENALTY + steer_change and the "
+                "cheapest outcome is to end the episode immediately. That is a "
+                "guaranteed suicide incentive. Use 'heading' for a map-free "
+                "progress term, or 'raw' if you accept that circling pays.")
         if (novelty is not None and encoder is not None
                 and not novelty.persist):
             print("[LaneExplore] WARNING: novelty memory resets every episode, "
@@ -167,9 +209,20 @@ class LaneExploreReward(Wrapper):
         disp = pos - self._prev_pos
         self._prev_pos = pos
 
-        # Displacement projected onto the LANE direction, not the goal's.
-        fwd = np.asarray(info.get("wp_forward", (0.0, 0.0)), np.float64)
-        projected = float(np.dot(disp, fwd))
+        # Progress term. See PROGRESS_MODE for why the choice is load-bearing.
+        if PROGRESS_MODE == "projected":
+            # Onto the LANE direction, not the goal's.
+            fwd = np.asarray(info.get("wp_forward", (0.0, 0.0)), np.float64)
+            projected = float(np.dot(disp, fwd))
+        elif PROGRESS_MODE == "heading":
+            # Onto the CAR's own heading -- no map anywhere in the reward.
+            yaw = float(info.get("hero_yaw", 0.0))
+            projected = float(disp[0] * np.cos(yaw) + disp[1] * np.sin(yaw))
+        elif PROGRESS_MODE == "raw":
+            # ANY motion. Pays a tight circle as much as a straight road.
+            projected = float(np.linalg.norm(disp))
+        else:
+            projected = 0.0
 
         steer_change = float(info.get("action_smoothness_penalty", 0.0))
         speed_factor = float(info.get("speed_factor", 0.0))

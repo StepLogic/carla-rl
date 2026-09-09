@@ -86,8 +86,31 @@ def edge_reject_mask(cost_steps, spread, max_steps=H_STEPS, tau=None):
         left its provable range entirely;
       * critics disagree -- the cheapest available off-distribution signal.
 
-    `tau` of None disables the disagreement test, for when no spread
-    distribution has been observed yet to set it from.
+    `tau` of None disables the disagreement test, and DEFAULTING IT ON WOULD
+    CURRENTLY BE A MISTAKE.
+
+    DO NOT SET `tau` FROM A RAW SPREAD DISTRIBUTION. Two independent peer
+    sessions on the Habitat/Gibson side of this project measured critic-ensemble
+    disagreement against outcome and found it is a proxy for MAGNITUDE, not for
+    local uncertainty:
+
+        corr(epistemic, leg length)                        -0.656
+        AUC(epistemic vs arrival)                           0.830
+        AUC(epistemic | leg length + Qmean regressed out)   0.533   <- chance
+        AUC(leg length, negated) -- the bare baseline       0.856
+        (n = 561 legs, 3 scenes, one checkpoint)
+
+    Disagreement FALLS as the goal nears, so raw spread has the wrong sign for
+    a rejection criterion: it flags the edges the policy handles BEST. Rejecting
+    on it here would preferentially discard short, reliable edges while keeping
+    long ones -- the opposite of what the horizon test above is for, and the
+    optimistic direction that graph search actively selects for.
+
+    A second session independently reported the same inversion
+    (corr(leg length, epistemic) between -0.6 and -0.9) and the same remedy:
+    normalise by |Q| before thresholding, or score within distance bands. Until
+    that normalisation exists and is validated on THIS agent, leave `tau` unset;
+    the horizon test carries the rejection on its own.
     """
     cost_steps = np.asarray(cost_steps, np.float64)
     reject = cost_steps > max_steps

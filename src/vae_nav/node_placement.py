@@ -5,12 +5,25 @@ states and differs only in which it keeps. Node placement is then the only
 variable, so a difference in SR/SPL is attributable to it. Anything collected
 per method would measure the collection instead.
 
-EQUAL BUDGET IS THE ONLY FAIR COMPARISON, and it is this project's existing
-convention -- node_placement_entropy.py states it plainly: a method with more
-nodes trivially covers more of the world, so every arm places EXACTLY the same
-number of nodes on EXACTLY the same trace. SGM is the one method that derives
-its own count (sparsity falls out of its merge test rather than being imposed),
-so that count becomes the budget the other three are given.
+THERE IS NO NODE BUDGET, AND THAT IS DELIBERATE. The question is the PARETO
+FRONTIER of node count against SR/SPL, so nothing is forced onto a shared
+number. An earlier version of this file imposed an equal budget -- SGM's own
+count, handed to the other three -- which answers a different and narrower
+question: "which method is best at exactly n nodes". It also caps the one
+method whose sparsity is supposed to be emergent.
+
+THE TWO KINDS OF ARM ARE SWEPT DIFFERENTLY, because their free parameter is not
+the same thing:
+
+    uniform, random, policy   have NO intrinsic node count. They must be told
+                              how many to place, so node count IS their free
+                              parameter and sweeping it traces their curve.
+    sgm                       DERIVES its count from its consistency cutoff.
+                              That cutoff is swept and the node count is an
+                              OUTPUT, never a target.
+
+`n` therefore means "how many this arm was asked for", not "the budget", and it
+is meaningless for SGM.
 
 THE FOUR ARMS:
 
@@ -148,36 +161,6 @@ def place_peaks(h, s, n_max, min_sep_m, smooth_w):
     return np.array(sorted(picked), dtype=int)
 
 
-def value_coverage_select(dist, max_steps=H_STEPS, order=None):
-    """SoRB coverage: keep a candidate no existing node can already reach.
-
-    NOT ONE OF THE FOUR ARMS. It is kept because it is SGM's natural ablation
-    partner -- SGM's merge test minus the two-way consistency check -- and is
-    the thing to reach for if the SGM result needs decomposing. Reachability is
-    required in BOTH directions here, because a node the policy can drive to
-    but not out of is useless as a waypoint; that is a different question from
-    SGM's, which compares how two states behave toward every OTHER node.
-    """
-    dist = np.asarray(dist, np.float64)
-    n = len(dist)
-    if n == 0:
-        return np.empty(0, dtype=int), np.empty(0, dtype=int)
-    seq = list(range(n)) if order is None else list(order)
-
-    members, covered_by = [], -np.ones(n, dtype=int)
-    for i in seq:
-        hit = -1
-        for node in members:
-            if dist[node, i] <= max_steps and dist[i, node] <= max_steps:
-                hit = node
-                break
-        if hit < 0:
-            members.append(i)
-        else:
-            covered_by[i] = hit
-    return np.asarray(members, dtype=int), covered_by
-
-
 def sgm_cutoff_for_budget(dist, embeddings, target_n, embedding_cutoff,
                           lo=0.1, hi=None, iters=18, order=None):
     """Find the consistency cutoff whose SGM node count is nearest `target_n`.
@@ -218,10 +201,11 @@ def place(method, s=None, entropy=None, dist=None, embeddings=None, n=None,
           **kw):
     """One entry point, so the driver cannot apply a method inconsistently.
 
-    `n` is the equal budget, normally SGM's own node count. It is REQUIRED for
-    the three budgeted arms: defaulting it would silently let one arm place a
-    different number of nodes than the others, which is the single easiest way
-    to turn a placement comparison into a sparsity comparison without noticing.
+    `n` is HOW MANY NODES THIS ARM WAS ASKED FOR -- the sweep point for uniform,
+    random and policy, and meaningless for sgm, whose count comes out of its
+    consistency cutoff. It is REQUIRED for the three that take it: defaulting it
+    would let an arm quietly place a different number than the point being
+    swept, which turns a curve into an unlabelled scatter.
     """
     method = str(method).lower()
     if method in ("uniform", "random", "policy") and (s is None or n is None):
@@ -239,12 +223,8 @@ def place(method, s=None, entropy=None, dist=None, embeddings=None, n=None,
             raise ValueError("sgm placement needs dist and embeddings")
         from vae_nav.sgm_placement import sgm_select
         return sgm_select(dist, embeddings, order=order, **kw)
-    if method == "coverage":
-        if dist is None:
-            raise ValueError("coverage placement needs a distance matrix")
-        return value_coverage_select(dist, max_steps=max_steps, order=order)
     raise ValueError(f"unknown placement method {method!r}; "
-                     f"expected one of {METHODS} (or 'coverage')")
+                     f"expected one of {METHODS}")
 
 
 def actor_entropy(agent, observations, seed=0, batch=256):

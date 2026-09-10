@@ -21,8 +21,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(
 
 from vae_nav.node_placement import (METHODS, arclength,  # noqa: E402
                                     place, place_peaks, place_random,
-                                    place_uniform, smooth,
-                                    value_coverage_select)
+                                    place_uniform, smooth)
 
 
 # ------------------------------------------------------------ utilities ----
@@ -133,34 +132,6 @@ def test_peaks_respects_the_budget():
     h = rng.normal(size=200)
     s = np.arange(200.0) * 5.0
     assert len(place_peaks(h, s, n_max=7, min_sep_m=1.0, smooth_w=3)) == 7
-
-
-# ------------------------------------------------- coverage (SGM's foil) ----
-
-def _dist(pairs, n, far=1e6):
-    d = np.full((n, n), far, np.float64)
-    np.fill_diagonal(d, 0.0)
-    for (i, j), v in pairs.items():
-        d[i, j] = v
-    return d
-
-
-def test_coverage_keeps_the_first_candidate():
-    idx, covered = value_coverage_select(_dist({}, 3), max_steps=10.0)
-    assert idx[0] == 0 and covered[0] == -1
-
-
-def test_coverage_needs_reachability_in_both_directions():
-    # A node the policy can drive TO but not back FROM is useless as a
-    # waypoint: the route has to pass through it and come out again.
-    d = _dist({(0, 1): 5.0, (1, 0): 1e6}, 2)
-    assert list(value_coverage_select(d, max_steps=10.0)[0]) == [0, 1]
-
-
-def test_coverage_is_measured_against_nodes_not_merged_states():
-    d = _dist({(0, 1): 5.0, (1, 0): 5.0, (1, 2): 5.0, (2, 1): 5.0}, 3)
-    idx, covered = value_coverage_select(d, max_steps=10.0)
-    assert list(idx) == [0, 2] and covered[1] == 0
 
 
 # ------------------------------------------------------------ dispatch ----

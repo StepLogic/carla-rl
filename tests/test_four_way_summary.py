@@ -88,6 +88,45 @@ def test_an_empty_directory_says_no_results():
     assert render([]) == "no results found"
 
 
+# ------------------------------------------- the deconfound rows ----
+#
+# goal_only_lanenoop and goal_only_freerun are the SAME frozen checkpoint as
+# goal_only under a relaxed termination rule, run to answer how much of the
+# extrapolation gap was the rule rather than the gate. Two properties matter
+# for reading the table and neither is self-evident from the code.
+
+def _deconfound_column(out):
+    names = {"goal_only", "goal_only_lanenoop", "goal_only_freerun",
+             "goal_free", "gated", "gated_her"}
+    return [line.split()[0] for line in out.splitlines()
+            if line and line.split()[0] in names]
+
+
+def test_the_deconfound_rows_sit_directly_under_the_baseline():
+    # They are only readable AS a comparison: the three goal_only rows differ
+    # by termination rule alone, so separating them puts the reader's eye on
+    # the wrong contrast.
+    rows = ALL_FOUR + [_arm("goal_only_freerun"), _arm("goal_only_lanenoop")]
+    assert _deconfound_column(render(rows)) == [
+        "goal_only", "goal_only_lanenoop", "goal_only_freerun",
+        "goal_free", "gated", "gated_her"]
+
+
+def test_the_deconfound_rows_are_not_required_for_a_complete_table():
+    # They answer a follow-up question. Reporting them as MISSING on every
+    # ordinary four-way run would cry wolf and teach the reader to skip the
+    # warning that does matter.
+    out = render(ALL_FOUR)
+    assert "MISSING" not in out
+
+
+def test_a_long_arm_name_does_not_break_the_column():
+    # The names are 17 characters; the column was 12 wide when they were added.
+    row = format_row(_arm("goal_only_freerun", success=0.9))
+    assert row.split()[0] == "goal_only_freerun"
+    assert "0.900" in row
+
+
 def test_the_footnotes_explain_the_n_a_and_the_steps_column():
     out = render(ALL_FOUR)
     assert "BY CONSTRUCTION" in out

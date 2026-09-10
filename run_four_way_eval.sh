@@ -60,6 +60,13 @@ export EVAL_VIDEO=0
 export XLA_PYTHON_CLIENT_PREALLOCATE=false XLA_PYTHON_CLIENT_MEM_FRACTION=0.4
 export XLA_FLAGS=--xla_gpu_enable_command_buffer=
 
+# WHICH ARMS TO RUN. Default is the four the table is built from. Naming a
+# subset re-runs just those, against the SAME episode set -- EVAL_SEED is what
+# defines the set, and it is untouched by this, so a row produced alone is
+# comparable to rows produced in a full sweep. That is what makes the
+# deconfound arms below cheap: one arm, three bands, no retraining.
+ARMS="${ARMS:-goal_only,goal_free,gated,gated_her}"
+
 EPISODES="${EPISODES:-60}"
 EVAL_SEED="${EVAL_SEED:-0}"
 EVAL_MAX_STEPS="${EVAL_MAX_STEPS:-1000}"
@@ -103,6 +110,10 @@ BANDS="${BANDS:-5-20,20-40,40-70}"
 
 run_arm() {
   local name="$1" ckpt="$2" goal_conditioned="$3"
+  case ",$ARMS," in
+    *",$name,"*) ;;
+    *) echo "[Arm $name] not in ARMS=$ARMS; skipping"; return 0 ;;
+  esac
   if [ ! -f "$ckpt" ]; then
     echo "[Arm $name] SKIPPED: no checkpoint at $ckpt" >&2
     return 0
@@ -166,6 +177,41 @@ run_arm() {
          LANE_INVASION_NOOP=1 DISCOUNT=1.0 EXPLORE_DISCOUNT=0.99 \
          EXPLORE_PROB=0.5 GOAL_BATCH_FRAC=0.5 TQC_KAPPA=1.0
   run_arm gated_her "${CKPT_GATED_HER:-checkpoints/carla_gated_her/checkpoint_350000.pkl}" 1 1 1 )
+
+# 5 and 6. THE SAME BASELINE CHECKPOINT UNDER THE GATED ARMS' TERMINATION RULE.
+#
+# WHY. Arm 1's extrapolation numbers (0.32 / 0.28 against the gated arms'
+# 0.90 / 0.82) are recorded as CONFOUNDED: crossing a lane marking ENDS an
+# episode for arm 1 and is a no-op for arms 3 and 4, whose goal mode discards
+# the env's `done` entirely. Arm 1 died on lane invasion in 35 and 43 of its 60
+# episodes while the gated arms only ever timed out, so an unknown part of that
+# gap is who gets stopped first rather than who drives better.
+#
+# NOTHING IS RETRAINED AND NOTHING ELSE CHANGES. Same checkpoint as arm 1, same
+# episode set, same bands, same observation. Only the rule for ending an episode
+# differs, and it differs in two steps so the effect can be attributed:
+#
+#   goal_only_lanenoop  a painted crossing is free; OFF-ROAD AND COLLISION STAY
+#                       FATAL. Isolates the lane rule alone.
+#   goal_only_freerun   only arrival ends an episode -- EXACTLY the gated goal
+#                       arm's rule. Removes the termination difference entirely,
+#                       so what is left is attributable to the gate.
+#
+# READ THESE ROWS WITH ONE CAVEAT, WHICH IS NOT A DEFECT OF THE COMPARISON: this
+# policy was TRAINED with those events terminal, so its behaviour in the steps
+# after a crossing is out of distribution. That is a fact about the baseline,
+# not a flaw in the measurement -- the gated arms were trained under their rule
+# and are evaluated under it, and this is what evaluating the baseline under the
+# same rule actually costs.
+( export GATED=0 OBS_WITH_MODE=0 OBS_WITH_GOAL=1 OBS_WITH_VECTOR=1 \
+         LANE_FOLLOW=1 LANE_FOLLOW_NOGOAL=0 LANE_EXPLORE=0 DELTA_MODE=positive \
+         LANE_INVASION_NOOP=1
+  run_arm goal_only_lanenoop "${CKPT_GOAL:-checkpoints/carla_lanefollow/checkpoint_50000.pkl}" 1 )
+
+( export GATED=0 OBS_WITH_MODE=0 OBS_WITH_GOAL=1 OBS_WITH_VECTOR=1 \
+         LANE_FOLLOW=1 LANE_FOLLOW_NOGOAL=0 LANE_EXPLORE=0 DELTA_MODE=positive \
+         LF_ONLY_ARRIVAL_TERMINATES=1
+  run_arm goal_only_freerun "${CKPT_GOAL:-checkpoints/carla_lanefollow/checkpoint_50000.pkl}" 1 )
 
 echo
 echo "=== FOUR-WAY COMPARISON ==="

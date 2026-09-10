@@ -68,6 +68,36 @@ K_STEER_CHANGE = float(os.environ.get("LF_K_STEER_CHANGE", 1.0))
 K_GOAL_BONUS = float(os.environ.get("LF_K_GOAL_BONUS", 1.0))
 K_CHECKPOINT = float(os.environ.get("LF_K_CHECKPOINT", 1.0))
 
+# TWO WAYS TO RELAX WHEN AN EPISODE ENDS, FOR THE ABLATION'S SAKE.
+#
+# WHY THEY EXIST. The four-way comparison reports the shaped baseline failing to
+# extrapolate (0.32 / 0.28) where the gated arms hold up (0.90 / 0.82), and
+# records that gap as CONFOUNDED: a lane crossing ENDS an episode here and is a
+# no-op for the gated arms, whose goal mode discards the env's `done` entirely.
+# The baseline died on lane invasion in 35 and 43 of 60 episodes while the gated
+# arms only ever timed out, so part of that gap is a termination rule rather
+# than the gate. Removing the confound means re-evaluating the SAME frozen
+# policy under the gated arms' rule -- no retraining, but this wrapper has to be
+# able to apply it, which it could not: LANE_INVASION_NOOP was read only by
+# gated_reward.py, a module a GATED=0 run never imports.
+#
+# NEITHER FLAG CHANGES WHAT A STEP IS WORTH except where the docstring says so,
+# and neither is on by default: the recorded ablation's numbers stay
+# reproducible by running the same script with no flags set.
+#
+# LANE_INVASION_NOOP -- crossing a painted marking costs nothing and ends
+# nothing; OFF-ROAD AND COLLISION STAY FATAL. Same meaning the flag already
+# carries in gated_reward.explore_reward, deliberately, so one name does not
+# denote two rules.
+LANE_INVASION_NOOP = os.environ.get("LANE_INVASION_NOOP", "0") == "1"
+
+# LF_ONLY_ARRIVAL_TERMINATES -- only arrival ends the episode; every failure
+# runs on to the step cap. This is EXACTLY what the gated goal arm does under
+# the SORB reward, so it is the setting that makes a success rate attributable
+# to the gate rather than to who gets stopped first. Failures still bill, so the
+# reward the policy sees is unchanged; only the episode's length is.
+ONLY_ARRIVAL_TERMINATES = os.environ.get("LF_ONLY_ARRIVAL_TERMINATES", "0") == "1"
+
 
 def delta_term(delta, mode=None):
     """Apply DELTA_MODE to a per-step goal-distance reduction."""
@@ -85,8 +115,13 @@ class LaneFollowReward(Wrapper):
     def __init__(self, env, delta_mode=None, k_lane=K_LANE,
                  k_collision=K_COLLISION, k_idle=K_IDLE,
                  k_steer_change=K_STEER_CHANGE, k_goal_bonus=K_GOAL_BONUS,
-                 k_checkpoint=K_CHECKPOINT, terminal=True):
+                 k_checkpoint=K_CHECKPOINT, terminal=True,
+                 lane_noop=None, only_arrival=None):
         super().__init__(env)
+        self.lane_noop = bool(LANE_INVASION_NOOP if lane_noop is None
+                              else lane_noop)
+        self.only_arrival = bool(ONLY_ARRIVAL_TERMINATES if only_arrival is None
+                                 else only_arrival)
         self.delta_mode = delta_mode or DELTA_MODE
         self.k_lane = float(k_lane)
         self.k_collision = float(k_collision)
@@ -106,6 +141,22 @@ class LaneFollowReward(Wrapper):
               f"k_lane={self.k_lane} k_collision={self.k_collision} "
               f"k_idle={self.k_idle} k_steer_change={self.k_steer_change} "
               f"terminal={self.terminal}")
+        # A SETTING THAT CHANGES WHEN EPISODES END MUST SAY SO ON SCREEN.
+        # Otherwise the only live confirmation is /proc/<pid>/environ, and a
+        # run's termination breakdown cannot be trusted after the fact.
+        if self.only_arrival:
+            print("[LaneFollow] ONLY ARRIVAL TERMINATES: collision, off-road, "
+                  "idle and lane crossings all run on to the step cap, exactly "
+                  "as the gated goal arm does. Failures still bill, so the "
+                  "reward is unchanged. THIS IS AN EVALUATION SETTING for the "
+                  "ablation's termination confound -- this policy was TRAINED "
+                  "with those events terminal, so its behaviour after one is "
+                  "out of distribution.")
+        elif self.lane_noop:
+            print("[LaneFollow] LANE INVASION IS A NO-OP: crossing a marking "
+                  "costs nothing and ends nothing. OFF-ROAD AND COLLISION ARE "
+                  "STILL FATAL. THIS IS AN EVALUATION SETTING; the policy was "
+                  "trained with crossings terminal.")
 
     def step(self, action):
         obs, _env_reward, terminated, truncated, info = self.env.step(action)
@@ -123,6 +174,12 @@ class LaneFollowReward(Wrapper):
 
         hit = bool(info.get("collision", False))
         lane = bool(info.get("lane_invasion", False))
+        # OFF-ROAD IS READ SEPARATELY because core_state ORs it INTO
+        # `lane_invasion`. Under LANE_INVASION_NOOP a painted crossing goes
+        # free but leaving the drivable surface must not, so the two cannot be
+        # taken from one flag.
+        off_road = bool(info.get("off_road", False))
+        lane_billed = off_road if self.lane_noop else lane
         reasons = info.get("done_reasons") or {}
         idle = bool(reasons.get("idle", False))
         arrived = bool(info.get("is_success", False))
@@ -138,11 +195,37 @@ class LaneFollowReward(Wrapper):
                   + (self.k_goal_bonus if arrived else 0.0)
                   + (self.k_checkpoint if checkpoint else 0.0)
                   - (self.k_collision if hit else 0.0)
-                  - (self.k_lane if lane else 0.0)
+                  - (self.k_lane if lane_billed else 0.0)
                   - (self.k_idle if idle else 0.0)
                   - steer_pen)
 
-        task_terminal = bool(self.terminal and (hit or lane or idle or arrived))
+        if self.only_arrival:
+            task_terminal = bool(self.terminal and arrived)
+        else:
+            task_terminal = bool(
+                self.terminal and (hit or lane_billed or idle or arrived))
+
+        # SUPPRESSING THIS WRAPPER'S TERMINAL IS NOT ENOUGH ON ITS OWN. The env
+        # ORs its raw `diff_lane` into its own `done`, which is forwarded below
+        # as `truncated`; relaxing only `task_terminal` would leave the episode
+        # ending anyway, one field to the left and silently at reward 0.0.
+        # sparse_reward.py records having hit exactly that.
+        #
+        # get_done_status only computes flags -- CarlaEnv tears nothing down on
+        # done -- so declining to end the episode here is safe: the next step()
+        # proceeds normally.
+        if bool(terminated) and not task_terminal:
+            if self.only_arrival:
+                terminated = False
+                info["suppressed_env_done"] = True
+            elif self.lane_noop and reasons.get("lane_any"):
+                # ONLY when a crossing is the sole reason. A crossing that
+                # coincides with a real failure still ends the episode, or the
+                # flag would launder every termination that co-occurs with one.
+                real = any(v for k, v in reasons.items() if k != "lane_any")
+                if not real:
+                    terminated = False
+                    info["suppressed_lane_done"] = True
 
         info["lf_progress"] = float(progress)
         info["lf_steer_penalty"] = float(steer_pen)

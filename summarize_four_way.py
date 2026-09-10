@@ -13,9 +13,24 @@ import sys
 
 # Presentation order: the two specialists first, then the gated arms they are
 # there to be compared against.
-ORDER = {"goal_only": 0, "goal_free": 1, "gated": 2, "gated_her": 3}
+#
+# THE TWO goal_only_* ROWS ARE THE SAME FROZEN CHECKPOINT as goal_only, run
+# under a different TERMINATION RULE, and they sit next to it for that reason.
+# They exist because the recorded extrapolation gap is confounded: a lane
+# crossing ended an episode for the baseline and was a no-op for the gated
+# arms. `lanenoop` frees the crossing (off-road and collision stay fatal);
+# `freerun` ends episodes only on arrival, which is exactly the gated goal
+# arm's rule. Reading down those three rows is reading off how much of the gap
+# was the rule rather than the gate.
+ORDER = {"goal_only": 0, "goal_only_lanenoop": 1, "goal_only_freerun": 2,
+         "goal_free": 3, "gated": 4, "gated_her": 5}
 
-HEADER = (f"{'arm':<12} {'success':>10} {'steps(med)':>11} {'n_arr':>6} "
+# WHICH ARMS A COMPLETE TABLE NEEDS. The deconfound rows are OPTIONAL: they
+# answer a follow-up question and their absence is not a hole in the four-way
+# claim, so reporting them as MISSING would cry wolf on every ordinary run.
+REQUIRED = ("goal_only", "goal_free", "gated", "gated_her")
+
+HEADER = (f"{'arm':<20} {'success':>10} {'steps(med)':>11} {'n_arr':>6} "
           f"{'ep_len':>8} {'timeout':>8} {'q_bias':>10} {'q_corr':>7}")
 
 FOOTNOTES = [
@@ -54,7 +69,7 @@ def format_row(r):
     bias = ("n/a" if r.get("q_bias_steps") is None
             else f"{r['q_bias_steps']:+.0f}")
     corr = "n/a" if r.get("q_corr") is None else f"{r['q_corr']:.2f}"
-    return (f"{r['arm']:<12} {succ:>10} {med:>11} {r.get('n_arrived', 0):>6} "
+    return (f"{r['arm']:<20} {succ:>10} {med:>11} {r.get('n_arrived', 0):>6} "
             f"{r.get('episode_len_mean', float('nan')):>8.1f} "
             f"{r.get('timeout_frac', float('nan')):>8.3f} "
             f"{bias:>10} {corr:>7}")
@@ -96,7 +111,7 @@ def render(rows):
                else "EXTRAPOLATION -- training is pinned to 5-20 m")
         lines += [f"band {band}  ({tag})", HEADER]
         lines += [format_row(r) for r in here]
-        missing = [a for a in ORDER if a not in {r.get("arm") for r in here}]
+        missing = [a for a in REQUIRED if a not in {r.get("arm") for r in here}]
         if missing:
             lines.append("  MISSING: " + ", ".join(sorted(missing))
                          + " -- no checkpoint")
@@ -118,7 +133,7 @@ def render(rows):
         lines.append("")
 
     lines += FOOTNOTES
-    all_missing = [a for a in ORDER if a not in {r.get("arm") for r in rows}]
+    all_missing = [a for a in REQUIRED if a not in {r.get("arm") for r in rows}]
     if all_missing:
         lines += ["",
                   "MISSING ARMS: " + ", ".join(sorted(all_missing)) + ".",

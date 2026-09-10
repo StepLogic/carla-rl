@@ -44,10 +44,30 @@ def test_a_missing_spl_prints_na_not_zero():
     assert "n/a" in format_row(_row("sgm", spl=None))
 
 
-def test_unroutable_episodes_are_counted_from_the_reasons():
-    row = format_row(_row("uniform", end_reasons={"arrived": 10, "no_path": 4,
-                                                  "start_unlocalised": 2}))
-    assert " 6 " in row or row.rstrip().endswith("6       2")
+def test_the_routed_count_is_shown_next_to_the_scores():
+    # SR and SPL are ROUTED-ONLY, so a map that routed 3 of 20 is scored on
+    # those 3. The count has to sit beside them or a sparse, barely-usable
+    # graph reads as a strong one.
+    row = format_row(_row("uniform", n_routed=3, episodes=20))
+    assert "3/20" in row
+
+
+def test_success_is_na_not_zero_when_nothing_routed():
+    # A graph that never supplied a path has not scored zero -- it has not been
+    # measured. Reporting 0.000 would rank an unusable map below a merely bad
+    # one on the same axis.
+    row = format_row(_row("sgm", success=None, n_routed=0, episodes=20))
+    assert "n/a" in row
+    assert "0.000" not in row
+
+
+def test_the_bypassed_control_is_reported_separately():
+    # The unaided policy on episodes this graph could not route. It should be
+    # similar across methods; a large spread means the methods are being scored
+    # on genuinely different episode subsets.
+    row = format_row(_row("policy", success=0.9, success_bypassed=0.75,
+                          n_routed=8, episodes=20))
+    assert "0.750" in row and "0.900" in row
 
 
 def test_different_budgets_are_reported_loudly():

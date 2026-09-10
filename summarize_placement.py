@@ -17,8 +17,8 @@ import sys
 # consulting the policy buy", which is the question.
 ORDER = {"uniform": 0, "random": 1, "policy": 2, "sgm": 3}
 
-HEADER = (f"{'method':<10} {'nodes':>6} {'budget':>7} {'edges':>7} "
-          f"{'SR':>7} {'SPL':>7} {'unroutable':>11} {'leg_TO':>7}")
+HEADER = (f"{'method':<10} {'nodes':>6} {'edges':>7} {'routed':>8} "
+          f"{'SR|rtd':>7} {'SPL|rtd':>8} {'SR|byp':>7} {'leg_TO':>7}")
 
 FOOTNOTES = [
     "EQUAL BUDGET: every arm places the number of nodes SGM derived for",
@@ -66,13 +66,61 @@ def _band_upper(band):
 
 
 def format_row(r):
+    """One sweep point. SR and SPL are ROUTED-ONLY.
+
+    `routed` must be read alongside them, and is placed before them for that
+    reason: a graph that routes 3 episodes of 20 is scored on those 3, so a
+    sparse or disconnected map can post a strong SR while being useless. SR|byp
+    is the unaided policy on the episodes this graph could NOT route -- a
+    control, not a headline, and it should be broadly similar across methods.
+    """
     spl = "n/a" if r.get("spl") is None else f"{r['spl']:.3f}"
-    reasons = r.get("end_reasons") or {}
-    unroutable = sum(v for k, v in reasons.items() if k in UNROUTABLE)
+    sr = "n/a" if r.get("success") is None else f"{r['success']:.3f}"
+    byp = ("n/a" if r.get("success_bypassed") is None
+           else f"{r['success_bypassed']:.3f}")
+    routed = f"{r.get('n_routed', 0)}/{r.get('episodes', 0)}"
     return (f"{r.get('method', '?'):<10} {r.get('n_nodes', 0):>6} "
-            f"{r.get('budget', 0):>7} {r.get('n_edges', 0):>7} "
-            f"{r.get('success', 0.0):>7.3f} {spl:>7} "
-            f"{unroutable:>11} {r.get('leg_timeouts', 0):>7}")
+            f"{r.get('n_edges', 0):>7} {routed:>8} "
+            f"{sr:>7} {spl:>8} {byp:>7} {r.get('leg_timeouts', 0):>7}")
+
+
+def pareto_front(rows):
+    """Indices of the non-dominated rows in (nodes DOWN, SR UP, SPL UP).
+
+    THE QUESTION IS NOT "WHICH METHOD WINS AT n NODES" but what the frontier of
+    cost against performance looks like, so a point matters when nothing else
+    is at least as good on every axis while costing no more nodes. A method can
+    own part of the frontier and be dominated everywhere else, which a
+    fixed-budget table cannot express at all.
+
+    SPL is compared only where BOTH points have it; a missing SPL never counts
+    as better and never as worse, so an unmeasured arm cannot dominate.
+    """
+    front = []
+    for i, a in enumerate(rows):
+        dominated = False
+        for j, b in enumerate(rows):
+            if i == j:
+                continue
+            if b.get("n_nodes", 0) > a.get("n_nodes", 0):
+                continue
+            # An UNMEASURED point (nothing routed) can neither dominate nor be
+            # dominated on success; it simply has no value on that axis.
+            sra, srb = a.get("success"), b.get("success")
+            if sra is not None and (srb is None or srb < sra):
+                continue
+            sa, sb = a.get("spl"), b.get("spl")
+            if sa is not None and sb is not None and sb < sa:
+                continue
+            strictly = (b.get("n_nodes", 0) < a.get("n_nodes", 0)
+                        or (sra is not None and srb is not None and srb > sra)
+                        or (sa is not None and sb is not None and sb > sa))
+            if strictly:
+                dominated = True
+                break
+        if not dominated:
+            front.append(i)
+    return front
 
 
 def render(rows):
@@ -85,7 +133,9 @@ def render(rows):
     lines = []
     for band in bands:
         here = sorted((r for r in rows if r.get("band", "default") == band),
-                      key=lambda r: ORDER.get(r.get("method", ""), 99))
+                      key=lambda r: (ORDER.get(r.get("method", ""), 99),
+                                     r.get("n_nodes", 0)))
+        star = set(pareto_front(here))
         tag = ("in-distribution" if _band_upper(band) <= 20.0
                else "EXTRAPOLATION -- training is pinned to 5-20 m")
         lines += [f"band {band}  ({tag})", HEADER]

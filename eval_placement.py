@@ -317,7 +317,26 @@ def navigate(T, latent, agent, trace, G, nodes, episodes, args, method):
         print(f"[SPL] WARNING: no route planner ({e}); SPL will be n/a.")
 
     positions = trace["positions"]
+    # SR AND SPL ARE COMPUTED OVER ROUTED EPISODES ONLY.
+    #
+    # An episode is ROUTED when the graph actually supplied a path: start and
+    # goal both localised, and a route between them exists. It is BYPASSED when
+    # the graph offered nothing and the policy was handed the true goal as its
+    # only waypoint -- in which case the map contributed nothing and the episode
+    # measures the unaided policy.
+    #
+    # Averaging the two together makes the headline numbers a BLEND of "how good
+    # is the map" and "how good is the policy without one", in a mixing ratio
+    # that differs per method. Measured at 20-40 m: sgm and policy each bypassed
+    # 17 of 20 episodes while uniform bypassed 11, so comparing their means
+    # compared two different mixtures rather than two maps.
+    #
+    # THE COST OF THIS CHOICE, AND WHY routed_frac IS REPORTED NEXT TO IT: a
+    # graph that routes 3 episodes of 20 is now scored on those 3, so a sparse
+    # or disconnected map can post a strong SR while being useless in practice.
+    # The routed fraction is the guard against reading one without the other.
     successes, spls, reasons, leg_timeouts = [], [], {}, 0
+    n_routed, n_bypassed, bypassed_ok = 0, 0, []
 
     for ep in episodes:
         obs, info = env.reset(seed=ep["seed"])
@@ -364,6 +383,17 @@ def navigate(T, latent, agent, trace, G, nodes, episodes, args, method):
                 wp_i, leg_t = wp_i + 1, 0
                 leg_timeouts += 1
 
+        if node_path is None:
+            # BYPASSED: the graph gave nothing, so this episode says nothing
+            # about placement. Counted and kept as a control, never mixed into
+            # the headline SR/SPL.
+            n_bypassed += 1
+            bypassed_ok.append(float(ok))
+            if ok:
+                reasons["arrived"] = reasons.get("arrived", 0) + 1
+            continue
+
+        n_routed += 1
         successes.append(float(ok))
         # SPL IS ONLY DEFINED WHERE THE GEODESIC IS KNOWN, and an episode whose
         # geodesic is unknown contributes NOTHING -- not a zero.
@@ -391,7 +421,21 @@ def navigate(T, latent, agent, trace, G, nodes, episodes, args, method):
         "nodes_per_100m": float(len(nodes)) / max(path_length_m(positions), 1e-9) * 100.0,
         "n_edges": int(G.number_of_edges()),
         "episodes": len(episodes),
-        "success": float(np.mean(successes)) if successes else 0.0,
+        # ROUTED-ONLY. n/a rather than 0.0 when nothing routed, because a graph
+        # that never supplied a path has not been measured -- it has not scored
+        # zero. Reporting 0.000 there would rank an unusable map below a bad one
+        # on the same axis, which is the n/a-versus-zero trap this harness keeps
+        # out of every other column.
+        "success": (float(np.mean(successes)) if successes else None),
+        "n_routed": int(n_routed),
+        "n_bypassed": int(n_bypassed),
+        "routed_frac": float(n_routed) / max(len(episodes), 1),
+        # THE CONTROL, not a headline metric: the unaided policy on the episodes
+        # this graph could not route. It should be broadly similar across
+        # methods, since it does not depend on the map; a large spread means the
+        # methods are being scored on genuinely different episode subsets.
+        "success_bypassed": (float(np.mean(bypassed_ok))
+                             if bypassed_ok else None),
         # SPL IS n/a, NOT ZERO, WITHOUT A ROUTE PLANNER. A zero would read as
         # "took an infinite detour" rather than "was never measured".
         "spl": (float(np.mean(finite)) if finite else None),
@@ -473,6 +517,10 @@ def main():
     ap.add_argument("--localize-radius", type=float, default=15.0)
     ap.add_argument("--leg-steps", type=int, default=200)
     ap.add_argument("--out-dir", default="results/placement")
+    ap.add_argument("--tag", default="",
+                    help="suffix for the result filename, e.g. '__d8'. Carries "
+                         "the sweep point, so two densities cannot overwrite "
+                         "each other and every file still looks complete.")
     args = ap.parse_args()
 
     os.environ["EVAL_FORCE_MODE"] = str(GOAL_MODE)
@@ -666,14 +714,41 @@ def main():
                     # it on trust; n_nodes below it is what the arm actually
                     # placed, which can be lower when snapping collides.
                     "budget": budget,
+                    # THE SWEEP COORDINATES, so a Pareto point can be placed
+                    # without parsing its filename. For the three budgeted arms
+                    # nodes_per_100m IS the independent variable; for SGM the
+                    # independent variable is consistency_cutoff and n_nodes is
+                    # whatever falls out of it.
+                    "nodes_per_100m": args.nodes_per_100m,
+                    "consistency_cutoff": float(cutoff),
+                    "path_m": path_m,
                     "min_sep_m": args.min_sep_m,
                     "smooth_w": args.smooth_w,
                     "entropy_mean": float(entropy.mean())})
-        path = os.path.join(args.out_dir, f"{args.arm}__{method}__{band}.json")
-        with open(path, "w") as fh:
+        # WRITTEN ATOMICALLY: a full file appears or the old one is untouched.
+        #
+        # The supervisor kills these jobs at arbitrary moments, and a kill
+        # landing between open() and the end of json.dump leaves a TRUNCATED
+        # file under the final name -- a banked result silently replaced by
+        # half of one, which json.load may even parse if the truncation falls
+        # on a boundary. os.replace is atomic within a filesystem, so a reader
+        # sees either the previous complete result or the new complete one.
+        # THE TAG CARRIES THE SWEEP POINT INTO THE FILENAME. Without it a second
+        # density silently overwrites the first and the Pareto curve collapses
+        # to whichever point ran last -- with every file looking complete.
+        path = os.path.join(
+            args.out_dir,
+            f"{args.arm}__{method}__{band}{args.tag}.json")
+        tmp = path + ".part"
+        with open(tmp, "w") as fh:
             json.dump(out, fh, indent=2)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp, path)
         spl = "n/a" if out["spl"] is None else f"{out['spl']:.3f}"
-        print(f"[Result] {method}: SR {out['success']:.3f}  SPL {spl}  "
+        sr = "n/a" if out["success"] is None else f"{out['success']:.3f}"
+        print(f"[Result] {method}: SR(routed) {sr}  SPL {spl}  "
+              f"routed {out['n_routed']}/{out['episodes']}  "
               f"nodes {out['n_nodes']}  -> {path}", flush=True)
 
 

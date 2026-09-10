@@ -101,14 +101,25 @@ def place_uniform(s, n):
 
 
 def place_random(s, n, seed=0):
-    """n uniform-random arc-length targets, snapped to the nearest state."""
+    """EXACTLY n distinct states, uniformly at random, in trace order.
+
+    DRAWN OVER STATES, NOT OVER ARC LENGTH, and the difference is the budget.
+    Sampling arc-length targets and snapping each to its nearest state -- the
+    reference's formulation -- lets two targets land on one state, and the
+    duplicates collapse: measured here, 101 targets produced 79 distinct nodes.
+    An arm silently 22% sparser than the others is the sparsity confound the
+    equal budget exists to prevent, so the budget is honoured exactly instead.
+
+    The candidates are already thinned to near-uniform spacing before any of
+    this, so uniform over states and uniform over arc length are nearly the
+    same draw; only the duplicate handling differs.
+    """
     s = np.asarray(s, np.float64)
-    if n <= 0 or len(s) == 0:
+    n = int(min(max(n, 0), len(s)))
+    if n <= 0:
         return np.empty(0, dtype=int)
     rng = np.random.default_rng(seed)
-    targets = rng.uniform(s[0], s[-1], size=int(n))
-    return np.array(sorted({int(np.argmin(np.abs(s - t))) for t in targets}),
-                    dtype=int)
+    return np.sort(rng.choice(len(s), size=n, replace=False)).astype(int)
 
 
 def place_peaks(h, s, n_max, min_sep_m, smooth_w):
@@ -165,6 +176,41 @@ def value_coverage_select(dist, max_steps=H_STEPS, order=None):
         else:
             covered_by[i] = hit
     return np.asarray(members, dtype=int), covered_by
+
+
+def sgm_cutoff_for_budget(dist, embeddings, target_n, embedding_cutoff,
+                          lo=0.1, hi=None, iters=18, order=None):
+    """Find the consistency cutoff whose SGM node count is nearest `target_n`.
+
+    WHY SEARCH AT ALL. SGM derives its own sparsity rather than taking a budget,
+    which is the property that makes it interesting and also makes it
+    incomparable to fixed-budget baselines. Sweeping its one free parameter to
+    the budget is the standard way to put a self-selecting method on the same
+    axis as arms that are told how many nodes to place.
+
+    MONOTONE, SO BISECTION IS VALID: a larger cutoff admits more merges, so the
+    node count falls monotonically in the cutoff. Returns (cutoff, nodes,
+    merged_into) for the best cutoff found, so the caller reports what was
+    actually used rather than what was asked for.
+    """
+    from vae_nav.sgm_placement import sgm_select
+
+    hi = float(np.max(dist)) if hi is None else float(hi)
+    lo = float(lo)
+    best = None
+    for _ in range(int(iters)):
+        mid = 0.5 * (lo + hi)
+        nodes, merged = sgm_select(dist, embeddings, embedding_cutoff=embedding_cutoff,
+                                   consistency_cutoff=mid, order=order)
+        gap = abs(len(nodes) - int(target_n))
+        if best is None or gap < best[0]:
+            best = (gap, mid, nodes, merged)
+        if len(nodes) > target_n:
+            lo = mid            # too many nodes -> merge more -> raise cutoff
+        else:
+            hi = mid
+    _gap, cutoff, nodes, merged = best
+    return cutoff, nodes, merged
 
 
 def place(method, s=None, entropy=None, dist=None, embeddings=None, n=None,

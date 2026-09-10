@@ -268,7 +268,12 @@ def navigate(T, latent, agent, trace, G, nodes, episodes, args, method):
     planner = carla = None
     try:
         import carla as carla_mod
-        from src.global_route_planner import GlobalRoutePlanner
+        # BOTH PATHS, because this module is imported one way from the repo
+        # root (expert_oracle.py) and another with src/ on sys.path (here).
+        try:
+            from src.global_route_planner import GlobalRoutePlanner
+        except ImportError:
+            from global_route_planner import GlobalRoutePlanner
         core = getattr(getattr(env, "unwrapped", env), "core", None)
         hero = getattr(core, "hero", None)
         if hero is not None:
@@ -326,18 +331,25 @@ def navigate(T, latent, agent, trace, G, nodes, episodes, args, method):
                 leg_timeouts += 1
 
         successes.append(float(ok))
-        if ok and geodesic:
+        # SPL IS ONLY DEFINED WHERE THE GEODESIC IS KNOWN, and an episode whose
+        # geodesic is unknown contributes NOTHING -- not a zero.
+        #
+        # The earlier version appended 0.0 for every failure regardless, so with
+        # no route planner an arm that failed once reported SPL 0.000 while an
+        # arm that never failed reported n/a. Two arms, two different meanings
+        # of "no measurement", and the 0.000 reads as "took an infinite detour"
+        # rather than "was never measured". Caught by the smoke test.
+        if geodesic:
             p = max(path_length_m(driven), 1e-9)
-            spls.append(geodesic / max(p, geodesic))
-        elif ok:
-            spls.append(float("nan"))
-        else:
-            spls.append(0.0)
+            spls.append((geodesic / max(p, geodesic)) if ok else 0.0)
         if ok:
             reasons["arrived"] = reasons.get("arrived", 0) + 1
     env.close()
 
     finite = [s for s in spls if not math.isnan(s)]
+    if not finite:
+        print("[SPL] n/a for this arm: no episode had a known geodesic. SPL is "
+              "reported as n/a rather than 0.000 for every arm alike.")
     return {
         "method": method,
         "n_nodes": int(len(nodes)),
@@ -398,8 +410,29 @@ def main():
                          "value_distance defaults to 0.1 and would scale every "
                          "edge weight by ten.")
     ap.add_argument("--percentile", type=float, default=None)
-    ap.add_argument("--embedding-percentile", type=float, default=5.0)
-    ap.add_argument("--consistency-cutoff", type=float, default=None)
+    ap.add_argument("--nodes-per-100m", type=float, default=4.0,
+                    help="THE EQUAL BUDGET, as node density along the trace. "
+                         "Every arm places this many. node_placement_entropy.py"
+                         "'s default; at 4/100 m the nominal spacing is 25 m, "
+                         "so --min-sep-m 8 is satisfiable by every arm.")
+    ap.add_argument("--embedding-percentile", type=float, default=75.0,
+                    help="SGM's prefilter width, as a percentile of observed "
+                         "pairwise LATENT distances. sgm_placement calls this a "
+                         "cheap prefilter and not the test -- too tight costs "
+                         "sparsity, never correctness -- so it is opened wide "
+                         "and the consistency test is left to decide. At the "
+                         "reference's literal 0.05 it proposes no neighbours "
+                         "at all in this latent space and nothing ever merges.")
+    ap.add_argument("--consistency-cutoff", type=float, default=None,
+                    help="SGM's two-way agreement threshold, IN STEPS. "
+                         "Overrides --consistency-frac. sgm_placement's own "
+                         "default of 5.0 is in the reference implementation's "
+                         "units and is far too strict here, where the critic's "
+                         "whole horizon is 106 steps.")
+    ap.add_argument("--consistency-frac", type=float, default=0.1,
+                    help="consistency cutoff as a fraction of the critic's "
+                         "trained horizon H_STEPS, used when "
+                         "--consistency-cutoff is not given")
     ap.add_argument("--max-edge-steps", type=float, default=None)
     # navigation
     ap.add_argument("--arrival-radius", type=float, default=4.0)
@@ -418,7 +451,8 @@ def main():
 
     import train_carla_tqc as T
     from vae_nav.latent_source import from_env as latent_from_env
-    from vae_nav.node_placement import actor_entropy, arclength, place
+    from vae_nav.node_placement import (actor_entropy, arclength, place,
+                                        sgm_cutoff_for_budget)
     from vae_nav.policy_io import load_agent_state
     from vae_nav.value_distance import H_STEPS
 
@@ -451,7 +485,26 @@ def main():
             with open(args.trace_cache, "wb") as fh:
                 pickle.dump(trace, fh)
 
-    dist = candidate_distances(agent, trace, goal_block_fn, args)
+    # THE DISTANCE MATRIX IS CACHED BESIDE THE TRACE. It costs an n^2 critic
+    # pass on the GPU and depends on nothing but the trace and the checkpoint,
+    # while the merge cutoffs it feeds are exactly what needs tuning. Without
+    # this, every cutoff experiment reruns CARLA and the critic; with it,
+    # tuning is an offline second.
+    dist_cache = (args.trace_cache + ".dist.npy") if args.trace_cache else None
+    dist = None
+    if dist_cache and os.path.exists(dist_cache):
+        cached = np.load(dist_cache)
+        if cached.shape == (len(trace["positions"]),) * 2:
+            dist = cached
+            print(f"[Build] reusing the {len(dist)}x{len(dist)} distance "
+                  f"matrix from {dist_cache}")
+        else:
+            print(f"[Build] ignoring {dist_cache}: shape {cached.shape} does "
+                  f"not match {len(trace['positions'])} candidates")
+    if dist is None:
+        dist = candidate_distances(agent, trace, goal_block_fn, args)
+        if dist_cache:
+            np.save(dist_cache, dist)
     embeddings = np.stack([np.asarray(o["latent"], np.float64)
                            for o in trace["observations"]])
     emb_cutoff = embedding_cutoff_from_data(embeddings, args.embedding_percentile)
@@ -465,16 +518,81 @@ def main():
     # "random had fewer nodes" and the ablation is about sparsity, not
     # placement. This is node_placement_entropy.py's convention.
     order = list(range(len(trace["positions"])))
-    sgm_kw = {"embedding_cutoff": emb_cutoff}
-    if args.consistency_cutoff is not None:
-        sgm_kw["consistency_cutoff"] = args.consistency_cutoff
-    sgm_nodes, _ = place("sgm", dist=dist, embeddings=embeddings,
-                         order=order, **sgm_kw)
-    budget = int(len(sgm_nodes))
-    print(f"[Build] sgm kept {budget} of {len(order)} candidates; "
-          f"that is the equal budget for uniform, random and policy")
-
+    # THE CONSISTENCY CUTOFF IS IN STEPS HERE, NOT THE REFERENCE'S UNITS.
+    # sgm_placement's default of 5.0 comes from the reference implementation,
+    # whose distances are on a different scale; ours are steps under
+    # step_cost=1.0, where the critic's whole trained horizon is H_STEPS=106.
+    # Demanding that two states agree to within 5 steps about every other node
+    # is far stricter than the reference intends, and the failure is SILENT:
+    # nothing merges, SGM "keeps" every candidate, and the equal budget
+    # silently becomes the entire candidate set.
+    # THE BUDGET COMES FROM A DENSITY TARGET, NOT FROM SGM'S OWN COUNT.
+    #
+    # Deriving it from SGM looked principled and was not: SGM's natural count
+    # here is denser than an 8 m-separated peak set can match, so the peaks arm
+    # undershot it badly -- measured 25 nodes against a budget of 101, which is
+    # a different map, not a different placement. node_placement_entropy.py sets
+    # the count from nodes-per-100m for exactly this reason, and at its default
+    # of 4/100 m the nominal spacing is 25 m, so the 8 m separation is
+    # comfortably satisfiable by every arm.
     s = arclength(trace["positions"], trace["segments"])
+    path_m = float(s[-1]) if len(s) else 0.0
+    budget = max(2, int(round(path_m / 100.0 * args.nodes_per_100m)))
+    print(f"[Build] trace {path_m:.0f} m, {args.nodes_per_100m}/100 m "
+          f"-> budget {budget} nodes for every arm")
+
+    # CLIPPED AT THE HORIZON FOR THE MERGE TEST, and this is the difference
+    # between SGM working and SGM merging nothing.
+    #
+    # The consistency test is a MAX over every current node k, so it is decided
+    # by the worst-disagreeing pair. Raw predicted distances here run to a
+    # median of 221 steps against a trained horizon of 106: beyond H the critic
+    # is extrapolating, and comparing two states on those values compares noise,
+    # which the max then selects for. edge_reject_mask refuses such edges for
+    # exactly this reason; the same reasoning applies to the merge test.
+    #
+    # Clipping says: two states must agree about everything they can ACTUALLY
+    # reach, and where both are beyond the horizon the critic has no opinion
+    # worth comparing, so they agree trivially. The graph edges below still use
+    # the RAW matrix, where the horizon test rejects rather than clips.
+    dist_merge = np.minimum(dist, max_edge_steps)
+    if args.consistency_cutoff is not None:
+        from vae_nav.sgm_placement import sgm_select
+        cutoff = args.consistency_cutoff
+        sgm_nodes, merged_into = sgm_select(
+            dist_merge, embeddings, embedding_cutoff=emb_cutoff,
+            consistency_cutoff=cutoff, order=order)
+    else:
+        # SGM DERIVES ITS OWN SPARSITY, WHICH IS THE PROPERTY THAT MAKES IT
+        # INTERESTING AND ALSO MAKES IT INCOMPARABLE to arms that are told how
+        # many nodes to place. Sweeping its one free parameter onto the budget
+        # is the standard way to put a self-selecting method on the same axis.
+        # The cutoff that was actually used is reported and recorded, not the
+        # one that was asked for.
+        cutoff, sgm_nodes, merged_into = sgm_cutoff_for_budget(
+            dist_merge, embeddings, budget, emb_cutoff, order=order)
+    n_merged = int(np.sum(np.asarray(merged_into) >= 0))
+    print(f"[Build] sgm kept {len(sgm_nodes)} of {len(order)} candidates "
+          f"({n_merged} merged) at consistency_cutoff={cutoff:.1f} steps, "
+          f"embedding_cutoff={emb_cutoff:.4f}")
+
+    # REFUSE TO RUN A DEGENERATE ABLATION. With no merges the budget is the
+    # whole candidate set, every arm keeps almost everything, and the four rows
+    # differ by nothing -- a table that renders perfectly and means nothing.
+    # Better to spend a minute here than hours of GPU producing it.
+    if n_merged == 0:
+        off = dist[~np.eye(len(dist), dtype=bool)]
+        raise SystemExit(
+            "SGM MERGED NOTHING, so there is no sparsification and no budget.\n"
+            f"  consistency_cutoff = {cutoff:.1f} steps\n"
+            f"  embedding_cutoff   = {emb_cutoff:.4f}\n"
+            "  pairwise distance percentiles (steps): "
+            + ", ".join(f"p{p}={np.percentile(off, p):.1f}"
+                        for p in (1, 5, 25, 50))
+            + "\nRaise --consistency-frac (or set --consistency-cutoff) so the "
+              "two-way test can pass, or widen --embedding-percentile so the "
+              "prefilter proposes neighbours at all.")
+
     entropy = actor_entropy(agent, trace["observations"], seed=args.seed)
     print(f"[Build] actor entropy over candidates: mean {entropy.mean():.3f} "
           f"nats, range [{entropy.min():.3f}, {entropy.max():.3f}]")

@@ -58,8 +58,18 @@ export GOAL_DIST_MIN=5.0 GOAL_DIST_START=20.0 GOAL_DIST_TARGET=20.0
 export MAX_EPISODE_STEPS=2000 MAX_DISTANCE_M=200
 export EXPERT_PROB=0 EPISODE_HER=0 CHAIN_MAX_GOALS=1
 export EVAL_VIDEO=0
-export XLA_PYTHON_CLIENT_PREALLOCATE=false XLA_PYTHON_CLIENT_MEM_FRACTION=0.4
-export XLA_FLAGS=--xla_gpu_enable_command_buffer=
+export XLA_PYTHON_CLIENT_PREALLOCATE=false XLA_PYTHON_CLIENT_MEM_FRACTION=0.2
+# PLATFORM ALLOCATOR AND NO AUTOTUNING, both to survive the all-pairs critic
+# pass. The first call of that pass is a new shape, and XLA's autotuner logged
+# "All configs were filtered out ... using the full hints set instead" and then
+# took the process down on HOST memory -- the run died between collecting a
+# trace and producing a single distance. Autotuning buys kernel speed we do not
+# need for one batched forward pass per node.
+#
+# corl_2026_evaluate.py sets the same allocator and a low mem fraction at import,
+# which is where these values come from rather than from guesswork.
+export XLA_PYTHON_CLIENT_ALLOCATOR=platform
+export XLA_FLAGS="--xla_gpu_enable_command_buffer= --xla_gpu_autotune_level=0"
 
 # ---- the gated arm's own configuration, copied from run_four_way_eval.sh ----
 export GATED=1 OBS_WITH_MODE=1 OBS_WITH_GOAL=1 OBS_WITH_VECTOR=1

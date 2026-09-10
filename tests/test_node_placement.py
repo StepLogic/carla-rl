@@ -87,6 +87,22 @@ def test_random_returns_indices_in_trace_order():
     assert list(idx) == sorted(idx)
 
 
+def test_random_places_EXACTLY_the_budget():
+    # THE BUG THIS PINS: drawing arc-length targets and snapping each to its
+    # nearest state let two targets collapse onto one node. Measured in a smoke
+    # run, a budget of 101 produced 79 distinct nodes -- an arm silently 22%
+    # sparser than the ones it is the control for, which is the sparsity
+    # confound the equal budget exists to prevent.
+    s = np.linspace(0.0, 100.0, 120)
+    for budget in (5, 40, 119):
+        assert len(place_random(s, budget, seed=0)) == budget, budget
+
+
+def test_random_cannot_exceed_the_states_available():
+    s = np.linspace(0.0, 10.0, 6)
+    assert len(place_random(s, 99, seed=0)) == 6
+
+
 # ---------------------------------------------------- policy: entropy ----
 
 def test_peaks_takes_the_highest_entropy_state():
@@ -191,6 +207,40 @@ def test_place_refuses_the_policy_arm_without_entropy():
 def test_place_refuses_sgm_without_a_distance_matrix():
     with pytest.raises(ValueError, match="needs dist and embeddings"):
         place("sgm", s=np.arange(4, dtype=float), n=2)
+
+
+def test_the_sgm_cutoff_search_moves_toward_the_budget():
+    # SGM derives its own sparsity, which makes it incomparable to arms that
+    # are TOLD how many nodes to place. Sweeping its one free parameter onto
+    # the budget is what puts it on the same axis; this pins that a larger
+    # target really does yield more nodes.
+    from vae_nav.node_placement import sgm_cutoff_for_budget
+
+    rng = np.random.default_rng(0)
+    n = 40
+    emb = rng.normal(size=(n, 4))
+    d = np.abs(rng.normal(size=(n, n))) * 30.0
+    np.fill_diagonal(d, 0.0)
+    wide = float(np.percentile(np.linalg.norm(
+        emb[:, None, :] - emb[None, :, :], axis=-1), 90))
+    few = sgm_cutoff_for_budget(d, emb, 5, wide)[1]
+    many = sgm_cutoff_for_budget(d, emb, 30, wide)[1]
+    assert len(few) <= len(many)
+
+
+def test_the_sgm_cutoff_search_reports_the_cutoff_it_used():
+    # The caller must record what was ACTUALLY used, not what was asked for --
+    # a budget that cannot be hit exactly is normal and must not be reported
+    # as though it were.
+    from vae_nav.node_placement import sgm_cutoff_for_budget
+
+    rng = np.random.default_rng(1)
+    emb = rng.normal(size=(20, 3))
+    d = np.abs(rng.normal(size=(20, 20))) * 10.0
+    np.fill_diagonal(d, 0.0)
+    cutoff, nodes, merged = sgm_cutoff_for_budget(d, emb, 6, 5.0)
+    assert cutoff > 0
+    assert len(nodes) + int((merged >= 0).sum()) == 20
 
 
 def test_place_refuses_an_unknown_method():

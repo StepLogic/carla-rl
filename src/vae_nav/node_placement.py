@@ -144,9 +144,19 @@ def place_peaks(h, s, n_max, min_sep_m, smooth_w):
 
     MIN-SEPARATION IS NOT A FUDGE. Entropy is autocorrelated over tens of
     steps, so raw maxima arrive in clusters of near-duplicates around one
-    event, and nodes a metre apart are not two nodes in any useful sense. The
-    uniform arm satisfies the same constraint by construction, so this
-    equalises the arms rather than favouring one.
+    event, and nodes a metre apart are not two nodes in any useful sense.
+
+    IT IS SET TO THE ENVIRONMENT'S GOAL RADIUS (2 m: the env resamples when
+    distance_to_goal < 2), which is the smallest separation with an operational
+    meaning -- two nodes closer than the radius at which the policy considers a
+    goal reached are not two waypoints, since arriving at one arrives at both.
+
+    IT MUST NOT BE LARGER THAN THE SWEEP NEEDS, and the reference's 8 m was.
+    This is a CAP on how many nodes the arm can place: at separation d a trace
+    of length L admits at most L/d nodes, so 8 m on a 7.5 km trace ceilings the
+    arm at ~933. A sweep point requesting 1194 would then return ~933 here and
+    1194 for uniform and random -- an unequal-node comparison, arriving silently
+    at the dense end of the curve where nothing flags it.
     """
     h, s = np.asarray(h, np.float64), np.asarray(s, np.float64)
     if n_max <= 0 or len(h) == 0:
@@ -197,7 +207,7 @@ def sgm_cutoff_for_budget(dist, embeddings, target_n, embedding_cutoff,
 
 
 def place(method, s=None, entropy=None, dist=None, embeddings=None, n=None,
-          seed=0, min_sep_m=8.0, smooth_w=9, max_steps=H_STEPS, order=None,
+          seed=0, min_sep_m=2.0, smooth_w=9, max_steps=H_STEPS, order=None,
           **kw):
     """One entry point, so the driver cannot apply a method inconsistently.
 

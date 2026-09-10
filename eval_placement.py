@@ -475,11 +475,18 @@ def main():
                          "recollecting per band would be three different maps "
                          "for one comparison.")
     # placement
-    ap.add_argument("--min-sep-m", type=float, default=8.0,
-                    help="minimum arc-length separation between entropy peaks. "
-                         "Entropy is autocorrelated over tens of steps, so raw "
-                         "maxima cluster around one event; the uniform arm "
-                         "meets the same constraint by construction.")
+    ap.add_argument("--min-sep-m", type=float, default=2.0,
+                    help="minimum arc-length separation between entropy peaks, "
+                         "in metres. SET TO THE ENVIRONMENT'S GOAL RADIUS "
+                         "(distance_to_goal < 2), so two nodes are never closer "
+                         "than the distance at which the policy considers a "
+                         "goal reached -- below that they are not two waypoints "
+                         "in any operational sense. "
+                         "node_placement_entropy.py used 8 m, which CAPPED this "
+                         "arm: at 8 m a 7.5 km trace admits at most ~933 nodes, "
+                         "so a sweep requesting 1194 would have returned ~933 "
+                         "for policy and 1194 for uniform and random, silently "
+                         "comparing arms at unequal node counts.")
     ap.add_argument("--smooth-w", type=int, default=9,
                     help="entropy smoothing window, odd")
     ap.add_argument("--step-cost", type=float,

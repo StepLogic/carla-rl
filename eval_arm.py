@@ -62,6 +62,14 @@ def main():
     ap.add_argument("--goal-max", type=float, default=None,
                     help="goal distance band in metres. Bands beyond 20 m are "
                          "EXTRAPOLATION: training is pinned to 5-20 m.")
+    ap.add_argument("--minimum-time", type=int, default=0,
+                    help="1 if this arm was trained on the SORB minimum-time "
+                         "reward. Only then is the critic supposed to read as "
+                         "-(steps to goal), so only then is the calibration "
+                         "measurement defined. The shaped arm's critic "
+                         "predicts a shaped return; scoring it against steps "
+                         "measures nothing, and it reported a meaningless "
+                         "+398 before this flag existed.")
     ap.add_argument("--mode", choices=("goal", "explore"), default="goal",
                     help="which half of a GATED arm to evaluate. A gated arm "
                          "serves both, so measuring only the goal half can "
@@ -90,29 +98,58 @@ def main():
     # IT ALSO TESTS HINDSIGHT'S ACTUAL CLAIM. Relabelling supplies goal data at
     # distances the pinned 5-20 m curriculum cannot produce. Evaluating only
     # inside that curriculum could not show the benefit even if it were real.
+    # GOAL_DIST_MIN AND *MAX* ARE THE ONES THE SAMPLER READS.
+    #
+    # GOAL_DIST_START and GOAL_DIST_TARGET are consumed ONLY by the curriculum,
+    # once, at trainer startup (train_carla_tqc.py:720-722); the curriculum then
+    # WRITES GOAL_DIST_MIN/MAX as it advances (:743-744), and those are what the
+    # goal sampler actually uses.
+    #
+    # Setting START/TARGET from an evaluator therefore does NOTHING, because no
+    # curriculum runs here -- and it fails silently, leaving GOAL_DIST_MAX at
+    # its default. Measured: a "5-20 m" band produced an arrival after 427
+    # steps, roughly 200 m of driving, because the band was never applied.
     if args.goal_min is not None:
         os.environ["GOAL_DIST_MIN"] = str(args.goal_min)
     if args.goal_max is not None:
+        os.environ["GOAL_DIST_MAX"] = str(args.goal_max)
+        # Kept consistent so anything that re-derives the band from these, such
+        # as the [Eval] banner, agrees with what is actually sampled.
         os.environ["GOAL_DIST_START"] = str(args.goal_max)
         os.environ["GOAL_DIST_TARGET"] = str(args.goal_max)
 
     import train_carla_tqc as T
-    from vae_nav.latent_source import LatentSource
+    # MODULE-LEVEL FUNCTION, not a classmethod. from_env is deliberately the
+    # ONLY place that chooses the perception backend, so that a difference
+    # between runs cannot come from two call sites picking differently. The
+    # trainer imports it the same way at train_carla_tqc.py:52.
+    from vae_nav.latent_source import from_env as latent_from_env
     from vae_nav.policy_io import load_agent_state
 
     towns = [t for t in args.towns.split(",") if t]
     episodes = T.build_eval_episodes(towns, args.episodes, seed=args.seed)
 
-    latent = LatentSource.from_env()
-    # eval_mode=True: forces GOAL mode on the gated arms and takes the eval
-    # branch of every wrapper, so this is the same stack training evaluated.
-    env = T.make_env(towns[0], seed=args.seed, latent_source=latent,
-                     eval_mode=True, port=args.port)
+    latent = latent_from_env()
+    # eval_mode=True: forces the commanded mode on the gated arms and takes the
+    # eval branch of every wrapper, so this is the same stack training evaluated.
+    env = T.make_env(episodes[0]["town"], seed=episodes[0]["seed"],
+                     latent_source=latent, eval_mode=True, port=args.port)
+    current_town = episodes[0]["town"]
 
     agent = T.build_agent(env.observation_space, env.action_space, args.seed)
     with open(args.ckpt, "rb") as fh:
         import pickle
         state = pickle.load(fh)
+
+    # REFUSE A PERCEPTION MISMATCH BEFORE DRIVING ANYWHERE. The identity record
+    # is written into every checkpoint so evaluation cannot silently pair a
+    # policy with an encoder it never saw -- a 384-d MobileNet checkpoint read
+    # under a 128-d autoencoder would not crash, it would produce confident
+    # nonsense. The trainer makes the same check in run_evaluation.
+    if isinstance(state, dict) and "identity" in state:
+        from vae_nav.latent_source import LatentSource
+        LatentSource.assert_matches(state["identity"], latent)
+
     load_agent_state(agent, state.get("agent", state))
 
     def q_at(observation):
@@ -144,8 +181,23 @@ def main():
 
     successes, steps_to_goal, timeouts, lengths = [], [], 0, []
     q0, q0_steps = [], []
+    end_reasons = {}
     for ep in episodes:
-        obs, _ = env.reset()
+        # REBUILD ON A TOWN CHANGE, as run_evaluation does. A single-town sweep
+        # never triggers this; it exists so a multi-town one is not silently
+        # driving the wrong map.
+        if ep["town"] != current_town:
+            env.close()
+            env = T.make_env(ep["town"], seed=ep["seed"], latent_source=latent,
+                             eval_mode=True, port=args.port)
+            current_town = ep["town"]
+        # RESET WITH THE EPISODE'S OWN SEED, as run_evaluation does. Without it
+        # the fixed episode set is decorative: every arm drives whatever the
+        # env happens to sample, so "identical episodes across arms" -- the
+        # property the whole comparison rests on -- silently does not hold.
+        # It also produced a 0.000 success rate for an arm whose own training
+        # evaluation reads 1.000, because the goal was never resampled.
+        obs, _ = env.reset(seed=ep["seed"])
         q_start = q_at(obs)
         done, n, ok = False, 0, False
         while not done and n < args.max_steps:
@@ -154,6 +206,33 @@ def main():
             n += 1
             ok = ok or bool(info.get("is_success", False))
             done = bool(term or trunc)
+        # WHY THE EPISODE ENDED. Without this a zero success rate is just a
+        # zero: it cannot distinguish "the policy drives badly" from "the
+        # harness is configured so episodes end before it can arrive", which is
+        # exactly the ambiguity that cost several runs here.
+        # ARRIVAL IS ONLY A TERMINATOR IN GOAL MODE. In explore mode the goal
+        # block is zeroed and arrival does not end the episode, yet the success
+        # flag still passes through from the wrapper below -- so keying the
+        # label off it reported "arrived=4" for episodes that in fact ran the
+        # full 500-step cap. The reason must come from what actually ended the
+        # episode.
+        if n >= args.max_steps:
+            reason = "step_cap"
+        elif ok and args.goal_conditioned:
+            reason = "arrived"
+        else:
+            reason = "truncated_or_env_done"
+            for key in ("collision", "off_road", "lane_invasion", "wedged",
+                        "lane_any"):
+                if info.get(key):
+                    reason = key
+                    break
+        end_reasons[reason] = end_reasons.get(reason, 0) + 1
+        # Counted, but NEVER as a termination reason: for an arm that cannot
+        # see the goal this is driving past one, not reaching it.
+        if ok and not args.goal_conditioned:
+            end_reasons["incidental_pass"] = (
+                end_reasons.get("incidental_pass", 0) + 1)
         successes.append(float(ok))
         lengths.append(n)
         if ok:
@@ -170,6 +249,10 @@ def main():
     env.close()
 
     goal_conditioned = bool(args.goal_conditioned)
+    # CALIBRATION IS DEFINED ONLY WHERE THE CRITIC IS SUPPOSED TO BE A DISTANCE:
+    # a goal-conditioned arm trained on the minimum-time reward. Anything else
+    # produces a number with no referent.
+    _calib = goal_conditioned and bool(args.minimum_time)
     band = (f"{args.goal_min:g}-{args.goal_max:g}m"
             if args.goal_min is not None and args.goal_max is not None
             else "default")
@@ -189,12 +272,23 @@ def main():
         "goal_conditioned": goal_conditioned,
         # REFUSED, not zeroed, for the goal-free arm.
         "success": (float(np.mean(successes)) if goal_conditioned else None),
+        # STEPS-TO-GOAL IS REFUSED FOR NON-GOAL-CONDITIONED ARMS TOO, for the
+        # same reason success is. A goal-free policy cannot see the goal and is
+        # not paid for it, so any arrival is INCIDENTAL -- it drove past. A
+        # median printed beside the gated arms' figures would invite comparing
+        # deliberate arrival with stumbling into one, which is the category
+        # error the n/a on success exists to prevent. Caught in a smoke test,
+        # where the goal-free arm reported 331 steps from a single accidental
+        # arrival.
         "steps_median": (float(np.median(steps_to_goal))
-                         if steps_to_goal else None),
-        "steps_mean": (float(np.mean(steps_to_goal)) if steps_to_goal else None),
-        "n_arrived": len(steps_to_goal),
+                         if steps_to_goal and goal_conditioned else None),
+        "steps_mean": (float(np.mean(steps_to_goal))
+                       if steps_to_goal and goal_conditioned else None),
+        "n_arrived": (len(steps_to_goal) if goal_conditioned else 0),
+        "n_incidental_arrivals": (0 if goal_conditioned else len(steps_to_goal)),
         "episode_len_mean": float(np.mean(lengths)),
         "timeout_frac": timeouts / max(1, len(episodes)),
+        "end_reasons": end_reasons,
         # CRITIC-AS-DISTANCE. Under minimum time Q(s0) should equal -(steps
         # this episode then took). q_bias is the mean signed error in STEPS, so
         # -570 means the critic thinks the goal is 570 steps further away than
@@ -202,11 +296,15 @@ def main():
         # critic can be badly biased yet still ORDER states correctly, which is
         # all a map builder needs if it compares distances rather than reading
         # them absolutely. Reporting both separates those two failures.
+        # ALSO REFUSED FOR NON-GOAL-CONDITIONED ARMS. Their critic predicts
+        # their own lane-following return, not a distance to a goal they cannot
+        # see, so scoring it against steps-to-goal would measure nothing.
+        "minimum_time": bool(args.minimum_time),
         "q_bias_steps": (float(np.mean(np.array(q0) + np.array(q0_steps)))
-                         if len(q0) >= 2 else None),
+                         if _calib and len(q0) >= 2 else None),
         "q_corr": (float(np.corrcoef(np.array(q0), -np.array(q0_steps))[0, 1])
-                   if len(q0) >= 2 and np.std(q0) > 0 else None),
-        "q_n": len(q0),
+                   if _calib and len(q0) >= 2 and np.std(q0) > 0 else None),
+        "q_n": (len(q0) if _calib else 0),
     }
     os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)
     with open(args.out, "w") as fh:
@@ -222,6 +320,9 @@ def main():
           f"steps_to_goal_median={med} (n={out['n_arrived']}) "
           f"episode_len_mean={out['episode_len_mean']:.1f} "
           f"timeouts={out['timeout_frac']:.3f} -> {args.out}", flush=True)
+    why = "  ".join(f"{k}={v}" for k, v in
+                    sorted(end_reasons.items(), key=lambda kv: -kv[1]))
+    print(f"[Arm {args.arm}] why episodes ended: {why or '(none)'}", flush=True)
     print(f"[Arm {args.arm}] critic-as-distance: bias={bias} corr={corr} "
           f"(n={out['q_n']}) -- bias is how far wrong the value is IN STEPS; "
           f"corr is whether it still ORDERS states correctly", flush=True)

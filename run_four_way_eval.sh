@@ -116,6 +116,7 @@ run_arm() {
         --max-steps "$EVAL_MAX_STEPS" \
         --goal-conditioned "$goal_conditioned" \
         --goal-min "$lo" --goal-max "$hi" --mode goal \
+        --minimum-time "${5:-0}" \
         --out "$OUT_DIR/${name}__${lo}-${hi}m.json" \
       || echo "[Arm $name band ${lo}-${hi}m] FAILED" >&2
   done
@@ -133,6 +134,7 @@ run_arm() {
     python -u eval_arm.py --arm "$name" --ckpt "$ckpt" \
         --episodes "$EPISODES" --seed "$EVAL_SEED" \
         --max-steps "$EVAL_MAX_STEPS" --mode explore \
+        --minimum-time "${5:-0}" \
         --out "$OUT_DIR/${name}__explore.json" \
       || echo "[Arm $name explore] FAILED" >&2
   fi
@@ -154,7 +156,7 @@ run_arm() {
          GATED_GOAL_MAX_STEPS=1000 GATED_EXPLORE_MAX_STEPS=500 \
          LANE_INVASION_NOOP=1 DISCOUNT=1.0 EXPLORE_DISCOUNT=0.99 \
          EXPLORE_PROB=0.5 GOAL_BATCH_FRAC=0.5 TQC_KAPPA=1.0
-  run_arm gated "${CKPT_GATED:-checkpoints/carla_gated/checkpoint_350000.pkl}" 1 1 )
+  run_arm gated "${CKPT_GATED:-checkpoints/carla_gated/checkpoint_350000.pkl}" 1 1 1 )
 
 # 4. GATED + HINDSIGHT: identical environment to arm 3. ONLY the checkpoint
 #    differs, which is what isolates relabelling from the gate itself.
@@ -163,7 +165,7 @@ run_arm() {
          GATED_GOAL_MAX_STEPS=1000 GATED_EXPLORE_MAX_STEPS=500 \
          LANE_INVASION_NOOP=1 DISCOUNT=1.0 EXPLORE_DISCOUNT=0.99 \
          EXPLORE_PROB=0.5 GOAL_BATCH_FRAC=0.5 TQC_KAPPA=1.0
-  run_arm gated_her "${CKPT_GATED_HER:-checkpoints/carla_gated_her/checkpoint_350000.pkl}" 1 1 )
+  run_arm gated_her "${CKPT_GATED_HER:-checkpoints/carla_gated_her/checkpoint_350000.pkl}" 1 1 1 )
 
 echo
 echo "=== FOUR-WAY COMPARISON ==="

@@ -47,7 +47,14 @@ export DISPLAY=:1
 export CARLA_PORT=2000 CARLA_PORTS=2000
 
 # ---- shared, and identical for every arm -------------------------------------
-export ENV_TOWNS=Town02 EVAL_TOWNS=Town02
+# THE TOWN, AND WHY IT IS A VARIABLE. Every arm here was trained in Town02
+# only, so another town is a generalization test rather than a rerun. NOTE for
+# the writeup: configs/town_split.json designates Town03 and Town10HD as the
+# frozen HELD-OUT set; Town01 is in the TRAIN split and is merely a town this
+# particular policy never saw. Both are honest unseen-town evidence, but only
+# the former is the held-out claim.
+TOWN="${TOWN:-Town02}"
+export ENV_TOWNS="$TOWN" EVAL_TOWNS="$TOWN"
 export ENV_IMAGE_SIZE=120 VAE_IMAGE_SIZE=120
 export PERCEPTION=vae
 export VAE_CKPT=checkpoints/lane_vae_120/best.pkl
@@ -70,7 +77,14 @@ ARMS="${ARMS:-goal_only,goal_free,gated,gated_her}"
 EPISODES="${EPISODES:-60}"
 EVAL_SEED="${EVAL_SEED:-0}"
 EVAL_MAX_STEPS="${EVAL_MAX_STEPS:-1000}"
-OUT_DIR="${OUT_DIR:-results/four_way_eval}"
+# PER TOWN BY DEFAULT, so a second town cannot overwrite the first town's rows.
+# Result filenames carry only the arm and the band, so one directory holding two
+# towns would silently be a MIXTURE -- and the table would render perfectly.
+if [ "$TOWN" = "Town02" ]; then
+  OUT_DIR="${OUT_DIR:-results/four_way_eval}"
+else
+  OUT_DIR="${OUT_DIR:-results/four_way_eval_$(echo "$TOWN" | tr '[:upper:]' '[:lower:]')}"
+fi
 mkdir -p "$OUT_DIR" logs
 
 CARLA_SH=/home/robotlab/Apps/CARLA_0.9.15/CarlaUE4.sh

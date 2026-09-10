@@ -45,7 +45,10 @@ export DISPLAY=:1
 export CARLA_PORT=2000 CARLA_PORTS=2000
 
 # ---- identical to the four-way evaluation, so rows are comparable -----------
-export ENV_TOWNS=Town02 EVAL_TOWNS=Town02
+# See run_four_way_eval.sh for the town note: Town03/Town10HD are the frozen
+# held-out set, Town01 is a train-split town this policy never saw.
+TOWN="${TOWN:-Town02}"
+export ENV_TOWNS="$TOWN" EVAL_TOWNS="$TOWN"
 export ENV_IMAGE_SIZE=120 VAE_IMAGE_SIZE=120
 export PERCEPTION=vae
 export VAE_CKPT=checkpoints/lane_vae_120/best.pkl
@@ -75,11 +78,17 @@ EVAL_MAX_STEPS="${EVAL_MAX_STEPS:-1000}"
 BANDS="${BANDS:-5-20,20-40,40-70}"
 COLLECT_EPISODES="${COLLECT_EPISODES:-20}"
 COLLECT_STEPS="${COLLECT_STEPS:-500}"
-OUT_DIR="${OUT_DIR:-results/placement}"
-# ONE TRACE FOR EVERY BAND. The bands are separate processes because the goal
-# sampler reads its band at import, but the TRACE does not depend on the band --
-# recollecting per band would compare four methods on three different maps.
-TRACE="${TRACE:-results/placement/trace_${ARM}.pkl}"
+TOWN_LC="$(echo "$TOWN" | tr '[:upper:]' '[:lower:]')"
+OUT_DIR="${OUT_DIR:-results/placement_${TOWN_LC}}"
+# ONE TRACE FOR EVERY BAND, AND ONE PER TOWN. The bands are separate processes
+# because the goal sampler reads its band at import, but the TRACE does not
+# depend on the band -- recollecting per band would compare four methods on
+# three different maps.
+#
+# THE TOWN IS IN THE FILENAME, and that is not cosmetic: a Town02 trace reused
+# in Town01 would build the map of one town and navigate another. Nothing
+# downstream checks, and every number would look ordinary.
+TRACE="${TRACE:-results/placement_${TOWN_LC}/trace_${ARM}.pkl}"
 mkdir -p "$OUT_DIR" logs
 
 if [ ! -f "$CKPT" ]; then
@@ -109,7 +118,7 @@ sleep 40
 for band in ${BANDS//,/ }; do
   lo="${band%%-*}"; hi="${band##*-}"
   echo "=== placement: $ARM  band ${lo}-${hi}m  methods $METHODS ==="
-  python -u eval_placement.py --arm "$ARM" --ckpt "$CKPT" \
+  python -u eval_placement.py --arm "$ARM" --ckpt "$CKPT" --town "$TOWN" \
       --methods "$METHODS" --episodes "$EPISODES" --seed "$EVAL_SEED" \
       --max-steps "$EVAL_MAX_STEPS" --goal-min "$lo" --goal-max "$hi" \
       --collect-episodes "$COLLECT_EPISODES" --collect-steps "$COLLECT_STEPS" \

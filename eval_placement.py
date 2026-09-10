@@ -337,6 +337,25 @@ def navigate(T, latent, agent, trace, G, nodes, episodes, args, method):
     # The routed fraction is the guard against reading one without the other.
     successes, spls, reasons, leg_timeouts = [], [], {}, 0
     n_routed, n_bypassed, bypassed_ok = 0, 0, []
+    # WHERE ALONG THE ROUTE EPISODES END, one record per routed episode as
+    # [leg reached, legs in plan, success].
+    #
+    # WHY THIS INTEGER MATTERS. A peer session found their mapped arm scoring
+    # 19% on a PERFECT route, and the summary alone read as a weak policy. The
+    # per-episode field said otherwise: all 34 failures ended on leg 1 of 11
+    # while distance-to-goal still fell, which is not a competence gradient but
+    # a leg that never advanced. A policy that cannot navigate fails at varying
+    # points; one that can does not fail at leg 1 thirty-four times.
+    #
+    # AND THE OPPOSITE FAILURE, which is the one this harness is exposed to.
+    # habitat_map.py warns that when node spacing is smaller than the arrival
+    # radius, "a waypoint is already reached when it becomes current, the
+    # follower skips down the chain, and the mapped arm degenerates toward the
+    # unmapped one." Our advance radius is 4 m against an environment goal
+    # radius of 2 m, so a skipped advance is counted: an advance whose NEXT
+    # waypoint was ALREADY inside the radius at the moment of advancing.
+    # Counted, never acted on -- changing the rule would change the experiment.
+    leg_records, n_advances, n_skip_advances = [], 0, 0
 
     for ep in episodes:
         obs, info = env.reset(seed=ep["seed"])
@@ -375,6 +394,14 @@ def navigate(T, latent, agent, trace, G, nodes, episodes, args, method):
             leg_t += 1
             if np.linalg.norm(here - target) <= args.arrival_radius:
                 wp_i, leg_t = wp_i + 1, 0
+                n_advances += 1
+                # A SKIP: the waypoint we just adopted is already satisfied, so
+                # the follower will retire it next step without the policy ever
+                # driving toward it. Measured, not corrected.
+                nxt = waypoints[min(wp_i, len(waypoints) - 1)]
+                if (wp_i < len(waypoints)
+                        and np.linalg.norm(here - nxt) <= args.arrival_radius):
+                    n_skip_advances += 1
             elif leg_t >= args.leg_steps and wp_i < len(waypoints) - 1:
                 # A LEG THE POLICY CANNOT DRIVE IS AN EDGE THE GRAPH SHOULD NOT
                 # HAVE OFFERED, which is a placement result. Skipping on rather
@@ -394,6 +421,7 @@ def navigate(T, latent, agent, trace, G, nodes, episodes, args, method):
             continue
 
         n_routed += 1
+        leg_records.append([int(wp_i), int(len(waypoints)), int(ok)])
         successes.append(float(ok))
         # SPL IS ONLY DEFINED WHERE THE GEODESIC IS KNOWN, and an episode whose
         # geodesic is unknown contributes NOTHING -- not a zero.
@@ -441,6 +469,13 @@ def navigate(T, latent, agent, trace, G, nodes, episodes, args, method):
         "spl": (float(np.mean(finite)) if finite else None),
         "spl_n": len(finite),
         "leg_timeouts": int(leg_timeouts),
+        # DIAGNOSTICS, not metrics. See the comment at leg_records above.
+        "legs": leg_records,
+        "n_advances": int(n_advances),
+        "n_skip_advances": int(n_skip_advances),
+        # arrival_radius only: min_sep_m is written by main(), and two writers
+        # for one key is what silently corrupted nodes_per_100m earlier.
+        "arrival_radius": float(args.arrival_radius),
         "end_reasons": reasons,
     }
 

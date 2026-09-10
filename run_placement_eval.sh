@@ -29,8 +29,25 @@ if ! flock -n 200; then
 fi
 echo "[Lock] acquired $LOCK (pid $$)"
 
-# Same measured requirement as training: ~9.2 GB. See run_gated.sh.
-NEED_MB="${NEED_MB:-9500}"
+# THE GATE DEPENDS ON WHETHER CARLA IS ALREADY RESIDENT, and getting this wrong
+# deadlocks the queue rather than failing loudly.
+#
+# The 9500 MiB figure is CARLA + JAX together (~9.2 GB measured), and it assumed
+# the driver boots CARLA ITSELF, after gating, on an empty card. With a server
+# already running that server is holding ~5.5 GB of the card, so a 9500 MiB gate
+# can NEVER pass and every job waits out its deadline and exits 0 having done
+# nothing -- which is exactly what happened once here, silently.
+#
+# So the gate asks for what this job still has to ALLOCATE: the full pair when
+# it must boot a server, or roughly the JAX half when it is adopting one.
+# Detection therefore has to happen BEFORE the gate, not after it.
+if pgrep -f '[C]arlaUE4-Linux-Shipping' >/dev/null 2>&1; then
+  SERVER_RUNNING=1
+  NEED_MB="${NEED_MB:-4000}"
+else
+  SERVER_RUNNING=0
+  NEED_MB="${NEED_MB:-9500}"
+fi
 MAX_WAIT_H="${MAX_WAIT_H:-6}"
 deadline=$(( $(date +%s) + MAX_WAIT_H * 3600 ))
 while true; do
@@ -88,6 +105,24 @@ EVAL_MAX_STEPS="${EVAL_MAX_STEPS:-1000}"
 BANDS="${BANDS:-5-20,20-40,40-70}"
 COLLECT_EPISODES="${COLLECT_EPISODES:-20}"
 COLLECT_STEPS="${COLLECT_STEPS:-500}"
+# METRES BETWEEN CANDIDATES. The critic pass is QUADRATIC in this count, and
+# consecutive simulator steps are only ~0.28 m apart, so a fine spacing buys
+# duplicates at quadratic cost. At 4 m a 2800 m trace gives ~700 candidates,
+# which is far more than the ~113-node budget needs.
+CANDIDATE_SPACING="${CANDIDATE_SPACING:-4.0}"
+# HOW FAR A POSE MAY BE FROM THE NEAREST NODE AND STILL ENTER THE GRAPH.
+#
+# MEASURED, and the reason this is not left at 15 m: with a 20-episode trace,
+# 34-46 of 60 evaluation episodes failed to localise their START pose, so the
+# graph offered no route and they fell back to driving straight at the goal.
+# SR and SPL then measured the POLICY, not the map, for most of the episodes --
+# a placement comparison in which placement barely participates.
+#
+# 25 m is bounded by something real rather than tuned: the policy's own
+# training band is 5-20 m, so a node within ~25 m is a leg it is competent to
+# drive. Anything much larger would be asserting entry points the policy cannot
+# actually reach.
+LOCALIZE_RADIUS="${LOCALIZE_RADIUS:-25.0}"
 TOWN_LC="$(echo "$TOWN" | tr '[:upper:]' '[:lower:]')"
 OUT_DIR="${OUT_DIR:-results/placement_${TOWN_LC}}"
 # ONE TRACE FOR EVERY BAND, AND ONE PER TOWN. The bands are separate processes
@@ -115,25 +150,68 @@ kill_servers() {
     sleep 3
   done
 }
-cleanup() { kill_servers; echo "=== placement eval done ==="; }
+# REUSE A RUNNING SERVER, AND ONLY TEAR DOWN ONE WE STARTED.
+#
+# WHY: the task supervisor has been killing these jobs at LAUNCH -- one left a
+# two-line log, dead within seconds, before any evaluation began -- on a machine
+# with 108 GB available and no kernel OOM. Booting CARLA at Epic is the largest
+# and fastest allocation a job makes, and every job was doing it. Reusing a live
+# server removes that spike from all but the first job, and removes 40 s of boot
+# from each as a side benefit.
+#
+# ONLY THE STARTER KILLS IT. A job that adopted an existing server leaves it
+# running for the next one; killing a server this job did not start would take
+# down a sibling evaluation mid-episode.
+STARTED_SERVER=0
+cleanup() {
+  if [ "$STARTED_SERVER" = "1" ]; then
+    kill_servers
+    echo "=== placement eval done (server stopped) ==="
+  else
+    echo "=== placement eval done (server left running for the next job) ==="
+  fi
+}
 trap cleanup EXIT
 
-kill_servers
-( exec 200>&-; "$CARLA_SH" -carla-port=2000 -quality-level=Epic \
-      -windowed -ResX=640 -ResY=360 2>&1 \
-    | grep -v --line-buffered "Invalid session: no stream available" \
-    > logs/carla_placement_eval.log ) &
-sleep 40
+if [ "$SERVER_RUNNING" = "1" ]; then
+  echo "[CARLA] reusing the server already running on port $CARLA_PORT"
+else
+  echo "[CARLA] no server running; starting one"
+  STARTED_SERVER=1
+  kill_servers
+  ( exec 200>&-; "$CARLA_SH" -carla-port=2000 -quality-level=Epic \
+        -windowed -ResX=640 -ResY=360 2>&1 \
+      | grep -v --line-buffered "Invalid session: no stream available" \
+      > logs/carla_placement_eval.log ) &
+  sleep 40
+fi
 
+# ONE METHOD PER PROCESS, and one CARLA server for all of them.
+#
+# WHY, MEASURED: a single process running all four methods at 60 episodes was
+# killed twice by the task supervisor for "low memory", early in the first
+# method, while the four-way driver ran six 60-episode evaluations in one job
+# without trouble. The difference is that eval_arm.py takes ONE arm per process
+# and this took four. The machine was never actually short -- 108 GB available,
+# swap untouched, no kernel OOM -- so this is about process lifetime rather
+# than a leak worth hunting.
+#
+# THE TRACE AND THE DISTANCE MATRIX ARE CACHED ON DISK, so a fresh process per
+# method re-reads them instead of re-collecting or re-querying the critic. The
+# comparison still rests on ONE trace, which is the property that matters.
 for band in ${BANDS//,/ }; do
   lo="${band%%-*}"; hi="${band##*-}"
-  echo "=== placement: $ARM  band ${lo}-${hi}m  methods $METHODS ==="
+  for method in ${METHODS//,/ }; do
+  echo "=== placement: $ARM  band ${lo}-${hi}m  method $method ==="
   python -u eval_placement.py --arm "$ARM" --ckpt "$CKPT" --town "$TOWN" \
-      --methods "$METHODS" --episodes "$EPISODES" --seed "$EVAL_SEED" \
+      --methods "$method" --episodes "$EPISODES" --seed "$EVAL_SEED" \
       --max-steps "$EVAL_MAX_STEPS" --goal-min "$lo" --goal-max "$hi" \
       --collect-episodes "$COLLECT_EPISODES" --collect-steps "$COLLECT_STEPS" \
+      --candidate-spacing "$CANDIDATE_SPACING" \
+      --localize-radius "$LOCALIZE_RADIUS" \
       --trace-cache "$TRACE" --out-dir "$OUT_DIR" \
-    || echo "[Placement $ARM band ${lo}-${hi}m] FAILED" >&2
+    || echo "[Placement $ARM band ${lo}-${hi}m $method] FAILED" >&2
+  done
 done
 
 echo

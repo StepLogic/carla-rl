@@ -91,13 +91,26 @@ def find_wrapper(env, attr):
 
 # ------------------------------------------------------------- stage 1 ----
 
-def collect_trace(T, latent, agent, args):
+def collect_trace(T, latent, agent, args, resume=None):
     """Drive the explore half and record candidate states.
 
     Returns a dict of parallel arrays. Candidates are THINNED BY DISTANCE as
     they are recorded: consecutive simulator steps are ~0.28 m apart, so an
     unthinned trace is mostly duplicates and the pairwise critic matrix is
     quadratic in exactly that redundancy.
+
+    SAVED AFTER EVERY EPISODE, AND RESUMABLE, because the task supervisor on
+    this machine kills background jobs at random with a spurious low-memory
+    message (see run_placement_eval.sh). A 60-episode collection is the longest
+    single step in the pipeline, and writing only at the end meant a kill at
+    episode 59 cost the whole thing. `episodes_done` records how far it got so
+    a later run continues rather than restarts.
+
+    RESUMING CHANGES THE DRAW, and that is acknowledged rather than hidden: the
+    RNG is reseeded from the episode index, so a resumed trace is the same
+    sequence of seeds it would have drawn anyway. What it cannot preserve is
+    the novelty buffer's history within the killed episode, which is not
+    carried across episodes in eval_mode regardless.
     """
     os.environ["EVAL_FORCE_MODE"] = str(EXPLORE_MODE)
     env = T.make_env(args.town, seed=args.collect_seed, latent_source=latent,
@@ -108,9 +121,28 @@ def collect_trace(T, latent, agent, args):
             "no VAEGoalWrapper in the chain: the goal block cannot be rebuilt, "
             "so neither the critic queries nor the subgoal driving can run.")
 
-    obs_list, fields_list, pos, yaw, seg = [], [], [], [], []
-    rng = np.random.default_rng(args.collect_seed)
-    for ep in range(args.collect_episodes):
+    if resume is not None:
+        obs_list = list(resume["observations"])
+        fields_list = list(resume["fields"])
+        pos = [np.asarray(p, np.float64) for p in resume["positions"]]
+        yaw = list(resume["yaws"])
+        seg = list(resume["segments"])
+        first_ep = int(resume.get("episodes_done", 0))
+    else:
+        obs_list, fields_list, pos, yaw, seg = [], [], [], [], []
+        first_ep = 0
+
+    def _snapshot(done):
+        return {"observations": obs_list, "fields": fields_list,
+                "positions": np.asarray(pos, np.float64),
+                "yaws": np.asarray(yaw, np.float64),
+                "segments": np.asarray(seg, dtype=int),
+                "episodes_done": int(done)}
+
+    for ep in range(first_ep, args.collect_episodes):
+        # SEEDED FROM THE EPISODE INDEX, not from a running generator, so a
+        # resumed run draws the same episode a fresh run would have.
+        rng = np.random.default_rng((args.collect_seed, ep))
         o, info = env.reset(seed=int(rng.integers(0, 2**31 - 1)))
         last_kept = None
         for t in range(args.collect_steps):
@@ -127,12 +159,14 @@ def collect_trace(T, latent, agent, args):
                 break
         print(f"[Collect] episode {ep + 1}/{args.collect_episodes}: "
               f"{len(pos)} candidates so far", flush=True)
+        # AFTER EVERY EPISODE. A kill then costs one episode, not sixty.
+        if args.trace_cache:
+            os.makedirs(os.path.dirname(args.trace_cache) or ".", exist_ok=True)
+            with open(args.trace_cache, "wb") as fh:
+                pickle.dump(_snapshot(ep + 1), fh)
     env.close()
 
-    trace = {"observations": obs_list, "fields": fields_list,
-             "positions": np.asarray(pos, np.float64),
-             "yaws": np.asarray(yaw, np.float64),
-             "segments": np.asarray(seg, dtype=int)}
+    trace = _snapshot(args.collect_episodes)
     print(f"[Collect] {len(pos)} candidates over {args.collect_episodes} "
           f"explore episodes, thinned to {args.candidate_spacing} m")
     return trace
@@ -473,17 +507,24 @@ def main():
     goal_block_fn = find_wrapper(env0, "goal_block").goal_block
     env0.close()
 
+    trace = None
     if args.trace_cache and os.path.exists(args.trace_cache):
         with open(args.trace_cache, "rb") as fh:
-            trace = pickle.load(fh)
-        print(f"[Collect] reusing {len(trace['positions'])} candidates from "
-              f"{args.trace_cache}")
-    else:
+            cached = pickle.load(fh)
+        done = int(cached.get("episodes_done", args.collect_episodes))
+        if done >= args.collect_episodes:
+            trace = cached
+            print(f"[Collect] reusing {len(trace['positions'])} candidates "
+                  f"from {args.trace_cache} ({done} episodes)")
+        else:
+            # A PARTIAL TRACE IS RESUMED, NOT DISCARDED AND NOT USED AS IS.
+            # Using it as is would silently compare four placement methods on a
+            # map built from however far the last kill happened to get.
+            print(f"[Collect] {args.trace_cache} holds {done} of "
+                  f"{args.collect_episodes} episodes; resuming collection")
+            trace = collect_trace(T, latent, agent, args, resume=cached)
+    if trace is None:
         trace = collect_trace(T, latent, agent, args)
-        if args.trace_cache:
-            os.makedirs(os.path.dirname(args.trace_cache) or ".", exist_ok=True)
-            with open(args.trace_cache, "wb") as fh:
-                pickle.dump(trace, fh)
 
     # THE DISTANCE MATRIX IS CACHED BESIDE THE TRACE. It costs an n^2 critic
     # pass on the GPU and depends on nothing but the trace and the checkpoint,

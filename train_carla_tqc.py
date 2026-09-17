@@ -402,6 +402,18 @@ def make_env(town, seed, latent_source, eval_mode=False, port=None):
     #
     # Setting start_server=False disables both behaviours: no spawn, no global
     # kill. The queue owns exactly one server and cleans up only that one.
+    #
+    # CARLA_START_SERVER=1 HANDS THAT JOB BACK TO CarlaCore. It is OFF by
+    # default, so every existing run script behaves exactly as before -- this
+    # only makes the other mode reachable without editing the file. Use it for
+    # a ONE-SHOT, SINGLE-ENV job with no other CARLA on the box, and nothing
+    # else: both hazards above are still live when it is set. make_env is
+    # called once per episode to rotate towns, so a training run leaves one
+    # orphaned UE4 server per episode, and CarlaCore.close() ->
+    # kill_all_servers() (carla_core.py:41-45) SIGKILLs every process whose
+    # name contains "carla" machine-wide, which on a shared box takes other
+    # people's servers with it. Note the port below is then IGNORED: init_server
+    # picks a random one in 15000-32000.
     # SHORT-HORIZON GOALS. carla_core.reset_hero samples the initial goal from
     #   lenghts = range(10,80,5) if is_short_horizon else [200,230,240,150,120]
     # and is_short_horizon defaults to False -- so every episode had a goal
@@ -559,6 +571,31 @@ def make_env(town, seed, latent_source, eval_mode=False, port=None):
         # The explorer's own step cap, not MAX_EPISODE_STEPS: the goal arm's
         # cap is tied to its horizon and means nothing here.
         env = TimeLimit(env, max_episode_steps=LANE_EXPLORE_MAX_STEPS)
+        return env
+
+    # GOAL-FREE LANE FOLLOWING. Plain lane following with the goal removed from
+    # BOTH halves -- reward and observation -- and nothing else added.
+    #
+    # WHY NOT JUST LANE_EXPLORE=1. That arm is also goal-free, but it swaps in
+    # ExploreObsWrapper: a 21-d block carrying a visit ring, a dead-reckoned or
+    # privileged pose, and an image-novelty scalar, plus a novelty bonus in the
+    # reward. That is an EXPLORER. Asked for "just lane following", those are
+    # three extra mechanisms that would each need their own justification, and
+    # the visit ring in particular needs a pose the deployed robot may not have.
+    #
+    # So this branch takes LaneExploreReward -- which is only "the goal-free half
+    # of the upstream reward", with novelty disabled -- and keeps the ORDINARY
+    # observation stack. With OBS_WITH_GOAL=0 that is {latent (128,),
+    # vector (4,)}: what the camera sees plus the applied controls and speed.
+    # No goal, no map, no memory.
+    if os.environ.get("LANE_FOLLOW_NOGOAL", "0") == "1":
+        from vae_nav.lane_explore_reward import LaneExploreReward
+        # novelty=None and encoder=None: _novelty_bonus returns 0.0 and the
+        # buffer is never built, so this is the bare lane reward.
+        env = LaneExploreReward(env, novelty=None, encoder=None,
+                                max_steps=MAX_EPISODE_STEPS)
+        env = VAEGoalWrapper(env, source=latent_source)
+        env = TimeLimit(env, max_episode_steps=MAX_EPISODE_STEPS)
         return env
 
     if os.environ.get("TIME_TO_GOAL", "0") == "1":
@@ -1085,6 +1122,10 @@ def main():
     # Histogram of WHY episodes end. Without it "return 0.0" is the only
     # symptom and every diagnosis is a guess.
     end_reasons = {}
+    # Total stalls across all episodes. A list so the closure-free inner loop
+    # can accumulate without a `nonlocal`; end_reasons["stalled"] counts
+    # EPISODES with at least one, so total/episodes gives the mean per episode.
+    stall_total = [0]
     # Denominators for the oracle/policy split below. A tagged count divided by
     # total_eps would be wrong by ~5x for the oracle, whose episodes are only
     # EXPERT_PROB of the total -- the exact class of mis-normalised metric this
@@ -1413,6 +1454,22 @@ def main():
                         end_reasons[rname] = end_reasons.get(rname, 0) + 1
                         _kw = f"{rname}/{_who}"
                         end_reasons[_kw] = end_reasons.get(_kw, 0) + 1
+                # STALLS ARE INVISIBLE TO done_reasons BY CONSTRUCTION.
+                #
+                # Under STALL_STEPS > 0 a lane crossing no longer wedges, so
+                # `wedged` never goes True and the episode does not end on it.
+                # The [Why] histogram is built from done_reasons, which records
+                # only what was true AT THE END -- so a run could stall twenty
+                # times and report a clean sheet. `stalled` counts episodes with
+                # at least one stall, directly comparable to the old lane_any
+                # rate; `stall_n` accumulates the total so the mean per episode
+                # is recoverable. Measurement only.
+                _stalls = int(fi.get("stall_count", 0) or 0)
+                if _stalls:
+                    end_reasons["stalled"] = end_reasons.get("stalled", 0) + 1
+                    _ks = f"stalled/{_who}"
+                    end_reasons[_ks] = end_reasons.get(_ks, 0) + 1
+                    stall_total[0] += _stalls
                 # WHICH MARKING THE WEDGE FIRED ON. Measurement only -- nothing
                 # here changes what wedges.
                 #
@@ -1469,7 +1526,14 @@ def main():
                         sorted(end_reasons.items())
                         if k.endswith(("/orc", "/pol"))
                         and not k.startswith("mark:"))
-                    print(f"[Why {total_eps:5d}] {hist}  | goals "
+                    # Mean stalls per episode, over ALL episodes, not just the
+                    # ones that stalled -- the rate `stalled=` in `hist` already
+                    # gives the fraction that did, and quoting a mean over only
+                    # those two would be two numbers with different denominators
+                    # sitting on the same line.
+                    _stall_mean = (f"  stalls/ep={stall_total[0] / max(1, tot):.2f}"
+                                   if stall_total[0] else "")
+                    print(f"[Why {total_eps:5d}] {hist}{_stall_mean}  | goals "
                           f"{CURR_MIN:.1f}-{curr_max:.1f}m", flush=True)
                     # THE TWO UNCALIBRATED NUMBERS IN THE EXPLORE ARM.
                     #

@@ -4,7 +4,7 @@ import ml_collections
 import numpy as np
 from absl import app, flags
 from flax.training import checkpoints
-from carla_eval import CarlaEvalEnv
+from src.carla_eval import CarlaEvalEnv
 from jaxrl2.agents import DrQLearner, PixelBCLearner
 from jaxrl2.agents.resnet_agents import PixelResNetBCLearner
 from rlib_integration.helper import ndarray_to_location

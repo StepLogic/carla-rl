@@ -47,7 +47,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "src
 from vae_nav.core_state import CoreStateWrapper  # noqa: E402
 from vae_nav.episode_her import EpisodeRelabelBuffer  # noqa: E402
 from vae_nav.eval_video import EvalVideoRecorder  # noqa: E402
-from vae_nav.expert_oracle import ExpertOracle, should_use_expert  # noqa: E402
+from vae_nav.expert_oracle import ExpertOracle, BasicAgentExpert, should_use_expert  # noqa: E402
 from vae_nav.latent_source import LatentSource  # noqa: E402
 from vae_nav.latent_source import from_env as latent_from_env  # noqa: E402
 from vae_nav.sparse_reward import (K_COLLISION, K_DIST,  # noqa: E402
@@ -105,7 +105,36 @@ def make_expert(env, action_space):
               "episodes ever enter the buffer.")
         return None
     try:
-        return ExpertOracle(hero, hero.get_world().get_map(), action_space)
+        # THE ORACLE'S SPEED TARGET MUST BE REACHABLE, or its PID saturates.
+        #
+        # ExpertOracle defaults to 25 km/h and this call passed nothing, so the
+        # default stood while the env ran TARGET_SPEED=20 and MAX_THROTTLE=0.4.
+        # The config measures this vehicle settling at 22.4 km/h at throttle
+        # 0.6, so at 0.4 the target is PERMANENTLY unreachable: the longitudinal
+        # PID holds full throttle indefinitely and never lifts for a corner,
+        # which is what a route follower crossing lines on turns looks like.
+        #
+        # MEASURED with the 25 km/h default at MAX_THROTTLE=0.4: the oracle
+        # collided on 36% of episodes and scored 0.000 success, against 0.980
+        # for the same oracle before the throttle cap was lowered.
+        #
+        # EXPERT_TARGET_SPEED overrides; it falls back to the env's own
+        # TARGET_SPEED so the two cannot silently disagree.
+        _tgt = float(os.environ.get("EXPERT_TARGET_SPEED",
+                                    os.environ.get("TARGET_SPEED", 20.0)))
+        # EXPERT_KIND=basic uses CARLA's own BasicAgent (see BasicAgentExpert
+        # for the benchmark that justified it); anything else keeps the
+        # hand-rolled ExpertOracle so existing runs are unchanged.
+        _cls = (BasicAgentExpert
+                if os.environ.get("EXPERT_KIND", "oracle").lower() == "basic"
+                else ExpertOracle)
+        # NAME THE EXPERT IN THE LOG. Which class drove is otherwise only
+        # inferable from its failure rates, and that inference was wrong three
+        # times tonight.
+        print(f"[Expert] kind={_cls.__name__} target_speed={_tgt:g} km/h",
+              flush=True)
+        return _cls(hero, hero.get_world().get_map(), action_space,
+                    target_speed_kmh=_tgt)
     except Exception as e:  # noqa: BLE001
         print(f"[Expert] WARNING: could not build oracle ({e}); expert disabled.")
         return None
@@ -204,6 +233,18 @@ def make_env(town, seed, latent_source, eval_mode=False, port=None):
     #
     # Setting start_server=False disables both behaviours: no spawn, no global
     # kill. The queue owns exactly one server and cleans up only that one.
+    #
+    # CARLA_START_SERVER=1 HANDS THAT JOB BACK TO CarlaCore. It is OFF by
+    # default, so every existing run script behaves exactly as before -- this
+    # only makes the other mode reachable without editing the file. Use it for
+    # a ONE-SHOT, SINGLE-ENV job with no other CARLA on the box, and nothing
+    # else: both hazards above are still live when it is set. make_env is
+    # called once per episode to rotate towns, so a training run leaves one
+    # orphaned UE4 server per episode, and CarlaCore.close() ->
+    # kill_all_servers() (carla_core.py:41-45) SIGKILLs every process whose
+    # name contains "carla" machine-wide, which on a shared box takes other
+    # people's servers with it. Note the port below is then IGNORED: init_server
+    # picks a random one in 15000-32000.
     # SHORT-HORIZON GOALS. carla_core.reset_hero samples the initial goal from
     #   lenghts = range(10,80,5) if is_short_horizon else [200,230,240,150,120]
     # and is_short_horizon defaults to False -- so every episode had a goal
@@ -223,7 +264,28 @@ def make_env(town, seed, latent_source, eval_mode=False, port=None):
 
     env_cfg = dict(cfg.get("env_config", {}))
     carla_cfg = dict(env_cfg.get("carla", {}))
-    carla_cfg["start_server"] = False
+    # THE TOWN MUST BE SET ON THE CARLA BLOCK, NOT THE TOP LEVEL.
+    #
+    # `cfg["town"] = town` above is read by the EXPERIMENT, but CarlaCore is
+    # constructed from cfg["env_config"]["carla"] and calls
+    # load_world(self.config["town"]) on THAT dict (carla_core.py:182-183).
+    # The base config hardcodes "town": "Town01" there
+    # (train_env_config_v4_image_goal.py:1170), so without this line EVERY env
+    # loaded Town01 no matter what town was asked for -- training and eval
+    # alike, silently, with the banner still printing the requested name.
+    carla_cfg["town"] = town
+    carla_cfg["start_server"] = os.environ.get("CARLA_START_SERVER", "0") == "1"
+    # RENDER QUALITY IS PART OF THE PERCEPTION CONTRACT, NOT A PERFORMANCE KNOB.
+    #
+    # The frozen lane VAE was trained on EPIC frames, and quality is a server
+    # LAUNCH flag rather than a per-frame setting (collect_lane_data.py:421).
+    # BASE_CORE_CONFIG defaults quality_level to "Low" (carla_core.py:30) and so
+    # does this config (:1166), while every run script's own launcher passes
+    # -quality-level=Epic. So the moment CarlaCore started the server instead of
+    # the script, the encoder began seeing an input distribution it was never
+    # trained on -- silently, because nothing asserts quality the way
+    # latent_source.assert_matches asserts the VAE's identity.
+    carla_cfg["quality_level"] = os.environ.get("CARLA_QUALITY", "Epic")
     carla_cfg["port"] = int(port if port is not None else CARLA_PORTS[0])
     env_cfg["carla"] = carla_cfg
     cfg["env_config"] = env_cfg
@@ -274,6 +336,31 @@ def make_env(town, seed, latent_source, eval_mode=False, port=None):
         # The explorer's own step cap, not MAX_EPISODE_STEPS: the goal arm's
         # cap is tied to its horizon and means nothing here.
         env = TimeLimit(env, max_episode_steps=LANE_EXPLORE_MAX_STEPS)
+        return env
+
+    # GOAL-FREE LANE FOLLOWING. Plain lane following with the goal removed from
+    # BOTH halves -- reward and observation -- and nothing else added.
+    #
+    # WHY NOT JUST LANE_EXPLORE=1. That arm is also goal-free, but it swaps in
+    # ExploreObsWrapper: a 21-d block carrying a visit ring, a dead-reckoned or
+    # privileged pose, and an image-novelty scalar, plus a novelty bonus in the
+    # reward. That is an EXPLORER. Asked for "just lane following", those are
+    # three extra mechanisms that would each need their own justification, and
+    # the visit ring in particular needs a pose the deployed robot may not have.
+    #
+    # So this branch takes LaneExploreReward -- which is only "the goal-free half
+    # of the upstream reward", with novelty disabled -- and keeps the ORDINARY
+    # observation stack. With OBS_WITH_GOAL=0 that is {latent (128,),
+    # vector (4,)}: what the camera sees plus the applied controls and speed.
+    # No goal, no map, no memory.
+    if os.environ.get("LANE_FOLLOW_NOGOAL", "0") == "1":
+        from vae_nav.lane_explore_reward import LaneExploreReward
+        # novelty=None and encoder=None: _novelty_bonus returns 0.0 and the
+        # buffer is never built, so this is the bare lane reward.
+        env = LaneExploreReward(env, novelty=None, encoder=None,
+                                max_steps=MAX_EPISODE_STEPS)
+        env = VAEGoalWrapper(env, source=latent_source)
+        env = TimeLimit(env, max_episode_steps=MAX_EPISODE_STEPS)
         return env
 
     if os.environ.get("TIME_TO_GOAL", "0") == "1":
@@ -335,6 +422,15 @@ def run_evaluation(agent, episodes, latent_source, identity, step=0,
                 env = make_env(ep["town"], ep["seed"], latent_source,
                                eval_mode=True)
                 current = ep["town"]
+            # THE SEED MUST REACH THE GOAL SAMPLER. CarlaEnv.reset drops its
+            # kwargs and carla_core.reset_hero draws spawn and goal from Python's
+            # GLOBAL `random`, so env.reset(seed=...) alone fixed nothing and
+            # every eval was a fresh draw of 60 goals. Measured 2026-09-11:
+            # consecutive evals drew median routes of 40/26/25/38 m and scored
+            # 0.45/0.73/0.78/0.13 -- the distance draw, not the policy, moved.
+            import random as _random
+            _random.seed(int(ep["seed"]))
+            np.random.seed(int(ep["seed"]) % (2 ** 32))
             obs, info = env.reset(seed=ep["seed"])
             if recorder is not None:
                 recorder.start_episode(ep["index"], ep["town"])
@@ -399,7 +495,14 @@ def main():
             "held-out results would be meaningless. Retrain the VAE on the "
             "training towns only.")
 
-    rng = np.random.default_rng(SEED)
+    # THE EXPERT COIN GETS ITS OWN STREAM. GatedReward draws its mode bit from
+    # default_rng(env seed) = default_rng(SEED) for env 0, one draw per reset;
+    # this coin also drew once per episode from default_rng(SEED). Same seed,
+    # same cadence, same uniform: u < 0.4 armed the oracle and u < 0.5 made
+    # the episode explore, so EVERY oracle episode was an explore episode and
+    # goal mode never received one oracle row (14/14 armed episodes at
+    # mode=0, in a run whose [Why] line reported them as the goal oracle).
+    rng = np.random.default_rng([SEED, 0x0E5])
 
     # ONE ENV PER TOWN, one server each. Replaces the previous scheme of
     # rebuilding the env every episode to rotate towns, which reloaded the CARLA
@@ -559,6 +662,22 @@ def main():
 
     def _arm_expert(i, info):
         """Decide whether env i's NEW episode is oracle-driven, and plan it."""
+        # THE ORACLE MUST HOLD THE LIVE HERO. The vec env rebuilds an env (new
+        # world actors) after a failed reset/step, and a destroyed actor does
+        # not raise -- it reports the origin. Measured: from episode ~118 every
+        # [ExpertPlan] read hero=(0.0,0.0) and the oracle drove 300-700-node
+        # routes from a phantom pose, lane_any/orc climbing from 0 to 0.09
+        # while the rows kept entering the buffer. Rebuild whenever the hero
+        # actor the oracle was built on is no longer the env's hero.
+        _core = getattr(getattr(venv.envs[i], "unwrapped", venv.envs[i]), "core", None)
+        _hero = getattr(_core, "hero", None)
+        _held = getattr(experts[i], "_vehicle", None) if experts[i] is not None else None
+        if _hero is not None and (experts[i] is None or
+                                  getattr(_held, "id", None) != _hero.id):
+            print(f"[Expert] env{i}: hero actor is "
+                  f"{getattr(_held, 'id', None)} -> {_hero.id}; rebuilding oracle",
+                  flush=True)
+            experts[i] = make_expert(venv.envs[i], venv.action_space)
         if experts[i] is None or not should_use_expert(rng, EXPERT_PROB):
             is_expert_ep[i] = False
             return
@@ -567,6 +686,19 @@ def main():
             arm_failures["no_goal_in_info"] = arm_failures.get("no_goal_in_info", 0) + 1
             is_expert_ep[i] = False
             return
+        # EXPERT_MODES: which gated episodes the oracle may drive. "both"
+        # (default) is the documented setup -- 40% of ALL episodes; "goal"
+        # keeps it to goal-mode episodes, where a route-following driver is
+        # the task; in explore mode it drives to a goal explore does not
+        # have, then parks. A non-gated env has no mode and counts as goal.
+        _mode = (info or {}).get("mode", 1)
+        _allowed = {"both": (0, 1), "goal": (1,), "explore": (0,)}[
+            os.environ.get("EXPERT_MODES", "both")]
+        if _mode not in _allowed:
+            is_expert_ep[i] = False
+            return
+        print(f"[ExpertArm] env{i} mode={info.get('mode')} "
+              f"goal=({goal.x:.1f},{goal.y:.1f})", flush=True)
         is_expert_ep[i] = bool(experts[i].reset(goal) > 0)
         if not is_expert_ep[i]:
             r = getattr(experts[i], "last_plan_error", None) or "unknown"
@@ -639,6 +771,10 @@ def main():
     # Histogram of WHY episodes end. Without it "return 0.0" is the only
     # symptom and every diagnosis is a guess.
     end_reasons = {}
+    # Total stalls across all episodes. A list so the closure-free inner loop
+    # can accumulate without a `nonlocal`; end_reasons["stalled"] counts
+    # EPISODES with at least one, so total/episodes gives the mean per episode.
+    stall_total = [0]
     # Denominators for the oracle/policy split below. A tagged count divided by
     # total_eps would be wrong by ~5x for the oracle, whose episodes are only
     # EXPERT_PROB of the total -- the exact class of mis-normalised metric this
@@ -907,6 +1043,22 @@ def main():
                         end_reasons[rname] = end_reasons.get(rname, 0) + 1
                         _kw = f"{rname}/{_who}"
                         end_reasons[_kw] = end_reasons.get(_kw, 0) + 1
+                # STALLS ARE INVISIBLE TO done_reasons BY CONSTRUCTION.
+                #
+                # Under STALL_STEPS > 0 a lane crossing no longer wedges, so
+                # `wedged` never goes True and the episode does not end on it.
+                # The [Why] histogram is built from done_reasons, which records
+                # only what was true AT THE END -- so a run could stall twenty
+                # times and report a clean sheet. `stalled` counts episodes with
+                # at least one stall, directly comparable to the old lane_any
+                # rate; `stall_n` accumulates the total so the mean per episode
+                # is recoverable. Measurement only.
+                _stalls = int(fi.get("stall_count", 0) or 0)
+                if _stalls:
+                    end_reasons["stalled"] = end_reasons.get("stalled", 0) + 1
+                    _ks = f"stalled/{_who}"
+                    end_reasons[_ks] = end_reasons.get(_ks, 0) + 1
+                    stall_total[0] += _stalls
                 # WHICH MARKING THE WEDGE FIRED ON. Measurement only -- nothing
                 # here changes what wedges.
                 #
@@ -949,7 +1101,14 @@ def main():
                         sorted(end_reasons.items())
                         if k.endswith(("/orc", "/pol"))
                         and not k.startswith("mark:"))
-                    print(f"[Why {total_eps:5d}] {hist}  | goals "
+                    # Mean stalls per episode, over ALL episodes, not just the
+                    # ones that stalled -- the rate `stalled=` in `hist` already
+                    # gives the fraction that did, and quoting a mean over only
+                    # those two would be two numbers with different denominators
+                    # sitting on the same line.
+                    _stall_mean = (f"  stalls/ep={stall_total[0] / max(1, tot):.2f}"
+                                   if stall_total[0] else "")
+                    print(f"[Why {total_eps:5d}] {hist}{_stall_mean}  | goals "
                           f"{CURR_MIN:.1f}-{curr_max:.1f}m", flush=True)
                     # THE TWO UNCALIBRATED NUMBERS IN THE EXPLORE ARM.
                     #

@@ -1,8 +1,11 @@
 from collections import defaultdict, deque
+from functools import partial
+import glob
 import os
 import pickle
 import cv2
 import numpy as np
+import shutil
 from absl import app, flags
 from jaxrl2.wrappers.frame_stack import FrameStack
 from jaxrl2.wrappers.timelimit import TimeLimit
@@ -33,7 +36,7 @@ flags.DEFINE_boolean("deterministic", True, "Whether to use deterministic action
 flags.DEFINE_string("map_dir", None, "Whether to use deterministic actions")
 flags.DEFINE_string("town", "Town01", "Town Name")
 
-def evaluate_policy(model_type,env, n_eval_episodes=10, deterministic=True):
+def evaluate_policy(env:CarlaEvalEnv,experiment:str,model_type:str,map_dir:str,origin=None,destination=None):
     """Evaluate the agent for n_eval_episodes."""
     episode_rewards = []
     episode_lengths = []
@@ -42,7 +45,7 @@ def evaluate_policy(model_type,env, n_eval_episodes=10, deterministic=True):
     SPL_per_skip_frame = []
     distance_completed = []
     slack_values = []
-    skip_index=37
+    skip_index=1
    
     data=defaultdict(lambda :[])
     models={
@@ -59,64 +62,54 @@ def evaluate_policy(model_type,env, n_eval_episodes=10, deterministic=True):
     checkpoint_path=default_checkpointts[model_type]
     # https://github.com/carla-simulator/carla/issues/2832
 
-    termination_budget=10
+    termination_budget=5
     while termination_budget>0:
         done = False
         episode_reward = 0
         episode_length = 0
         goal_location=None
         shortest_distance_along_road=1e-8
-        if FLAGS.map_dir is None:
+        print("Map directory",map_dir)
+        if map_dir is None:
             if model_type != "nomad":
                 raise ValueError("Only NoMaD can explore")
             agent = MODEL(ckpt_path=checkpoint_path,mode="explore")
         else:
-            agent = MODEL(ckpt_path=checkpoint_path,mode="navigate",skip_index=skip_index ,map_dir=FLAGS.map_dir)
+            agent = MODEL(ckpt_path=checkpoint_path,mode="navigate",skip_index=skip_index ,map_dir=map_dir)
             print(f"Using {len(agent.topomap)} Nodes")
             # map_dir="/home/kojogyaase/Projects/Research/carla-rl/topomap"
             shortest_distance_along_road=None
-            with open(f'{FLAGS.map_dir}/aux.pkl', 'rb') as handle:
-                dataset=pickle.load(handle)
-                # breakpoint()
-                start_location=ndarray_to_location(dataset["start"])
-                goal_location=ndarray_to_location(dataset["goal"])
-                env.unwrapped.set_start_transform(start_location)
-                env.unwrapped.set_destination_transform(goal_location)
-                route_plannner=GlobalRoutePlanner(env.unwrapped.core.map, 2.0)
-        
-                prev_waypoint=None
-                trace=route_plannner.trace_route(start_location,goal_location)
-                for wp,_ in trace:
-                    if shortest_distance_along_road is None:
-                        shortest_distance_along_road=0
-
-                    if prev_waypoint is None:
-                        prev_waypoint=wp
-                    shortest_distance_along_road+=prev_waypoint.transform.location.distance(wp.transform.location)
+            if origin is None or destination is None:
+                with open(f'{map_dir}/aux.pkl', 'rb') as handle:
+                    dataset=pickle.load(handle)
+                    origin=ndarray_to_location(dataset["start"])
+                    destination=ndarray_to_location(dataset["goal"])
+            
+            env.unwrapped.set_start_transform(origin)
+            env.unwrapped.set_destination_transform(destination)
+            route_plannner=GlobalRoutePlanner(env.unwrapped.core.map, 2.0)
+            prev_waypoint=None
+            trace=route_plannner.trace_route(origin,destination)
+            for wp,_ in trace:
+                if shortest_distance_along_road is None:
+                    shortest_distance_along_road=0
+                if prev_waypoint is None:
                     prev_waypoint=wp
-                if shortest_distance_along_road <= 2.0:
-                    shortest_distance_along_road=start_location.distance(goal_location)
-                # assert shortest_distance_along_road>1.0
-        # breakpoint()
-        # print("shortest_distance_along_roads is",shortest_distance_along_road)
+                shortest_distance_along_road+=prev_waypoint.transform.location.distance(wp.transform.location)
+                prev_waypoint=wp
+            if shortest_distance_along_road <= 2.0:
+                shortest_distance_along_road=origin.distance(goal_location)
+
         observation, info = env.reset()
-        # if not FLAGS.map_dir is None:
-        #     goal=np.asarray(agent.topomap[agent.goal_node])
-        #     print("Goal Node",agent.goal_node)
-        #     # cv2.imwrite("goal.jpg",goal)
-        #     env.unwrapped.set_goal(goal,0.0,goal_location)
-     
         spAgent=SetPointAgent(env.unwrapped.core.hero)
         while not done:
-            waypoints = np.array(agent.eval_action(observation["pixels"]))
-            actions=spAgent.run_step(waypoints)
-            # actions=spAgent.run_step(waypoints)
-            # config["env_config"]["carla"]["timestep"]  
+            waypoints  = agent.eval_action(observation["pixels"])
+            actions=spAgent.run_step(waypoints) 
             observation, reward, done, truncated, info = env.step(actions)
             episode_reward += reward
             episode_length += 1
             done = done or truncated
-            
+    
             if done:
                 episode_rewards.append(episode_reward)
                 episode_lengths.append(episode_length)
@@ -138,8 +131,7 @@ def evaluate_policy(model_type,env, n_eval_episodes=10, deterministic=True):
 
                     _spl=S*(shortest_distance_along_road)/max(shortest_distance_along_road,agent_distance_completed)
                     SPL.append(_spl)
-                    # distance_completed.append()
-                    print("==================SPL===============",_spl,SPL)
+                    # print("==================SPL===============",_spl,SPL)
                     
                 if "slack" in info:
                     slack_values.append(float(info["slack"]))
@@ -148,22 +140,14 @@ def evaluate_policy(model_type,env, n_eval_episodes=10, deterministic=True):
                 else:
                     termination_budget-=1
                 env.unwrapped.set_start_transform(env.unwrapped.last_position.location)
-                # if i%5==0 and i!=0:
-                #     skip_index+=2
-                #     l=np.nan_to_num(np.mean(SPL),nan=0)
-                #     SPL_per_skip_frame.append(l)
-                #     # breakpoint()
-                #     print("=================Skip Index==============",skip_index,l,SPL_per_skip_frame)
-                #     SPL = []
-    # breakpoint()
-    # Compute statistics
+                
     stats = {
         "mean_reward": np.mean(episode_rewards),
         "std_reward": np.std(episode_rewards),
         "mean_length": np.mean(episode_lengths),
         "std_length": np.std(episode_lengths),
         "max_SPL":np.nan_to_num(np.mean(SPL),nan=0),
-        "mean_distance_per_step":dataset.get("mean_distance_per_step",1.0),
+        # "mean_distance_per_step":dataset.get("mean_distance_per_step",1.0),
         "distance_completed":distance_completed,
         "nodes":len(agent.topomap),
         "shortest_distance_along_road":shortest_distance_along_road
@@ -181,42 +165,48 @@ def evaluate_policy(model_type,env, n_eval_episodes=10, deterministic=True):
         "experiment_results":stats,
         "SPLs":SPL_per_skip_frame,
     })
-    difficulty=FLAGS.map_dir.split("/")[-2]
-    name=FLAGS.map_dir.split("/")[-1] or model_type
-    path=f"results/{model_type}/{difficulty}"
+    criteria=map_dir.split("/")[-3]
+    difficulty=map_dir.split("/")[-2]
+    trajectory = map_dir.split("/")[-1]
+    path=f"results/{experiment}/{criteria}/{difficulty}/{trajectory}"
     os.makedirs(path,exist_ok=True)
-    with open(f"{path}/{name}_test_results.pkl", "wb") as f:
+    with open(f"{path}/{model_type}_test_results.pkl", "wb") as f:
         pickle.dump(dict(data), f)
     return stats
 
-def main(_):
-    # Create and wrap environment
-    env = CarlaEvalEnv(start_server=True,town=FLAGS.town)
-    env = TimeLimit(env, max_episode_steps=int(2e4))
+
+def run_agent():
+    env = CarlaEvalEnv(start_server=False,town="Town02")
+    env = TimeLimit(env, max_episode_steps=int(1e3))
     env = FrameStack(env=env, num_stack=1, stacking_key="pixels")
     env = FrameStack(env=env, num_stack=1, stacking_key="goal")
     env = RecordEpisodeStatistics(env)
 
+    base="/home/robotlab/scratch/carla-rl"
+    for experiment in ["distance_experiment"]:
+        wrapped_func=partial(evaluate_policy,env,experiment)
+        # for model_type in os.listdir(f"{base}/{experiment}"):
+        for model_type in ["vint"]:
+            model_wrapped_func=partial(wrapped_func,model_type)
+            for criterion in os.listdir(f"{base}/{experiment}/{model_type}"):
+                for difficulty  in os.listdir(f"{base}/{experiment}/{model_type}/{criterion}"):
+                    for trajectory  in os.listdir(f"{base}/{experiment}/{model_type}/{criterion}/{difficulty}"):
+                        map_dir=f"{base}/{experiment}/{model_type}/{criterion}/{difficulty}/{trajectory}"
+                        dense_map=f"/home/robotlab/scratch/carla-rl/evaluation_trajectory/gnm/dense/{difficulty}/{trajectory}"
+                        # # the goal image is not always present in the topological map
+                        # goal_image = sorted(glob.glob(f"{dense_map}/*.jpg"), 
+                        #      key=lambda x: int(os.path.splitext(os.path.basename(x))[0]))[-1]
+                        # shutil.copy(goal_image,f"{map_dir}")
+                        # print(goal_image,map_dir)
+                        with open(f'{dense_map}/aux.pkl', 'rb') as handle:
+                            dataset=pickle.load(handle)
+                            origin=ndarray_to_location(dataset["start"])
+                            destination=ndarray_to_location(dataset["goal"])
+                            print("origin",origin,destination)
+                        # try:
+                            model_wrapped_func(map_dir,origin=origin,destination=destination)
+                        # except:
+                            # breakpoint()
+                        # run_agent_on_map()
 
-    # Initialize agent
-    # kwargs = dict(FLAGS.config)
-
-    # Evaluate
-    stats = evaluate_policy(
-        FLAGS.model,
-        env,
-        n_eval_episodes=FLAGS.n_eval_episodes,
-        deterministic=FLAGS.deterministic
-    )
-    
-    # Print results
-    print("\nEvaluation Results:")
-    print("=" * 50)
-    for key, value in stats.items():
-        if not isinstance(value,list):
-            print(f"{key}: {value:.4f}")
-    print("=" * 50)
-
-if __name__ == "__main__":
-    # flags.mark_flag_as_required("checkpoint_path")
-    app.run(main)
+run_agent()

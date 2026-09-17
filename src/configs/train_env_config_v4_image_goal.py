@@ -94,6 +94,37 @@ class RLDataAugmentation:
 # in get_done_status for why this is a dynamics change rather than a reward
 # penalty.
 LANE_WEDGE = os.environ.get("LANE_WEDGE", "0") == "1"
+# STALL_STEPS > 0 MAKES THE WEDGE FINITE. 0 keeps the absorbing wedge exactly
+# as it was, so every existing run script is unchanged.
+#
+# WHY GRADED. The absorbing wedge is one terminal bit per episode, and its
+# failure probability compounds with route length -- the same rules gave
+# lane_any 0.24 at 20-31 m and ~0.85 at 100 m. A stall instead charges
+# STALL_STEPS of frozen clock and hands control back, so a crossing costs time
+# rather than the run and the cost stops scaling with how far there is to go.
+# It stays a DYNAMICS change: the car really is stopped for those steps, so
+# V(s) remains -(steps to goal) and value_distance.py is untouched.
+#
+# NO COOLDOWN, AND ONLY LANE CROSSINGS STALL. off_road keeps the absorbing
+# wedge; see the trigger site for the measurement that forced that split.
+#
+#   diff_lane   EDGE-triggered ('lane_invasion' in sensor_data, :582) -- the
+#               sensor fires on the CROSSING event, not on the state of being
+#               over a line, so a stall arms once per crossing and a car
+#               released just past a line does not re-fire. Recoverable.
+#   off_road    STATE ('wp is None', :621) -- true on every tick the car sits
+#               on grass. It cannot be graded without a cooldown, and it should
+#               not be: under a minimum-time objective a shortcut across grass
+#               is REWARDED whenever it is shorter, so pricing it at a few
+#               seconds could make cutting the corner optimal. It stays a wedge.
+STALL_STEPS = int(os.environ.get("STALL_STEPS", 0))
+# Publish remaining ALONG-ROAD distance to the goal, for potential-based
+# shaping in the reward wrapper. Off by default: it costs a route plan per goal
+# and every existing run script is written without it.
+ROUTE_POTENTIAL = os.environ.get("ROUTE_POTENTIAL", "0") == "1"
+# How many route plans to log on startup, so the route-vs-straight-line
+# ratio is visible as a distribution rather than a single sample.
+ROUTE_LOG_N = int(os.environ.get("ROUTE_LOG_N", 20))
 # Same default and same meaning as core_state.py's read of it, so the wedge and
 # the reward's lane signal cannot disagree about what counts as a violation.
 # 1 = any crossing is fatal; 0 = only illegal markings (Solid/Curb/Grass) are,
@@ -148,6 +179,22 @@ class STBL3Experiment(BaseExperiment):
         else:
             self.max_steer = float(os.environ.get("MAX_STEER", 1.0))
             self.max_throttle = float(os.environ.get("MAX_THROTTLE", 1.0))
+        # THROTTLE FLOOR. Whenever the car is driving it gets at least this
+        # much throttle, so the policy cannot park itself with a zero command.
+        # It applies ONLY where the car is meant to be moving: the wedge's full
+        # brake is untouched (a wedged car must stay stationary), and in the
+        # absolute action space the braking branch keeps throttle at 0, since a
+        # floor fighting the brake would mean the car could never stop.
+        #
+        # Under INCREMENTAL_ACTIONS the brake is always 0, so this makes the
+        # floor absolute: the car always creeps. That is the point -- `idle` is
+        # a terminal reason, and a policy that learns to sit still cannot be
+        # distinguished from one that has not learned to drive.
+        #
+        # It also lifts the bottom of the observed throttle in the `vector`
+        # block (vec[1] = throttle / max_throttle) from 0.0 to
+        # min_throttle / max_throttle.
+        self.min_throttle = float(os.environ.get("MIN_THROTTLE", 0.05))
         # One action = one step of this size on the control.
         self.steer_step = float(os.environ.get("STEER_STEP", 0.01))
         self.throttle_step = float(os.environ.get("THROTTLE_STEP", 0.01))
@@ -257,6 +304,10 @@ class STBL3Experiment(BaseExperiment):
 
         # Control variables
         self.wedged = False
+        # Countdown for the graded stall (STALL_STEPS > 0). Cleared per episode
+        # alongside self.wedged, or a stall would leak across the reset.
+        self.stall_steps_left = 0
+        self.stall_count = 0
         self.prev_steer = 0.0
         self.prev_throttle = 0.0
         self.steer = 0.0
@@ -375,11 +426,17 @@ class STBL3Experiment(BaseExperiment):
 
         vehicle_control = carla.VehicleControl()
 
-        # WEDGED: the action is discarded entirely and the car is held still.
-        # Full brake rather than merely zero throttle, so it does not coast on
-        # for another twenty metres after crossing the line -- "wedged" should
-        # mean stationary, not drifting.
-        if getattr(self, "wedged", False):
+        # WEDGED or STALLED: the action is discarded entirely and the car is
+        # held still. Full brake rather than merely zero throttle, so it does
+        # not coast on for another twenty metres after crossing the line --
+        # "wedged" should mean stationary, not drifting.
+        #
+        # The two differ only in DURATION. A wedge lasts the rest of the
+        # episode; a stall lasts STALL_STEPS and then hands control back. Both
+        # are the same dynamics change, so V stays -(steps to goal) either way.
+        if getattr(self, "wedged", False) or getattr(self, "stall_steps_left", 0) > 0:
+            if getattr(self, "stall_steps_left", 0) > 0:
+                self.stall_steps_left -= 1
             vehicle_control.steer = 0.0
             vehicle_control.throttle = 0.0
             vehicle_control.brake = 1.0
@@ -394,7 +451,8 @@ class STBL3Experiment(BaseExperiment):
             steer = self.steer + self.steer_step * np.clip(a0, -1.0, 1.0)
             throttle = self.throttle + self.throttle_step * np.clip(a1, -1.0, 1.0)
             vehicle_control.steer = float(np.clip(steer, -self.max_steer, self.max_steer))
-            vehicle_control.throttle = float(np.clip(throttle, 0.0, self.max_throttle))
+            vehicle_control.throttle = float(np.clip(throttle, self.min_throttle,
+                                                     self.max_throttle))
             vehicle_control.brake = 0.0
             self.steer = vehicle_control.steer
             self.throttle = vehicle_control.throttle
@@ -407,7 +465,8 @@ class STBL3Experiment(BaseExperiment):
         vehicle_control.steer = float(np.clip(steer, -self.max_steer, self.max_steer))
 
         if throttle_brake >= 0:
-            vehicle_control.throttle = float(np.clip(throttle_brake, 0.0, self.max_throttle))
+            vehicle_control.throttle = float(np.clip(throttle_brake, self.min_throttle,
+                                                     self.max_throttle))
             vehicle_control.brake = 0.0
         else:
             vehicle_control.throttle = 0.0
@@ -421,6 +480,64 @@ class STBL3Experiment(BaseExperiment):
         self.last_action = vehicle_control
         
         return vehicle_control
+
+    def _route_remaining(self, core):
+        """Metres left ALONG THE ROAD to the goal, or None if unavailable.
+
+        Lazily built because it needs core.map, which does not exist when the
+        experiment is constructed. Replans whenever the destination moves --
+        which it does on every arrival, since the env resamples the goal the
+        moment it is reached, and a stale route would keep measuring progress
+        toward a goal that is no longer there.
+
+        None, NOT 0.0, when there is no route. Zero reads as "arrived" and
+        would pay out the whole potential in one step; None tells the reward
+        wrapper to skip shaping for this step, which is always safe.
+        """
+        if not ROUTE_POTENTIAL:
+            return None
+        try:
+            goal = core.destination.location
+            hero = core.hero.get_transform().location
+            if getattr(self, "_route_pot", None) is None:
+                from vae_nav.route_potential import RoutePotential
+                self._route_pot = RoutePotential(core.map)
+                self._route_goal = None
+            key = (round(goal.x, 2), round(goal.y, 2))
+            if key != getattr(self, "_route_goal", None):
+                length = self._route_pot.reset(hero, goal)
+                self._route_goal = key
+                # ONE-SHOT PROOF THAT SHAPING IS LIVE. A planner that silently
+                # returns None disables the shaping and is INVISIBLE in every
+                # metric -- shaping only redistributes credit, so a run with it
+                # switched off looks like a run where it did not help. Print the
+                # first plan's outcome once so that cannot go unnoticed.
+                n = getattr(self, "_route_announced", 0)
+                if n < ROUTE_LOG_N:
+                    self._route_announced = n + 1
+                    err = self._route_pot.plan_error
+                    import math as _m
+                    eu = _m.hypot(goal.x - hero.x, goal.y - hero.y)
+                    # ROUTE vs STRAIGHT LINE. The goal is origin.next(d), a
+                    # forward walk of 20-50 m ALONG the lane, so the route
+                    # should be about the same. A ratio far above 1 means
+                    # trace_route is not following the path the car will drive
+                    # -- and the monotone pointer would then stall near the
+                    # route's start and pay the shaping in one late spike
+                    # instead of per metre. Logged for the first few plans so
+                    # the distribution is visible, not one sample.
+                    print(f"[Route] plan {n + 1}: {length:.1f} m road / "
+                          f"{eu:.1f} m straight  ratio={length / max(eu, 1e-6):.2f}"
+                          + (f"  ERROR={err}" if err else ""), flush=True)
+            return self._route_pot.remaining((hero.x, hero.y))
+        except Exception as e:  # noqa: BLE001
+            # Shaping is optional by construction, so a planner failure must
+            # degrade to "no shaping" rather than kill the episode -- but it
+            # must not do so silently.
+            if not getattr(self, "_route_announced", False):
+                self._route_announced = True
+                print(f"[Route] DISABLED -- {type(e).__name__}: {e}", flush=True)
+            return None
 
     def get_observation(self, sensor_data, core):
         """Process sensor data into observation."""
@@ -727,8 +844,36 @@ class STBL3Experiment(BaseExperiment):
         # reaches core_state and the [Why] breakdown as a RATE, so switching it
         # off here hides nothing; it only stops it freezing the vehicle.
         _off_road_fatal = WEDGE_ON_OFF_ROAD and self.off_road
-        if LANE_WEDGE and (_lane_fatal or _off_road_fatal):
+        # THE TWO TRIGGERS TAKE DIFFERENT PATHS, and routing both through the
+        # stall was a bug: get_done_status runs EVERY step, off_road is a STATE
+        # rather than an event, so an off-road car re-armed the countdown on
+        # every tick. It never expired, the car was frozen for the rest of the
+        # episode AND the episode ran its full 500 steps instead of being billed
+        # and ended. MEASURED before the fix: stalls/ep=181 on a 500-step
+        # episode, off_road/pol=0.76.
+        #
+        #   off_road    -> WEDGE, exactly as before. Absorbing, terminal,
+        #                  billed for the remaining clock. Preserves the
+        #                  deterrent WEDGE_ON_OFF_ROAD exists for (a grass
+        #                  shortcut is REWARDED under a minimum-time objective
+        #                  whenever it is shorter) and keeps the wall-clock
+        #                  saving of not simulating a frozen car.
+        #   lane cross  -> STALL, when STALL_STEPS > 0. diff_lane is EDGE
+        #                  triggered ('lane_invasion' in sensor_data), so this
+        #                  arms once per crossing and cannot re-arm itself.
+        if LANE_WEDGE and _off_road_fatal:
             self.wedged = True
+        elif LANE_WEDGE and _lane_fatal:
+            if STALL_STEPS > 0:
+                # Guarded anyway: never re-arm while a stall is already
+                # running, so one crossing can only ever cost STALL_STEPS.
+                if self.stall_steps_left <= 0:
+                    self.stall_steps_left = STALL_STEPS
+                    # COUNTS EVENTS, NOT STEPS. Incrementing on every tick the
+                    # condition held is what produced stalls/ep=181.
+                    self.stall_count = getattr(self, "stall_count", 0) + 1
+            else:
+                self.wedged = True
         self.collision = 'collision' in sensor_data.keys()
         # DISTANCE CAP, env-var gated. Default 200 keeps the CORL dense-reward
         # experiments byte-identical; the long-horizon curriculum raises it.
@@ -797,6 +942,16 @@ class STBL3Experiment(BaseExperiment):
             # future is therefore fully determined: it cannot reach the goal,
             # and the time it will burn is exactly the steps left on the clock.
             wedged=bool(getattr(self, "wedged", False)),
+            # STALLS, published for MEASUREMENT ONLY -- nothing reads these to
+            # decide a terminal. Under STALL_STEPS > 0 the wedge never fires, so
+            # `wedged` above stays False and the [Why] histogram would otherwise
+            # show a run with no lane failures at all while the policy racked up
+            # stalls invisibly. stall_count is per episode.
+            stalled=bool(getattr(self, "stall_steps_left", 0) > 0),
+            stall_count=int(getattr(self, "stall_count", 0)),
+            # ALONG-ROAD metres left to the goal, or None when no route exists.
+            # Phi(s) = -route_remaining_m; the reward wrapper differences it.
+            route_remaining_m=self._route_remaining(core),
             # Whether the hero was inside a junction. The wedge's exemption
             # turns on this, so it has to be visible in the [Why] breakdown --
             # otherwise "crossings are forgiven correctly" is unfalsifiable.

@@ -3,14 +3,83 @@
 
 from collections import defaultdict
 import math
+import os
 import random
 import numpy as np
 from gymnasium.spaces import Box, Dict
-
+# Add this import at the top of your script with the other torch/gym imports
+import torch
+import torchvision.transforms as T
 import carla
-
+import torch.nn as nn 
+from dune.model.dune import build_encoder
+from dune.model.model_utils import extra_repr
 from rlib_integration.base_experiment import BaseExperiment
 from rlib_integration.helper import post_process_image, carla_location_to_np_array
+
+class DUNE(nn.Module):
+    def __init__(
+        self,
+        encoder: nn.Module,
+        # proj: nn.Module,
+        apply_last_enc_norm: bool = False,
+    ):
+        super().__init__()
+        self.encoder = encoder
+        # self.proj = proj
+        self.apply_last_enc_norm = apply_last_enc_norm
+
+    def extra_repr(self) -> str:
+        return extra_repr(self)
+
+    @property
+    def patch_size(self) -> int:
+        return self.encoder.patch_size  # type: ignore
+
+    def get_encoder_output(
+        self, image: torch.Tensor, concat_cls_patch=True
+    ):
+        out_dict = self.encoder(image, apply_norm=self.apply_last_enc_norm)
+
+        enc_out = out_dict
+        if concat_cls_patch:
+            enc_out = torch.cat(
+                [
+                    out_dict["x_norm_clstoken"].unsqueeze(1),
+                    out_dict["x_norm_patchtokens"],
+                ],
+                dim=1,
+            )
+        # print(enc_out.shape)
+        return enc_out
+
+def build_student_from_args(args):
+    encoder = build_encoder(args.image_size, args.enc_args)
+    model = DUNE(encoder)
+    return model
+
+
+def load_student_from_checkpoint(ckpt_fname, ckpt_key="model"):
+    assert os.path.isfile(ckpt_fname), ckpt_fname
+    ckpt = torch.load(ckpt_fname, "cpu", weights_only=False)
+    model = build_student_from_args(ckpt["args"])
+    state_dict = ckpt.get(ckpt_key, ckpt)
+    state_dict = {
+        k.replace("module.", "").replace("_orig_mod.", ""): v
+        for k, v in state_dict.items()
+    }
+    state_dict_np={}
+    for  k,v in state_dict.items():
+        if not "projector" in k and not "projectors" in k and not "teacher_norms" in k:
+            state_dict_np[k]=v
+
+    model.load_state_dict(state_dict_np)
+   
+    return model
+
+
+
+
 def normalize_angle(angle):
     """Normalize angle to [-π, π]"""
     return ((angle + np.pi) % (2 * np.pi)) - np.pi
@@ -37,12 +106,23 @@ class STBL3Experiment(BaseExperiment):
         self.velocity=0.0
         self.info=dict()
         self.rewards=[]
-        self.image_size=64
+        self.image_size=63
         self.episode_num=1
         self.max_episodes=10000
         self.explore_mode=False
         self.distance_travelled = 0.0
-        self.distance_completed = 0.0
+        self.distance_completed = 0.04
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.model = load_student_from_checkpoint("/home/robotlab/scratch/carla-rl/dune_checkpoints/dune_vitbase14_448.pth")
+        self.model.to(self.device)
+        self.model.eval() # Set model to evaluation mode
+        self.image_transform = T.Compose([
+            T.ToTensor(),
+            T.Resize((70, 70), antialias=True),
+            T.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+        ])
+        
+
     def _cache_waypoints(self,world) -> None:
             env_map = world.get_map()
             waypoints = env_map.generate_waypoints(distance=2)
@@ -91,20 +171,25 @@ class STBL3Experiment(BaseExperiment):
         # self.target_speed = random.uniform(5.0,10.0)
         self.info=dict()
         if self.trajectories is None:
-            self._cache_waypoints(env.core.world)
+            self._cache_waypoints(env.world)
 
     # def get_action_space(self):
     #     """Returns the action space, in this case, a discrete space"""
     #     return Discrete(len(self.get_actions()))
 
     def get_observation_space(self):
-        image_space = Box(
-            low=-1.0,
-            high=1.0,
-            shape=(self.image_size, self.image_size, 3,),
-            dtype=np.float32,
-        )
-        
+        # image_space = Box(
+        #     low=-1.0,
+        #     high=1.0,
+        #     shape=(self.image_size, self.image_size, 3,),
+        #     dtype=np.float32,
+        # )
+        image_space= Box(
+                low=-np.inf,
+                high=np.inf,
+                shape=(26*768,), # DUNE ViT-Base patch token output
+                dtype=np.float32
+            )
         vec_space = Box(
             low=-5.1,
             high=5.1,
@@ -112,12 +197,12 @@ class STBL3Experiment(BaseExperiment):
             dtype=np.float32,
         )
 
-        return Dict({"pixels":image_space, "vector":vec_space})
+        return Dict({"state":image_space, "vector":vec_space})
 
     def get_action_space(self):
         """Returns the continuous action space for steering and throttle"""
         return Box(
-            low=np.array([-self.max_steer, -1.0]),  # [steering, throttle/brake]
+            low=np.array([-self.max_steer, 0.0]),  # [steering, throttle/brake]
             high=np.array([self.max_steer, 1.0]),
             dtype=np.float32
         )
@@ -162,7 +247,7 @@ class STBL3Experiment(BaseExperiment):
         """
         vecs = self.get_vec_obs(sensor_data, core)
         images = self.get_img_obs(sensor_data, core)
-        return {"pixels":images, "vector":vecs}, self.info
+        return {"state":images, "vector":vecs}, self.info
 
     def get_vec_obs(self, sensor_data, core):
         # breakpoint()
@@ -179,26 +264,13 @@ class STBL3Experiment(BaseExperiment):
         else:
             vec[2] = np.clip(self.get_speed(hero)/self.target_speed, 0.0, 1.0)
         # vec[3] = self.time_idle / self.max_time_idle
-        if self.explore_mode:
-            vec[3]= -1.0
-        else:
-            if not wp is None and wp.is_junction:
-                vec[3]=np.cos(abs(imu-heading))
-            else:
-                vec[3]=np.cos(0)
-            
-        # vec[3]= np.clip((imu+1e-8)/(heading+1e-8),-1.0,1.0)
-     
-        # print(np.cos(imu-heading))
-            # else:
-            #     wp=core.map.get_waypoint(core.hero.get_transform().location,project_to_road=True) 
-            #     if not wp is None:
-            #         current_forward_vector=carla_location_to_np_array(core.hero.get_transform().get_forward_vector())
-            #         correct_forward_vector=carla_location_to_np_array(wp.transform.get_forward_vector())
-            #         vec[3] = np.dot(current_forward_vector,correct_forward_vector)
-            #     else:
-            #         vec[3] = -1
-
+        # if self.explore_mode:
+        #     vec[3]= -1.0
+        # else:
+        #     if not wp is None and wp.is_junction:
+        #         vec[3]=np.cos(abs(imu-heading))
+        #     else:
+        #         vec[3]=np.cos(0)
         if self.prev_vec_0 is None:
             self.prev_vec_0 = vec
             self.prev_vec_1 = self.prev_vec_0
@@ -222,7 +294,7 @@ class STBL3Experiment(BaseExperiment):
         return vecs
     def get_img_obs(self, sensor_data, core):
         image = post_process_image(sensor_data['rgb'][1], normalized = True,crop=False, grayscale = False,image_size=self.image_size)
-
+        
         if self.prev_image_0 is None:
             self.prev_image_0 = image
             self.prev_image_1 = self.prev_image_0
@@ -240,8 +312,13 @@ class STBL3Experiment(BaseExperiment):
         self.prev_image_2 = self.prev_image_1
         self.prev_image_1 = self.prev_image_0
         self.prev_image_0 = image
+        img_tensor = self.image_transform(image.copy()).unsqueeze(0).to(self.device)
 
-        return images
+        with torch.no_grad():
+            # breakpoint()
+            latent_vector = self.model.get_encoder_output(img_tensor)
+        
+        return  latent_vector.squeeze(0).cpu().numpy().flatten()
     
     def get_speed(self, hero):
         """Computes the speed of the hero vehicle in Km/h"""
@@ -271,7 +348,7 @@ class STBL3Experiment(BaseExperiment):
     
         # self.done_speed = (hero_velocity/(self.target_speed)) > 1.0
         self.done_speed= False
-        self.done_dist=core.destination.transform.location.distance(hero.get_transform().location) <1.0 or self.distance_travelled>=100
+        self.done_dist = self.distance_travelled>=205
         # self.done_dist = self.distance_travelled>=100
         done=self.done_falling or self.done_dist or self.diff_lane or self.collision or self.done_dist or self.done_speed
         self.info.update(dict(is_success=self.done_dist,
@@ -288,11 +365,11 @@ class STBL3Experiment(BaseExperiment):
                              mean_reward=np.mean(self.rewards)))
         if done:
             self.episode_num+=1
-        #     self.info.update(is_success=self.done_dist,
-        #                      distance_completed=self.distance_travelled,
-        #                      max_reward=np.max(self.rewards),
-        #                      min_reward=np.min(self.rewards),
-        #                      mean_reward=np.mean(self.rewards))
+            self.info.update(is_success=self.done_dist,
+                             distance_completed=self.distance_travelled,
+                             max_reward=np.max(self.rewards),
+                             min_reward=np.min(self.rewards),
+                             mean_reward=np.mean(self.rewards))
             # print(self.distance_travelled)
         return done
     def compute_reward(self, sensor_data, core):
@@ -312,9 +389,9 @@ class STBL3Experiment(BaseExperiment):
             'direction': 0.6,
             'action_smoothness': 0.05,
             'time_penalty': 0.09,
-            'collision_penalty': 2.0,  # Still the largest penalty but scaled down
-            'lane_departure_penalty': 2.0,
-            'goal_reached_bonus': 2.0
+            'collision_penalty': 1.0,  # Still the largest penalty but scaled down
+            'lane_departure_penalty': 1.0,
+            'goal_reached_bonus': 1.0
         }
         
         # Get vehicle and sensor data
@@ -368,21 +445,21 @@ class STBL3Experiment(BaseExperiment):
         action_smoothness_reward = -abs(self.steer)  # Penalize large steering actions
         
         # ===== Combine Reward Components =====
-        reward = 0.0
+        reward = -1e-3
         
         # Add positive components
         if speed_factor<1.0:
-            reward += WEIGHTS['speed'] * speed_reward
+            reward +=  delta_distance
         
         # Add direction reward only in non-exploration mode
         # if not self.explore_mode:
-        reward += WEIGHTS['direction'] * direction_reward
+        # reward += WEIGHTS['direction'] * direction_reward
         
         # Add action smoothness
-        reward += WEIGHTS['action_smoothness'] * action_smoothness_reward
+        # reward += WEIGHTS['action_smoothness'] * action_smoothness_reward
         
         # Apply time penalty to encourage efficiency
-        reward -= WEIGHTS['time_penalty']
+        # reward -= WEIGHTS['time_penalty']
         
         # Apply penalties
         if self.done_speed:  # Vehicle stopped when it shouldn't

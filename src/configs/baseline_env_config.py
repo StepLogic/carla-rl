@@ -662,7 +662,7 @@ from rlib_integration.helper import post_process_image, carla_location_to_np_arr
 
 
 class JAXMappingExperiments(BaseExperiment):
-    def __init__(self, config={},is_rgb=False,image_size=64):
+    def __init__(self, config={},is_rgb=False,image_size=()):
         super().__init__(config)  # Creates a self.config with the experiment configuration
 
         self.frame_stack = self.config["others"]["framestack"]
@@ -684,10 +684,14 @@ class JAXMappingExperiments(BaseExperiment):
         self.origin=None
         self.trajectories=None
         self.destination=None
-        self.image_size=image_size
+        self.image_size=64
         self.done_goal=False
         self.destination=None
         self.lane_invasion_count=0
+        # Required for carla_env
+        self.eval_mode = False
+        self.map_mode = False
+        self.wp = None
     def _cache_waypoints(self,world) -> None:
             env_map = world.get_map()
             waypoints = env_map.generate_waypoints(distance=2)
@@ -768,7 +772,7 @@ class JAXMappingExperiments(BaseExperiment):
             dtype=np.float32
         )
 
-    def compute_action(self, action):
+    def compute_action(self, action, core=None):
         """Convert continuous actions to CARLA vehicle controls"""
         steer, throttle_brake = action
 
@@ -940,13 +944,8 @@ class JAXMappingExperiments(BaseExperiment):
         
         # Get vehicle and sensor data
         hero = core.hero
-        current_forward_vector = carla_location_to_np_array(core.hero.get_transform().get_forward_vector())
-        if isinstance(core.destination,carla.Transform):
-            correct_forward_vector = carla_location_to_np_array(core.destination.get_forward_vector())
-        else:
-            correct_forward_vector = carla_location_to_np_array(core.destination.transform.get_forward_vector())
-        # correct_forward_vector = carla_location_to_np_array(core.destination.transform.get_forward_vector())
-        self.delta_angle=np.dot(current_forward_vector, correct_forward_vector)
+        target_heading = np.nan_to_num(sensor_data["goal_heading"][-1][-1])
+        current_heading = np.nan_to_num(sensor_data["imu"][-1][-1])
         hero_location = hero.get_location()
         hero_velocity = self.get_speed(hero)
         
@@ -961,10 +960,10 @@ class JAXMappingExperiments(BaseExperiment):
                             np.square(hero_location.y - self.last_location.y)))
         
         # Calculate direction alignment using the angle between current and target heading
-        # heading_diff = abs(current_heading - target_heading)
+        heading_diff = abs(current_heading - target_heading)
         
         # Update distance traveled (only count distance in the right direction)
-        direction_factor = self.delta_angle
+        direction_factor = np.cos(heading_diff)
         forward_distance = self.delta_distance * direction_factor
         self.distance_travelled += self.delta_distance
         # self.distance_completed += forward_distance

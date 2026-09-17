@@ -1,40 +1,61 @@
-pyc
-__pycache__
+# --- python ---
+*.pyc
+__pycache__/
+.idea/
+.vscode/
 
-.vscode
-catkin_ws/*
-map_cache
-cache
-results/*
-runs/*
-checkpoints/*
-logs/*
-fastrlap-release/*
-datasets/*
-datasets/*
-src/logs/*
-src/checkpoints/*
-best_models/*
-src/checkpoints/*
-src/logs/*
-best_models/*
-success_rate_results/*
-evaluation_trajectory/*
-experiment_results/*
-*.pth
-*.zip
-topomap/*
+# --- archived material (see archive/MANIFEST.tsv) ---
+archive/
+
+# --- large binaries / data ---
 *.pth
 *.pkl
-*.jpg
-evaluation_trajectory/*
-evaluation_trajectories/*
-*.zip
-results/*
-logs_car_racing/*
 *.pickle
-*.pdf
-# .devcontainer/*
-.idea/*
-best_models/*
+*.zip
 *.bag
+*.prof
+*.jpg
+
+# --- run outputs ---
+logs/
+runs/
+checkpoints/
+cache/
+map_cache/
+outputs/
+datasets/
+src/logs/
+src/checkpoints/
+
+# --- experiment results ---
+results/
+eval_results/
+rss_results/
+benchmark_results/
+success_rate_results/
+experiment_results/
+evaluation_trajectory/
+evaluation_trajectories/
+ablation-results/
+ablation-results-gps/
+corl-2026-experiments/
+corl-2026-experiments-complete/
+corl-2026-baselines/
+corl-2026-results-dense-gps/
+corl-2026-results-dense-image/
+sptm_output/
+sptm_output_carla/
+sptm_output_carla_town05/
+sptm_dagger_output/
+sptm_eval_output/
+topomap/
+best_models/
+
+# --- latex build artifacts ---
+paper/**/*.aux
+paper/**/*.log
+paper/**/*.out
+paper/**/*.bbl
+paper/**/*.blg
+paper/**/*.synctex.gz
+*.pdf

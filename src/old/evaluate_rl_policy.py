@@ -14,7 +14,7 @@ from flax.training import checkpoints
 # from ml_collections import config_flags
 
 # from sac_lane_following import sac_config
-from carla_eval import CarlaEvalEnv
+from src.carla_eval import CarlaEvalEnv
 # from src.bc_lane_following import bc_config
 from jaxrl2.agents import DrQLearner,PixelBCLearner
 from jaxrl2.agents.resnet_agents import PixelResNetBCLearner

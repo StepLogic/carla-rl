@@ -98,6 +98,13 @@ LANE_WEDGE = os.environ.get("LANE_WEDGE", "0") == "1"
 # the reward's lane signal cannot disagree about what counts as a violation.
 # 1 = any crossing is fatal; 0 = only illegal markings (Solid/Curb/Grass) are,
 # which lets a route-following agent cross a dashed line to turn at a junction.
+# Publish remaining ALONG-ROAD distance to the goal, for potential-based
+# shaping in the reward wrapper. Off by default: it costs a route plan per goal
+# and every existing run script is written without it.
+ROUTE_POTENTIAL = os.environ.get("ROUTE_POTENTIAL", "0") == "1"
+# How many route plans to log on startup, so the route-vs-straight-line
+# ratio is visible as a distribution rather than a single sample.
+ROUTE_LOG_N = int(os.environ.get("ROUTE_LOG_N", 20))
 LANE_STRICT = os.environ.get("LANE_STRICT", "1") == "1"
 # Whether `off_road` (get_waypoint(project_to_road=False) is None) wedges.
 #
@@ -186,6 +193,26 @@ class STBL3Experiment(BaseExperiment):
         # into sub-pixel contrast). Left at 84 by default so the CORL 2026
         # dense-reward experiments, which share this config, are unchanged.
         self.image_size = int(os.environ.get("ENV_IMAGE_SIZE", 84))
+        # ENV_SKIP_IMAGE_FEATURES: return a correctly-shaped ZERO vector from
+        # get_img_obs / get_goal_img_obs instead of running MobileNetV3 over
+        # the frame. DEFAULT OFF, so every existing caller is unchanged.
+        #
+        # WHY IT EXISTS. torch.cuda.is_available() is False on this machine
+        # (the installed build wants a newer driver than is present), so both
+        # passes ran on the CPU for EVERY simulation step: measured 17.3 of 32
+        # cores in the policy process against 3.5 for the simulator, with the
+        # GPU at 0% and 701 MiB of 12282 -- the run was CPU-bound on them.
+        #
+        # WHY IT IS SAFE. Both results are DISCARDED by the gated stack.
+        # VAEGoalWrapper._observation builds its observation from info["rgb"]
+        # (core_state.py sets it from experiment.obs_img, assigned BELOW the
+        # skip point), the goal fields, raw_obs["vector"] and info["mode"]; it
+        # never reads the "state" or "goal" keys these methods return. The
+        # frame the VAE encodes, and the frame stack, are untouched.
+        # Pinned by tests/test_skip_discarded_image_features.py. Do NOT set
+        # this for any arm whose policy actually consumes the image features.
+        self.skip_image_features = (
+            os.environ.get("ENV_SKIP_IMAGE_FEATURES", "0") == "1")
         self.obs_img = None
         self.prev_vec_0 = None
         self.prev_vec_1 = None
@@ -422,6 +449,64 @@ class STBL3Experiment(BaseExperiment):
         
         return vehicle_control
 
+    def _route_remaining(self, core):
+        """Metres left ALONG THE ROAD to the goal, or None if unavailable.
+
+        Lazily built because it needs core.map, which does not exist when the
+        experiment is constructed. Replans whenever the destination moves --
+        which it does on every arrival, since the env resamples the goal the
+        moment it is reached, and a stale route would keep measuring progress
+        toward a goal that is no longer there.
+
+        None, NOT 0.0, when there is no route. Zero reads as "arrived" and
+        would pay out the whole potential in one step; None tells the reward
+        wrapper to skip shaping for this step, which is always safe.
+        """
+        if not ROUTE_POTENTIAL:
+            return None
+        try:
+            goal = core.destination.location
+            hero = core.hero.get_transform().location
+            if getattr(self, "_route_pot", None) is None:
+                from vae_nav.route_potential import RoutePotential
+                self._route_pot = RoutePotential(core.map)
+                self._route_goal = None
+            key = (round(goal.x, 2), round(goal.y, 2))
+            if key != getattr(self, "_route_goal", None):
+                length = self._route_pot.reset(hero, goal)
+                self._route_goal = key
+                # ONE-SHOT PROOF THAT SHAPING IS LIVE. A planner that silently
+                # returns None disables the shaping and is INVISIBLE in every
+                # metric -- shaping only redistributes credit, so a run with it
+                # switched off looks like a run where it did not help. Print the
+                # first plan's outcome once so that cannot go unnoticed.
+                n = getattr(self, "_route_announced", 0)
+                if n < ROUTE_LOG_N:
+                    self._route_announced = n + 1
+                    err = self._route_pot.plan_error
+                    import math as _m
+                    eu = _m.hypot(goal.x - hero.x, goal.y - hero.y)
+                    # ROUTE vs STRAIGHT LINE. The goal is origin.next(d), a
+                    # forward walk of 20-50 m ALONG the lane, so the route
+                    # should be about the same. A ratio far above 1 means
+                    # trace_route is not following the path the car will drive
+                    # -- and the monotone pointer would then stall near the
+                    # route's start and pay the shaping in one late spike
+                    # instead of per metre. Logged for the first few plans so
+                    # the distribution is visible, not one sample.
+                    print(f"[Route] plan {n + 1}: {length:.1f} m road / "
+                          f"{eu:.1f} m straight  ratio={length / max(eu, 1e-6):.2f}"
+                          + (f"  ERROR={err}" if err else ""), flush=True)
+            return self._route_pot.remaining((hero.x, hero.y))
+        except Exception as e:  # noqa: BLE001
+            # Shaping is optional by construction, so a planner failure must
+            # degrade to "no shaping" rather than kill the episode -- but it
+            # must not do so silently.
+            if not getattr(self, "_route_announced", False):
+                self._route_announced = True
+                print(f"[Route] DISABLED -- {type(e).__name__}: {e}", flush=True)
+            return None
+
     def get_observation(self, sensor_data, core):
         """Process sensor data into observation."""
         vecs = self.get_vec_obs(sensor_data, core)
@@ -508,7 +593,12 @@ class STBL3Experiment(BaseExperiment):
         self.prev_image_2 = self.prev_image_1
         self.prev_image_1 = self.prev_image_0
         self.prev_image_0 = image
-        
+
+        # AFTER obs_img and the frame stack: those are the real outputs of this
+        # method for the gated stack, and they must be identical either way.
+        if getattr(self, "skip_image_features", False):
+            return np.zeros((self._feature_dim(),), dtype=np.float32)
+
         # Transform and encode with model
         img_tensor = self.image_transform(image.copy()).unsqueeze(0).to(self.device)
 
@@ -527,7 +617,7 @@ class STBL3Experiment(BaseExperiment):
             image_size=self.image_size
         )
         # cv2.imwrite("goal.jpg",goal_image)
-        if self.mask_goal:
+        if self.mask_goal or getattr(self, "skip_image_features", False):
             return np.zeros((self._feature_dim()),dtype=np.float32)
         img_tensor = self.image_transform(goal_image.copy()).unsqueeze(0).to(self.device)
 
@@ -797,6 +887,9 @@ class STBL3Experiment(BaseExperiment):
             # future is therefore fully determined: it cannot reach the goal,
             # and the time it will burn is exactly the steps left on the clock.
             wedged=bool(getattr(self, "wedged", False)),
+            # ALONG-ROAD metres left to the goal, or None when no route
+            # exists. Phi(s) = -route_remaining_m; GatedReward differences it.
+            route_remaining_m=self._route_remaining(core),
             # Whether the hero was inside a junction. The wedge's exemption
             # turns on this, so it has to be visible in the [Why] breakdown --
             # otherwise "crossings are forgiven correctly" is unfalsifiable.

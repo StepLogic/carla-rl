@@ -1,0 +1,16 @@
+{
+  "_comment": "v7 town split (user 2026-09-16: 'remove Town10HD from held out'). A SEPARATE FILE, not an edit to configs/town_split.json: that file says 'Do not edit without a new experiment name', and every existing result -- v4, v5, v6c, v6m, v6n and every placement/mapping row built on them -- was produced against it. Editing it in place would retroactively change what those runs claim without touching a single number. Selected via TOWN_LIST=configs/town_split_v7.json, which load_split() already honours.",
+  "created": "2026-09-16",
+  "derived_from": "configs/town_split.json (created 2026-08-27)",
+  "change": "Town10HD moved from heldout to train. Nothing else differs.",
+  "train": ["Town01", "Town02", "Town04", "Town05", "Town10HD"],
+  "heldout": ["Town03"],
+  "heldout_rationale": {
+    "Town03": "roundabout, tunnel, multi-lane junctions - most structurally complex"
+  },
+  "consequences_on_record": {
+    "generalization_evidence": "The original split held out TWO independent towns; this leaves ONE. Town10HD was the 'dense urban HD assets' datapoint, structurally unlike Town03, so a v7 held-out claim rests on a single map and is weaker evidence than a v6n one, not merely different.",
+    "comparability": "Any v7 held-out transfer number is NOT comparable to a v6n/v6m number, which were evaluated against a split that excluded Town10HD.",
+    "encoder": "v7 uses PERCEPTION=mobilenet (frozen ImageNet weights, trained_on_towns empty), so the latent-source leak check at train_carla_tqc.py:740 is unaffected by this change. It would NOT be safe for a frozen-VAE arm: that VAE saw Towns 01/02/04/05."
+  }
+}

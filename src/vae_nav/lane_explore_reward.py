@@ -44,7 +44,8 @@ rather than ambiguous, and the explorer could never learn to turn. So the
 env's `done` is discarded and re-derived with the junction exemption already
 used by the wedge and pinned by tests/test_wedge_lane_filter.py:
 illegal markings (Solid/SolidSolid/SolidBroken/Curb/Grass) are fatal anywhere,
-Broken/NONE are fatal only OUTSIDE a junction, off_road is always fatal.
+Broken is fatal only OUTSIDE a junction, NONE (unpainted) is never fatal,
+off_road is always fatal.
 """
 import os
 
@@ -106,29 +107,94 @@ LANE_EXPLORE_MAX_STEPS = int(os.environ.get("LANE_EXPLORE_MAX_STEPS", 500))
 # the episode. That is a guaranteed suicide incentive, not a risk of one, and it
 # is refused below rather than offered.
 PROGRESS_MODE = os.environ.get("LANE_PROGRESS_MODE", "projected").lower()
+# PROGRESS SCALE (user decision 2026-09-11, "scale displacement by 10"): the
+# progress term is multiplied by this. At 10 a step at ~8 km/h pays ~2.2, so a
+# 500-step explore episode is worth ~+1100 and a terminal crossing at step 37
+# forfeits ~1000 of it -- the exit that trapped v4 stops being cheap by SCALE,
+# not by a separate bill. Applies to both LaneExploreReward and the gated
+# explore half, which share this constant.
+PROGRESS_SCALE = float(os.environ.get("LANE_PROGRESS_SCALE", 1.0))
 if PROGRESS_MODE not in ("projected", "heading", "raw", "none"):
     raise ValueError(f"LANE_PROGRESS_MODE={PROGRESS_MODE!r} is not one of "
                      "projected | heading | raw | none")
 
 # Same set as core_state.py and the config's wedge. Pinned by test.
 ILLEGAL_MARKS = {"Solid", "SolidSolid", "SolidBroken", "Curb", "Grass"}
+# AN UNPAINTED BOUNDARY IS NOT A LANE VIOLATION. LaneMarkingType.NONE means
+# the sensor fired where NOTHING IS PAINTED -- a road edge, a segment
+# transition, an unmarked boundary. There is no lane discipline to violate at
+# a line that does not exist.
+#
+# THIS WAS MISSING HERE WHILE THE ENV CONFIG'S WEDGE HAD IT, so the two
+# filters disagreed despite this module claiming to share "the junction
+# exemption already used by the wedge". MEASURED on the gated arm with NONE
+# fatal: the scripted PID oracle -- competent by construction -- failed 64%
+# of its episodes on lane_any. The env config records the same experiment at
+# 100 m goals, where the oracle scored 0.000.
+UNPAINTED_MARKS = {"NONE"}
+# WHETHER off_road ENDS AN EPISODE. Same variable name the env config's wedge
+# uses, so the two cannot be set to disagree.
+#
+# WHY IT IS WORTH TURNING OFF. off_road is get_waypoint(project_to_road=False)
+# is None -- a purely geometric probe, and the config records it as LEAST
+# reliable inside junctions, where lane polygons meet with gaps and a vehicle
+# mid-turn can fall between them WHILE DRIVING THE ROUTE CORRECTLY. A single
+# tick of None ends the episode.
+#
+# MEASURED, and it is why this gate now exists: in the gated arm the scripted
+# PID oracle -- competent by construction -- failed 43% of its episodes on
+# off_road, split evenly @junc 0.21 / @road 0.21, and scored 0.000 success
+# against 0.980 for the same oracle in the time-to-goal arm.
+#
+# WHAT IT COSTS, AND THIS IS NOT SMALL. off_road is the ONLY signal that catches
+# leaving the road where nothing is painted -- the lane sensor fires on crossing
+# PAINT, and CARLA junction interiors have none (measured: not one crossing has
+# ever been tagged @junc, in any run). With this off, a kerb-hop onto grass or a
+# median costs nothing but time, and under a minimum-time objective a shortcut
+# across grass is REWARDED whenever it is shorter. Watch for it.
+OFF_ROAD_FATAL = os.environ.get("WEDGE_ON_OFF_ROAD", "1") == "1"
+# ANY CROSSING IS FATAL. No marking filter, no junction exemption.
+#
+# WHY THE FILTER IS WORTH BYPASSING: it is mostly dead. Across every run in this
+# repo only TWO marking types have ever been observed -- NONE (3224 @road, 380
+# @junc) and Broken (3180 @road, 488 @junc). Solid, SolidSolid, SolidBroken,
+# Curb and Grass have NEVER fired, so ILLEGAL_MARKS never matches and
+# `crossed_illegal` is reachable only through its fail-closed empty-list branch.
+# Mounting a kerb therefore reports as NONE, which the filter forgives.
+#
+# THE MEASURED RISK, so it is not discovered later: making NONE fatal at 100 m
+# goals took the scripted PID oracle to 0.000 success over its last 100
+# episodes, and NONE@road alone accounted for ~0.8 of episodes there. At a
+# 20-50 m band the exposure is smaller but the same mechanism applies -- watch
+# lane_any/orc, which is the solvability check.
+LANE_ANY_FATAL = os.environ.get("LANE_STRICT", "0") == "1"
 
 
-def lane_departure_is_fatal(diff_lane, marking_types, in_junction, off_road):
+def lane_departure_is_fatal(diff_lane, marking_types, in_junction, off_road,
+                            strict=None):
     """The junction-forgiving rule, shared with the wedge.
 
     A Broken line crossed inside a junction is the turn; the same line crossed
     on open road is the vehicle drifting out of lane. Unknown markings fail
     CLOSED -- absent data is not evidence of a legal crossing.
     """
-    if off_road:
+    if off_road and OFF_ROAD_FATAL:
         return True
     if not diff_lane:
         return False
+    # `strict` overrides the module's LANE_STRICT: explore mode passes False so
+    # the goal arm's strictness never leaks into the explorer's rule.
+    if (LANE_ANY_FATAL if strict is None else strict):
+        return True
     marks = [str(t).split(".")[-1] for t in (marking_types or [])]
     crossed_illegal = (not marks) or any(m in ILLEGAL_MARKS for m in marks)
     if crossed_illegal:
         return True
+    # Only when EVERY reported marking is unpainted. A mixed Broken+NONE
+    # crossing is judged as the Broken one -- the painted line is the real
+    # boundary, and the junction rule below decides it.
+    if bool(marks) and all(m in UNPAINTED_MARKS for m in marks):
+        return False
     return not bool(in_junction)
 
 
@@ -230,7 +296,7 @@ class LaneExploreReward(Wrapper):
         reward = -BASE_PENALTY - steer_change
         # Upstream gates the progress term on being under the target speed.
         if speed_factor < 1.0:
-            reward += projected
+            reward += PROGRESS_SCALE * projected      # LANE_PROGRESS_SCALE
 
         # HOW THIS PRODUCES TURNS AT JUNCTIONS -- and it is indirect.
         #

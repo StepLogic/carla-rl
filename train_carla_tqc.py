@@ -28,6 +28,7 @@ TWO PLACES THIS DELIBERATELY DIVERGES FROM THE SETUP IT COPIES:
 import os
 import pickle
 import sys
+import time
 from datetime import datetime
 
 import numpy as np
@@ -47,7 +48,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "src
 from vae_nav.core_state import CoreStateWrapper  # noqa: E402
 from vae_nav.episode_her import EpisodeRelabelBuffer  # noqa: E402
 from vae_nav.eval_video import EvalVideoRecorder  # noqa: E402
-from vae_nav.expert_oracle import ExpertOracle, should_use_expert  # noqa: E402
+from vae_nav.expert_oracle import ExpertOracle, BasicAgentExpert, should_use_expert  # noqa: E402
 from vae_nav.latent_source import LatentSource  # noqa: E402
 from vae_nav.latent_source import from_env as latent_from_env  # noqa: E402
 from vae_nav.sparse_reward import (K_COLLISION, K_DIST,  # noqa: E402
@@ -109,7 +110,27 @@ def make_expert(env, action_space):
               "episodes ever enter the buffer.")
         return None
     try:
-        return ExpertOracle(hero, hero.get_world().get_map(), action_space)
+        # THE ORACLE'S SPEED TARGET MUST BE REACHABLE, or its PID saturates.
+        # ExpertOracle defaults to 25 km/h and this passed nothing, while the
+        # env runs TARGET_SPEED=20 at MAX_THROTTLE=0.4 -- a cap the config
+        # measures at 22.4 km/h when throttle is 0.6, so 25 is unreachable and
+        # the longitudinal PID never lifts for a corner. Measured with the
+        # default: oracle collided on 36% of episodes, 0.000 success.
+        _tgt = float(os.environ.get("EXPERT_TARGET_SPEED",
+                                    os.environ.get("TARGET_SPEED", 20.0)))
+        # EXPERT_KIND=basic uses CARLA's own BasicAgent (see BasicAgentExpert
+        # for the benchmark that justified it); anything else keeps the
+        # hand-rolled ExpertOracle so existing runs are unchanged.
+        _cls = (BasicAgentExpert
+                if os.environ.get("EXPERT_KIND", "oracle").lower() == "basic"
+                else ExpertOracle)
+        # NAME THE EXPERT IN THE LOG. Which class drove is otherwise only
+        # inferable from its failure rates, and that inference was wrong three
+        # times tonight.
+        print(f"[Expert] kind={_cls.__name__} target_speed={_tgt:g} km/h",
+              flush=True)
+        return _cls(hero, hero.get_world().get_map(), action_space,
+                    target_speed_kmh=_tgt)
     except Exception as e:  # noqa: BLE001
         print(f"[Expert] WARNING: could not build oracle ({e}); expert disabled.")
         return None
@@ -209,6 +230,14 @@ def build_agent(observation_space, action_space, seed):
             discount_e=float(os.environ.get("EXPLORE_DISCOUNT",
                                             kwargs["discount"])),
             explore_actor_warmup=int(os.environ.get("EXPLORE_ACTOR_WARMUP", 0)),
+            # ACTOR_FREEZE_STEPS: critics-only updates for this many updates
+            # (= env steps at one update per step). For warm starts; see
+            # GatedTQCLearner.actor_freeze_updates for the measurement.
+            actor_freeze_updates=int(os.environ.get("ACTOR_FREEZE_STEPS", 0)),
+            # ACTOR_Q_NORM=1: per-mode normalisation of the actor's -Q term so
+            # the goal critic's ~750-wide range and the explore critic's range
+            # pull the shared actor equally (option C, 2026-09-11).
+            actor_q_norm=os.environ.get("ACTOR_Q_NORM", "0") == "1",
             value_floor=float(os.environ.get("TQC_VALUE_FLOOR", floor))
             if (floor is not None or "TQC_VALUE_FLOOR" in os.environ) else None,
             value_ceiling=float(os.environ.get("TQC_VALUE_CEILING", ceiling))
@@ -224,6 +253,132 @@ def build_agent(observation_space, action_space, seed):
 # Shared across every TRAINING env rebuild -- see the note in make_env.
 # None until the explore arm asks for it, so the goal arm never builds one.
 _EXPLORE_NOVELTY = None
+
+
+# --- one CARLA per process, started from Python ---------------------------
+_PY_SERVER = {"proc": None, "port": None, "stop": None}
+
+
+def ensure_carla(port, timeout=180.0):
+    """Start ONE CARLA on `port` for this process, and reuse it thereafter.
+
+    WHY NOT CarlaCore's own start_server. init_server() does
+    `self.server_port = random.randint(15000, 32000)` and IGNORES the
+    configured port, so every env built in a process launches its OWN server
+    on its OWN random port. eval_policy builds two envs (a throwaway probe for
+    the observation/action spaces, then one per cell), so a single evaluation
+    started a server, killed it on probe.close(), and started another --
+    two heavyweight boots on one GPU, the second racing the first's shutdown,
+    and the client's 50 s timeout firing before it answered. That is what
+    "CARLA keeps restarting" was.
+
+    Here the server is started once, on a KNOWN port, and polled until it
+    actually answers rather than slept at for a fixed 45 s. Envs then attach
+    with start_server=False, so no env owns or kills it, and it is torn down
+    at process exit.
+    """
+    import atexit
+    import signal
+    import socket
+    import subprocess
+
+    if _PY_SERVER["port"] == port and _PY_SERVER["proc"] is not None \
+            and _PY_SERVER["proc"].poll() is None:
+        return port
+
+    def answering():
+        """Ready means the RPC ANSWERS, not that the port accepts TCP.
+
+        CARLA binds and accepts connections seconds before it can serve, so a
+        bare socket check returns True too early and the client then dies on
+        "time-out of 50000ms while waiting for the simulator" -- which is
+        exactly what the first smoke test did. get_world() is the real test.
+        """
+        with socket.socket() as sk:
+            sk.settimeout(1.0)
+            if sk.connect_ex(("localhost", int(port))) != 0:
+                return False
+        try:
+            import carla
+            c = carla.Client("localhost", int(port))
+            c.set_timeout(4.0)
+            c.get_world().get_map()
+            return True
+        except Exception:  # noqa: BLE001
+            return False
+
+    if answering():
+        # Something is already serving this port. Attaching to a server this
+        # process did not start is exactly the stale-server trap, so say so
+        # loudly rather than silently measuring someone else's simulator.
+        print(f"[CARLA] port {port} is already serving -- attaching to a "
+              f"server this process did NOT start", flush=True)
+        _PY_SERVER.update(proc=None, port=port)
+        return port
+
+    root = os.environ["CARLA_ROOT"]
+    quality = os.environ.get("CARLA_QUALITY", "Epic")
+    # -prefernvidia: CARLA picks the first active GPU (the Intel iGPU on this
+    # box) unless told otherwise. The VK_ICD/PRIME env vars already force
+    # NVIDIA; the flag is the documented belt to those braces.
+    # CARLA_OFFSCREEN=1 -> -RenderOffScreen. An on-screen render costs extra VRAM against a headless one
+    # (run_carla_queue.sh:130 says so, and offers the same switch there), and that cost decides whether a
+    # MULTI-SERVER run fits at all: MEASURED windowed at Low, two servers took 4846 + 4694 MiB of a 12.3 GB card,
+    # leaving 2384 MiB for a learner that needs ~2300 -- an 84 MiB margin, against the 3500 MiB the queue reserves.
+    # It also drops the live-X-session dependency: windowed, CarlaUE4 EXITS rather than falling back to headless if
+    # DISPLAY is wrong or the session is locked, which an unattended long run must not depend on.
+    # Default stays windowed so no existing caller changes behaviour.
+    _offscreen = os.environ.get("CARLA_OFFSCREEN", "0") == "1"
+    cmd = [f"{root}/CarlaUE4.sh", f"-carla-port={port}",
+           f"-quality-level={quality}",
+           "-RenderOffScreen" if _offscreen else "-windowed",
+           "-ResX=640", "-ResY=360", "-prefernvidia"]
+    # THE SERVER'S OWN OUTPUT GOES TO A FILE, NOT /dev/null. When the
+    # simulator stops answering mid-run, its log is the only evidence of why
+    # (Vulkan device lost, GPU OOM, a crash) -- and it was being discarded.
+    # The per-frame "Invalid session: no stream available" spam is dropped in
+    # the pipeline, as run_gated.sh does, so the log stays readable.
+    os.makedirs("logs", exist_ok=True)
+    log_path = os.path.join("logs", f"carla_py_{port}_{int(time.time())}.log")
+    # `sed -u`, not `grep --line-buffered`: grep on this box is ugrep, whose
+    # line buffering does not hold in a pipe -- the log files came out 0 bytes.
+    shell = (" ".join(cmd) + " 2>&1 | sed -u '/Invalid session: no stream "
+             "available/d' > " + log_path)
+    print(f"[CARLA] starting: {' '.join(cmd)}  (log: {log_path})", flush=True)
+    proc = subprocess.Popen(shell, shell=True, start_new_session=True)
+    t0 = time.time()
+    while time.time() - t0 < timeout:
+        if proc.poll() is not None:
+            raise RuntimeError(f"CARLA exited during startup "
+                               f"(rc={proc.returncode})")
+        if answering():
+            print(f"[CARLA] ready on port {port} after "
+                  f"{time.time() - t0:.0f} s", flush=True)
+            break
+        time.sleep(1.0)
+    else:
+        proc.kill()
+        raise RuntimeError(f"CARLA did not answer on port {port} in {timeout}s")
+
+    _PY_SERVER.update(proc=proc, port=port)
+
+    def _stop():
+        # KILL THE PROCESS GROUP, not the process. CarlaUE4.sh is a SHELL that
+        # execs the real CarlaUE4-Linux-Shipping as a child, so proc.kill()
+        # reaps the wrapper and orphans the simulator -- measured: the sweep
+        # died, atexit ran, and both the sh and the binary were still alive
+        # 64 s later holding port 2000, ready to be silently attached to by
+        # the next run. start_new_session=True gives them their own group.
+        pr = _PY_SERVER["proc"]
+        if pr is None or pr.poll() is not None:
+            return
+        try:
+            os.killpg(os.getpgid(pr.pid), signal.SIGKILL)
+        except Exception:  # noqa: BLE001
+            pr.kill()
+    atexit.register(_stop)
+    _PY_SERVER["stop"] = _stop
+    return port
 
 
 def make_env(town, seed, latent_source, eval_mode=False, port=None):
@@ -266,8 +421,38 @@ def make_env(town, seed, latent_source, eval_mode=False, port=None):
 
     env_cfg = dict(cfg.get("env_config", {}))
     carla_cfg = dict(env_cfg.get("carla", {}))
+    # THE TOWN MUST BE SET ON THE CARLA BLOCK, NOT THE TOP LEVEL. CarlaCore is
+    # built from cfg["env_config"]["carla"] and calls load_world on THAT dict
+    # (carla_core.py:182-183), where the base config hardcodes "town":
+    # "Town01". Without this every env loaded Town01 whatever was requested --
+    # training and eval alike -- while the banner printed the town asked for.
+    carla_cfg["town"] = town
+    # START CARLA FROM PYTHON BY DEFAULT -- it is faster than launching the
+    # shell script and waiting on a readiness probe, and CarlaCore then owns
+    # the process: its close() kills the server it started (kill_own_server),
+    # so a run cleans up after itself instead of leaving one behind. Was
+    # hardcoded False here, which forced every caller to launch a server first.
+    # CARLA_START_SERVER=0 keeps the old behaviour for attaching to one that is
+    # already up.
+    _port = int(port if port is not None else CARLA_PORTS[0])
+    # The PYTHON side starts CARLA (faster than a shell launch plus a fixed
+    # sleep), but ONCE per process on a known port -- see ensure_carla. The env
+    # then attaches, so no env owns the server and none can kill it mid-run.
+    if os.environ.get("CARLA_START_SERVER", "1") == "1":
+        ensure_carla(_port)
     carla_cfg["start_server"] = False
-    carla_cfg["port"] = int(port if port is not None else CARLA_PORTS[0])
+    # BASE_CORE_CONFIG defaults quality_level to "Low" (carla_core.py:30), and
+    # the frozen VAE was trained on EPIC frames -- at Low it is handed
+    # out-of-distribution images with nothing in the logs to say so. Note
+    # carla_core only passes the flag for Town01/Town04/None, so other towns
+    # take the simulator's own default (Epic); this makes the intent explicit
+    # wherever the flag is actually used.
+    carla_cfg["quality_level"] = os.environ.get("CARLA_QUALITY", "Epic")
+    carla_cfg["port"] = _port
+    # CARLA_TIMEOUT: the client RPC timeout (config default 50 s). Town12's
+    # load_world alone takes minutes, so the large-map stages pass 300.
+    if os.environ.get("CARLA_TIMEOUT"):
+        carla_cfg["timeout"] = float(os.environ["CARLA_TIMEOUT"])
     env_cfg["carla"] = carla_cfg
     cfg["env_config"] = env_cfg
 
@@ -318,12 +503,20 @@ def make_env(town, seed, latent_source, eval_mode=False, port=None):
             # mode and the harness refuses to report it.
             force_mode=(int(os.environ.get("EVAL_FORCE_MODE", GOAL))
                         if eval_mode else None),
-            max_steps=int(os.environ.get("GATED_EXPLORE_MAX_STEPS", 500)),
+            # NO_TIMELIMIT=1 (trace collection only, user decision 2026-09-12):
+            # no clock on explore episodes -- they end on a crash, a crossing,
+            # the 100 m arrival or the env's idle guard, never on a step cap.
+            max_steps=(10 ** 9 if os.environ.get("NO_TIMELIMIT", "0") == "1"
+                       else int(os.environ.get("GATED_EXPLORE_MAX_STEPS", 500))),
             seed=seed)
         env = VAEGoalWrapper(env, source=latent_source)
         # The GOAL arm's cap. GatedReward truncates explore episodes itself at
         # its own, shorter cap, so the two modes keep the episode lengths their
         # separate arms use and the comparison stays honest.
+        if os.environ.get("NO_TIMELIMIT", "0") == "1":
+            print("[Env] NO_TIMELIMIT=1: TimeLimit wrapper and explore cap removed "
+                  "(trace collection)", flush=True)
+            return env
         env = TimeLimit(env, max_episode_steps=MAX_EPISODE_STEPS)
         return env
 
@@ -408,6 +601,67 @@ def build_eval_episodes(heldout_towns, n_episodes, seed=0):
     return eps
 
 
+def run_explore_evaluation(agent, town, n_episodes, latent_source, step=0,
+                           seed0=7000, max_steps=None):
+    """Evaluate the EXPLORE half. Returns (mean_dist_m, ends, rows).
+
+    WHY THIS EXISTS. The periodic eval forces GOAL, so a gated arm was judged
+    on half of what it does, and an explore arm can degrade invisibly -- v5's
+    learned to cross a line at ~step 37 to cap a terminal loss while its goal
+    numbers still looked fine. There is NO success rate here: explore has no
+    goal. What is reported is what the explore reward pays for -- distance
+    driven, steps survived, and WHY the episode ended.
+
+    EVAL_FORCE_MODE is set to EXPLORE around make_env, which reads it at call
+    time, and restored afterwards so the goal eval is unaffected.
+    """
+    import random as _random
+    from collections import Counter
+
+    from vae_nav.gated_reward import EXPLORE, EXPLORE_GOAL_DIST_M
+
+    prev = os.environ.get("EVAL_FORCE_MODE")
+    os.environ["EVAL_FORCE_MODE"] = str(EXPLORE)
+    env, rows = None, []
+    try:
+        env = make_env(town, seed0, latent_source, eval_mode=True)
+        cap = int(max_steps or os.environ.get("GATED_EXPLORE_MAX_STEPS", 500))
+        for i in range(n_episodes):
+            sd = seed0 + i
+            _random.seed(sd)
+            np.random.seed(sd % (2 ** 32))
+            obs, info = env.reset(seed=sd)
+            done, steps = False, 0
+            while not done and steps < cap:
+                obs, _r, term, trunc, info = env.step(agent.eval_actions(obs))
+                steps += 1
+                done = bool(term or trunc)
+            rows.append({"steps": steps,
+                         "dist_m": float(info.get("explore_dist_m", 0.0) or 0.0),
+                         "end": str(info.get("explore_end", "?"))})
+    finally:
+        if env is not None:
+            try:
+                env.close()
+            except Exception:                      # noqa: BLE001
+                pass
+        if prev is None:
+            os.environ.pop("EVAL_FORCE_MODE", None)
+        else:
+            os.environ["EVAL_FORCE_MODE"] = prev
+
+    dists = [r["dist_m"] for r in rows]
+    ends = Counter(r["end"] for r in rows)
+    mean_d = float(np.mean(dists)) if dists else 0.0
+    reached = ends.get("reached", 0) / max(1, len(rows))
+    print(f"[Eval] EXPLORE n={len(rows)} dist mean={mean_d:.1f} m "
+          f"max={(max(dists) if dists else 0.0):.1f} m "
+          f"steps mean={(np.mean([r['steps'] for r in rows]) if rows else 0):.0f} "
+          f"reached_{int(EXPLORE_GOAL_DIST_M)}m={reached:.2f} "
+          f"ends={dict(ends)}", flush=True)
+    return mean_d, dict(ends), rows
+
+
 def run_evaluation(agent, episodes, latent_source, identity, step=0,
                    out_dir=None):
     """Evaluate on the held-out towns. Never called with a training env."""
@@ -427,6 +681,15 @@ def run_evaluation(agent, episodes, latent_source, identity, step=0,
                 env = make_env(ep["town"], ep["seed"], latent_source,
                                eval_mode=True)
                 current = ep["town"]
+            # THE SEED MUST REACH THE GOAL SAMPLER. CarlaEnv.reset drops its
+            # kwargs and carla_core.reset_hero draws spawn and goal from Python's
+            # GLOBAL `random`, so env.reset(seed=...) alone fixed nothing and
+            # every eval was a fresh draw of 60 goals. Measured 2026-09-11:
+            # consecutive evals drew median routes of 40/26/25/38 m and scored
+            # 0.45/0.73/0.78/0.13 -- the distance draw, not the policy, moved.
+            import random as _random
+            _random.seed(int(ep["seed"]))
+            np.random.seed(int(ep["seed"]) % (2 ** 32))
             obs, info = env.reset(seed=ep["seed"])
             if recorder is not None:
                 recorder.start_episode(ep["index"], ep["town"])
@@ -491,7 +754,14 @@ def main():
             "held-out results would be meaningless. Retrain the VAE on the "
             "training towns only.")
 
-    rng = np.random.default_rng(SEED)
+    # THE EXPERT COIN GETS ITS OWN STREAM. GatedReward draws its mode bit from
+    # default_rng(env seed) = default_rng(SEED) for env 0, one draw per reset;
+    # this coin also drew once per episode from default_rng(SEED). Same seed,
+    # same cadence, same uniform: u < 0.4 armed the oracle and u < 0.5 made
+    # the episode explore, so EVERY oracle episode was an explore episode and
+    # goal mode never received one oracle row (14/14 armed episodes at
+    # mode=0, in a run whose [Why] line reported them as the goal oracle).
+    rng = np.random.default_rng([SEED, 0x0E5])
 
     # ONE ENV PER TOWN, one server each. Replaces the previous scheme of
     # rebuilding the env every episode to rotate towns, which reloaded the CARLA
@@ -652,7 +922,17 @@ def main():
     # reconnect attempts. Honouring the override removes the rotation entirely
     # for a single-town run, so there are no world reloads at all.
     if os.environ.get("ENV_TOWNS"):
-        rotation = [t for t in env_towns]
+        # ROTATION FOLLOWS THE REQUESTED TOWNS, NOT THE TRUNCATED ENV LIST.
+        #
+        # env_towns is ordered[:n_envs], and n_envs is capped by how many CARLA servers fit -- ONE on a 12 GB card.
+        # Reading rotation off env_towns therefore collapsed ENV_TOWNS=Town01,Town10HD to rotation=['Town01'] and
+        # printed "[Rotate] disabled -- single town", so the run trained on ONE of the two towns asked for while its
+        # config, its .env snapshot and its banner all said two. A silent half-run is the worst shape of this bug.
+        #
+        # The truncation is correct for how many towns run SIMULTANEOUSLY; it is wrong for which towns the single env
+        # CYCLES through, which is precisely what rotation exists to do when the fleet is smaller than the request.
+        # Falls back to env_towns when the override names nothing trainable, so a bad ENV_TOWNS cannot empty the list.
+        rotation = [t for t in priority if t in train_towns] or list(env_towns)
         print(f"[Rotate] ENV_TOWNS is set; rotation restricted to {rotation}")
     else:
         rotation = ordered          # full town list, richest lane density first
@@ -679,6 +959,22 @@ def main():
 
     def _arm_expert(i, info):
         """Decide whether env i's NEW episode is oracle-driven, and plan it."""
+        # THE ORACLE MUST HOLD THE LIVE HERO. The vec env rebuilds an env (new
+        # world actors) after a failed reset/step, and a destroyed actor does
+        # not raise -- it reports the origin. Measured: from episode ~118 every
+        # [ExpertPlan] read hero=(0.0,0.0) and the oracle drove 300-700-node
+        # routes from a phantom pose, lane_any/orc climbing from 0 to 0.09
+        # while the rows kept entering the buffer. Rebuild whenever the hero
+        # actor the oracle was built on is no longer the env's hero.
+        _core = getattr(getattr(venv.envs[i], "unwrapped", venv.envs[i]), "core", None)
+        _hero = getattr(_core, "hero", None)
+        _held = getattr(experts[i], "_vehicle", None) if experts[i] is not None else None
+        if _hero is not None and (experts[i] is None or
+                                  getattr(_held, "id", None) != _hero.id):
+            print(f"[Expert] env{i}: hero actor is "
+                  f"{getattr(_held, 'id', None)} -> {_hero.id}; rebuilding oracle",
+                  flush=True)
+            experts[i] = make_expert(venv.envs[i], venv.action_space)
         if experts[i] is None or not should_use_expert(rng, EXPERT_PROB):
             is_expert_ep[i] = False
             return
@@ -687,6 +983,19 @@ def main():
             arm_failures["no_goal_in_info"] = arm_failures.get("no_goal_in_info", 0) + 1
             is_expert_ep[i] = False
             return
+        # EXPERT_MODES: which gated episodes the oracle may drive. "both"
+        # (default) is the documented setup -- 40% of ALL episodes; "goal"
+        # keeps it to goal-mode episodes, where a route-following driver is
+        # the task; in explore mode it drives to a goal explore does not
+        # have, then parks. A non-gated env has no mode and counts as goal.
+        _mode = (info or {}).get("mode", 1)
+        _allowed = {"both": (0, 1), "goal": (1,), "explore": (0,)}[
+            os.environ.get("EXPERT_MODES", "both")]
+        if _mode not in _allowed:
+            is_expert_ep[i] = False
+            return
+        print(f"[ExpertArm] env{i} mode={info.get('mode')} "
+              f"goal=({goal.x:.1f},{goal.y:.1f})", flush=True)
         is_expert_ep[i] = bool(experts[i].reset(goal) > 0)
         if not is_expert_ep[i]:
             r = getattr(experts[i], "last_plan_error", None) or "unknown"
@@ -763,7 +1072,14 @@ def main():
               "ret_goal": deque(maxlen=100), "ret_explore": deque(maxlen=100),
               "len_goal": deque(maxlen=100), "len_explore": deque(maxlen=100),
               "succ_goal": deque(maxlen=100),
-              "coll_goal": deque(maxlen=100), "coll_explore": deque(maxlen=100)}
+              "coll_goal": deque(maxlen=100), "coll_explore": deque(maxlen=100),
+              # HOW FAR explore actually drives, and WHY it stops. Added
+              # 2026-09-11: the explore arm was being judged on return and
+              # length alone, and neither says whether it ended on a lane
+              # crossing, off-road, a collision, the step cap, or the new
+              # 100 m arrival.
+              "dist_explore": deque(maxlen=100),
+              "end_explore": deque(maxlen=100)}
     LOG_EVERY = int(os.environ.get("LOG_EVERY_EPISODES", 10))
     total_eps = 0
     # Histogram of WHY episodes end. Without it "return 0.0" is the only
@@ -846,6 +1162,30 @@ def main():
             print("[Resume] no loadable checkpoint; starting from scratch",
                   flush=True)
 
+    # WARM START (INIT_FROM=<checkpoint>): weights from another run's
+    # checkpoint, but the STEP COUNTER, REPLAY BUFFER, OPTIMISER STATE and
+    # CURRICULUM all start fresh -- this is initialisation, not a resume, and
+    # the new run keeps its own name and folder. RESUME (same folder) wins if
+    # it found a checkpoint. User decision 2026-09-11: v5 starts from v4.
+    init_from = os.environ.get("INIT_FROM", "")
+    if init_from and step == 0:
+        with open(init_from, "rb") as f:
+            _ck0 = pickle.load(f)
+        _state0 = dict(_ck0["agent"])
+        # INIT_FROM_FRESH_EXPLORE_CRITIC=1: do NOT restore the source run's
+        # explore critic/temperature. A critic fitted to a reward of a
+        # different scale is confidently wrong from step 0 (v4's explore
+        # returns ~-10 against v5's ~+500), and the shared actor followed it.
+        if os.environ.get("INIT_FROM_FRESH_EXPLORE_CRITIC", "0") == "1":
+            for k in ("critic_e", "target_critic_e", "temp_e"):
+                _state0.pop(k, None)
+            print("[Init] explore critic + temperature start FRESH "
+                  "(INIT_FROM_FRESH_EXPLORE_CRITIC=1)", flush=True)
+        load_agent_state(agent, _state0)
+        print(f"[Init] weights warm-started from {init_from} "
+              f"(that run's step {_ck0.get('step')}, eval_success "
+              f"{_ck0.get('eval_success')}); step counter, replay buffer, "
+              "optimiser and curriculum start fresh", flush=True)
     while step < MAX_STEPS:
         if step < START_TRAINING:
             actions = np.stack([venv.action_space.sample() for _ in range(n_envs)])
@@ -963,6 +1303,10 @@ def main():
                         recent["ret_explore"].append(_ep_ret)
                         recent["len_explore"].append(_ep_len)
                         recent["coll_explore"].append(_coll)
+                        recent["dist_explore"].append(
+                            float(fi.get("explore_dist_m", 0.0) or 0.0))
+                        recent["end_explore"].append(
+                            str(fi.get("explore_end", "?")))
 
                 # Widen the band when the POLICY (never the oracle) is solving
                 # the current one. Requires a fresh window of episodes since
@@ -1092,6 +1436,20 @@ def main():
                 for _mt in (fi.get("lane_marking_types") or []):
                     _k = "mark:" + str(_mt).split(".")[-1] + _where
                     end_reasons[_k] = end_reasons.get(_k, 0) + 1
+                # OFF-ROAD TAGGED BY LOCATION, for the same reason the markings
+                # are. off_road is get_waypoint(project_to_road=False) is None,
+                # and the env config records that probe as LEAST RELIABLE inside
+                # junctions -- "lane polygons meet with gaps there, and a vehicle
+                # mid-turn can fall between them while driving the route
+                # correctly". With JUNCTION_GOAL_FRAC=0.7 most episodes pass
+                # through exactly that geometry, so "the policy left the road"
+                # and "the probe glitched mid-turn" produce the same count and
+                # the aggregate cannot tell them apart. Measurement only.
+                if (fi.get("done_reasons") or {}).get("off_road"):
+                    _ok = "off_road" + _where
+                    end_reasons[_ok] = end_reasons.get(_ok, 0) + 1
+                    _okw = f"{_ok}/{_who}"
+                    end_reasons[_okw] = end_reasons.get(_okw, 0) + 1
                 if total_eps % LOG_EVERY == 0:
                     tot = max(1, total_eps)
                     def _denom(k):
@@ -1216,10 +1574,18 @@ def main():
                               f"ret={_m('ret_goal'):8.1f} (= -steps) "
                               f"len={_m('len_goal'):6.1f} "
                               f"coll={_m('coll_goal'):.3f}", flush=True)
+                        from collections import Counter as _C
+                        _ends = _C(recent["end_explore"])
+                        _tot = max(1, sum(_ends.values()))
+                        _endstr = " ".join(
+                            f"{k}={v / _tot:.2f}" for k, v in
+                            sorted(_ends.items(), key=lambda kv: -kv[1])[:4])
                         print(f"[GatedEp{total_eps:5d}] "
                               f"EXPLORE n={n_e:3d} "
                               f"ret={_m('ret_explore'):8.1f} "
                               f"len={_m('len_explore'):6.1f} "
+                              f"dist={_m('dist_explore'):6.1f}m "
+                              f"ends[{_endstr}] "
                               f"coll={_m('coll_explore'):.3f} "
                               f"| episode mix goal={frac_g:.2f} "
                               f"(batch mix is FIXED at GOAL_BATCH_FRAC "
@@ -1306,8 +1672,28 @@ def main():
                                     if np.asarray(v).size}
 
         if step % EVAL_INTERVAL < n_envs and step >= START_TRAINING:
-            rate, by_town = run_evaluation(agent, eval_episodes, latent_source,
-                                           identity, step=step, out_dir=out_dir)
+            # N_EVAL_EPISODES=0 SKIPS THE EVAL ENTIRELY. build_eval_episodes floors the count to at least one episode
+            # per town, so "0" still built an eval env -- and that env attaches to CARLA_PORTS[0], the server a
+            # training env is running on, and reloads its world. Measured 2026-09-16 (v7, 2 envs): the server
+            # segfaulted at the 25k eval, the trainer hung reconnecting, and since the checkpoint is written after
+            # the eval nothing was saved. Skipping keeps the checkpoint cadence; evaluate checkpoints offline.
+            if N_EVAL_EPISODES > 0:
+                rate, by_town = run_evaluation(agent, eval_episodes, latent_source,
+                                               identity, step=step, out_dir=out_dir)
+            else:
+                rate, by_town = 0.0, {}
+                print(f"[Eval] skipped at step {step} (N_EVAL_EPISODES=0); checkpoint still written", flush=True)
+            # THE EXPLORE HALF, measured at every eval. N_EVAL_EXPLORE=0
+            # turns it off; it costs one env build and N short episodes.
+            _n_expl = int(os.environ.get("N_EVAL_EXPLORE", 10))
+            _expl_dist, _expl_ends = 0.0, {}
+            if _n_expl > 0:
+                try:
+                    _expl_dist, _expl_ends, _ = run_explore_evaluation(
+                        agent, env_towns[0], _n_expl, latent_source, step=step)
+                except Exception as _e:            # noqa: BLE001
+                    print(f"[Eval] EXPLORE eval failed: "
+                          f"{type(_e).__name__}: {_e}", flush=True)
             # THE WEIGHTS GO IN THE FILE. Every checkpoint before this one
             # held run metadata only -- step, success rate, HER counters -- so
             # a completed run left nothing that could be replayed, watched, or
@@ -1317,6 +1703,8 @@ def main():
             with open(os.path.join(out_dir, f"checkpoint_{step}.pkl"), "wb") as f:
                 pickle.dump({"step": step, "identity": identity,
                              "eval_success": rate,
+                             "eval_explore_dist_m": _expl_dist,
+                             "eval_explore_ends": _expl_ends,
                              "eval_by_town": {k: float(np.mean(v))
                                               for k, v in by_town.items()},
                              "episodes_per_env": ep_done.tolist(),

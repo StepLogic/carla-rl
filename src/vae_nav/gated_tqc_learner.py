@@ -163,8 +163,19 @@ def _masked_critic_update(key, actor, critic, target_critic_params, temp, batch,
 
 
 def _gated_actor_update(key, actor, critic, critic_e, temp, temp_e, batch,
-                        m_goal, explore_actor_w):
-    """One actor, choosing its critic and its temperature PER ROW."""
+                        m_goal, explore_actor_w, q_scale_g=1.0, q_scale_e=1.0):
+    """One actor, choosing its critic and its temperature PER ROW.
+
+    q_scale_g / q_scale_e (PER-MODE Q NORMALISATION, default 1.0 = off): each
+    mode's -Q term is divided by a running estimate of that critic's value
+    spread before the mean, so neither critic can dominate the shared actor
+    by its units alone. The actor's gradient comes from dQ/da, whose size
+    scales with the critic's value range: goal values span ~750 (gamma=1, cap
+    750) while explore values are whatever the explore reward scale makes them
+    (v4: ~10; v5 at x10 progress: ~200-600). Left unnormalised, the larger
+    range owns the shared network. The temperature auto-tunes to the target
+    entropy, so dividing Q rescales nothing that alpha does not absorb.
+    """
     alpha_g = temp.apply_fn({"params": temp.params})
     alpha_e = temp_e.apply_fn({"params": temp_e.params})
     is_goal = m_goal > 0.5
@@ -179,9 +190,16 @@ def _gated_actor_update(key, actor, critic, critic_e, temp, temp_e, batch,
                               batch["observations"], actions).mean(axis=(0, 2))
         q_e = critic_e.apply_fn({"params": critic_e.params},
                                 batch["observations"], actions).mean(axis=(0, 2))
-        q = jnp.where(is_goal, q_g, q_e)
+        q = jnp.where(is_goal, q_g / q_scale_g, q_e / q_scale_e)
         alpha = jnp.where(is_goal, alpha_g, alpha_e)
         per_row = alpha * log_probs - q
+        # the raw per-mode value spread, for the caller's running normaliser
+        def _masked_std(x, m):
+            n = jnp.maximum(m.sum(), 1.0)
+            mu = (x * m).sum() / n
+            return jnp.sqrt(((x - mu) ** 2 * m).sum() / n)
+        q_std_g = jax.lax.stop_gradient(_masked_std(q_g, m_goal))
+        q_std_e = jax.lax.stop_gradient(_masked_std(q_e, m_explore))
         # explore_actor_w damps the explore-mode gradient during warm-up. After
         # a warm start the explore critic is stale, and an actor following a
         # stale critic moves away from a policy that was already good.
@@ -191,6 +209,7 @@ def _gated_actor_update(key, actor, critic, critic_e, temp, temp_e, batch,
             "entropy": -log_probs.mean(),
             "entropy_goal": masked_mean(-log_probs, m_goal),
             "entropy_explore": masked_mean(-log_probs, m_explore),
+            "q_std_goal": q_std_g, "q_std_explore": q_std_e,
         }
 
     grads, info = jax.grad(actor_loss_fn, has_aux=True)(actor.params)
@@ -210,7 +229,7 @@ def _gated_update_jit(rng, actor, critic, target_critic_params, temp,
                       top_quantiles_to_drop, kappa,
                       value_floor=None, value_ceiling=None,
                       enable_update_temperature=True, augument=True,
-                      share_encoder=True):
+                      share_encoder=True, q_scale_g=1.0, q_scale_e=1.0):
     if share_encoder:
         # From the GOAL critic, matching the ungated path exactly. Sharing from
         # both would need a rule for combining them, and any such rule is a
@@ -263,7 +282,7 @@ def _gated_update_jit(rng, actor, critic, target_critic_params, temp,
     rng, key_a = jax.random.split(rng)
     new_actor, info_a = _gated_actor_update(
         key_a, actor, new_critic, new_critic_e, temp, temp_e, batch,
-        m_goal, explore_actor_w)
+        m_goal, explore_actor_w, q_scale_g, q_scale_e)
 
     new_temp, new_temp_e = temp, temp_e
     alpha_info = {}
@@ -307,6 +326,9 @@ class GatedTQCLearner(TQCLearner):
                  init_temperature_e: Optional[float] = None,
                  target_entropy_e: Optional[float] = None,
                  explore_actor_warmup: int = 0,
+                 actor_freeze_updates: int = 0,
+                 actor_q_norm: bool = False,
+                 actor_q_norm_tau: float = 0.01,
                  value_floor: Optional[float] = None,
                  value_ceiling: Optional[float] = None, **kwargs):
         super().__init__(seed, observations, actions, **kwargs)
@@ -323,6 +345,22 @@ class GatedTQCLearner(TQCLearner):
                                  if target_entropy_e is None
                                  else float(target_entropy_e))
         self.explore_actor_warmup = int(explore_actor_warmup)
+        # ACTOR FREEZE (warm starts). For the first `actor_freeze_updates`
+        # updates only the critics and their targets move; the actor and both
+        # temperatures are held. Measured 2026-09-11 on v5, warm-started from
+        # v4 with a fresh buffer and a re-scaled explore reward: the actor's
+        # goal-conditioned steering fell from corr 0.57 to 0.04 within 50k
+        # steps because it was updated against two critics far from their
+        # fixed points, then took >75k steps to crawl back to 0.23.
+        self.actor_freeze_updates = int(actor_freeze_updates)
+        # PER-MODE Q NORMALISATION of the actor loss (see _gated_actor_update).
+        # Scales are EMAs of each critic's masked batch std, initialised from
+        # the first batch that carries the mode; floored so an untrained critic
+        # (std ~ 0) cannot blow the gradient up.
+        self.actor_q_norm = bool(actor_q_norm)
+        self.actor_q_norm_tau = float(actor_q_norm_tau)
+        self._q_scale_g = None
+        self._q_scale_e = None
         self._updates = 0
 
         # THE SECOND CRITIC IS BUILT BY CONSTRUCTING A SIBLING LEARNER AND
@@ -349,7 +387,9 @@ class GatedTQCLearner(TQCLearner):
               f"discount_e={self.discount_e} "
               f"target_entropy={self.target_entropy} "
               f"target_entropy_e={self.target_entropy_e} "
-              f"explore_actor_warmup={self.explore_actor_warmup}")
+              f"explore_actor_warmup={self.explore_actor_warmup} "
+              f"actor_freeze_updates={self.actor_freeze_updates} "
+              f"actor_q_norm={self.actor_q_norm}")
         print(f"[Gated] goal critic target clip {bounds}; "
               f"explore critic UNCLIPPED (its range is its own, not the goal arm's)")
         if self.discount >= 1.0 and self.value_floor is None:
@@ -377,15 +417,34 @@ class GatedTQCLearner(TQCLearner):
             self.top_quantiles_to_drop, self.kappa,
             value_floor=self.value_floor, value_ceiling=self.value_ceiling,
             enable_update_temperature=enable_update_temperature,
-            augument=self.augument, share_encoder=self.share_encoder)
+            augument=self.augument, share_encoder=self.share_encoder,
+            q_scale_g=(float(self._q_scale_g) if (self.actor_q_norm and self._q_scale_g) else 1.0),
+            q_scale_e=(float(self._q_scale_e) if (self.actor_q_norm and self._q_scale_e) else 1.0))
 
         self._rng = rng
-        self._actor = actor
+        frozen = self._updates < self.actor_freeze_updates
+        if not frozen:
+            # the jitted step always computes an actor update; while frozen it
+            # is simply discarded, so the critics train against a fixed actor
+            self._actor = actor
+            self._temp = temp
+            self._temp_e = temp_e
         self._critic = critic
         self._target_critic_params = target_params
-        self._temp = temp
         self._critic_e = critic_e
         self._target_critic_e_params = target_e_params
-        self._temp_e = temp_e
         self._updates += 1
+        info = dict(info)
+        info["actor_frozen"] = float(frozen)
+        if self.actor_q_norm:
+            sg, se = float(info["q_std_goal"]), float(info["q_std_explore"])
+            t = self.actor_q_norm_tau
+            if sg > 0:
+                self._q_scale_g = max(1e-3, sg if self._q_scale_g is None
+                                      else (1 - t) * self._q_scale_g + t * sg)
+            if se > 0:
+                self._q_scale_e = max(1e-3, se if self._q_scale_e is None
+                                      else (1 - t) * self._q_scale_e + t * se)
+            info["q_scale_goal"] = float(self._q_scale_g or 1.0)
+            info["q_scale_explore"] = float(self._q_scale_e or 1.0)
         return info

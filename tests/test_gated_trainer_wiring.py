@@ -88,7 +88,14 @@ def test_without_the_flag_the_plain_learner_is_built(trainer, monkeypatch):
 def test_an_incoherent_gated_config_is_refused_before_the_simulator(monkeypatch):
     # check_gated_run is called from make_env, which needs a server; call it
     # directly with the same environment to prove the refusal path works.
+    #
+    # PERCEPTION="mobilenet" was the example here until 2026-09-11, when the
+    # user had that guard relaxed (it now warns; the checkpoint's encoder
+    # identity catches a real mismatch at load time). The refusal path itself
+    # is unchanged, so this uses a config that is still incoherent: the mode
+    # bit removed from the observation, which leaves the actor unable to see
+    # which of the two rewards it is being scored against.
     from vae_nav.gated_config import check_gated_run
-    env = dict(GATED_ENV, PERCEPTION="mobilenet")
-    with pytest.raises(ValueError, match="PERCEPTION"):
+    env = dict(GATED_ENV, OBS_WITH_MODE="0")
+    with pytest.raises(ValueError, match="OBS_WITH_MODE"):
         check_gated_run(env)

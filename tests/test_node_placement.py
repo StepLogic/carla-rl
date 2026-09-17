@@ -144,9 +144,18 @@ def test_place_dispatches_every_named_method():
     d = np.full((n_states, n_states), 1e6)
     np.fill_diagonal(d, 0.0)
     for method in METHODS:
-        idx, _ = place(method, s=s, entropy=h, dist=d, embeddings=emb, n=5,
-                       seed=0, min_sep_m=1.0, smooth_w=3)
-        assert len(idx) > 0, method
+        kw = dict(s=s, entropy=h, dist=d, embeddings=emb, n=5, seed=0,
+                  min_sep_m=1.0, smooth_w=3)
+        if method == "sgm":
+            # the release-faithful frame takes plane positions and cutoffs
+            kw.update(path_xy=emb, consistency_cutoff=1.0, edge_cutoff=2.0,
+                      gate_m=1.0)
+        idx, _ = place(method, **kw)
+        if method == "madent":
+            # a spike detector may legitimately find no spike in noise
+            assert idx is not None and np.asarray(idx).ndim == 1, method
+        else:
+            assert len(idx) > 0, method
 
 
 def test_the_budgeted_arms_never_exceed_the_budget():
@@ -176,8 +185,12 @@ def test_place_refuses_the_policy_arm_without_entropy():
 
 
 def test_place_refuses_sgm_without_a_distance_matrix():
-    with pytest.raises(ValueError, match="needs dist and embeddings"):
+    # the faithful frame needs the matrix AND plane positions
+    with pytest.raises(ValueError, match="needs dist and path_xy"):
         place("sgm", s=np.arange(4, dtype=float), n=2)
+    # the paper-test diagnostic keeps the old contract
+    with pytest.raises(ValueError, match="needs dist and embeddings"):
+        place("sgm_paper", s=np.arange(4, dtype=float), n=2)
 
 
 def test_the_sgm_cutoff_search_moves_toward_the_budget():

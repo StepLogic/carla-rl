@@ -272,3 +272,62 @@ def test_the_trainers_printed_keys_are_all_present_and_finite():
                 "entropy_goal", "entropy_explore", "frac_goal"):
         assert key in info, f"{key} is dropped before the trainer sees it"
         assert np.isfinite(float(info[key])), key
+
+
+def test_actor_freeze_holds_actor_and_temperatures_while_critics_train():
+    # WARM STARTS: for the first `actor_freeze_updates` updates only the
+    # critics (and their targets) move. Measured 2026-09-11: updating the actor
+    # against two re-fitting critics destroyed v4's goal steering in 50k steps.
+    ag = _agent(actor_freeze_updates=3)
+    a0, t0, te0 = _flat(ag._actor.params), _flat(ag._temp.params), _flat(ag._temp_e.params)
+    c0, ce0 = _flat(ag._critic.params), _flat(ag._critic_e.params)
+    b = _batch("mixed")
+    for i in range(3):
+        info = ag.update(b)
+        assert info["actor_frozen"] == 1.0, i
+    assert np.array_equal(_flat(ag._actor.params), a0)          # held
+    assert np.array_equal(_flat(ag._temp.params), t0)
+    assert np.array_equal(_flat(ag._temp_e.params), te0)
+    assert not np.array_equal(_flat(ag._critic.params), c0)      # trained
+    assert not np.array_equal(_flat(ag._critic_e.params), ce0)
+    info = ag.update(b)                                          # 4th: released
+    assert info["actor_frozen"] == 0.0
+    assert not np.array_equal(_flat(ag._actor.params), a0)
+
+
+def test_actor_freeze_default_is_off():
+    ag = _agent()
+    a0 = _flat(ag._actor.params)
+    info = ag.update(_batch("mixed"))
+    assert info["actor_frozen"] == 0.0
+    assert not np.array_equal(_flat(ag._actor.params), a0)
+
+
+def test_q_norm_makes_the_actor_step_invariant_to_one_modes_reward_scale():
+    # With normalisation ON, scaling the explore rows' rewards x100 must not
+    # change how far the actor moves; OFF, it must (the larger critic owns the
+    # shared actor). This is the coupling measured on v5 (2026-09-11).
+    def actor_move(norm, scale):
+        ag = _agent(actor_q_norm=norm, seed=3)
+        # let the critics see the scale first, then measure one actor step
+        b = _batch("mixed", reward_scale=scale)
+        for _ in range(6):
+            ag.update(b)
+        a0 = _flat(ag._actor.params)
+        ag.update(b)
+        return float(np.linalg.norm(_flat(ag._actor.params) - a0))
+    on_1, on_100 = actor_move(True, 1.0), actor_move(True, 100.0)
+    off_1, off_100 = actor_move(False, 1.0), actor_move(False, 100.0)
+    ratio_on = max(on_1, on_100) / max(min(on_1, on_100), 1e-12)
+    ratio_off = max(off_1, off_100) / max(min(off_1, off_100), 1e-12)
+    assert ratio_on < ratio_off, (ratio_on, ratio_off)
+    assert ratio_on < 3.0, ratio_on
+
+
+def test_q_norm_default_off_leaves_scales_at_one():
+    ag = _agent()
+    info = ag.update(_batch("mixed"))
+    assert "q_scale_goal" not in info
+    ag2 = _agent(actor_q_norm=True)
+    info2 = ag2.update(_batch("mixed"))
+    assert info2["q_scale_goal"] > 0 and info2["q_scale_explore"] > 0

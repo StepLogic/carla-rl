@@ -53,7 +53,14 @@ class EvalVideoRecorder:
     """Writes one mp4 per recorded evaluation episode."""
 
     def __init__(self, out_dir, step, max_videos=DEFAULT_MAX_VIDEOS,
-                 latent_source=None):
+                 latent_source=None, decode=True):
+        # decode=False drops the VAE mask panel. That panel is a full
+        # encode->decode of the frozen VAE ON THE GPU for EVERY frame, and it
+        # is the only GPU cost video adds: measured 2026-09-11, a sweep
+        # peaked at 9.8 GB of 12.3 with it against 7.4 GB without, and the
+        # simulator (Vulkan, same GPU) died mid-run in every video arm and in
+        # no video-free one. The policy-view half of the video is pure CPU.
+        self.decode = bool(decode)
         self.dir = os.path.join(out_dir, "videos")
         os.makedirs(self.dir, exist_ok=True)
         self.step = int(step)
@@ -77,8 +84,11 @@ class EvalVideoRecorder:
         import cv2
 
         left = _upscale(rgb)
-        right = _mask_panel(self._decode(rgb))
-        frame = np.concatenate([left, right], axis=1)
+        if self.decode:
+            right = _mask_panel(self._decode(rgb))
+            frame = np.concatenate([left, right], axis=1)
+        else:
+            frame = np.ascontiguousarray(left)
 
         if info:
             d = info.get("distance_to_goal")
@@ -89,8 +99,10 @@ class EvalVideoRecorder:
                         0.5, (255, 255, 255), 1, cv2.LINE_AA)
         cv2.putText(frame, "policy view", (6, 16), cv2.FONT_HERSHEY_SIMPLEX,
                     0.45, (255, 255, 255), 1, cv2.LINE_AA)
-        cv2.putText(frame, "VAE lane/obst", (PANEL + 6, 16),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1, cv2.LINE_AA)
+        if self.decode:
+            cv2.putText(frame, "VAE lane/obst", (PANEL + 6, 16),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1,
+                        cv2.LINE_AA)
         self._frames.append(frame)
 
     def _decode(self, rgb):

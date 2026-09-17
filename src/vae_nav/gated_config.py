@@ -54,13 +54,31 @@ def check_gated_run(env=None):
             "speed sees the gate as an unobservable coin flip.")
 
     perception = str(env.get("PERCEPTION", "vae")).lower()
-    if perception not in ("vae", ""):
+    if perception not in ("vae", "", "mobilenet"):
         raise ValueError(
-            f"GATED=1 requires PERCEPTION=vae, not {perception!r}. The gated "
-            "arm unifies the two 128-d autoencoder lane arms. The explorer's "
-            "384-d MobileNet backend would change the observation width, and "
-            "policy_io.load_agent_state would then refuse every checkpoint on "
-            "the other side -- loudly, and correctly.")
+            f"GATED=1 accepts PERCEPTION=vae or mobilenet, not {perception!r}.")
+    if perception == "mobilenet":
+        # RELAXED 2026-09-11 on the user's instruction. This used to be a hard
+        # refusal, on the grounds that MobileNet's 384-d latent changes the
+        # observation width and checkpoints would not load across the two.
+        #
+        # THAT RISK IS REAL BUT ALREADY COVERED, AND MORE PRECISELY: every
+        # checkpoint stores its encoder identity and
+        # LatentSource.assert_matches / policy_io.load_agent_state refuse a
+        # mismatch at load time, naming both sides. This guard was a second,
+        # blunter copy of that check, and it also blocked a legitimate
+        # from-scratch run. It now warns instead of refusing.
+        #
+        # WHAT IS STILL TRUE AND IS WHY THE WARNING IS LOUD: a mobilenet run
+        # shares NO checkpoint with a vae run in either direction, and it must
+        # start from scratch -- INIT_FROM a vae checkpoint will fail.
+        print("=" * 72)
+        print("[GatedConfig] WARNING: PERCEPTION=mobilenet on a GATED run.")
+        print("  observation is 384-d (mobilenet_v3_small_f4_pool4), NOT the")
+        print("  145-d VAE observation. Checkpoints are NOT interchangeable")
+        print("  with any vae run, in either direction. This run must be from")
+        print("  scratch: INIT_FROM a vae checkpoint will be refused at load.")
+        print("=" * 72, flush=True)
 
     if _flag(env, "LANE_EXPLORE"):
         raise ValueError(
@@ -99,7 +117,24 @@ def check_gated_run(env=None):
 
     if goal_reward == "sorb":
         # THE SINGLE MOST EXPENSIVE MISCONFIGURATION AVAILABLE HERE.
-        if discount < 1.0:
+        #
+        # ESCAPE HATCH, 2026-09-11, ON THE USER'S EXPLICIT INSTRUCTION.
+        # GATED_ALLOW_DISCOUNTED_SORB=1 downgrades this to a loud warning. It
+        # is opt-in per run and deliberately ugly to type, so it cannot happen
+        # by accident. The measured cost is unchanged and is printed.
+        if discount < 1.0 and _flag(env, "GATED_ALLOW_DISCOUNTED_SORB"):
+            _h = 1.0 / (1.0 - discount)
+            print("=" * 72)
+            print(f"[GatedConfig] WARNING: sorb goal reward with DISCOUNT="
+                  f"{discount} (horizon ~{_h:.0f} steps).")
+            print("  The goal critic's Q NO LONGER READS AS -(steps to goal).")
+            print("  Measured here: goal episodes run ~195 steps, where V is")
+            print("  -86.6 at 200 steps and -95.1 at 300 -- 8.5 apart; 400 vs")
+            print("  750 steps are 1.7 apart. Cutoffs calibrated in STEPS stop")
+            print("  meaning steps, and the SGM graph built on -V is an")
+            print("  ORDERING, not a distance. Recalibrate before trusting it.")
+            print("=" * 72, flush=True)
+        elif discount < 1.0:
             raise ValueError(
                 f"GATED_GOAL_REWARD=sorb requires DISCOUNT=1.0, not {discount}. "
                 "Under -1 per step the critic IS the cost-to-go, and gamma=0.99 "

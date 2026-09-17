@@ -123,6 +123,21 @@ CANDIDATE_SPACING="${CANDIDATE_SPACING:-4.0}"
 # drive. Anything much larger would be asserting entry points the policy cannot
 # actually reach.
 LOCALIZE_RADIUS="${LOCALIZE_RADIUS:-25.0}"
+# THE SWEEP POINT. There is NO equal budget any more: the question is the
+# PARETO FRONTIER of node count against SR/SPL, so each method is run at
+# several densities and the curves are compared, not single points.
+#
+# For uniform, random and policy the node count IS the independent variable and
+# DENSITY sets it. For SGM the independent variable is its consistency cutoff
+# and the node count is whatever falls out -- which is the honest way to sweep
+# a method that derives its own sparsity, and is what "no budget" means for it.
+# Pass SGM_CUTOFF to drive that arm; leave it unset and SGM is fitted to DENSITY
+# instead, which is only useful when a matched-count point is wanted.
+DENSITY="${DENSITY:-4.0}"
+SGM_CUTOFF="${SGM_CUTOFF:-}"
+# Distinguishes sweep points in the filename. Without it the second density
+# overwrites the first and every file still looks complete.
+TAG="${TAG:-}"
 TOWN_LC="$(echo "$TOWN" | tr '[:upper:]' '[:lower:]')"
 OUT_DIR="${OUT_DIR:-results/placement_${TOWN_LC}}"
 # ONE TRACE FOR EVERY BAND, AND ONE PER TOWN. The bands are separate processes
@@ -209,6 +224,8 @@ for band in ${BANDS//,/ }; do
       --collect-episodes "$COLLECT_EPISODES" --collect-steps "$COLLECT_STEPS" \
       --candidate-spacing "$CANDIDATE_SPACING" \
       --localize-radius "$LOCALIZE_RADIUS" \
+      --nodes-per-100m "$DENSITY" --tag "$TAG" \
+      ${SGM_CUTOFF:+--consistency-cutoff "$SGM_CUTOFF"} \
       --trace-cache "$TRACE" --out-dir "$OUT_DIR" \
     || echo "[Placement $ARM band ${lo}-${hi}m $method] FAILED" >&2
   done

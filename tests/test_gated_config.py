@@ -55,11 +55,26 @@ def test_rejects_a_gated_run_without_the_vector_block():
         check_gated_run(_env(OBS_WITH_VECTOR=0))
 
 
-def test_rejects_the_mobilenet_backend():
-    # The gated arm unifies the two 128-d autoencoder arms. MobileNet is the
-    # explorer's 384-d backend and would change the observation width.
+def test_accepts_the_mobilenet_backend_with_a_warning(capsys):
+    # RELAXED 2026-09-11 (user): this used to raise. The width risk it guarded
+    # against is already caught at load time by the checkpoint's encoder
+    # identity (LatentSource.assert_matches), which names both sides, so the
+    # guard was a blunter duplicate that also blocked a legitimate
+    # from-scratch run. It must still WARN, loudly.
+    check_gated_run(_env(PERCEPTION="mobilenet"))
+    out = capsys.readouterr().out
+    assert "384-d" in out and "NOT interchangeable" in out
+    assert "from" in out and "scratch" in out
+
+
+def test_still_rejects_an_unknown_backend():
     with pytest.raises(ValueError, match="PERCEPTION"):
-        check_gated_run(_env(PERCEPTION="mobilenet"))
+        check_gated_run(_env(PERCEPTION="resnet50"))
+
+
+def test_vae_backend_warns_about_nothing(capsys):
+    check_gated_run(_env(PERCEPTION="vae"))
+    assert "WARNING" not in capsys.readouterr().out
 
 
 def test_rejects_gating_against_the_explorer_arm():
@@ -142,3 +157,17 @@ def test_the_run_announces_the_reward_and_its_return_range(capsys):
     assert "SORB minimum time" in out
     assert "[-1000, 0]" in out
     assert "steps to goal" in out
+
+
+def test_discounted_sorb_is_still_refused_by_default():
+    with pytest.raises(ValueError, match="DISCOUNT"):
+        check_gated_run(_env(DISCOUNT="0.99"))
+
+
+def test_discounted_sorb_is_allowed_with_the_explicit_opt_in(capsys):
+    # User instruction 2026-09-11. Opt-in per run, and it must WARN with the
+    # measured cost: Q stops reading as steps-to-goal, which is what the SGM
+    # graph is built on.
+    check_gated_run(_env(DISCOUNT="0.99", GATED_ALLOW_DISCOUNTED_SORB="1"))
+    out = capsys.readouterr().out
+    assert "NO LONGER READS AS" in out and "ORDERING" in out

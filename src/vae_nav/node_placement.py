@@ -63,7 +63,7 @@ import numpy as np
 
 from vae_nav.value_distance import H_STEPS
 
-METHODS = ("uniform", "random", "policy", "sgm")
+METHODS = ("uniform", "random", "policy", "madent", "sgm", "sgm_paper")
 
 
 def smooth(x, w):
@@ -171,6 +171,49 @@ def place_peaks(h, s, n_max, min_sep_m, smooth_w):
     return np.array(sorted(picked), dtype=int)
 
 
+def mad_spikes(h, s, min_sep_m, smooth_w, z_thresh=3.0, centre="median",
+               nms_w=0):
+    """Robust-z spike detection on the entropy trace, then the same
+    min-separation greedy pick as place_peaks. THE PROTOCOL'S `madent` ARM.
+
+    z = (h - median) / (1.4826 * MAD). Median and MAD rather than mean and std
+    because both of the latter are inflated by the very spikes being detected,
+    and by the episode-start transient. Unlike top-N this CAN return nothing:
+    a detector that always fills a budget cannot say "no spike here".
+    Segment endpoints are NEVER added (the protocol's --mad_endpoints 0):
+    with them on, 18-32 of 22-38 nodes were endpoints and the arm became a
+    topology baseline wearing an entropy label. Ported verbatim from
+    node_placement_entropy.mad_spikes so the junction-coverage result and the
+    SR result are on one detector.
+    """
+    h, s = np.asarray(h, np.float64), np.asarray(s, np.float64)
+    if len(h) == 0:
+        return np.empty(0, dtype=int)
+    hs = smooth(h, smooth_w)
+    if centre == "mean":
+        c, scale = float(np.mean(hs)), float(np.std(hs))
+    else:
+        c = float(np.median(hs))
+        scale = 1.4826 * float(np.median(np.abs(hs - c)))
+    if scale <= 1e-12:
+        return np.empty(0, dtype=int)
+    z = (hs - c) / scale
+    cand = np.flatnonzero(z >= z_thresh)
+    if len(cand) == 0:
+        return np.empty(0, dtype=int)
+    if nms_w > 0:
+        keep = [i for i in cand
+                if hs[i] >= hs[max(0, i - nms_w):min(len(hs), i + nms_w + 1)].max()]
+        cand = np.array(keep, dtype=int)
+        if len(cand) == 0:
+            return np.empty(0, dtype=int)
+    picked = []
+    for i in cand[np.argsort(-hs[cand])]:
+        if all(abs(s[i] - s[j]) >= min_sep_m for j in picked):
+            picked.append(int(i))
+    return np.array(sorted(picked), dtype=int)
+
+
 def sgm_cutoff_for_budget(dist, embeddings, target_n, embedding_cutoff,
                           lo=0.1, hi=None, iters=18, order=None):
     """Find the consistency cutoff whose SGM node count is nearest `target_n`.
@@ -228,17 +271,45 @@ def place(method, s=None, entropy=None, dist=None, embeddings=None, n=None,
         if entropy is None:
             raise ValueError("policy placement needs per-state actor entropy")
         return place_peaks(entropy, s, n, min_sep_m, smooth_w), None
+    if method == "madent":
+        if entropy is None or s is None:
+            raise ValueError("madent placement needs per-state entropy and arc length")
+        return mad_spikes(entropy, s, min_sep_m, smooth_w,
+                          z_thresh=float(kw.get("z_thresh", 3.0)),
+                          nms_w=int(kw.get("nms_w", 0))), None
     if method == "sgm":
+        # THE RELEASE-FAITHFUL FRAME (sgm_frame.py). Needs the plane positions,
+        # the calibrated cutoffs and the metric gate; returns learned edges too.
+        if dist is None or kw.get("path_xy") is None:
+            raise ValueError("sgm placement needs dist and path_xy")
+        from vae_nav.sgm_frame import sgm_faithful
+        return sgm_faithful(dist, kw["path_xy"],
+                            consistency_cutoff=float(kw["consistency_cutoff"]),
+                            edge_cutoff=float(kw["edge_cutoff"]),
+                            gate_m=float(kw.get("gate_m", 1.0)))
+    if method == "sgm_paper":
+        # DIAGNOSTIC: the paper's all-nodes two-way test (sgm_placement.py).
         if dist is None or embeddings is None:
-            raise ValueError("sgm placement needs dist and embeddings")
+            raise ValueError("sgm_paper placement needs dist and embeddings")
         from vae_nav.sgm_placement import sgm_select
-        return sgm_select(dist, embeddings, order=order, **kw)
+        return sgm_select(dist, embeddings, order=order,
+                          **{k: v for k, v in kw.items()
+                             if k in ("embedding_cutoff", "consistency_cutoff")})
     raise ValueError(f"unknown placement method {method!r}; "
                      f"expected one of {METHODS}")
 
 
-def actor_entropy(agent, observations, seed=0, batch=256):
-    """Per-state entropy of the actor, as -log_prob of one sample.
+def actor_entropy(agent, observations, seed=0, batch=256, analytic=True):
+    """Per-state entropy of the actor.
+
+    analytic=True (DEFAULT, the protocol's `madent` estimator): the closed-form
+    entropy of the BASE Gaussian, dist.distribution.entropy(), never a Monte
+    Carlo estimate of the tanh-squashed distribution. Raises rather than
+    falling back if the distribution has no base -- a silent switch of
+    estimator would make two arms' "entropy" two quantities.
+    analytic=False: -log_prob of one sample, the learner's own training-curve
+    estimator, kept for the legacy `policy` arm so its earlier numbers remain
+    readable.
 
     THE SAME ESTIMATOR THE LEARNER REPORTS (gated_tqc_learner's "entropy" is
     -log_probs.mean() over one sample per state), so a peak here means what a
@@ -256,6 +327,14 @@ def actor_entropy(agent, observations, seed=0, batch=256):
                    for k in chunk[0]}
         key, sub = jax.random.split(key)
         dist = agent._actor.apply_fn({"params": agent._actor.params}, stacked)
-        _act, log_prob = dist.sample_and_log_prob(seed=sub)
-        out[a:a + len(chunk)] = -np.asarray(log_prob, np.float64)
+        if analytic:
+            base = getattr(dist, "distribution", None)
+            if base is None or not hasattr(base, "entropy"):
+                raise TypeError("actor distribution exposes no base "
+                                "distribution with a closed-form entropy; "
+                                "refusing to substitute the MC estimator")
+            out[a:a + len(chunk)] = np.asarray(base.entropy(), np.float64)
+        else:
+            _act, log_prob = dist.sample_and_log_prob(seed=sub)
+            out[a:a + len(chunk)] = -np.asarray(log_prob, np.float64)
     return out

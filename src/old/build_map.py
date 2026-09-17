@@ -10,7 +10,7 @@ from absl import app, flags
 from flax.training import checkpoints
 from ml_collections import config_flags
 from rlib_integration.helper import carla_location_to_np_array
-from src.carla_eval import CarlaEvalEnv
+from carla_eval import CarlaEvalEnv
 # from src.sac_lane_following import sac_config
 from jaxrl2.agents import DrQLearner,PixelBCLearner,PixelResNetBCLearner
 from jaxrl2.wrappers.frame_stack import FrameStack

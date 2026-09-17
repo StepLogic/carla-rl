@@ -12,7 +12,7 @@ from jaxrl2.wrappers.timelimit import TimeLimit
 from jaxrl2.wrappers.record_statistics import RecordEpisodeStatistics
 from rlib_integration.carla_goal_env import CarlaGoalEnv
 from configs.train_env_config import config as carla_config
-from src.carla_eval import CarlaEvalEnv
+from carla_eval import CarlaEvalEnv
 # from sac_lane_following import sac_config
 os.environ['XLA_FLAGS']="--xla_gpu_enable_command_buffer="
 # Define flags

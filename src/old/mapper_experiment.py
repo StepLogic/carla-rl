@@ -8,7 +8,7 @@ import numpy as np
 from absl import app, flags
 from flax.training import checkpoints
 from ml_collections import config_flags
-from src.carla_eval import CarlaEvalEnv
+from carla_eval import CarlaEvalEnv
 # from src.sac_lane_following import sac_config
 from jaxrl2.agents import DrQLearner
 from jaxrl2.wrappers.frame_stack import FrameStack

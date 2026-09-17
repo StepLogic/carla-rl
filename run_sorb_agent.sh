@@ -86,13 +86,9 @@ export EVAL_VIDEO=1
 export XLA_PYTHON_CLIENT_PREALLOCATE=false XLA_PYTHON_CLIENT_MEM_FRACTION=0.5
 
 CARLA_SH=/home/robotlab/Apps/CARLA_0.9.15/CarlaUE4.sh
-# pgrep -x CANNOT match here: /proc/PID/comm is capped at 15 chars, so
-# 'CarlaUE4-Linux-Shipping' (23) is truncated to 'CarlaUE4-Linux-' and an
-# exact-name match never fires. That is why servers survived this trap and
-# sat holding ~2.8 GB of GPU after their job had exited. -f matches argv.
 kill_servers() {
   for _ in 1 2 3 4 5; do
-    mapfile -t p < <(pgrep -f '[C]arlaUE4-Linux-Shipping'); [ ${#p[@]} -eq 0 ] && return 0
+    mapfile -t p < <(pgrep -x CarlaUE4-Linux-Shipping); [ ${#p[@]} -eq 0 ] && return 0
     for q in "${p[@]}"; do kill -9 "$q" 2>/dev/null; done; sleep 3
   done
 }

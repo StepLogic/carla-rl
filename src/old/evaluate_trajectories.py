@@ -12,11 +12,11 @@ from jaxrl2.wrappers.frame_stack import FrameStack
 from jaxrl2.wrappers.timelimit import TimeLimit
 from jaxrl2.wrappers.record_statistics import RecordEpisodeStatistics
 from rlib_integration.helper import carla_location_to_np_array
-from src.carla_eval import CarlaEvalEnv
+from carla_eval import CarlaEvalEnv
 from PIL import Image
 from jaxrl2.noise import OrnsteinUhlenbeckActionNoise
 # from jax_mapping_experiment import JAXMappingExperiments
-from src.carla_eval import CarlaEvalEnv
+from carla_eval import CarlaEvalEnv
 
 #!/usr/bin/env python
 

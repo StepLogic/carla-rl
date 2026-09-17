@@ -96,16 +96,12 @@ export MAX_STEPS="${MAX_STEPS:-500000}"
 export RESUME="${RESUME:-1}"
 export TEMP_LR=3e-4
 export EVAL_VIDEO=1
-export XLA_PYTHON_CLIENT_PREALLOCATE=false XLA_PYTHON_CLIENT_MEM_FRACTION=0.15
+export XLA_PYTHON_CLIENT_PREALLOCATE=false XLA_PYTHON_CLIENT_MEM_FRACTION=0.5
 
 CARLA_SH=/home/robotlab/Apps/CARLA_0.9.15/CarlaUE4.sh
-# pgrep -x CANNOT match here: /proc/PID/comm is capped at 15 chars, so
-# 'CarlaUE4-Linux-Shipping' (23) is truncated to 'CarlaUE4-Linux-' and an
-# exact-name match never fires. That is why servers survived this trap and
-# sat holding ~2.8 GB of GPU after their job had exited. -f matches argv.
 kill_servers() {
   for _ in 1 2 3 4 5; do
-    mapfile -t p < <(pgrep -f '[C]arlaUE4-Linux-Shipping'); [ ${#p[@]} -eq 0 ] && return 0
+    mapfile -t p < <(pgrep -x CarlaUE4-Linux-Shipping); [ ${#p[@]} -eq 0 ] && return 0
     for q in "${p[@]}"; do kill -9 "$q" 2>/dev/null; done; sleep 3
   done
 }
@@ -117,7 +113,7 @@ for ATTEMPT in 1 2 3 4 5; do
   kill_servers
   # fd 200 dropped FIRST: an orphaned grep inheriting this lock once held it
   # for 8.5 hours after the job it belonged to had exited.
-  ( exec 200>&-; "$CARLA_SH" -carla-port=2000 -quality-level=Low \
+  ( exec 200>&-; "$CARLA_SH" -carla-port=2000 -quality-level=Epic \
       -windowed -ResX=640 -ResY=360 2>&1 \
     | grep -v --line-buffered "Invalid session: no stream available" \
     > logs/carla_lane_explorer.log ) &

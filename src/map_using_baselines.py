@@ -33,20 +33,7 @@ os.environ["XLA_PYTHON_CLIENT_ALLOCATOR"]="platform"
 # flags.DEFINE_string("map_dir", None, "Whether to use deterministic actions")
 # flags.DEFINE_string("town", "Town01", "Town Name")
 
-class RealTimeVectorEMA:
-    def __init__(self, window_size=100, alpha=0.1, vector_dim=3):
-        self.window = deque(maxlen=window_size)
-        self.alpha = alpha
-        self.last_value = np.zeros(vector_dim)
-        
-    def update(self, new_vector):
-        self.window.append(new_vector)
-        self.last_value = self.alpha * new_vector + (1 - self.alpha) * self.last_value
-        return self.last_value
-    def threshold(self):
-        return np.std(self.window)*1.5
-    def get_current(self):
-        return self.last_value
+
 # %%
 
 def map_environment(env,model_type="nomad",map_dir=None,mode=["dense","sparse_dist","sparse_actions"],difficulty="easy",threshold=0.1,n_eval_episodes=10, deterministic=True,origin=None,destination=None):
@@ -64,11 +51,9 @@ def map_environment(env,model_type="nomad",map_dir=None,mode=["dense","sparse_di
     MODEL=None
     checkpoint_path=None
     agent=None
-    uncertainty_filter = None
-    if mode == "sparse_actions":
-        uncertainty_filter = RealTimeVectorEMA(window_size=100, vector_dim=1)
+
     if mode !="dense":
-        # model_type="nomad"
+        model_type="nomad"
         models={
             "gnm":GNM_Policy,
             "nomad":NoMaD,
@@ -123,42 +108,31 @@ def map_environment(env,model_type="nomad",map_dir=None,mode=["dense","sparse_di
     keyframe_count=0
 
 
-    # if mode == "dense":
-    #     path=f"evaluation_trajectory/{model_type}/{mode}/{difficulty}/"
-    #     os.makedirs(path, exist_ok=True)
-    #     save_dir=path+str(len(os.listdir(path)))  
-    #     os.makedirs(save_dir, exist_ok=True)  
-    # elif mode =="sparse_dist":
-    #     base=map_dir.split("/")[-5]
-    #     difficulty=map_dir.split("/")[-2]
-    #     name=map_dir.split("/")[-1] 
-    #     save_dir=f"{base}/{model_type}/{mode}/{difficulty}/{name}"
-    #     os.makedirs(save_dir,exist_ok=True)
-    # else:
-    #     base=map_dir.split("/")[-5]
-    #     difficulty=map_dir.split("/")[-2]
-    #     name=map_dir.split("/")[-1] 
-    #     save_dir=f"{base}/{model_type}/{mode}/{difficulty}/{name}"
-    #     os.makedirs(save_dir,exist_ok=True)
-    if map_dir:
-        base=map_dir.split("/")[-5]
+    if mode =="dense":
+        path=f"evaluation_trajectory/{mode}/{difficulty}/"
+        os.makedirs(path, exist_ok=True)
+        save_dir=path+str(len(os.listdir(path)))  
+        os.makedirs(save_dir, exist_ok=True)  
+    elif mode =="sparse_dist":
+        base=map_dir.split("/")[-4]
         difficulty=map_dir.split("/")[-2]
         name=map_dir.split("/")[-1] 
-        save_dir=f"uncertainty_experiment/{model_type}/{mode}_{threshold}/{difficulty}/{name}"
+        save_dir=f"{base}/{mode}_alpha_{threshold}/{difficulty}/{name}"
+        os.makedirs(save_dir,exist_ok=True)
     else:
-        save_dir=f"experiment/{difficulty}"
-    os.makedirs(save_dir,exist_ok=True)
+        pass
     while not done:
         control = expert_agent.run_step()
         actions = np.array([control.steer, control.throttle])
         # next_observation, reward, done, truncated, info = env.step(action)
         if mode == "sparse_dist":
+
             if keyframe is None:
                 # breakpoint()
                 keyframe=observation["pixels"]
                 origin = carla_location_to_np_array(env.unwrapped.core.hero.get_transform().location)
             agent.eval_action(observation["pixels"])
-            add_to_map,keyframe = agent.distance_to_observation(keyframe,alpha=threshold)
+            add_to_map,keyframe = agent.distance_to_observation(keyframe)
             if add_to_map:
                 image = (keyframe[...,-1] * 255).astype(np.uint8)
                 saved=cv2.imwrite(f"{save_dir}/{keyframe_count}.jpg",image)
@@ -166,23 +140,15 @@ def map_environment(env,model_type="nomad",map_dir=None,mode=["dense","sparse_di
                 keyframe_count+=1
             # breakpoint()
         elif mode=="sparse_actions":
-            waypoints=agent.eval_action(observation["pixels"])
-            if np.any((uncertainty_filter.get_current()-np.sum(waypoints**2))>uncertainty_filter.threshold()):
-                cv2.imwrite(f"{save_dir}/{keyframe_count}.jpg",obs)
-            uncertainty=np.sum(np.std(waypoints)**2)
-            uncertainty_filter.update(uncertainty)
-            keyframe_count+=1
+            pass
         else:
-            is_at_junction,_,_= env.unwrapped.is_agent_at_junction()
-            if is_at_junction:
-                obs=(observation["pixels"][...,0]*255).astype(np.uint8)
-                cv2.imwrite(f"{save_dir}/{keyframe_count}.jpg",obs)
-                keyframe_count+=1
+            obs=(observation["pixels"][...,0]*255).astype(np.uint8)
+            cv2.imwrite(f"{save_dir}/{keyframe_count}.jpg",obs)
+            keyframe_count+=1
         observation, reward, done, truncated, info = env.step(actions)
         episode_reward += reward
         episode_length += 1
         done = done or truncated
-
         if done:
             episode_rewards.append(episode_reward)
             episode_lengths.append(episode_length)
@@ -209,15 +175,13 @@ def map_environment(env,model_type="nomad",map_dir=None,mode=["dense","sparse_di
                 
             if "slack" in info:
                 slack_values.append(float(info["slack"]))
-            # if "is_success" in info:
-            #     termination_budget=0
-            # else:
-            #     termination_budget-=1
+            if "is_success" in info:
+                termination_budget=0
+            else:
+                termination_budget-=1
 
-   
-    obs=(observation["pixels"][...,0]*255).astype(np.uint8)
-    cv2.imwrite(f"{save_dir}/{keyframe_count}.jpg",obs)
-    keyframe_count+=1
+
+
     stats = {
         "mean_reward": np.mean(episode_rewards),
         "std_reward": np.std(episode_rewards),
@@ -279,26 +243,23 @@ def run_agent():
     
     wrapped_func=partial(map_environment,env)
     if user_defined_trajectories:
-        for model_type in ["vint"]:
-            dense_mappting_func=partial(wrapped_func,mode="dense",model_type=model_type)
-            for difficult,trajectories in user_defined_trajectories.items():
-                for trajectory in trajectories.values():
-                    location=trajectory[0]["location"]
-                    origin=carla.Location(x=location[0],y=location[1],z=location[2])
-                    location=trajectory[-1]["location"]
-                    destination=carla.Location(x=location[0],y=location[1],z=location[2])
-                    dense_mappting_func(difficulty=difficult,origin=origin,destination=destination)
-                    break
-            #         #    wrapped_func
-            # sparse_dist_mappting_func=partial(wrapped_func,mode="sparse_dist",model_type=model_type,threshold=5)
-            # for difficult,trajectories in user_defined_trajectories.items():
-            #     for ix,_ in enumerate(trajectories.values()):
-            #         sparse_dist_mappting_func(map_dir=f"evaluation_trajectory/{model_type}/dense/{difficult}/{ix}")
-
-            sparse_action_mapping_func=partial(wrapped_func,mode="dense",model_type=model_type,threshold=5)
-            # for difficult,trajectories in user_defined_trajectories.items():
-            #     for ix,_ in enumerate(trajectories.values()):
-            #         sparse_action_mapping_func(map_dir=f"evaluation_trajectory/{model_type}/dense/{difficult}/{ix}")
+        dense_mappting_func=partial(wrapped_func,mode="dense")
+        for difficult,trajectories in user_defined_trajectories.items():
+           for trajectory in trajectories.values():
+               location=trajectory[0]["location"]
+               origin=carla.Location(x=location[0],y=location[1],z=location[2])
+               location=trajectory[-1]["location"]
+               destination=carla.Location(x=location[0],y=location[1],z=location[2])
+               dense_mappting_func(difficulty=difficult,origin=origin,destination=destination)
+            #    wrapped_func
+        sparse_dist_mappting_func=partial(wrapped_func,mode="sparse_dist")
+        for difficult,trajectories in user_defined_trajectories.items():
+           for ix,trajectory in enumerate(trajectories.values()):
+               location=trajectory[0]["location"]
+               origin=carla.Location(x=location[0],y=location[1],z=location[2])
+               location=trajectory[-1]["location"]
+               destination=carla.Location(x=location[0],y=location[1],z=location[2])
+               sparse_dist_mappting_func(map_dir=f"evaluation_trajectory/dense/{difficult}/{ix}")
             #    wrapped_func
     # print("\nEvaluation Results:")
     # print("=" * 50)

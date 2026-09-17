@@ -12,7 +12,7 @@ from jaxrl2.wrappers.timelimit import TimeLimit
 from jaxrl2.wrappers.record_statistics import RecordEpisodeStatistics
 from rlib_integration.agent import GlobalRoutePlanner
 from rlib_integration.helper import ndarray_to_location
-from src.carla_eval import CarlaEvalEnv
+from carla_eval import CarlaEvalEnv
 from navigation_policies.baseline_policies.nomad_policy import NoMaD
 from navigation_policies.baseline_policies.gnm_policy import GNM_Policy
 from navigation_policies.baseline_policies.vint_policy import ViNT_Policy

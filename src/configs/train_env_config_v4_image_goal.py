@@ -122,6 +122,28 @@ LANE_STRICT = os.environ.get("LANE_STRICT", "1") == "1"
 # shorter. The rate stays in the [Why] breakdown either way, so the trade is
 # measurable rather than invisible.
 WEDGE_ON_OFF_ROAD = os.environ.get("WEDGE_ON_OFF_ROAD", "1") == "1"
+# THE IMAGE-GOAL TASK REGIME (user spec 2026-09-18). One flag, three effects,
+# all required together or the task is incoherent:
+#
+#   1. THE GOAL IS FIXED. The env's own mid-episode resample (fires whenever
+#      the hero comes within 2 m of the goal) is SKIPPED: under the image-goal
+#      spec the episode ENDS at the target viewpoint -- a goal that runs away
+#      the moment it is reached is exactly the arrival-erasure bug that made
+#      the oracle's successes invisible (see core_state.py's arrived comment).
+#      Termination belongs to the reward wrapper (ImageGoalReward), not here.
+#   2. THE COLLISION IS A MAGNITUDE AND A LATCH. The env keeps only the
+#      boolean event; the spec's persistent -0.75/step penalty needs the
+#      impulse (to gate sensor noise) and an episode-level latch. Both are
+#      published in info; the reward wrapper latches its own copy from the
+#      impulse, so the env latch is for visibility and Phase 2 (critic z).
+#   3. THE NEW LABELS ARE PUBLISHED: yaw_error_to_goal_deg (relative to the
+#      goal waypoint's road heading, the yaw the goal camera was spawned at),
+#      route_distance_to_goal_m (along-road, euclidean fallback), and
+#      simulator_invalid (hero destroyed).
+#
+# Additive only: with the flag off, nothing in the existing CORL/gated
+# behaviour changes by one bit.
+IMAGE_GOAL_TASK = os.environ.get("IMAGE_GOAL_TASK", "0") == "1"
 
 
 class STBL3Experiment(BaseExperiment):
@@ -298,6 +320,12 @@ class STBL3Experiment(BaseExperiment):
         self.passed_chckp = False
         self.info = dict()
         self.rewards = []
+        # IMAGE-GOAL LATCHES (IMAGE_GOAL_TASK only; see the flag's comment).
+        # The collision flag is the episode-level persistent state the spec
+        # requires: False at reset, latched True by the first meaningful
+        # impact, never cleared until the next reset.
+        self.collision_impulse = 0.0
+        self.has_collided = False
         
         if self.trajectories is None:
             self._cache_waypoints(env.world)
@@ -820,6 +848,25 @@ class STBL3Experiment(BaseExperiment):
         if LANE_WEDGE and (_lane_fatal or _off_road_fatal):
             self.wedged = True
         self.collision = 'collision' in sensor_data.keys()
+        if self.collision:
+            # THE MAGNITUDE, kept for the image-goal spec. Collision.parse
+            # returns [other_actor, |normal_impulse|]; the env's own flag
+            # above discards the impulse entirely. Read defensively -- a
+            # malformed event reads as "no meaningful impact" rather than
+            # killing the episode; the magnitude lands in info either way,
+            # so the gap is visible, not silent.
+            if IMAGE_GOAL_TASK:
+                from vae_nav.image_goal_reward import (
+                    COLLISION_IMPULSE_THRESHOLD)
+                try:
+                    raw = sensor_data["collision"]
+                    self.collision_impulse = float(
+                        raw[1] if isinstance(raw, (list, tuple))
+                        and len(raw) > 1 else getattr(raw, "impulse_value", 0.0))
+                except (TypeError, ValueError, IndexError):
+                    self.collision_impulse = 0.0
+                if self.collision_impulse > COLLISION_IMPULSE_THRESHOLD:
+                    self.has_collided = True
         # DISTANCE CAP, env-var gated. Default 200 keeps the CORL dense-reward
         # experiments byte-identical; the long-horizon curriculum raises it.
         #
@@ -839,7 +886,11 @@ class STBL3Experiment(BaseExperiment):
         
         # Check success condition
         # self.done_dist = self.distance_travelled >= max(50,50*round(self.time_episode/4e4))
-        if distance_to_goal < 2:  # Resample when within 2m of goal (for 4-8m range)
+        # IMAGE-GOAL: the resample is SKIPPED -- the goal is fixed for the
+        # episode and the reward wrapper decides what arrival means. See the
+        # IMAGE_GOAL_TASK comment at the top of this file.
+        if distance_to_goal < 2 and not IMAGE_GOAL_TASK:
+            # Resample when within 2m of goal (for 4-8m range)
             self.passed_chckp = True
             self.checkpoint_count += 1
             print("Checkppoint Passed")
@@ -878,6 +929,33 @@ class STBL3Experiment(BaseExperiment):
         )
         
         # Update info
+        _route_remaining = self._route_remaining(core)
+        _ig = {}
+        if IMAGE_GOAL_TASK:
+            # THE IMAGE-GOAL LABELS. Yaw error is relative to the GOAL
+            # waypoint's road heading -- the yaw the goal camera was spawned
+            # at -- so "matches the intended orientation" means facing along
+            # the road as in the goal image. Both headings are read in the
+            # same CARLA convention the rest of this file uses
+            # (radians(rotation.yaw) and atan2 of forward vectors agree).
+            _dest = core.destination
+            _fwd_getter = getattr(_dest, "get_forward_vector", None)
+            _goal_fwd = (_fwd_getter() if _fwd_getter is not None
+                         else _dest.transform.get_forward_vector())
+            _goal_yaw = math.atan2(_goal_fwd.y, _goal_fwd.x)
+            _hero_yaw = math.radians(float(hero.get_transform().rotation.yaw))
+            from vae_nav.image_goal_reward import wrap_deg
+            _ig = dict(
+                collision_impulse=float(getattr(self, "collision_impulse", 0.0)),
+                has_collided=bool(getattr(self, "has_collided", False)),
+                yaw_error_to_goal_deg=wrap_deg(
+                    math.degrees(_goal_yaw - _hero_yaw)),
+                route_distance_to_goal_m=(_route_remaining
+                                          if _route_remaining is not None
+                                          else float(distance_to_goal)),
+                simulator_invalid=not bool(
+                    getattr(hero, "is_alive", True)),
+            )
         self.info.update(dict(
             is_success=self.done_dist,
             # PUBLISHED SO THE REWARD WRAPPER CAN END THE EPISODE EARLY.
@@ -889,7 +967,7 @@ class STBL3Experiment(BaseExperiment):
             wedged=bool(getattr(self, "wedged", False)),
             # ALONG-ROAD metres left to the goal, or None when no route
             # exists. Phi(s) = -route_remaining_m; GatedReward differences it.
-            route_remaining_m=self._route_remaining(core),
+            route_remaining_m=_route_remaining,
             # Whether the hero was inside a junction. The wedge's exemption
             # turns on this, so it has to be visible in the [Why] breakdown --
             # otherwise "crossings are forgiven correctly" is unfalsifiable.
@@ -899,7 +977,8 @@ class STBL3Experiment(BaseExperiment):
             checkpoints_passed=self.checkpoint_count,
             max_reward=0,
             min_reward=0,
-            mean_reward=0
+            mean_reward=0,
+            **_ig
         ))
         
         if len(self.rewards) > 0:

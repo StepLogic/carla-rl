@@ -97,6 +97,16 @@ WITH_GOAL = os.environ.get("OBS_WITH_GOAL", "1") == "1"
 WITH_MODE = os.environ.get("OBS_WITH_MODE", "0") == "1"
 MODE_DIM = 1
 
+# OBS_WITH_COLLISION=1 ADDS THE CRITIC'S COLLISION FLAG z = has_collided.
+# It reaches BOTH actor and critic through the shared obs dict; the policy
+# seeing z is harmless (z is observable state), while the CRITIC needs it for
+# Markov validity: the image-goal reward's persistent collision penalty makes
+# the reward depend on history, and V(o, z) repairs that. Own key, own
+# projection -- the same reasoning as WITH_MODE. Default off, so every
+# existing run is byte-identical.
+WITH_COLLISION = os.environ.get("OBS_WITH_COLLISION", "0") == "1"
+COLL_DIM = 1
+
 # Must match vae_nav.gated_reward. Inverting these silently swaps which critic
 # trains on which mode, and nothing downstream would raise.
 GOAL, EXPLORE = 1, 0
@@ -152,6 +162,7 @@ class VAEGoalWrapper(Wrapper):
         self.with_vector = WITH_VECTOR
         self.with_goal = WITH_GOAL
         self.with_mode = WITH_MODE
+        self.with_collision = WITH_COLLISION
         check_gated_coherence()
         if not self.with_goal:
             _goal_reward = (os.environ.get("LANE_FOLLOW", "0") == "1"
@@ -177,6 +188,8 @@ class VAEGoalWrapper(Wrapper):
             space["vector"] = spaces.Box(-5.1, 5.1, (VECTOR_DIM,), np.float32)
         if self.with_mode:
             space["mode"] = spaces.Box(0.0, 1.0, (MODE_DIM,), np.float32)
+        if self.with_collision:
+            space["coll"] = spaces.Box(0.0, 1.0, (COLL_DIM,), np.float32)
         self.observation_space = spaces.Dict(space)
         # THE BANNER MUST LIST EVERY KEY IN THE SPACE. It is the one place an
         # operator confirms the observation layout of a live run, and a gated
@@ -188,6 +201,7 @@ class VAEGoalWrapper(Wrapper):
               + f"'latent': ({self.latent_dim},)"
               + (f", 'vector': ({VECTOR_DIM},)" if self.with_vector else "")
               + (f", 'mode': ({MODE_DIM},)" if self.with_mode else "")
+              + (f", 'coll': ({COLL_DIM},)" if self.with_collision else "")
               + f"}} = {total}-d backend='{self.source.name}'"
               + ("  [GATED: goal block zeroed in explore mode]"
                  if self.with_mode else "")
@@ -283,6 +297,9 @@ class VAEGoalWrapper(Wrapper):
             if self.with_goal:
                 out["goal"] = apply_mode(out["goal"], mode)
             out["mode"] = np.array([float(mode)], np.float32)
+        if self.with_collision:
+            out["coll"] = np.array(
+                [float(bool(info.get("has_collided", False)))], np.float32)
         return out
 
     def reset(self, **kwargs):
@@ -324,4 +341,5 @@ class VAEGoalWrapper(Wrapper):
         ident["with_mode"] = self.with_mode
         ident["with_vector"] = bool(self.with_vector)
         ident["with_goal"] = bool(self.with_goal)
+        ident["with_coll"] = bool(self.with_collision)
         return ident

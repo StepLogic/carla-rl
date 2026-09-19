@@ -867,6 +867,23 @@ def main():
                 w = getattr(w, "env", None)
             if w is None:
                 raise SystemExit("EPISODE_HER=1 needs VAEGoalWrapper in the stack")
+            # THE SELECTION. The image-goal arm's hindsight buffer differs in
+            # CLASS, not just coefficients: it keeps the flown reward on every
+            # relabelled row (the image-goal reward is goal-independent) and
+            # sets done only at the hindsight entry, so it takes none of the
+            # k_* coefficients and neither time_to_goal nor gated -- those
+            # kwargs do not exist on the variant. Its goal_radius is the same
+            # 2.0 m the success test uses, not the goal arm's GOAL_THRESHOLD.
+            if os.environ.get("IMAGE_GOAL_TASK", "0") == "1":
+                from vae_nav.image_goal_her import ImageGoalRelabelBuffer
+                hers.append(ImageGoalRelabelBuffer(
+                    buffer, w.goal_block,
+                    goal_radius=float(os.environ.get(
+                        "IG_GOAL_DISTANCE_THRESHOLD_M", 2.0)),
+                    n_relabel=int(os.environ.get("EPISODE_HER_N", 1)),
+                    min_disp=float(os.environ.get("HER_MIN_DISP", 5.0)),
+                    seed=SEED + len(hers)))
+                continue
             hers.append(EpisodeRelabelBuffer(
                 buffer, w.goal_block, goal_radius=GOAL_THRESHOLD, k_goal=K_GOAL,
                 k_collision=K_COLLISION, k_lane=K_LANE,
@@ -1586,6 +1603,8 @@ def main():
                           + (f" her={hers[i].stats()['her_relabelled']}"
                              f" paying={hers[i].stats()['her_paying']}"
                              f"({hers[i].stats()['her_paying_frac']:.3f})"
+                             + (f" entry_done={hers[i].stats()['her_entry_done']}"
+                                if getattr(hers[i], "IMAGE_GOAL", False) else "")
                              if hers else ""),
                           flush=True)
                     if GATED:
@@ -1624,7 +1643,19 @@ def main():
                               f"(batch mix is FIXED at GOAL_BATCH_FRAC "
                               f"regardless)", flush=True)
                 if hers is not None:
-                    hers[i].flush_episode()
+                    # THE DISPATCH IS ON A CLASS ATTRIBUTE, not an isinstance
+                    # import: the base call site stays `flush_episode()` bare
+                    # and only the image-goal buffer accepts `truncated=`.
+                    # `fi` is the terminal step's info and DOES carry a real
+                    # truncation key -- vec_env.step stuffs inf["truncated"]
+                    # (and inf["terminated"]) into the step info it appends to
+                    # final_infos. A truncated timeout's last frame is a clock
+                    # artefact, not a destination, so the buffer must see it.
+                    if getattr(hers[i], "IMAGE_GOAL", False):
+                        hers[i].flush_episode(
+                            truncated=bool(fi.get("truncated", False)))
+                    else:
+                        hers[i].flush_episode()
 
                 # New episode -> re-roll the oracle coin and replan.
                 # Uses the POST-RESET info, not `fi`: `fi` is the finished

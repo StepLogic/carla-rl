@@ -31,6 +31,14 @@ python3 -m venv --system-site-packages "$_VENV"
 # installing jax/jaxlib into the venv -- that forks the learner's jax silently.
 "$_VENV/bin/pip" install -q "nvidia-cudnn-cu12==9.24.0.43"
 
+# WHY PIN protobuf 6.31.1. --system-site-packages exposes the system's
+# protobuf to the venv, but the resolver picked 5.29.6 for the venv while
+# tensorboard 2.21.0's protos are gencode 6.31.1 -- torch.utils.tensorboard
+# then dies at import ("Runtime version cannot be older than the linked
+# gencode version"), which the trainer hits the moment it opens its summary
+# writer. Install the exact gencode version; jaxlib accepts 6.x (< 7).
+"$_VENV/bin/pip" install -q "protobuf==6.31.1"
+
 _VC_MODELS=""
 if [ -n "${EAI_VC_DIR:-}" ] && [ -d "$EAI_VC_DIR" ]; then
     _VC_MODELS="$EAI_VC_DIR"

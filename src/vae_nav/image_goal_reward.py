@@ -97,6 +97,43 @@ MAX_STEPS = int(os.environ.get("IG_MAX_STEPS", 1000))
 STOP_SPEED_MPS = float(os.environ.get("IG_STOP_SPEED_MPS", 0.2))
 STOP_WINDOW_STEPS = int(os.environ.get("IG_STOP_WINDOW_STEPS", 10))
 
+IMAGE_GOAL_TASK = os.environ.get("IMAGE_GOAL_TASK", "0") == "1"
+
+
+def image_goal_coherence():
+    """Refuse image-goal configurations that cannot learn, BEFORE CARLA starts.
+
+    Mirrors gated_config.check_gated_run: a run that starts and then dies at
+    step 1 has still cost a server start, a world load and a GPU share.
+    """
+    if not IMAGE_GOAL_TASK:
+        return
+    if os.environ.get("GATED", "0") == "1":
+        raise SystemExit(
+            "IMAGE_GOAL_TASK=1 with GATED=1 is not a supported pairing: the "
+            "image-goal arm is a single-mode run. GatedReward draws a mode "
+            "per episode and two critics; ImageGoalReward defines its own "
+            "single reward and termination. Run one or the other.")
+    if os.environ.get("OBS_WITH_COLLISION", "0") != "1":
+        raise SystemExit(
+            "IMAGE_GOAL_TASK=1 requires OBS_WITH_COLLISION=1. The persistent "
+            "collision penalty makes the reward depend on history; the critic "
+            "must see z = has_collided or the MDP is not Markov and the "
+            "critic fits noise.")
+    if os.environ.get("PERCEPTION", "vae").lower() not in ("vc1", "vc1_vitb"):
+        raise SystemExit(
+            "IMAGE_GOAL_TASK=1 expects PERCEPTION=vc1. The arm's checkpoint "
+            "identity, latent width (768) and edge-weight calibration are "
+            "tied to the VC-1 backend; running it on another encoder is an "
+            "experiment change, not a run option.")
+    if (os.environ.get("LANE_FOLLOW", "0") == "1"
+            or os.environ.get("LANE_EXPLORE", "0") == "1"
+            or os.environ.get("TIME_TO_GOAL", "0") == "1"):
+        raise SystemExit(
+            "IMAGE_GOAL_TASK=1 must not stack another reward wrapper: its "
+            "own reward is ImageGoalReward, and a second reward below it "
+            "would be dead code the run banner would not reflect.")
+
 
 def wrap_deg(angle_deg):
     """Wrap an angle difference in degrees to (-180, 180]."""

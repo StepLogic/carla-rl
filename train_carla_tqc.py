@@ -463,6 +463,25 @@ def make_env(town, seed, latent_source, eval_mode=False, port=None):
     # LANE FOLLOWING uses the env's own per-step distance reward instead of the
     # sparse +600 arrival. LANE_FOLLOW=1 selects it; the sparse path is
     # untouched so existing goal-navigation runs are bit-identical.
+    # IMAGE-GOAL ARM. One reward, one mode, VC-1 features: reach the goal
+    # image's viewpoint and stop there. Placed before the GATED branch and
+    # returning early, for the same reason the gated and explorer branches
+    # are: so no part of either existing stack can be half-applied.
+    if os.environ.get("IMAGE_GOAL_TASK", "0") == "1":
+        from vae_nav.image_goal_reward import (ImageGoalReward,
+                                               image_goal_coherence)
+        image_goal_coherence()
+        # The Phase 1 reward owns termination (success / simulator_invalid /
+        # MAX_STEPS timeout), latches the collision flag, and publishes every
+        # info key the coll key and the relabel buffer read. The env's own
+        # `done` is discarded inside ImageGoalReward.
+        env = ImageGoalReward(env)
+        env = VAEGoalWrapper(env, source=latent_source)
+        if os.environ.get("NO_TIMELIMIT", "0") == "1":
+            print("[Env] IMAGE_GOAL + NO_TIMELIMIT=1: no step cap (trace "
+                  "collection)", flush=True)
+            return env
+        return TimeLimit(env, max_episode_steps=MAX_EPISODE_STEPS)
     # GATED ARM. One policy serving BOTH the goal-reaching and the goal-free
     # task, switched by a bit drawn once per episode. Placed before the
     # goal-reward branches and returning early, for the same reason the

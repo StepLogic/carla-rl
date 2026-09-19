@@ -507,7 +507,7 @@ def make_env(town, seed, latent_source, eval_mode=False, port=None):
             # no clock on explore episodes -- they end on a crash, a crossing,
             # the 100 m arrival or the env's idle guard, never on a step cap.
             max_steps=(10 ** 9 if os.environ.get("NO_TIMELIMIT", "0") == "1"
-                       else int(os.environ.get("GATED_EXPLORE_MAX_STEPS", 500))),
+                       else int(os.environ.get("GATED_EXPLORE_MAX_STEPS", 1000))),
             seed=seed)
         env = VAEGoalWrapper(env, source=latent_source)
         # The GOAL arm's cap. GatedReward truncates explore episodes itself at
@@ -625,7 +625,7 @@ def run_explore_evaluation(agent, town, n_episodes, latent_source, step=0,
     env, rows = None, []
     try:
         env = make_env(town, seed0, latent_source, eval_mode=True)
-        cap = int(max_steps or os.environ.get("GATED_EXPLORE_MAX_STEPS", 500))
+        cap = int(max_steps or os.environ.get("GATED_EXPLORE_MAX_STEPS", 1000))
         for i in range(n_episodes):
             sd = seed0 + i
             _random.seed(sd)

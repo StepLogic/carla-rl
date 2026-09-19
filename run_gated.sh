@@ -87,7 +87,7 @@ export EXPLORE_PROB=0.5           # strictly between 0 and 1, or one critic
                                   # never trains
 export GOAL_BATCH_FRAC=0.5        # batch composition FIXED on sample, so the
                                   # env-step skew cannot starve either critic
-export GATED_EXPLORE_MAX_STEPS=500   # the goal-free arm's cap
+export GATED_EXPLORE_MAX_STEPS=1000  # the goal-free arm's cap (user 2026-09-18: 500 -> 1000)
 # ---- the goal arm's reward: SORB minimum time --------------------------------
 # -1 per step until arrival, 0 on arrival, as in the Habitat peer. The goal
 # critic then IS the cost-to-go: Q = -(steps to goal). That reading is what a

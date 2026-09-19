@@ -292,8 +292,13 @@ EXPLORE_OFF_ROAD_FATAL = os.environ.get("EXPLORE_OFF_ROAD_FATAL", "1") == "1"
 # earlier runs that used it, not for new ones.
 # EXPLORE_GOAL_DIST_M: explore mode ARRIVES once the car has driven this much
 # CUMULATIVE PATH (not net displacement), ending the episode with
-# EXPLORE_ARRIVAL_BONUS on top of that step's reward. User decision
-# 2026-09-11: "terminate exploration episode at 100m and given +2.0 reward".
+# EXPLORE_ARRIVAL_BONUS: charged on top of that step's reward when the car has
+# driven EXPLORE_GOAL_DIST_M of cumulative path, ending the episode. User
+# decision 2026-09-11: "terminate exploration episode at 100m and given +2.0
+# reward"; raised to 10.0 by user decision 2026-09-18 -- at 2.0 the bonus was
+# SMALLER THAN ONE STEP'S PROGRESS (~2.2 at 8 km/h under scale 10), so arrival
+# was mildly discouraged and the bonus was invisible at gamma=0.99 against
+# returns of ~1100.
 #
 # WHY 100 m IS THE RIGHT TARGET AND NOT A CAP CHANGE. Measured on v6c@75k over
 # five episodes: explore drives at 2.0-2.35 m/s, so a surviving 500-step (50 s)
@@ -325,7 +330,7 @@ GOAL_OFF_ROAD_PENALTY = float(os.environ.get("GOAL_OFF_ROAD_PENALTY", 0.0))
 GOAL_LANE_PENALTY = float(os.environ.get("GOAL_LANE_PENALTY", 0.0))
 EXPLORE_OFF_ROAD_PENALTY = float(os.environ.get("EXPLORE_OFF_ROAD_PENALTY", 0.0))
 EXPLORE_GOAL_DIST_M = float(os.environ.get("EXPLORE_GOAL_DIST_M", 100.0))
-EXPLORE_ARRIVAL_BONUS = float(os.environ.get("EXPLORE_ARRIVAL_BONUS", 2.0))
+EXPLORE_ARRIVAL_BONUS = float(os.environ.get("EXPLORE_ARRIVAL_BONUS", 10.0))
 EXPLORE_LANE_MODE = os.environ.get("EXPLORE_LANE_MODE", "terminal")
 if EXPLORE_LANE_MODE not in ("penalise", "terminal"):
     raise ValueError(f"EXPLORE_LANE_MODE={EXPLORE_LANE_MODE!r}: penalise|terminal")
@@ -410,7 +415,7 @@ class GatedReward(Wrapper):
     """Draw a mode per episode; return that mode's reward and termination."""
 
     def __init__(self, env, explore_prob=EXPLORE_PROB, force_mode=None,
-                 max_steps=500, delta_mode="positive", seed=0,
+                 max_steps=1000, delta_mode="positive", seed=0,
                  goal_kind=GOAL_REWARD_KIND, goal_max_steps=GOAL_MAX_STEPS,
                  step_cost=STEP_COST, wedge_truncate=WEDGE_TRUNCATE):
         super().__init__(env)

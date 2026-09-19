@@ -46,6 +46,11 @@ def _make(monkeypatch, coll="1"):
     monkeypatch.setenv("OBS_WITH_COLLISION", coll)
     monkeypatch.setenv("OBS_WITH_GOAL", "0")   # keep the stub small; goal block
     # needs info fields the stub does not carry
+    # test_gated_obs.py's deliberate no-restore reload can leak these; pin
+    # both or the wrapper builds space["vector"] / check_gated_coherence
+    # raises on the leaked mode bit.
+    monkeypatch.setenv("OBS_WITH_VECTOR", "0")
+    monkeypatch.setenv("OBS_WITH_MODE", "0")
     import vae_nav.vae_goal_wrapper as m
     import importlib
     importlib.reload(m)
@@ -69,6 +74,8 @@ def test_coll_key_present_when_requested_and_carries_the_flag(monkeypatch):
 def test_coll_defaults_to_zero_when_info_has_no_flag(monkeypatch):
     monkeypatch.setenv("OBS_WITH_COLLISION", "1")
     monkeypatch.setenv("OBS_WITH_GOAL", "0")
+    monkeypatch.setenv("OBS_WITH_VECTOR", "0")
+    monkeypatch.setenv("OBS_WITH_MODE", "0")
     import vae_nav.vae_goal_wrapper as m
     import importlib
     importlib.reload(m)

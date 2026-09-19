@@ -13,6 +13,11 @@ def _set(monkeypatch, **kw):
     monkeypatch.delenv("GATED", raising=False)
     monkeypatch.delenv("OBS_WITH_GOAL", raising=False)
     monkeypatch.delenv("OBS_WITH_COLLISION", raising=False)
+    # ambient vars must not steer which coherence check a test passes through
+    monkeypatch.delenv("PERCEPTION", raising=False)
+    monkeypatch.delenv("LANE_FOLLOW", raising=False)
+    monkeypatch.delenv("LANE_EXPLORE", raising=False)
+    monkeypatch.delenv("TIME_TO_GOAL", raising=False)
     for k, v in kw.items():
         monkeypatch.setenv(k, v)
     import vae_nav.image_goal_reward as m

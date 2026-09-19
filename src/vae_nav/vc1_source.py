@@ -38,6 +38,14 @@ class VcSource:
     def __init__(self, model_name=VC1_MODEL_NAME, device=None):
         self.name = model_name
         self.latent_dim = VC1_EMBED_DIM
+        # The trainer's town-leak check reads trained_on_towns on EVERY
+        # backend (train_carla_tqc.py: a perception module trained on a
+        # held-out town leaks it like a policy does). VC-1 is a web-scale
+        # foundation model (Ego4D and similar) with NO CARLA town provenance,
+        # so the honest value is empty -- no held-out leak, which is exactly
+        # the encoder-clean transfer this arm exists to produce (the VAE
+        # arms cannot give that number; their encoder saw four towns).
+        self.trained_on_towns = []
         try:
             import torch
             from hydra import compose, initialize

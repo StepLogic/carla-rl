@@ -16,6 +16,9 @@ def test_identity_names_the_backend_and_dim():
     src = VcSource(device="cpu")
     assert src.name == "vc1_vitb"
     assert src.latent_dim == 768
+    # The trainer's town-leak check reads this unconditionally on every
+    # backend (train_carla_tqc.py); a backend without it crashes at startup.
+    assert src.trained_on_towns == []
     ident = src.identity()
     assert ident["latent_backend"] == "vc1_vitb"
     assert ident["latent_dim"] == 768

@@ -193,6 +193,20 @@ export TARGET_SPEED="${TARGET_SPEED:-20.0}"  # the config's 5.0 km/h is
 # cores per step. Pinned byte-exact by tests/test_skip_discarded_image_features.py.
 export ENV_SKIP_IMAGE_FEATURES=1
 
+# ---- goal placement + expert (user decisions 2026-09-19) ----------------------
+# FIXED BAND, NO CURRICULUM (user: goal band "5 - 100"). carla_core samples the
+# goal's distance from [GOAL_DIST_MIN, GOAL_DIST_MAX] at every reset; the
+# trainer's curriculum (train_carla_tqc.py, the CURR_* block) advances
+# GOAL_DIST_MAX from GOAL_DIST_START toward GOAL_DIST_TARGET on success. Pinning
+# START=TARGET=100.0 leaves curr_max at 100 from episode 1 with nothing to
+# advance to, so EVERY episode draws its goal in the fixed 5-100 m band. These
+# are exported here (rather than left to the trainer's runtime os.environ
+# writes) so the .env snapshot records the schedule an eval replay needs.
+export GOAL_DIST_MIN=5.0 GOAL_DIST_START=100.0 GOAL_DIST_TARGET=100.0
+# NO ORACLE EPISODES (user: expert_prob = 0). Every episode is policy-driven
+# from step 1; the expert path stays available for offline analysis later.
+export EXPERT_PROB=0.0
+
 # ---- the run ------------------------------------------------------------------
 export RUN_NAME="${RUN_NAME:-carla_image_goal}"
 export POLICY_FOLDER="${POLICY_FOLDER:-$RUN_NAME}"
@@ -227,6 +241,7 @@ for _k in IMAGE_GOAL_TASK PERCEPTION OBS_WITH_COLLISION GATED EPISODE_HER \
           CARLA_ROOT CARLA_QUALITY CARLA_OFFSCREEN CARLA_START_SERVER \
           CARLA_PORT CARLA_PORTS TOWN_LIST ENV_TOWNS TOWN_ROTATE_EPISODES \
           MAX_EPISODE_STEPS TARGET_SPEED ENV_SKIP_IMAGE_FEATURES \
+          GOAL_DIST_MIN GOAL_DIST_START GOAL_DIST_TARGET EXPERT_PROB \
           N_EVAL_EPISODES N_EVAL_EXPLORE \
           RUN_NAME POLICY_FOLDER MAX_STEPS SEED RESUME \
           XLA_PYTHON_CLIENT_PREALLOCATE XLA_PYTHON_CLIENT_MEM_FRACTION; do

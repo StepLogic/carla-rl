@@ -149,6 +149,7 @@ def from_env(latent_dim=LATENT_DIM):
 
         PERCEPTION=vae        frozen lane+obstacle VAE, 128-d      (needs VAE_CKPT)
         PERCEPTION=mobilenet  frozen MobileNetV3-Small features[:4]
+        PERCEPTION=vc1        frozen Meta VC-1 ViT-B CLS, 768-d
 
     The two produce vectors of different width AND different meaning, so
     assert_matches -- which compares `latent_backend` recorded in the
@@ -158,10 +159,13 @@ def from_env(latent_dim=LATENT_DIM):
     if backend in ("mobilenet", "mobilenetv3", "mnv3"):
         from vae_nav.mobilenet_source import MobileNetSource
         return MobileNetSource(image_size=IMAGE_SIZE)
+    if backend in ("vc1", "vc1_vitb"):
+        from vae_nav.vc1_source import VcSource
+        return VcSource()
     if backend not in ("vae", ""):
         raise SystemExit(
-            f"PERCEPTION='{backend}' is not a known backend. Use 'vae' or "
-            "'mobilenet'. Failing loudly rather than silently falling back to "
-            "the VAE, because a silent fallback would make a backend-ablation "
-            "compare a run against itself.")
+            f"PERCEPTION='{backend}' is not a known backend. Use 'vae', "
+            "'mobilenet' or 'vc1'. Failing loudly rather than silently "
+            "falling back to the VAE, because a silent fallback would make a "
+            "backend-ablation compare a run against itself.")
     return LatentSource(os.environ.get("VAE_CKPT", ""), latent_dim=latent_dim)

@@ -468,14 +468,28 @@ def make_env(town, seed, latent_source, eval_mode=False, port=None):
     # returning early, for the same reason the gated and explorer branches
     # are: so no part of either existing stack can be half-applied.
     if os.environ.get("IMAGE_GOAL_TASK", "0") == "1":
+        # IG_MAX_STEPS (imported aliased: this file's own module-level
+        # MAX_STEPS is the 200k training-step budget, a different thing).
         from vae_nav.image_goal_reward import (ImageGoalReward,
                                                image_goal_coherence)
+        from vae_nav.image_goal_reward import MAX_STEPS as IG_MAX_STEPS
         image_goal_coherence()
         # The Phase 1 reward owns termination (success / simulator_invalid /
         # MAX_STEPS timeout), latches the collision flag, and publishes every
         # info key the coll key and the relabel buffer read. The env's own
         # `done` is discarded inside ImageGoalReward.
-        env = ImageGoalReward(env)
+        #
+        # THE REWARD'S OWN CLOCK MUST GO WITH THE TIMELIMIT, OR NO_TIMELIMIT IS
+        # HALF-APPLIED. ImageGoalReward truncates at its own max_steps
+        # (default IG_MAX_STEPS=1000) INDEPENDENT of the TimeLimit wrapper, so
+        # under NO_TIMELIMIT=1 the banner below would claim "no step cap" while
+        # every episode still died at 1000 steps. Same pattern as the GATED
+        # branch: remove TimeLimit AND set the reward's cap to 10**9. Normal
+        # runs keep IG_MAX_STEPS (default 1000) unchanged.
+        env = ImageGoalReward(
+            env,
+            max_steps=(10 ** 9 if os.environ.get("NO_TIMELIMIT", "0") == "1"
+                       else IG_MAX_STEPS))
         env = VAEGoalWrapper(env, source=latent_source)
         if os.environ.get("NO_TIMELIMIT", "0") == "1":
             print("[Env] IMAGE_GOAL + NO_TIMELIMIT=1: no step cap (trace "

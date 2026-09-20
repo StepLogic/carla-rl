@@ -140,3 +140,40 @@ def test_stats_counts_entry_dones():
     out = buf.stats()
     assert out["her_entry_done"] == buf.n_entry_done
     assert out["her_entry_done"] >= 1, "no entry done was counted"
+
+
+def test_real_step_spacing_still_terminates_legs():
+    # THE REGRESSION FOR THE v1 BUG. Real env steps move ~0.28 m (20 km/h at
+    # 0.05 s); the old single-row relabelling drew the goal >= min_disp (5 m)
+    # from pos[i] and tested pos[i+1] against it, so the entry could never
+    # fire -- the 1M-step v1 run logged her_entry_done = 0 across all
+    # 245,025 relabelled rows. Synthetic tests with 10 m jumps masked this.
+    # Under leg relabelling the leg reaches the goal frame itself, so real
+    # spacing must still produce a terminal.
+    xs = list(np.arange(0.0, 30.0, 0.28))          # ~107 steps, 0.28 m each
+    buf = _buf()
+    _episode(buf, xs)
+    buf.flush_episode()
+    assert buf.stats()["her_entry_done"] >= 1
+
+
+def test_leg_rows_are_contiguous_and_end_exactly_once():
+    # One hindsight leg: every HINDSIGHT row's goal block points at the SAME
+    # goal, the rows are contiguous in position order, and exactly ONE row is
+    # terminal -- the last one inserted. buf.rows also holds the on-policy
+    # rows (goal block 99.0 from _tr); scope to the hindsight rows.
+    buf = _buf()
+    _episode(buf, [0.0, 10.0, 20.0, 30.0, 40.0])
+    buf.flush_episode()
+    legs = [r for r in buf.rows
+            if float(r["observations"]["goal"][0]) != 99.0]
+    assert legs, "no hindsight rows were inserted"
+    dones = [j for j, r in enumerate(legs) if float(r["dones"]) == 1.0]
+    assert len(dones) == 1
+    last = dones[0]
+    assert last == len(legs) - 1, "rows were inserted after the arrival"
+    goals = {tuple(np.round(r["observations"]["goal"], 3)) for r in legs}
+    assert len(goals) == 1, "a leg mixed goals"
+    # the terminal row's NEXT goal block is the goal itself (arrival state)
+    assert legs[last]["next_observations"]["goal"][0] == \
+        legs[last]["observations"]["goal"][0]

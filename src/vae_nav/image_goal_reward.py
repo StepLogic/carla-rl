@@ -13,7 +13,7 @@ THE SHAPE (user spec 2026-09-18; in-lane bonus REMOVED, user decision
         - 0.75   if off the drivable surface (each step it persists)
         - 0.75   if a collision has EVER happened this episode
         - K |v - v*|  if L_t                the velocity preference (2026-09-20),
-                                            K = IG_SPEED_PREF_K (0.1), v* =
+                                            K = IG_SPEED_PREF_K, v* =
                                             TARGET_SPEED (20 km/h)
 
     L_t = on the drivable lane, moving in the route direction, no lane
@@ -124,7 +124,9 @@ STOP_WINDOW_STEPS = int(os.environ.get("IG_STOP_WINDOW_STEPS", 10))
 # The velocity preference (user spec 2026-09-20): while in lane, every step
 # pays -SPEED_PREF_K * |v - v*| with v* = TARGET_SPEED. A penalty times the
 # in-lane indicator, so it is always <= 0 and the ReViND invariant survives.
-SPEED_PREF_K = float(os.environ.get("IG_SPEED_PREF_K", 0.1))
+# K's default was raised 0.1 -> 0.2 (user decision 2026-09-20, both modes,
+# unified reward -- the 0.1 default is superseded); no other constant moved.
+SPEED_PREF_K = float(os.environ.get("IG_SPEED_PREF_K", 0.2))
 TARGET_SPEED_KMH = float(os.environ.get("TARGET_SPEED", 20.0))
 
 IMAGE_GOAL_TASK = os.environ.get("IMAGE_GOAL_TASK", "0") == "1"

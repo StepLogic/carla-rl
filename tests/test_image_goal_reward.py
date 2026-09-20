@@ -15,7 +15,7 @@ REMOVES the +0.75 flat in-lane bonus, so the in-lane rows below are exact at
 v = TARGET_SPEED and lower by the term when the car crawls or parks):
 
     in-lane, at v* = 20 km/h, no collision    -1.00
-    parked in lane (L_t via the carve-out)    -1.5556  = -1.0 - 0.1*(20/3.6)
+    parked in lane (L_t via the carve-out)    -2.1111  = -1.0 - 0.2*(20/3.6)
     one-step lane crossing                    -1.00
     off-road                                  -1.75
     post-collision, back on the road          -1.75
@@ -299,12 +299,13 @@ def test_the_envs_own_done_is_discarded():
 
 # ------------------------------------------------------- route direction ----
 
-def test_parked_in_lane_keeps_L_t_and_pays_minus_1556():
+def test_parked_in_lane_keeps_L_t_and_pays_minus_2111():
     # The sustained stop the success condition demands still runs through the
     # carve-out in _driving_with_route_direction: a stationary car is not
     # driving the wrong way, so L_t stays True. The flat lane bonus is GONE
     # (user 2026-09-20), so what L_t now grants the parked car is the SPEED
-    # PENALTY, which keeps applying: -1.0 - 0.1*(20/3.6) = -1.5556.
+    # PENALTY, which keeps applying: -1.0 - 0.2*(20/3.6) = -2.1111
+    # (K = 0.2, user 2026-09-20).
     w, _ = _stopped()
     _, reward, _, _, info = w.step(ACT)
     comp = info["ig_reward_components"]
@@ -312,7 +313,7 @@ def test_parked_in_lane_keeps_L_t_and_pays_minus_1556():
     assert comp["speed_penalty"] == pytest.approx(
         -SPEED_PREF_K * TARGET_SPEED_KMH / 3.6)
     assert reward == pytest.approx(-1.0 + comp["speed_penalty"])
-    assert reward == pytest.approx(-1.0 - 0.1 * (20.0 / 3.6))
+    assert reward == pytest.approx(-1.0 - 0.2 * (20.0 / 3.6))
 
 
 # ------------------------------------------------- the ablation override ----

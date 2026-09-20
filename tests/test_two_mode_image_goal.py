@@ -173,7 +173,8 @@ def test_goal_success_needs_sustained_stop():
     # THE SUCCESS STEP PAYS THE ORDINARY REWARD: a parked car is in lane
     # (moving nothing is not driving the wrong way) and pays the velocity
     # preference for being stopped, which is v = 0 against 20 km/h. The flat
-    # lane bonus is REMOVED (user 2026-09-20), so the step is -1.5556.
+    # lane bonus is REMOVED (user 2026-09-20), so the step is -2.1111
+    # (K = 0.2, user 2026-09-20).
     comp = info["ig_reward_components"]
     assert reward == pytest.approx(
         -1.0 + IN_LANE_BONUS - SPEED_PREF_K * TARGET_SPEED_KMH / 3.6)

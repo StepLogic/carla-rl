@@ -202,7 +202,13 @@ export ENV_SKIP_IMAGE_FEATURES=1
 # advance to, so EVERY episode draws its goal in the fixed 5-100 m band. These
 # are exported here (rather than left to the trainer's runtime os.environ
 # writes) so the .env snapshot records the schedule an eval replay needs.
-export GOAL_DIST_MIN=5.0 GOAL_DIST_START=100.0 GOAL_DIST_TARGET=100.0
+# OVERRIDE WITH ${VAR:-default} so the v2 retrain (user 2026-09-19: band
+# 5-25 m, inside gamma=0.99's ~28 m effective horizon) can set
+# GOAL_DIST_START=GOAL_DIST_TARGET=25.0 without editing this file; the
+# defaults preserve the v1 record exactly.
+export GOAL_DIST_MIN="${GOAL_DIST_MIN:-5.0}" \
+       GOAL_DIST_START="${GOAL_DIST_START:-100.0}" \
+       GOAL_DIST_TARGET="${GOAL_DIST_TARGET:-100.0}"
 # NO ORACLE EPISODES (user: expert_prob = 0). Every episode is policy-driven
 # from step 1; the expert path stays available for offline analysis later.
 export EXPERT_PROB=0.0

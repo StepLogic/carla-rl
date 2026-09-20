@@ -153,6 +153,51 @@ def _wrapper(module):
     return module.VAEGoalWrapper(_StubEnv(), source=_StubSource())
 
 
+class _ModeStubEnv(gym.Env):
+    """Publishes a commanded mode in info, as the reward wrappers do."""
+    metadata = {}
+
+    def __init__(self, mode):
+        self.observation_space = spaces.Dict({})
+        self.action_space = spaces.Box(
+            np.array([-0.5, 0.0], np.float32), np.array([0.5, 0.6], np.float32))
+        self._mode = int(mode)
+        self._info = {"mode": self._mode, "rgb": np.zeros((2, 2, 3), np.uint8),
+                      "hero_pos": (0.0, 0.0), "hero_yaw": 0.0,
+                      "goal_pos": (10.0, 0.0)}
+
+    def _raw_obs(self):
+        return {"vector": np.zeros(4, np.float32)}
+
+    def reset(self, **kw):
+        return self._raw_obs(), dict(self._info)
+
+    def step(self, a):
+        return self._raw_obs(), 0.0, False, False, dict(self._info)
+
+
+def test_the_mode_block_reaches_the_observation_unmasked_in_both_modes():
+    # THE MODE-BIT-TO-CRITIC CHECK (user 2026-09-20). The one-critic 2-mode
+    # arm's critic is mode-conditioned ONLY through the obs dict, so the
+    # `mode` key must be emitted with the commanded value in BOTH modes --
+    # apply_mode zeroes the goal block in explore and must never touch the
+    # mode block. Nothing downstream masks it (the vec env, the plain
+    # replay buffer and the learner consume the dict whole).
+    m = _reload(**GATED)
+    act = np.zeros(2, np.float32)
+    for commanded in (m.GOAL, m.EXPLORE):
+        w = m.VAEGoalWrapper(_ModeStubEnv(commanded), source=_StubSource())
+        obs, _ = w.reset()
+        assert "mode" in obs
+        assert float(obs["mode"][0]) == float(commanded)
+        obs, _, _, _, _ = w.step(act)
+        assert float(obs["mode"][0]) == float(commanded)
+        if commanded == m.EXPLORE:
+            assert np.all(obs["goal"] == 0.0)   # the goal block IS masked
+        else:
+            assert obs["goal"].shape == (m.GOAL_DIM,)
+
+
 def test_gated_space_has_all_four_keys_at_the_pinned_widths():
     # These widths are also pinned by tests/test_mode_split_buffer.py. If the
     # two disagree, the buffer and the wrapper are building different agents.

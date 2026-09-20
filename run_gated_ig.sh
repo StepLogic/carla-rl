@@ -159,6 +159,10 @@ export IG_SPEED_PREF_K=0.2     # raised from 0.1 (user 2026-09-20, both modes)
 export IG_IN_LANE_BONUS=0    # flat in-lane bonus REMOVED (user 2026-09-20);
                              # pinned explicitly so the 49-var snapshot
                              # records it and the banner cannot disagree
+export IG_TERMINAL_PENALTY=5   # explore mode's terminal failure penalty
+                               # (user 2026-09-20): off-road/crossed/
+                               # collision/invalid terminate explore and
+                               # pay this flat; goal mode never reads it
 export DISCOUNT=0.99 TOP_QUANTILES_DROP=2 TQC_KAPPA=1.0
 export TEMP_LR=3e-4                      # the v2 divergence fix (entropy brake)
 export TQC_TARGET_MIN=-260 TQC_TARGET_MAX=100   # ReViND window at gamma=0.99
@@ -289,6 +293,7 @@ echo "[Banner] 2-mode pairing: IMAGE_GOAL_TASK=1 GATED=1 GATED_ONE_CRITIC=1"
 echo "[Banner] PERCEPTION=vc1 VC1_READOUT=grid2 OBS_WITH_STATE=1 OBS_WITH_MODE=1"
 echo "[Banner] EPISODE_HER=1 HER_MIN_DISP=5.0 IG_GOAL_DISTANCE_THRESHOLD_M=2.0"
 echo "[Banner] reward: IG_SPEED_PREF_K=0.2 TARGET_SPEED=20.0 km/h EXPLORE_GOAL_DIST_M=100.0 IG_IN_LANE_BONUS=0 (in-lane bonus removed 2026-09-20)"
+echo "[Banner] explore reward: terminal failures (off-road/crossed/collision/invalid) pay -IG_TERMINAL_PENALTY=5 and terminate; no base cost, no flat penalties -- speed pref only (user 2026-09-20)"
 echo "[Banner] learner: DISCOUNT=0.99 TOP_QUANTILES_DROP=2 TQC_KAPPA=1.0 TEMP_LR=3e-4"
 echo "[Banner] bounded critic: TQC_TARGET_MIN=-260 TQC_TARGET_MAX=100 (ReViND window)"
 echo "[Banner] modes: EXPLORE_PROB=0.5 | goal band ${GOAL_DIST_MIN}-${GOAL_DIST_TARGET} m"

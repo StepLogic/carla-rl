@@ -1,11 +1,15 @@
-"""The 2-mode image-goal arm: ONE reward, TWO modes, NO explore bonus.
+"""The 2-mode image-goal arm: ONE pure function, TWO modes, TWO contracts.
 
-THE INVARIANT THE WHOLE FILE GUARDS: both modes call the same
-image_goal_reward(), whose every step is < 0 (2026-09-20 velocity preference
-included), and the explore mode's 100 m path arrival TERMINATES but pays
-NOTHING -- the reward on that step is the ordinary step reward, so the episode
-return is exactly the sum of its step rewards. Termination buys the end of the
-negative stream and nothing else, in either mode.
+THE INVARIANTS THE FILE GUARDS (user decision 2026-09-20 splits them):
+  - GOAL mode (mode 1): the ReViND reward is UNCHANGED and FROZEN -- every
+    step < 0, the sustained-stop success terminates and pays no bonus, and
+    off-road / crossings / collisions only cost per step.
+  - EXPLORE mode (mode 0): NO TIME PRESSURE and TERMINAL FAILURES. The step
+    reward is the velocity preference alone (r <= 0, exactly 0.0 in lane at
+    v*), the FIRST off-road / crossing / collision step (and an invalid
+    step) TERMINATES paying exactly -IG_TERMINAL_PENALTY, and the 100 m path
+    arrival terminates with NO bonus (0.0 at v*). The cap truncates as a
+    safety bound. ORDERING: invalid > failure > arrival > cap.
 
 Mode semantics (mirrors GatedReward): mode 1 = goal (image-goal task:
 sustained stop on target), mode 0 = explore (drive EXPLORE_GOAL_DIST_M of
@@ -29,7 +33,7 @@ from gymnasium import spaces  # noqa: E402
 import vae_nav.image_goal_reward as igm  # noqa: E402
 from vae_nav.image_goal_reward import (  # noqa: E402
     IN_LANE_BONUS, SPEED_PREF_K, STOP_WINDOW_STEPS, TARGET_SPEED_KMH,
-    TwoModeImageGoalReward)
+    TERMINAL_PENALTY, TwoModeImageGoalReward, image_goal_reward)
 
 ACT = np.zeros(2, np.float32)
 # One metre of forward motion per step along the lane's forward vector, at
@@ -107,10 +111,12 @@ def _stopped(**extra):
 
 # --------------------------------------------------- the mode draw + reward ----
 
-def test_mode_drawn_and_rewarded_identically():
-    # THE UNIFIED CLAIM. Same info, both modes: the reward is IDENTICAL and
-    # only the mode key differs. explore_prob=0 draws goal every reset,
-    # explore_prob=1 draws explore every reset.
+def test_mode_drawn_and_rewarded_differently_at_v_star():
+    # THE MODE SPLIT (user 2026-09-20). Same info, both modes, but the
+    # branches differ now: goal keeps the ReViND step (-1.0 at v*) while
+    # explore pays the speed preference ALONE, which is exactly 0.0 in lane
+    # at v*. The reward is still the same pure function -- only the mode
+    # argument differs.
     env_g = TwoModeImageGoalReward(_StubEnv(explore_prob=0.0),
                                    explore_prob=0.0, seed=0)
     env_g.reset()
@@ -121,7 +127,8 @@ def test_mode_drawn_and_rewarded_identically():
     env_e.reset()
     out_e = env_e.step(ACT)
     assert out_e[4]["mode"] == 0
-    assert out_g[1] == out_e[1] == pytest.approx(-1.0)
+    assert out_g[1] == pytest.approx(-1.0)
+    assert out_e[1] == pytest.approx(0.0)
 
 
 def test_explore_prob_zero_and_one_draw_every_reset():
@@ -205,22 +212,27 @@ def test_latch_persists_until_reset():
     assert w.step(ACT)[1] == pytest.approx(-1.0)    # cleared
 
 
-def test_latch_persists_in_explore_mode_too():
-    # ONE reward means ONE collision latch: the persistent penalty is mode
-    # independent, so explore mode must carry it as well.
+def test_latch_is_visible_in_explore_mode_and_now_terminal():
+    # ONE latch for both modes: explore mode still latches
+    # info["has_collided"] for the statistics, and since 2026-09-20 the
+    # latching step TERMINATES the explore episode, paying the flat
+    # terminal penalty exactly (the ordinary component is 0.0: a collided
+    # car is not in lane).
     w, env = _wrap(mode=0)
     env.info["collision_impulse"] = 5.0
-    w.step(ACT)
-    env.info["collision_impulse"] = 0.0
-    assert w.step(ACT)[1] == pytest.approx(-1.75)
+    _, reward, terminated, truncated, info = w.step(ACT)
+    assert terminated is True and truncated is False
+    assert info["explore_end"] == "collision"
+    assert info["has_collided"] is True
+    assert reward == pytest.approx(-TERMINAL_PENALTY)
 
 
 # ------------------------------------------------------- explore arrival ----
 
 def test_explore_arrival_at_path(monkeypatch):
-    # Cumulative path >= EXPLORE_GOAL_DIST_M -> terminated, NO bonus, the
-    # reward on the arrival step is the ordinary step reward, and the
-    # episode's return is exactly the sum of its step rewards.
+    # Cumulative path >= EXPLORE_GOAL_DIST_M -> terminated, NO bonus: the
+    # arrival step pays the ordinary explore reward, which at v* is exactly
+    # 0.0, and the episode's return is exactly the sum of its step rewards.
     monkeypatch.setattr(igm, "EXPLORE_GOAL_DIST_M", EXPLORE_ARRIVAL_M)
     w, _ = _wrap(mode=0)
     rewards = []
@@ -232,8 +244,25 @@ def test_explore_arrival_at_path(monkeypatch):
             break
     assert terminated is True and truncated is False
     assert w._path_m == pytest.approx(EXPLORE_ARRIVAL_M)
-    assert all(r == pytest.approx(-1.0) for r in rewards)
-    assert sum(rewards) == pytest.approx(-1.0 * len(rewards))
+    assert all(r == pytest.approx(0.0) for r in rewards)
+    assert sum(rewards) == pytest.approx(0.0)
+
+
+def test_explore_arrival_at_the_real_100_m_target():
+    # The shipped constant: 100 m of cumulative path, driven at v* (the stub
+    # advances 10 m a step), terminates with explore_end="reached", NO bonus
+    # and a return of exactly 0.0 -- the sum of ten zero steps.
+    assert igm.EXPLORE_GOAL_DIST_M == pytest.approx(100.0)
+    w, _ = _wrap(mode=0, advance=(10.0, 0.0))
+    rewards = []
+    for _ in range(10):
+        _, reward, terminated, truncated, info = w.step(ACT)
+        rewards.append(reward)
+        if terminated:
+            assert info["explore_end"] == "reached"
+            break
+    assert terminated is True and truncated is False
+    assert sum(rewards) == pytest.approx(0.0)
 
 
 def test_explore_short_of_the_path_keeps_driving(monkeypatch):
@@ -245,27 +274,285 @@ def test_explore_short_of_the_path_keeps_driving(monkeypatch):
 
 
 def test_explore_end_is_cap_at_the_step_limit(monkeypatch):
+    # The cap TRUNCATES (never terminates) and pays the ordinary step
+    # reward, which with no base cost is 0.0 at v* -- a truncated clean
+    # episode returns ~0.
     monkeypatch.setattr(igm, "EXPLORE_GOAL_DIST_M", EXPLORE_ARRIVAL_M)
     w, _ = _wrap(mode=0, max_steps=3)
     for _ in range(2):
         w.step(ACT)
-    _, _, terminated, truncated, info = w.step(ACT)
+    _, reward, terminated, truncated, info = w.step(ACT)
     assert truncated is True and terminated is False
     assert info["explore_end"] == "cap"
+    assert reward == pytest.approx(0.0)
 
 
-def test_explore_invalid_terminates():
+def test_explore_invalid_terminates_and_pays_the_penalty():
+    # simulator_invalid still terminates; it pays the flat terminal penalty
+    # exactly -- the destroyed hero's speed is not read as an ordinary
+    # reward on top.
     w, _ = _wrap(mode=0, info={"simulator_invalid": True})
-    _, _, terminated, *_ = w.step(ACT)
+    _, reward, terminated, truncated, info = w.step(ACT)
+    assert terminated is True and truncated is False
+    assert info["explore_end"] == "invalid"
+    assert reward == pytest.approx(-TERMINAL_PENALTY)
+
+
+# --------------------------------------------- the explore reward table ----
+# (user decision 2026-09-20: no base cost, no flat penalties, terminal
+# failures; every ordinary explore row is the velocity preference alone.)
+
+def test_explore_in_lane_at_target_speed_pays_exactly_zero():
+    # The no-time-pressure row: a clean in-lane step at v* costs nothing.
+    w, _ = _wrap(mode=0)
+    _, reward, terminated, truncated, _ = w.step(ACT)
+    assert reward == pytest.approx(0.0)
+    assert (terminated, truncated) == (False, False)
+
+
+def test_explore_crawling_in_lane_pays_minus_0711():
+    # 2 m/s against the 5.556 m/s target: -K * |2 - 5.556| = -0.711.
+    _, comp = image_goal_reward({**DRIVING, "speed_kmh": 7.2}, (1.0, 0.0),
+                                False, mode=0)
+    assert comp["speed_penalty"] == pytest.approx(-0.7111, abs=1e-3)
+    r, comp = image_goal_reward({**DRIVING, "speed_kmh": 7.2}, (1.0, 0.0),
+                                False, mode=0)
+    assert r == pytest.approx(-SPEED_PREF_K * abs(2.0 - TARGET_SPEED_KMH / 3.6))
+    assert r == pytest.approx(-0.711, abs=1e-3)
+    assert comp["terminal_penalty"] == 0.0
+    assert comp["explore_end"] is None
+
+
+def test_explore_parked_in_lane_pays_minus_1111():
+    # The carve-out keeps L_t True at standstill, so a parked car in lane
+    # pays -K * v* = -0.2 * 5.556 = -1.111.
+    info = dict(DRIVING)
+    info["speed_kmh"] = 0.0
+    r, comp = image_goal_reward(info, (0.0, 0.0), False, mode=0)
+    assert r == pytest.approx(-SPEED_PREF_K * TARGET_SPEED_KMH / 3.6)
+    assert r == pytest.approx(-1.111, abs=1e-3)
+
+
+def test_explore_off_road_step_is_terminal_and_pays_exactly_minus_5():
+    # THE FIRST off-road step terminates and pays exactly -TERMINAL_PENALTY:
+    # in_lane is False by construction, so the ordinary component is
+    # exactly 0.0 and no off-road flat penalty is stacked on top.
+    w, _ = _wrap(mode=0, info={"off_road": True})
+    _, reward, terminated, truncated, info = w.step(ACT)
+    assert (terminated, truncated) == (True, False)
+    assert info["explore_end"] == "off_road"
+    assert reward == pytest.approx(-TERMINAL_PENALTY)
+    assert reward == pytest.approx(-5.0)
+    comp = info["ig_reward_components"]
+    assert comp["in_lane"] is False
+    assert comp["speed_penalty"] == pytest.approx(0.0)
+    assert comp["off_road"] is True
+    assert comp["terminal_penalty"] == pytest.approx(-TERMINAL_PENALTY)
+    assert comp["explore_end"] == "off_road"
+    assert comp["goal_reward_term"] == 0.0
+    assert comp["explore_reward_term"] == pytest.approx(-TERMINAL_PENALTY)
+
+
+def test_explore_crossing_step_is_terminal_and_pays_exactly_minus_5():
+    w, _ = _wrap(mode=0, info={"lane_invasion_any": True})
+    _, reward, terminated, truncated, info = w.step(ACT)
+    assert (terminated, truncated) == (True, False)
+    assert info["explore_end"] == "crossed"
+    assert reward == pytest.approx(-TERMINAL_PENALTY)
+    comp = info["ig_reward_components"]
+    assert comp["speed_penalty"] == pytest.approx(0.0)
+    assert comp["terminal_penalty"] == pytest.approx(-TERMINAL_PENALTY)
+
+
+def test_explore_collision_step_is_terminal_and_pays_exactly_minus_5():
+    w, env = _wrap(mode=0)
+    env.info["collision_impulse"] = 5.0
+    _, reward, terminated, truncated, info = w.step(ACT)
+    assert (terminated, truncated) == (True, False)
+    assert info["explore_end"] == "collision"
+    assert reward == pytest.approx(-TERMINAL_PENALTY)
+    comp = info["ig_reward_components"]
+    assert comp["speed_penalty"] == pytest.approx(0.0)
+    assert comp["terminal_penalty"] == pytest.approx(-TERMINAL_PENALTY)
+
+
+def test_explore_sub_threshold_impulse_does_not_terminate():
+    # Sensor noise is still not an impact: no latch, no termination, and
+    # the clean in-lane step at v* pays 0.0.
+    w, env = _wrap(mode=0)
+    env.info["collision_impulse"] = 0.5
+    _, reward, terminated, *_ = w.step(ACT)
+    env.info["collision_impulse"] = 0.0
+    assert w._has_collided is False
+    assert terminated is False
+    assert reward == pytest.approx(0.0)
+
+
+# --------------------------------------------------- the explore ordering ----
+
+def test_explore_failure_beats_arrival(monkeypatch):
+    # A car that goes off-road on the step it passes the distance still went
+    # off-road: the failure's terminal penalty is what the step pays and the
+    # end is the failure, not "reached".
+    monkeypatch.setattr(igm, "EXPLORE_GOAL_DIST_M", 1.0)
+    w, _ = _wrap(mode=0, info={"off_road": True})
+    _, reward, terminated, truncated, info = w.step(ACT)
+    assert terminated is True and truncated is False
+    assert info["explore_end"] == "off_road"
+    assert reward == pytest.approx(-TERMINAL_PENALTY)
+
+
+def test_explore_arrival_beats_the_cap(monkeypatch):
+    # 5 m of path, cap at 10: arrival terminates at step 5 with NO bonus
+    # and explore_end="reached", before the cap can fire.
+    monkeypatch.setattr(igm, "EXPLORE_GOAL_DIST_M", 5.0)
+    w, _ = _wrap(mode=0, max_steps=10)
+    for _ in range(4):
+        _, _, terminated, *_ = w.step(ACT)
+        assert terminated is False
+    _, reward, terminated, truncated, info = w.step(ACT)
+    assert terminated is True and truncated is False
+    assert info["explore_end"] == "reached"
+    assert reward == pytest.approx(0.0)
+
+
+def test_explore_invalid_beats_arrival(monkeypatch):
+    # ORDERING: invalid > failure > reached. An invalid step that is also
+    # the arrival step reports the invalid, not "reached".
+    monkeypatch.setattr(igm, "EXPLORE_GOAL_DIST_M", 1.0)
+    w, _ = _wrap(mode=0, info={"simulator_invalid": True})
+    _, reward, terminated, _, info = w.step(ACT)
     assert terminated is True
+    assert info["explore_end"] == "invalid"
+    assert reward == pytest.approx(-TERMINAL_PENALTY)
 
 
-# -------------------------------------------------- the ReViND invariant ----
+# ------------------------------------------------- the ReViND invariants ----
+
+def test_goal_every_step_negative_and_explore_every_step_nonpositive():
+    # THE SPLIT INVARIANT (user 2026-09-20). Walk the reward table in BOTH
+    # modes: goal is r < 0 at EVERY step; explore is r <= 0 (exactly 0.0 in
+    # lane at v*; a failure cell pays exactly -TERMINAL_PENALTY).
+    for speed in (0.0, 2.0, 10.0, 20.0, 40.0):
+        for off in (False, True):
+            for coll in (False, True):
+                for crossed in (False, True):
+                    info = dict(DRIVING)
+                    info["speed_kmh"] = speed
+                    info["off_road"] = off
+                    info["lane_invasion_any"] = crossed
+                    rg, _ = image_goal_reward(info, (1.0, 0.0), coll, mode=1)
+                    assert rg < 0.0, (speed, off, coll, crossed)
+                    re_, comp = image_goal_reward(info, (1.0, 0.0), coll,
+                                                  mode=0)
+                    assert re_ <= 0.0, (speed, off, coll, crossed)
+                    if off or crossed or coll:
+                        assert re_ == pytest.approx(-TERMINAL_PENALTY)
+                        assert comp["explore_end"] in ("off_road", "crossed",
+                                                       "collision")
+                    else:
+                        assert comp["explore_end"] is None
+
+
+def test_goal_rows_are_unchanged_by_the_mode_split():
+    # The GOAL TABLE, asserted against the pure function's default (the
+    # single-mode arm's call form): every previous value still holds. The
+    # composition is a MASKED SUM: the goal leg is the reward and the
+    # explore leg is masked to 0.
+    table = [
+        # (info overrides, has_collided, expected reward)
+        ({}, False, -1.0),                                  # in-lane at v*
+        ({"speed_kmh": 0.0}, False, -1.0 - 0.2 * (20.0 / 3.6)),   # parked
+        ({"lane_invasion_any": True}, False, -1.0),         # crossing
+        ({"off_road": True}, False, -1.75),                 # off-road
+        ({}, True, -1.75),                                  # post-collision
+        ({"off_road": True}, True, -2.50),                  # off-road+coll
+    ]
+    for overrides, coll, want in table:
+        info = dict(DRIVING)
+        info.update(overrides)
+        r, comp = image_goal_reward(info, (1.0, 0.0), coll, mode=1)
+        assert r == pytest.approx(want), (overrides, coll)
+        # and the DEFAULT call (no mode argument) is the same goal leg:
+        r0, _ = image_goal_reward(info, (1.0, 0.0), coll)
+        assert r0 == pytest.approx(want), (overrides, coll)
+        assert "base" in comp and "terminal_penalty" not in comp
+        assert comp["goal_reward_term"] == pytest.approx(want)
+        assert comp["explore_reward_term"] == 0.0
+        assert comp["goal_reward_term"] + comp["explore_reward_term"] \
+            == pytest.approx(r)
+
+
+def test_explore_rows_are_the_explore_leg_with_goal_masked():
+    # THE MASKED SUM, explore side: the reward is exactly the explore leg
+    # and the goal leg is masked to 0, in every row of the explore table.
+    rows = [
+        dict(DRIVING),                                      # at v*: 0.0
+        {**DRIVING, "speed_kmh": 7.2},                      # crawl: -0.711
+        {**DRIVING, "speed_kmh": 0.0},                      # parked: -1.111
+        {**DRIVING, "off_road": True},                      # off-road: -5
+        {**DRIVING, "lane_invasion_any": True},             # crossing: -5
+        {**DRIVING, "collision_impulse": 5.0},              # collision: -5
+    ]
+    for info in rows:
+        coll = bool(info.get("collision_impulse", 0.0) > 1.0)
+        r, comp = image_goal_reward(info, (1.0, 0.0), coll, mode=0)
+        assert comp["goal_reward_term"] == 0.0
+        assert comp["explore_reward_term"] == pytest.approx(r)
+        assert comp["goal_reward_term"] + comp["explore_reward_term"] \
+            == pytest.approx(r)
+
+
+# -------------------------------------------------- the ablation overrides ----
+
+def test_ig_terminal_penalty_env_override(monkeypatch):
+    # IG_TERMINAL_PENALTY stays env-overridable: with 10.0 in the env the
+    # failing explore step pays exactly -10.0. Reload-with-env, matching the
+    # IG_IN_LANE_BONUS test's pattern; the reload in the finally puts the
+    # shipped default back for the later tests.
+    monkeypatch.setenv("IG_TERMINAL_PENALTY", "10.0")
+    importlib.reload(igm)
+    try:
+        assert igm.TERMINAL_PENALTY == pytest.approx(10.0)
+        r, comp = igm.image_goal_reward({**DRIVING, "off_road": True},
+                                        (1.0, 0.0), False, mode=0)
+        assert r == pytest.approx(-10.0)
+        assert comp["terminal_penalty"] == pytest.approx(-10.0)
+        assert comp["explore_end"] == "off_road"
+        # and the goal branch never reads it:
+        rg, compg = igm.image_goal_reward(dict(DRIVING), (1.0, 0.0), False,
+                                          mode=1)
+        assert rg == pytest.approx(-1.0)
+        assert "terminal_penalty" not in compg
+    finally:
+        monkeypatch.delenv("IG_TERMINAL_PENALTY", raising=False)
+        importlib.reload(igm)
+    assert igm.TERMINAL_PENALTY == pytest.approx(5.0)
+
+
+def test_ig_speed_pref_k_env_override(monkeypatch):
+    # The weight itself is env-overridable in both branches: with K = 0.5
+    # the explore crawl row is -0.5 * |2 - 5.556| and the goal crawl row
+    # moves by the same term on top of its base cost.
+    monkeypatch.setenv("IG_SPEED_PREF_K", "0.5")
+    importlib.reload(igm)
+    try:
+        assert igm.SPEED_PREF_K == pytest.approx(0.5)
+        crawl = {**DRIVING, "speed_kmh": 7.2}
+        re_, _ = igm.image_goal_reward(crawl, (1.0, 0.0), False, mode=0)
+        assert re_ == pytest.approx(-0.5 * abs(2.0 - 20.0 / 3.6))
+        rg, _ = igm.image_goal_reward(crawl, (1.0, 0.0), False, mode=1)
+        assert rg == pytest.approx(-1.0 - 0.5 * abs(2.0 - 20.0 / 3.6))
+    finally:
+        monkeypatch.delenv("IG_SPEED_PREF_K", raising=False)
+        importlib.reload(igm)
+    assert igm.SPEED_PREF_K == pytest.approx(0.2)
+
 
 def test_no_arrival_bonus_anywhere(monkeypatch):
-    # Every reward in both modes < 0 even on terminal steps: the goal success
-    # step, the explore 100 m step, an invalid step and the cap step each pay
-    # the ordinary negative reward.
+    # No terminal anywhere pays a bonus: the goal success step, the explore
+    # 100 m step, an invalid step and the cap step each pay their ordinary
+    # (goal < 0, explore <= 0) reward.
     w, _ = _stopped(max_steps=1000)                    # goal success step
     rewards = [w.step(ACT)[1] for _ in range(STOP_WINDOW_STEPS)]
     assert all(r < 0.0 for r in rewards)
@@ -274,10 +561,11 @@ def test_no_arrival_bonus_anywhere(monkeypatch):
     monkeypatch.setattr(igm, "EXPLORE_GOAL_DIST_M", EXPLORE_ARRIVAL_M)
     w, _ = _wrap(mode=0)                                # explore arrival step
     rewards = [w.step(ACT)[1] for _ in range(10)]
-    assert all(r < 0.0 for r in rewards)
+    assert all(r <= 0.0 for r in rewards)
+    assert rewards[-1] == pytest.approx(0.0)
 
     w, _ = _wrap(mode=0, info={"simulator_invalid": True})
-    assert w.step(ACT)[1] < 0.0
+    assert w.step(ACT)[1] == pytest.approx(-TERMINAL_PENALTY)
 
     w, _ = _wrap(mode=1, max_steps=3)                   # the cap step
     for _ in range(2):
@@ -285,20 +573,30 @@ def test_no_arrival_bonus_anywhere(monkeypatch):
     assert w.step(ACT)[1] < 0.0
 
 
-def test_crossing_is_not_terminal_in_either_mode():
-    for mode in (0, 1):
-        w, _ = _wrap(mode=mode, info={"lane_invasion_any": True})
-        _, reward, terminated, truncated, _ = w.step(ACT)
-        assert (terminated, truncated) == (False, False), f"mode {mode}"
-        assert reward == pytest.approx(-1.0)
+def test_crossing_is_terminal_in_explore_but_not_in_goal():
+    # GOAL (unchanged): a crossing costs its step and continues.
+    w, _ = _wrap(mode=1, info={"lane_invasion_any": True})
+    _, reward, terminated, truncated, _ = w.step(ACT)
+    assert (terminated, truncated) == (False, False)
+    assert reward == pytest.approx(-1.0)
+    # EXPLORE (user 2026-09-20): the FIRST crossing terminates.
+    w, _ = _wrap(mode=0, info={"lane_invasion_any": True})
+    _, reward, terminated, truncated, _ = w.step(ACT)
+    assert (terminated, truncated) == (True, False)
+    assert reward == pytest.approx(-TERMINAL_PENALTY)
 
 
-def test_off_road_is_not_terminal_in_either_mode():
-    for mode in (0, 1):
-        w, _ = _wrap(mode=mode, info={"off_road": True})
-        _, reward, terminated, *_ = w.step(ACT)
-        assert terminated is False
-        assert reward == pytest.approx(-1.75)
+def test_off_road_is_terminal_in_explore_but_not_in_goal():
+    # GOAL (unchanged): off-road costs -1.75 per step and continues.
+    w, _ = _wrap(mode=1, info={"off_road": True})
+    _, reward, terminated, *_ = w.step(ACT)
+    assert terminated is False
+    assert reward == pytest.approx(-1.75)
+    # EXPLORE: the FIRST off-road step terminates at the flat penalty.
+    w, _ = _wrap(mode=0, info={"off_road": True})
+    _, reward, terminated, *_ = w.step(ACT)
+    assert terminated is True
+    assert reward == pytest.approx(-TERMINAL_PENALTY)
 
 
 def test_the_envs_own_done_is_discarded_in_both_modes():
@@ -317,6 +615,8 @@ def test_the_banner_names_the_knobs(capsys):
     assert "force_mode=None" in out
     assert "EXPLORE_GOAL_DIST_M" in out
     assert "IG_SPEED_PREF_K" in out
+    assert "IG_TERMINAL_PENALTY" in out
+    assert "UNCHANGED" in out          # goal mode: frozen, named as such
 
 
 # ------------------------------------------------------------ the coherence ----

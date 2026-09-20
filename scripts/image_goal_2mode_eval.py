@@ -144,6 +144,9 @@ os.environ.setdefault("IG_GOAL_DISTANCE_THRESHOLD_M", "2.0")
 # Raised from 0.1 (user 2026-09-20, both modes): the launcher now pins 0.2,
 # so the mirror must not fill the hole with the superseded weight.
 os.environ.setdefault("IG_SPEED_PREF_K", "0.2")
+# The explore branch's terminal failure penalty (user 2026-09-20): the
+# launcher pins 5, so the mirror fills the hole with the same value.
+os.environ.setdefault("IG_TERMINAL_PENALTY", "5")
 os.environ.setdefault("DISCOUNT", "0.99")
 os.environ.setdefault("TOP_QUANTILES_DROP", "2")
 os.environ.setdefault("TQC_KAPPA", "1.0")

@@ -12,6 +12,9 @@ THE SHAPE (user spec 2026-09-18, revised twice in review):
         + 0.75   if L_t                     the in-lane preference
         - 0.75   if off the drivable surface (each step it persists)
         - 0.75   if a collision has EVER happened this episode
+        - K |v - v*|  if L_t                the velocity preference (2026-09-20),
+                                            K = IG_SPEED_PREF_K (0.1), v* =
+                                            TARGET_SPEED (20 km/h)
 
     L_t = on the drivable lane, moving in the route direction, no lane
           crossing this step, and no collision yet.
@@ -29,6 +32,17 @@ THE TWO USER DECISIONS THAT CHANGED IT FROM THE WRITTEN SPEC:
      goal_image_similarity >= 0.85. The user removed it: success = sustained
      low speed, within GOAL_DISTANCE_THRESHOLD_M of the goal, and facing within
      GOAL_YAW_THRESHOLD_DEG of the goal waypoint's road heading.
+
+THE VELOCITY PREFERENCE (user spec 2026-09-20). While L_t holds, each step also
+pays -IG_SPEED_PREF_K * |v_mps - TARGET_SPEED/3.6|. It punishes slow CRAWLING
+in lane -- the failure mode the image-goal arm showed -- and it is a penalty
+times the in-lane indicator, so it can never lift a step toward 0. It applies
+to a stopped car too: holding the sustained stop costs the term for the (at
+most STOP_WINDOW_STEPS) steps the window needs, which is still the cheapest
+way to end the negative stream, so stopping remains dominant. A car off the
+lane, crossing, off-road or post-collision pays the ordinary penalties and NOT
+this term (its indicator is false); an unreadable speed reads as stopped, not
+as a free pass.
 
 WHY COLLISION IS A STATE, NOT AN EVENT. One impact is one sensor reading;
 the DAMAGE persists. A one-time event penalty is paid once and then forgotten,
@@ -96,6 +110,11 @@ COLLISION_IMPULSE_THRESHOLD = float(
 MAX_STEPS = int(os.environ.get("IG_MAX_STEPS", 1000))
 STOP_SPEED_MPS = float(os.environ.get("IG_STOP_SPEED_MPS", 0.2))
 STOP_WINDOW_STEPS = int(os.environ.get("IG_STOP_WINDOW_STEPS", 10))
+# The velocity preference (user spec 2026-09-20): while in lane, every step
+# pays -SPEED_PREF_K * |v - v*| with v* = TARGET_SPEED. A penalty times the
+# in-lane indicator, so it is always <= 0 and the ReViND invariant survives.
+SPEED_PREF_K = float(os.environ.get("IG_SPEED_PREF_K", 0.1))
+TARGET_SPEED_KMH = float(os.environ.get("TARGET_SPEED", 20.0))
 
 IMAGE_GOAL_TASK = os.environ.get("IMAGE_GOAL_TASK", "0") == "1"
 
@@ -199,9 +218,16 @@ def image_goal_reward(info, disp, has_collided):
         and not crossed
         and not has_collided)
 
+    v = _speed_mps(info)
+    if math.isnan(v):
+        v = 0.0    # an unreadable speed reads as stopped, not as a free pass
+    speed_penalty = (-SPEED_PREF_K * abs(v - TARGET_SPEED_KMH / 3.6)
+                     if in_lane else 0.0)
+
     r = -BASE_STEP_COST
     if in_lane:
         r += IN_LANE_BONUS
+    r += speed_penalty
     if off_road:
         r -= OFFROAD_PENALTY
     if has_collided:
@@ -210,6 +236,7 @@ def image_goal_reward(info, disp, has_collided):
     return r, {
         "base": -BASE_STEP_COST,
         "lane_bonus": IN_LANE_BONUS if in_lane else 0.0,
+        "speed_penalty": speed_penalty,
         "offroad_penalty": -OFFROAD_PENALTY if off_road else 0.0,
         "collision_penalty": (-PERSISTENT_COLLISION_PENALTY
                               if has_collided else 0.0),
@@ -243,6 +270,8 @@ class ImageGoalReward(Wrapper):
         print(f"[ImageGoal] reward: -{BASE_STEP_COST:g} base "
               f"+{IN_LANE_BONUS:g} in-lane  -{OFFROAD_PENALTY:g} off-road  "
               f"-{PERSISTENT_COLLISION_PENALTY:g} persistent-collision  "
+              f"speed_pref K={SPEED_PREF_K:g} x |v - {TARGET_SPEED_KMH:g} km/h|"
+              f" in-lane  "
               f"success_bonus={SUCCESS_REWARD:g}; success = speed<{STOP_SPEED_MPS:g}"
               f" m/s x{STOP_WINDOW_STEPS} steps while dist<"
               f"{GOAL_DISTANCE_THRESHOLD_M:g} m and |yaw|<"

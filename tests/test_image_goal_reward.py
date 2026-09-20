@@ -8,7 +8,10 @@ nothing except the end of the negative stream, and it is granted only for the
 thing the task IS (sustained stop at the target viewpoint and heading), a
 destroyed hero, or the clock.
 
-The reward table under test (user spec 2026-09-18):
+The reward table under test (user spec 2026-09-18; 2026-09-20 adds the
+velocity preference -SPEED_PREF_K * |v - v*| paid by every IN-LANE step, so
+the in-lane rows below are exact at v = TARGET_SPEED and lower by the term
+when the car crawls):
 
     in-lane, no collision              -0.25
     one-step lane crossing             -1.00
@@ -31,15 +34,21 @@ pytest.importorskip("gymnasium")
 import gymnasium as gym  # noqa: E402
 from gymnasium import spaces  # noqa: E402
 
-from vae_nav.image_goal_reward import (ImageGoalReward,  # noqa: E402
-                                       STOP_WINDOW_STEPS, wrap_deg)
+from vae_nav.image_goal_reward import (IN_LANE_BONUS,  # noqa: E402
+                                       SPEED_PREF_K, STOP_WINDOW_STEPS,
+                                       TARGET_SPEED_KMH, ImageGoalReward,
+                                       _speed_mps, image_goal_reward,
+                                       wrap_deg)
 
 ACT = np.zeros(2, np.float32)
 # One metre of forward motion per step along the lane's own forward vector,
-# at 1 m/s: the "driving the route, in lane" state.
+# at TARGET_SPEED (20 km/h): the "driving the route, in lane" state. The
+# fixture drives AT the target so the velocity preference term is zero here
+# and the reward table below stays exact; slow in-lane driving is the
+# velocity tests' business, not this table's.
 DRIVING = {
     "wp_forward": (1.0, 0.0),
-    "speed_kmh": 3.6,                       # 1 m/s
+    "speed_kmh": 20.0,                      # 5.556 m/s = TARGET_SPEED
     "route_distance_to_goal_m": 50.0,
     "yaw_error_to_goal_deg": 0.0,
     "off_road": False,
@@ -84,6 +93,16 @@ def _wrap(info=None, max_steps=1000, done_from_env=False, advance=(1.0, 0.0)):
 
 
 # ------------------------------------------------------------ the reward ----
+
+def _kmh_to_mps(kmh):
+    """km/h -> m/s, borrowed from the module's own convention."""
+    return _speed_mps({"speed_kmh": kmh})
+
+
+def disp_forward_1m():
+    """One metre of forward motion along the lane's own forward vector."""
+    return (1.0, 0.0)
+
 
 def test_in_lane_driving_pays_minus_a_quarter():
     w, _ = _wrap()
@@ -156,6 +175,41 @@ def test_every_step_is_negative_including_success():
         assert w.step(ACT)[1] < 0.0
 
 
+# ----------------------------------------------- the velocity preference ----
+
+def test_velocity_term_penalises_slow_driving_in_lane():
+    info = dict(DRIVING); info["speed_kmh"] = 10.0        # half of 20 km/h
+    _, comp = image_goal_reward(info, disp_forward_1m(), has_collided=False)
+    assert comp["speed_penalty"] == pytest.approx(
+        -SPEED_PREF_K * abs(_kmh_to_mps(10.0) - _kmh_to_mps(20.0)))
+    r, _ = image_goal_reward(info, disp_forward_1m(), False)
+    assert r == pytest.approx(-0.25 + comp["speed_penalty"])
+
+
+def test_velocity_term_zero_off_lane_or_parked_offroad():
+    info = dict(DRIVING); info["speed_kmh"] = 10.0
+    off = dict(info); off["off_road"] = True
+    assert image_goal_reward(off, disp_forward_1m(), False)[1]["speed_penalty"] == 0.0
+    crossed = dict(info); crossed["lane_invasion_any"] = True
+    assert image_goal_reward(crossed, disp_forward_1m(), False)[1]["speed_penalty"] == 0.0
+
+
+def test_velocity_term_at_target_is_zero():
+    info = dict(DRIVING); info["speed_kmh"] = 20.0
+    assert image_goal_reward(info, disp_forward_1m(), False)[1]["speed_penalty"] == 0.0
+
+
+def test_invariant_with_velocity_term():
+    # Every cell of the reward table, term included, stays < 0.
+    for speed in (0.0, 10.0, 20.0, 40.0):
+        for off in (False, True):
+            for coll in (False, True):
+                info = dict(DRIVING); info["speed_kmh"] = speed
+                info["off_road"] = off
+                r, _ = image_goal_reward(info, disp_forward_1m(), coll)
+                assert r < 0.0
+
+
 # ---------------------------------------------------------------- success ----
 
 def _stopped(**extra):
@@ -178,7 +232,9 @@ def test_success_fires_on_the_last_window_step_and_pays_no_bonus():
         assert terminated is False, f"fired early at step {i + 1}"
     _, reward, terminated, truncated, info = w.step(ACT)
     assert terminated is True and truncated is False
-    assert reward == pytest.approx(-0.25)     # the ordinary reward, NOT +10
+    comp = info["ig_reward_components"]
+    assert comp["speed_penalty"] < 0.0        # v = 0 sits far from the target
+    assert reward == pytest.approx(-0.25 + comp["speed_penalty"])
     assert info["is_success"] is True
 
 
@@ -239,9 +295,17 @@ def test_the_envs_own_done_is_discarded():
 
 def test_a_parked_car_keeps_the_lane_bonus():
     # The sustained stop the success condition demands must not pay -1.00
-    # while it waits: a stationary car is not driving the wrong way.
+    # while it waits: a stationary car is not driving the wrong way, so the
+    # LANE BONUS still lands. It DOES pay the velocity preference (v = 0 is
+    # far from the 20 km/h target) -- the 2026-09-20 term, not a direction
+    # penalty -- and the reward below says so explicitly.
     w, _ = _stopped()
-    assert w.step(ACT)[1] == pytest.approx(-0.25)
+    _, reward, _, _, info = w.step(ACT)
+    comp = info["ig_reward_components"]
+    assert comp["lane_bonus"] == pytest.approx(IN_LANE_BONUS)
+    assert comp["speed_penalty"] == pytest.approx(
+        -SPEED_PREF_K * TARGET_SPEED_KMH / 3.6)
+    assert reward == pytest.approx(-0.25 + comp["speed_penalty"])
 
 
 def test_driving_against_the_lane_forward_loses_the_bonus():

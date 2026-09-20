@@ -2,23 +2,25 @@
 
 THE INVARIANT THE WHOLE FILE GUARDS, stated once here: with the success bonus
 removed (user decision 2026-09-18), EVERY step pays a negative reward --
-including the success step. The best score available to a step is -1.0
-(in lane at the target speed; the flat in-lane bonus was REMOVED, user
-decision 2026-09-20), the worst is -4.0 (post-collision, off-road, under the
-1.5 flats of user decision 2026-09-20).
-Termination buys nothing except the end of the negative stream, and it is
-granted only for the thing the task IS (sustained stop at the target
-viewpoint and heading), a destroyed hero, or the clock.
+including the success step. The best score available to a step is -0.8
+(in lane at the target speed, under the SATURATING speed bonus of user
+decision 2026-09-20 evening), the worst is -4.0 (post-collision, off-road,
+under the 1.5 flats of user decision 2026-09-20). Termination buys nothing
+except the end of the negative stream, and it is granted only for the thing
+the task IS (sustained stop at the target viewpoint and heading), a
+destroyed hero, or the clock -- the SINGLE-MODE arm keeps exactly these
+terminals; the two-mode arm's goal branch additionally terminates on
+failures (test_two_mode_image_goal.py's business).
 
-The reward table under test (user spec 2026-09-18; 2026-09-20 adds the
-velocity preference -SPEED_PREF_K * |v - v*| paid by every IN-LANE step,
-REMOVES the +0.75 flat in-lane bonus and RAISES the two flat penalties
-0.75 -> 1.5 to restore the in-lane/off-road contrast, so the in-lane rows
-below are exact at v = TARGET_SPEED and lower by the term when the car
-crawls or parks):
+The reward table under test (user spec 2026-09-18; 2026-09-20 REMOVES the
++0.75 flat in-lane bonus, RAISES the two flat penalties 0.75 -> 1.5, and the
+evening batch turns the speed term into the positive SATURATING bonus
++IG_SPEED_PREF_K * min(v, v*)/v* paid by every IN-LANE step, so the in-lane
+rows below are exact at v = TARGET_SPEED and lower by the pro-rated bonus
+when the car crawls):
 
-    in-lane, at v* = 20 km/h, no collision    -1.00
-    parked in lane (L_t via the carve-out)    -2.1111  = -1.0 - 0.2*(20/3.6)
+    in-lane, at v* = 20 km/h, no collision    -0.80  = -1.0 + K
+    parked in lane (L_t via the carve-out)    -1.00  (bonus 0 at v = 0)
     one-step lane crossing                    -1.00   (crossing gates only
                                                L_t, not a flat: unchanged)
     off-road                                  -2.50
@@ -112,17 +114,20 @@ def disp_forward_1m():
     return (1.0, 0.0)
 
 
-def test_in_lane_driving_at_target_speed_pays_minus_one():
-    # The flat in-lane bonus is REMOVED (user 2026-09-20): at the target
-    # speed the step pays exactly the base cost and nothing more.
+def test_in_lane_driving_at_target_speed_pays_minus_point_eight():
+    # The saturating speed bonus (user 2026-09-20 evening) is at full tilt
+    # at v*: the step pays the base cost MINUS the bonus, -0.8.
     w, _ = _wrap()
-    assert w.step(ACT)[1] == pytest.approx(-1.0)
+    assert w.step(ACT)[1] == pytest.approx(-1.0 + SPEED_PREF_K)
+    assert w.step(ACT)[1] == pytest.approx(-0.8)
 
 
 def test_a_lane_crossing_step_pays_minus_one_and_continues():
     # UNCHANGED by the 2026-09-20 flat-penalty raise: crossed gates only
-    # L_t (which zeroes the speed term) -- neither flat penalty is gated on
-    # a crossing, so the step still pays exactly the base cost.
+    # L_t (which zeroes the speed bonus) -- neither flat penalty is gated on
+    # a crossing, so the step still pays exactly the base cost. The
+    # SINGLE-MODE arm keeps per-step crossings; only the two-mode goal
+    # branch terminates on them.
     w, _ = _wrap({"lane_invasion_any": True})
     _, reward, terminated, truncated, _ = w.step(ACT)
     assert (reward, terminated, truncated) == (pytest.approx(-1.0), False, False)
@@ -153,12 +158,13 @@ def test_sub_threshold_impulse_does_not_latch():
     w.step(ACT)
     env.info["collision_impulse"] = 0.0
     assert w._has_collided is False
-    assert w.step(ACT)[1] == pytest.approx(-1.0)
+    assert w.step(ACT)[1] == pytest.approx(-1.0 + SPEED_PREF_K)
 
 
 def test_post_collision_off_road_pays_minus_400():
-    # The WORST row: both flats stack (-1.0 - 1.5 - 1.5 = -4.0), the value
-    # the TQC_TARGET_MIN floor (-450) is sized against.
+    # The WORST row: both flats stack (-1.0 - 1.5 - 1.5 = -4.0). The 2-mode
+    # arm's TQC_TARGET_MIN floor (-800) is sized against its terminal rows
+    # (-7.5); this stacked row is the single-mode arm's worst.
     w, env = _wrap()
     env.info["collision_impulse"] = 5.0
     w.step(ACT)
@@ -173,7 +179,7 @@ def test_the_flag_resets_between_episodes():
     w.step(ACT)
     env.info["collision_impulse"] = 0.0
     w.reset()
-    assert w.step(ACT)[1] == pytest.approx(-1.0)
+    assert w.step(ACT)[1] == pytest.approx(-1.0 + SPEED_PREF_K)
 
 
 # ------------------------------------------------- the ReViND invariant ----
@@ -191,32 +197,40 @@ def test_every_step_is_negative_including_success():
         assert w.step(ACT)[1] < 0.0
 
 
-# ----------------------------------------------- the velocity preference ----
+# ------------------------------------------------- the speed term ----
 
-def test_velocity_term_penalises_slow_driving_in_lane():
+def test_speed_bonus_is_pro_rated_below_v_star():
     info = dict(DRIVING); info["speed_kmh"] = 10.0        # half of 20 km/h
     _, comp = image_goal_reward(info, disp_forward_1m(), has_collided=False)
     assert comp["speed_penalty"] == pytest.approx(
-        -SPEED_PREF_K * abs(_kmh_to_mps(10.0) - _kmh_to_mps(20.0)))
+        SPEED_PREF_K * _kmh_to_mps(10.0) / _kmh_to_mps(20.0))
+    assert comp["speed_penalty"] == pytest.approx(0.1)
     r, _ = image_goal_reward(info, disp_forward_1m(), False)
     assert r == pytest.approx(-1.0 + comp["speed_penalty"])
+    assert r == pytest.approx(-0.9)                        # the crawl row
 
 
-def test_velocity_term_zero_off_lane_or_parked_offroad():
+def test_speed_bonus_saturates_above_v_star():
+    # 2x v* (40 km/h): min(v, v*) clips, so the bonus never exceeds K.
+    info = dict(DRIVING); info["speed_kmh"] = 40.0
+    r, comp = image_goal_reward(info, disp_forward_1m(), False)
+    assert comp["speed_penalty"] == pytest.approx(SPEED_PREF_K)
+    assert r == pytest.approx(-1.0 + SPEED_PREF_K)
+
+
+def test_speed_bonus_zero_off_lane():
     info = dict(DRIVING); info["speed_kmh"] = 10.0
     off = dict(info); off["off_road"] = True
     assert image_goal_reward(off, disp_forward_1m(), False)[1]["speed_penalty"] == 0.0
     crossed = dict(info); crossed["lane_invasion_any"] = True
     assert image_goal_reward(crossed, disp_forward_1m(), False)[1]["speed_penalty"] == 0.0
-
-
-def test_velocity_term_at_target_is_zero():
-    info = dict(DRIVING); info["speed_kmh"] = 20.0
-    assert image_goal_reward(info, disp_forward_1m(), False)[1]["speed_penalty"] == 0.0
+    collided = dict(info)
+    assert image_goal_reward(collided, disp_forward_1m(), True)[1]["speed_penalty"] == 0.0
 
 
 def test_invariant_with_velocity_term():
-    # Every cell of the reward table, term included, stays < 0.
+    # Every cell of the reward table, bonus included, stays < 0: the base
+    # cost dominates the +K bonus.
     for speed in (0.0, 10.0, 20.0, 40.0):
         for off in (False, True):
             for coll in (False, True):
@@ -249,8 +263,9 @@ def test_success_fires_on_the_last_window_step_and_pays_no_bonus():
     _, reward, terminated, truncated, info = w.step(ACT)
     assert terminated is True and truncated is False
     comp = info["ig_reward_components"]
-    assert comp["speed_penalty"] < 0.0        # v = 0 sits far from the target
+    assert comp["speed_penalty"] == pytest.approx(0.0)   # parked: no bonus
     assert reward == pytest.approx(-1.0 + comp["speed_penalty"])
+    assert reward == pytest.approx(-1.0)
     assert info["is_success"] is True
 
 
@@ -309,79 +324,84 @@ def test_the_envs_own_done_is_discarded():
 
 # ------------------------------------------------------- route direction ----
 
-def test_parked_in_lane_keeps_L_t_and_pays_minus_2111():
+def test_parked_in_lane_keeps_L_t_and_pays_exactly_the_base_cost():
     # The sustained stop the success condition demands still runs through the
     # carve-out in _driving_with_route_direction: a stationary car is not
-    # driving the wrong way, so L_t stays True. The flat lane bonus is GONE
-    # (user 2026-09-20), so what L_t now grants the parked car is the SPEED
-    # PENALTY, which keeps applying: -1.0 - 0.2*(20/3.6) = -2.1111
-    # (K = 0.2, user 2026-09-20).
+    # driving the wrong way, so L_t stays True. But the saturating bonus at
+    # v = 0 is exactly 0, so what L_t now grants the parked car is freedom
+    # from the direction penalty -- the parked-in-lane row is exactly the
+    # base cost (user 2026-09-20 evening; the old -2.1111 row died with the
+    # |v - v*| penalty).
     w, _ = _stopped()
     _, reward, _, _, info = w.step(ACT)
     comp = info["ig_reward_components"]
     assert comp["lane_bonus"] == pytest.approx(IN_LANE_BONUS)   # 0.0 now
-    assert comp["speed_penalty"] == pytest.approx(
-        -SPEED_PREF_K * TARGET_SPEED_KMH / 3.6)
+    assert comp["speed_penalty"] == pytest.approx(0.0)
     assert reward == pytest.approx(-1.0 + comp["speed_penalty"])
-    assert reward == pytest.approx(-1.0 - 0.2 * (20.0 / 3.6))
+    assert reward == pytest.approx(-1.0)
 
 
 # ------------------------------------------------- the ablation override ----
 
 def test_goal_truncation_constants_carry_the_ruled_defaults():
-    # The goal-mode truncation constants (user decision 2026-09-20, the
-    # controller's rulings on N): the module carries them env-overridable,
-    # and the shipped defaults ARE the ruling.
-    assert igm.OFFROAD_TRUNC_STEPS == 5
+    # The stuck-truncation constants (user decision 2026-09-20): the module
+    # carries them env-overridable, and the shipped defaults ARE the
+    # ruling. (IG_OFFROAD_TRUNC_STEPS is gone -- the 2026-09-20 evening
+    # batch made the first off-road step TERMINATE, so there is no off-road
+    # budget left to rule on.)
     assert igm.STUCK_SPEED_MPS == pytest.approx(0.3)
     assert igm.STUCK_STEPS == 100
+    assert not hasattr(igm, "OFFROAD_TRUNC_STEPS")
 
 
 def test_goal_truncation_constants_env_override(monkeypatch):
-    # All three truncation constants are env-overridable like the other
+    # The stuck-truncation constants are env-overridable like the other
     # IG_* knobs: reload-with-env, and the finally restores the ruled
     # defaults for the later tests.
-    monkeypatch.setenv("IG_OFFROAD_TRUNC_STEPS", "7")
     monkeypatch.setenv("IG_STUCK_SPEED_MPS", "0.5")
     monkeypatch.setenv("IG_STUCK_STEPS", "42")
     importlib.reload(igm)
     try:
-        assert igm.OFFROAD_TRUNC_STEPS == 7
         assert igm.STUCK_SPEED_MPS == pytest.approx(0.5)
         assert igm.STUCK_STEPS == 42
         # the constants live in the module the wrapper reads at call time,
         # so a wrapper built from the pre-reload class still truncates on
-        # the shortened off-road budget (its methods resolve the module's
-        # globals dict, which reload reuses)
+        # the shortened stuck budget (its methods resolve the module's
+        # globals dict, which reload reuses). The 20 km/h fixture is above
+        # even the raised threshold, so drive the PARKED row 50 m out.
         w = igm.TwoModeImageGoalReward(
-            _StubEnv({"off_road": True}), explore_prob=0.0, force_mode=1)
+            _StubEnv({"speed_kmh": 0.0, "route_distance_to_goal_m": 50.0},
+                     advance=(0.0, 0.0)),
+            explore_prob=0.0, force_mode=1)
         w.reset()
-        w.step(ACT)
+        for _ in range(41):
+            _, _, terminated, truncated, info = w.step(ACT)
+            assert (terminated, truncated, info["ig_truncated"]) \
+                == (False, False, None)
         _, _, terminated, truncated, info = w.step(ACT)
-        assert truncated is False       # 2 < the overridden 7
-        assert info["ig_truncated"] is None
+        assert truncated is True and terminated is False
+        assert info["ig_truncated"] == "stuck"
     finally:
-        monkeypatch.delenv("IG_OFFROAD_TRUNC_STEPS", raising=False)
         monkeypatch.delenv("IG_STUCK_SPEED_MPS", raising=False)
         monkeypatch.delenv("IG_STUCK_STEPS", raising=False)
         importlib.reload(igm)
-    assert igm.OFFROAD_TRUNC_STEPS == 5
     assert igm.STUCK_SPEED_MPS == pytest.approx(0.3)
     assert igm.STUCK_STEPS == 100
 
 
 def test_ig_in_lane_bonus_env_override_restores_the_old_row(monkeypatch):
     # IG_IN_LANE_BONUS stays env-overridable for ablations: with 0.75 in the
-    # env the removed term comes back and the old -0.25 in-lane row is exact.
-    # Reload-with-env, matching the coherence tests' pattern; the reload in
-    # the finally puts the shipped default (0.0) back for the later tests.
+    # env the removed term comes back, and the in-lane-at-v* row is
+    # -1.0 + 0.75 + 0.2 = -0.05 under the saturating bonus. Reload-with-env,
+    # matching the coherence tests' pattern; the reload in the finally puts
+    # the shipped default (0.0) back for the later tests.
     monkeypatch.setenv("IG_IN_LANE_BONUS", "0.75")
     importlib.reload(igm)
     try:
         assert igm.IN_LANE_BONUS == pytest.approx(0.75)
         r, comp = igm.image_goal_reward(dict(DRIVING), disp_forward_1m(),
                                         False)
-        assert r == pytest.approx(-0.25)
+        assert r == pytest.approx(-1.0 + 0.75 + SPEED_PREF_K)
         assert comp["lane_bonus"] == pytest.approx(0.75)
     finally:
         monkeypatch.delenv("IG_IN_LANE_BONUS", raising=False)

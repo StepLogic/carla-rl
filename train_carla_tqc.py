@@ -1687,19 +1687,39 @@ def main():
                             # learnt the scale. Per-mode entropy falling toward
                             # the target (-2) is normal; collapsing far below it
                             # means that mode's policy has stopped exploring.
-                            _g = last_update_info
-                            print(f"[CriticE{total_eps:4d}] "
-                                  f"q_e={_g.get('q_e', float('nan')):10.2f} "
-                                  f"critic_loss_e="
-                                  f"{_g.get('critic_loss_e', float('nan')):10.2f} "
-                                  f"td_e={_g.get('td_errors_e', float('nan')):8.3f} "
-                                  f"| ent_goal="
-                                  f"{_g.get('entropy_goal', float('nan')):7.3f} "
-                                  f"ent_explore="
-                                  f"{_g.get('entropy_explore', float('nan')):7.3f} "
-                                  f"frac_goal="
-                                  f"{_g.get('frac_goal', float('nan')):.2f}",
-                                  flush=True)
+                            if wants_one_critic():
+                                # THE ONE-CRITIC ROUTE HAS NO SECOND CRITIC
+                                # (and no per-mode split to report): the plain
+                                # TQCLearner's update_info carries only the
+                                # mode-blind keys -- q, critic_loss, td_errors,
+                                # target_actor_entropy, entropy -- all printed
+                                # in the [Critic] line above. The q_e /
+                                # critic_loss_e / td_errors_e / entropy_goal /
+                                # entropy_explore / frac_goal keys this line
+                                # once read are emitted only by the two-critic
+                                # GatedTQCLearner's update, so under
+                                # GATED_ONE_CRITIC=1 they printed NaN forever.
+                                # Splitting the one critic's q by mode would
+                                # need learner surgery (the batch's mode bits
+                                # never leave the jitted update), so the line
+                                # says so instead.
+                                print(f"[CriticE{total_eps:4d}] N/A under "
+                                      f"GATED_ONE_CRITIC (single mode-blind "
+                                      f"critic line above)", flush=True)
+                            else:
+                                _g = last_update_info
+                                print(f"[CriticE{total_eps:4d}] "
+                                      f"q_e={_g.get('q_e', float('nan')):10.2f} "
+                                      f"critic_loss_e="
+                                      f"{_g.get('critic_loss_e', float('nan')):10.2f} "
+                                      f"td_e={_g.get('td_errors_e', float('nan')):8.3f} "
+                                      f"| ent_goal="
+                                      f"{_g.get('entropy_goal', float('nan')):7.3f} "
+                                      f"ent_explore="
+                                      f"{_g.get('entropy_explore', float('nan')):7.3f} "
+                                      f"frac_goal="
+                                      f"{_g.get('frac_goal', float('nan')):.2f}",
+                                      flush=True)
                     print(f"[Ep {total_eps:5d}] step={step:7d} town={venv.names[i]:8s} "
                           f"success={np.mean(recent['success']):.3f} "
                           f"collision={np.mean(recent['collision']):.3f} "
@@ -1723,10 +1743,12 @@ def main():
                         # returns differ in sign and by two orders of magnitude,
                         # so its `ret` and `success` describe neither task.
                         #
-                        # goal ret is in STEPS: under the SORB reward the return
-                        # IS minus the time taken, so -412 means the goal took
-                        # 412 steps or ran out the clock. Success is reported
-                        # for goal episodes ONLY.
+                        # goal ret tracks the STEPS taken: under the SORB
+                        # reward the return IS minus the time taken, and under
+                        # this arm's 2026-09-20-evening reward it is -1/step
+                        # plus the saturating speed bonus (up to +0.2/step),
+                        # so -412 still means roughly 412 goal steps. Success
+                        # is reported for goal episodes ONLY.
                         def _m(key, default=float("nan")):
                             return np.mean(recent[key]) if recent[key] else default
                         n_g, n_e = len(recent["ret_goal"]), len(recent["ret_explore"])
@@ -1739,7 +1761,7 @@ def main():
                                 "regardless)")
                         print(f"[GatedEp{total_eps:5d}] "
                               f"GOAL   n={n_g:3d} succ={_m('succ_goal'):.3f} "
-                              f"ret={_m('ret_goal'):8.1f} (= -steps) "
+                              f"ret={_m('ret_goal'):8.1f} (~ -steps) "
                               f"len={_m('len_goal'):6.1f} "
                               f"coll={_m('coll_goal'):.3f}", flush=True)
                         from collections import Counter as _C

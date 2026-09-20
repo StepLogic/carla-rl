@@ -5,7 +5,8 @@
 # arm's pairing, with the single-mode image-goal reward serving BOTH modes.
 #
 # ONE CRITIC, NOT THE FROZEN GATED STACK. The unified TwoModeImageGoalReward
-# puts both modes on one all-negative scale, so the two-critic
+# puts both modes on one scale (the goal leg all-negative, the explore leg
+# bounded in [-IG_TERMINAL_PENALTY, +IG_SPEED_PREF_K]), so the two-critic
 # GatedTQCLearner + ModeSplitBuffer split has nothing left to justify: under
 # GATED_ONE_CRITIC=1 the trainer routes to the PLAIN TQCLearner and a single
 # plain ReplayBuffer (the mode bit rides inside the observation dict). The
@@ -155,29 +156,35 @@ export IMAGE_GOAL_TASK=1 GATED=1 GATED_ONE_CRITIC=1
 export PERCEPTION=vc1 VC1_READOUT=grid2
 export OBS_WITH_STATE=1 OBS_WITH_MODE=1
 export EPISODE_HER=1 HER_MIN_DISP=5.0 IG_GOAL_DISTANCE_THRESHOLD_M=2.0
-export IG_SPEED_PREF_K=0.2     # raised from 0.1 (user 2026-09-20, both modes)
+export IG_SPEED_PREF_K=0.2     # raised from 0.1 (user 2026-09-20, both modes);
+                               # the SATURATING BONUS form (user 2026-09-20
+                               # evening) -- +0.2/step max at v >= v*, 0 parked
 export IG_IN_LANE_BONUS=0    # flat in-lane bonus REMOVED (user 2026-09-20);
-                             # pinned explicitly so the 53-var snapshot
-                             # records it and the banner cannot disagree
-export IG_TERMINAL_PENALTY=5   # explore mode's terminal failure penalty
-                               # (user 2026-09-20): off-road/crossed/
-                               # collision/invalid terminate explore and
-                               # pay this flat; goal mode never reads it
-export IG_OFFROAD_TRUNC_STEPS=5 IG_STUCK_SPEED_MPS=0.3 IG_STUCK_STEPS=100
-                               # goal-mode truncation (user 2026-09-20): 5
-                               # consecutive off-road steps, or speed under
-                               # 0.3 m/s for 100 consecutive steps outside
-                               # the success spatial/yaw gate, truncate the
-                               # goal episode (truncated=True, NO extra
+                             # pinned explicitly so the snapshot records it
+                             # and the banner cannot disagree
+export IG_TERMINAL_PENALTY=5   # the failing step's flat penalty
+                               # (user 2026-09-20, evening batch): off-road/
+                               # crossed/collision terminate BOTH modes and
+                               # pay this flat on top of the ordinary reward
+                               # (explore's leg pays it; the two-mode goal
+                               # branch pays it on the first failure);
+                               # invalid terminates explore only and pays it
+export IG_STUCK_SPEED_MPS=0.3 IG_STUCK_STEPS=100
+                               # goal-mode stuck truncation (user 2026-09-20):
+                               # speed under 0.3 m/s for 100 consecutive steps
+                               # outside the success spatial/yaw gate truncates
+                               # the goal episode (truncated=True, NO extra
                                # penalty; gate steps never count toward
-                               # stuck); explore mode never truncates on
-                               # these
+                               # stuck). The IG_OFFROAD_TRUNC_STEPS debounce
+                               # counter is GONE (user 2026-09-20 evening):
+                               # the first off-road step TERMINATES goal mode
+                               # now, so there is nothing left to debounce
 export DISCOUNT=0.99 TOP_QUANTILES_DROP=2 TQC_KAPPA=1.0
 export TEMP_LR=3e-4                      # the v2 divergence fix (entropy brake)
-export TQC_TARGET_MIN=-450 TQC_TARGET_MAX=100   # ReViND window at gamma=0.99;
-                                 # floor raised 2026-09-20 with the flat
-                                 # penalties (worst goal row -4.0 ->
-                                 # discounted floor -400 at gamma=0.99,
+export TQC_TARGET_MIN=-800 TQC_TARGET_MAX=100   # ReViND window at gamma=0.99;
+                                 # floor raised 2026-09-20 evening with the
+                                 # terminal failures (worst goal row -7.5 ->
+                                 # discounted floor -750 at gamma=0.99,
                                  # headroom below it)
 export EXPLORE_PROB=0.5 EXPLORE_GOAL_DIST_M=100.0
 export TARGET_SPEED=20.0 ENV_SKIP_IMAGE_FEATURES=1
@@ -263,7 +270,7 @@ for _k in IMAGE_GOAL_TASK GATED GATED_ONE_CRITIC \
           PERCEPTION VC1_READOUT \
           OBS_WITH_STATE OBS_WITH_MODE OBS_WITH_GOAL OBS_WITH_VECTOR \
           EPISODE_HER HER_MIN_DISP IG_GOAL_DISTANCE_THRESHOLD_M \
-          IG_SPEED_PREF_K IG_OFFROAD_TRUNC_STEPS IG_STUCK_SPEED_MPS \
+          IG_SPEED_PREF_K IG_STUCK_SPEED_MPS \
           IG_STUCK_STEPS TEMP_LR \
           TQC_TARGET_MIN TQC_TARGET_MAX \
           DISCOUNT TOP_QUANTILES_DROP TQC_KAPPA \
@@ -306,11 +313,12 @@ echo "[Banner] run=${RUN_NAME} policy_folder=${POLICY_FOLDER} interpreter=${PYTH
 echo "[Banner] 2-mode pairing: IMAGE_GOAL_TASK=1 GATED=1 GATED_ONE_CRITIC=1"
 echo "[Banner] PERCEPTION=vc1 VC1_READOUT=grid2 OBS_WITH_STATE=1 OBS_WITH_MODE=1"
 echo "[Banner] EPISODE_HER=1 HER_MIN_DISP=5.0 IG_GOAL_DISTANCE_THRESHOLD_M=2.0"
-echo "[Banner] reward: IG_SPEED_PREF_K=0.2 TARGET_SPEED=20.0 km/h EXPLORE_GOAL_DIST_M=100.0 IG_IN_LANE_BONUS=0 (in-lane bonus removed 2026-09-20)"
-echo "[Banner] explore reward: terminal failures (off-road/crossed/collision/invalid) pay -IG_TERMINAL_PENALTY=5 and terminate; no base cost, no flat penalties -- speed pref only (user 2026-09-20)"
-echo "[Banner] goal-mode truncation: IG_OFFROAD_TRUNC_STEPS=5 consecutive off-road steps or speed<IG_STUCK_SPEED_MPS=0.3 m/s for IG_STUCK_STEPS=100 consecutive steps outside the gate truncate (truncated=True, NO extra penalty; user 2026-09-20)"
+echo "[Banner] reward: IG_SPEED_PREF_K=0.2 (saturating bonus, user 2026-09-20 evening) TARGET_SPEED=20.0 km/h EXPLORE_GOAL_DIST_M=100.0 IG_IN_LANE_BONUS=0 (in-lane bonus removed 2026-09-20)"
+echo "[Banner] goal reward: -1.0 base + saturating speed bonus in lane - 1.5 off-road - 1.5 collision; off-road/crossed/collision TERMINATE paying -IG_TERMINAL_PENALTY=5 on top (off-road -7.5, crossed -6.0, collision -7.5; user 2026-09-20 evening)"
+echo "[Banner] explore reward: + saturating speed bonus only (0.2/step max, 0 parked); terminal failures (off-road/crossed/collision/invalid) pay -IG_TERMINAL_PENALTY=5 and terminate; no base cost, no flat penalties (user 2026-09-20)"
+echo "[Banner] goal-mode stuck truncation: speed<IG_STUCK_SPEED_MPS=0.3 m/s for IG_STUCK_STEPS=100 consecutive steps outside the gate truncates (truncated=True, NO extra penalty; the off-road debounce counter is gone -- first off-road step terminates; user 2026-09-20)"
 echo "[Banner] learner: DISCOUNT=0.99 TOP_QUANTILES_DROP=2 TQC_KAPPA=1.0 TEMP_LR=3e-4"
-echo "[Banner] bounded critic: TQC_TARGET_MIN=-450 TQC_TARGET_MAX=100 (ReViND window; floor raised 2026-09-20 with the 1.5 flat penalties, discounted floor -400)"
+echo "[Banner] bounded critic: TQC_TARGET_MIN=-800 TQC_TARGET_MAX=100 (ReViND window; floor raised 2026-09-20 evening with the terminal failures, worst goal row -7.5, discounted floor -750)"
 echo "[Banner] modes: EXPLORE_PROB=0.5 | goal band ${GOAL_DIST_MIN}-${GOAL_DIST_TARGET} m"
 echo "[Banner] no OBS_WITH_COLLISION, no TQC_VALUE_FLOOR/CEILING, NO_TIMELIMIT unset"
 echo "[Banner] snapshot: results/run_env/${RUN_NAME}.env ($(wc -l < "results/run_env/${RUN_NAME}.env") vars)"

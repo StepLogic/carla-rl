@@ -22,6 +22,11 @@ TWO PASSES, TWO MEASURES.
     the success columns from the mode-0 records rather than letting a
     meaningless 0.000 sit in the file to be read as a score.
 
+PER-PASS COUNTS. --episodes-goal / --episodes-explore override --episodes for
+the GOAL pass / the EXPLORE pass alone (unset: both passes still run
+args.episodes, exactly the old default); the JSON header records the
+effective counts as "episodes": {"goal": g, "explore": e, "default": n}.
+
 THE SHELL IS THE FIRST LAYER. PERCEPTION, VC1_READOUT, OBS_WITH_*,
 IG_SPEED_PREF_K, TARGET_SPEED and TQC_TARGET_MIN/MAX are read at MODULE
 IMPORT (vc1_source, image_goal_reward, jaxrl2's critic_updater), so an
@@ -187,6 +192,22 @@ from vae_nav.latent_source import LatentSource, from_env as latent_from_env  # n
 from vae_nav.policy_io import load_agent_state, param_fingerprint  # noqa: E402
 
 GOAL, EXPLORE = 1, 0
+
+
+def resolve_episode_counts(args):
+    """The per-pass episode counts: each --episodes-* override, else --episodes.
+
+    The user's binding 2026-09-20 decision (6 goal / 4 explore) is applied
+    THROUGH these overrides, not by changing --episodes' default, so a bare
+    --episodes invocation keeps driving both passes with the count it always
+    did. `is not None`, not truthiness: an explicit --episodes-goal 0 is an
+    override asking for zero episodes, not an unset flag.
+    """
+    goal = (args.episodes_goal
+            if args.episodes_goal is not None else args.episodes)
+    explore = (args.episodes_explore
+               if args.episodes_explore is not None else args.episodes)
+    return goal, explore
 
 
 class ModeRecorder:
@@ -378,6 +399,12 @@ def main():
     ap.add_argument("--town", default=os.environ.get("EVAL_TOWN", "Town01"))
     ap.add_argument("--episodes", type=int,
                     default=int(os.environ.get("EVAL_EPISODES", "25")))
+    ap.add_argument("--episodes-goal", type=int, default=None,
+                    help="episodes for the GOAL pass alone "
+                         "(default: --episodes)")
+    ap.add_argument("--episodes-explore", type=int, default=None,
+                    help="episodes for the EXPLORE pass alone "
+                         "(default: --episodes)")
     ap.add_argument("--seed", type=int,
                     default=int(os.environ.get("EVAL_SEED", "1234")))
     ap.add_argument("--port", type=int, default=_PORT)
@@ -402,6 +429,7 @@ def main():
     if args.action_mode not in ("sample", "deterministic"):
         ap.error(f"--action-mode {args.action_mode!r} is not "
                  f"sample|deterministic")
+    n_goal, n_explore = resolve_episode_counts(args)
 
     # THE PORT REFUSAL -- before the lock, before make_env, before
     # ensure_carla can attach to anything that is not ours.
@@ -478,7 +506,12 @@ def main():
     header = {"checkpoint": args.ckpt, "step": step, "identity": ident,
               "action_mode": args.action_mode, "seed0": args.seed,
               "town": args.town, "band": (args.band_lo, args.band_hi),
-              "episodes": args.episodes, "max_steps": args.max_steps,
+              # The EFFECTIVE per-pass counts, not just the --episodes
+              # default: with the overrides set the two passes differ, and a
+              # single integer here would silently lie about one of them.
+              "episodes": {"goal": n_goal, "explore": n_explore,
+                           "default": args.episodes},
+              "max_steps": args.max_steps,
               "flags": flags}
 
     # ONE agent, built against the first env's spaces -- the two passes build
@@ -507,8 +540,12 @@ def main():
         try:
             t0 = time.time()
             recorder = ModeRecorder(env)
+            # THE PASS'S OWN COUNT: the mode comes from EVAL_FORCE_MODE (set
+            # above), the episode count from the per-pass override.
             records = run_episodes(agent, recorder, args.town, args.band_lo,
-                                   args.band_hi, args.episodes, args.seed,
+                                   args.band_hi,
+                                   n_goal if mode == GOAL else n_explore,
+                                   args.seed,
                                    max_steps=args.max_steps,
                                    action_mode=args.action_mode)
             extras = _per_episode_extras(recorder, mode, records)
@@ -532,8 +569,8 @@ def main():
 
     # The lock is held to process exit; ensure_carla tears OUR server down at
     # atexit, and nothing here touches any other process.
-    print(f"[2ModeEval] done: {args.episodes} episodes x 2 modes "
-          f"(goal + explore) -> {out_dir}", flush=True)
+    print(f"[2ModeEval] done: {n_goal} goal + {n_explore} explore episodes "
+          f"(default {args.episodes}) -> {out_dir}", flush=True)
 
 
 if __name__ == "__main__":

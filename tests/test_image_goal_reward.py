@@ -4,22 +4,26 @@ THE INVARIANT THE WHOLE FILE GUARDS, stated once here: with the success bonus
 removed (user decision 2026-09-18), EVERY step pays a negative reward --
 including the success step. The best score available to a step is -1.0
 (in lane at the target speed; the flat in-lane bonus was REMOVED, user
-decision 2026-09-20), the worst is -2.50 (post-collision, off-road).
+decision 2026-09-20), the worst is -4.0 (post-collision, off-road, under the
+1.5 flats of user decision 2026-09-20).
 Termination buys nothing except the end of the negative stream, and it is
 granted only for the thing the task IS (sustained stop at the target
 viewpoint and heading), a destroyed hero, or the clock.
 
 The reward table under test (user spec 2026-09-18; 2026-09-20 adds the
-velocity preference -SPEED_PREF_K * |v - v*| paid by every IN-LANE step and
-REMOVES the +0.75 flat in-lane bonus, so the in-lane rows below are exact at
-v = TARGET_SPEED and lower by the term when the car crawls or parks):
+velocity preference -SPEED_PREF_K * |v - v*| paid by every IN-LANE step,
+REMOVES the +0.75 flat in-lane bonus and RAISES the two flat penalties
+0.75 -> 1.5 to restore the in-lane/off-road contrast, so the in-lane rows
+below are exact at v = TARGET_SPEED and lower by the term when the car
+crawls or parks):
 
     in-lane, at v* = 20 km/h, no collision    -1.00
     parked in lane (L_t via the carve-out)    -2.1111  = -1.0 - 0.2*(20/3.6)
-    one-step lane crossing                    -1.00
-    off-road                                  -1.75
-    post-collision, back on the road          -1.75
-    post-collision AND off-road               -2.50
+    one-step lane crossing                    -1.00   (crossing gates only
+                                               L_t, not a flat: unchanged)
+    off-road                                  -2.50
+    post-collision, back on the road          -2.50
+    post-collision AND off-road               -4.00
     success (sustained stop on target) ordinary reward, terminated, NO bonus
 """
 import importlib
@@ -116,15 +120,19 @@ def test_in_lane_driving_at_target_speed_pays_minus_one():
 
 
 def test_a_lane_crossing_step_pays_minus_one_and_continues():
+    # UNCHANGED by the 2026-09-20 flat-penalty raise: crossed gates only
+    # L_t (which zeroes the speed term) -- neither flat penalty is gated on
+    # a crossing, so the step still pays exactly the base cost.
     w, _ = _wrap({"lane_invasion_any": True})
     _, reward, terminated, truncated, _ = w.step(ACT)
     assert (reward, terminated, truncated) == (pytest.approx(-1.0), False, False)
 
 
-def test_off_road_pays_minus_175():
+def test_off_road_pays_minus_250():
+    # The flat off-road penalty is 1.5 (user 2026-09-20): -1.0 - 1.5.
     w, _ = _wrap({"off_road": True})
     _, reward, terminated, *_ = w.step(ACT)
-    assert reward == pytest.approx(-1.75)
+    assert reward == pytest.approx(-2.5)
     assert terminated is False
 
 
@@ -134,9 +142,9 @@ def test_a_collision_latches_and_costs_every_later_step():
     env.info["collision_impulse"] = 5.0
     _, reward, terminated, *_ = w.step(ACT)
     assert terminated is False
-    assert reward == pytest.approx(-1.75)     # the impact step itself
+    assert reward == pytest.approx(-2.5)      # the impact step itself
     env.info["collision_impulse"] = 0.0       # recovered to in-lane driving
-    assert w.step(ACT)[1] == pytest.approx(-1.75)   # STILL, on the road
+    assert w.step(ACT)[1] == pytest.approx(-2.5)    # STILL, on the road
 
 
 def test_sub_threshold_impulse_does_not_latch():
@@ -148,13 +156,15 @@ def test_sub_threshold_impulse_does_not_latch():
     assert w.step(ACT)[1] == pytest.approx(-1.0)
 
 
-def test_post_collision_off_road_pays_minus_250():
+def test_post_collision_off_road_pays_minus_400():
+    # The WORST row: both flats stack (-1.0 - 1.5 - 1.5 = -4.0), the value
+    # the TQC_TARGET_MIN floor (-450) is sized against.
     w, env = _wrap()
     env.info["collision_impulse"] = 5.0
     w.step(ACT)
     env.info["collision_impulse"] = 0.0
     env.info["off_road"] = True
-    assert w.step(ACT)[1] == pytest.approx(-2.50)
+    assert w.step(ACT)[1] == pytest.approx(-4.0)
 
 
 def test_the_flag_resets_between_episodes():
@@ -335,6 +345,36 @@ def test_ig_in_lane_bonus_env_override_restores_the_old_row(monkeypatch):
         monkeypatch.delenv("IG_IN_LANE_BONUS", raising=False)
         importlib.reload(igm)
     assert igm.IN_LANE_BONUS == pytest.approx(0.0)
+
+
+def test_ig_flat_penalty_env_overrides_restore_the_old_rows(monkeypatch):
+    # The two flat penalties stay env-overridable for the ablation: with
+    # 0.75 in the env the pre-2026-09-20 rows come back exactly (off-road
+    # -1.75, post-collision on-road -1.75, off-road+collided -2.5). Same
+    # reload-with-env pattern; the finally restores the shipped 1.5.
+    monkeypatch.setenv("IG_OFFROAD_PENALTY", "0.75")
+    monkeypatch.setenv("IG_PERSISTENT_COLLISION_PENALTY", "0.75")
+    importlib.reload(igm)
+    try:
+        assert igm.OFFROAD_PENALTY == pytest.approx(0.75)
+        assert igm.PERSISTENT_COLLISION_PENALTY == pytest.approx(0.75)
+        r, comp = igm.image_goal_reward(
+            dict(DRIVING, off_road=True), disp_forward_1m(), False)
+        assert r == pytest.approx(-1.75)
+        assert comp["offroad_penalty"] == pytest.approx(-0.75)
+        r, comp = igm.image_goal_reward(
+            dict(DRIVING), disp_forward_1m(), True)
+        assert r == pytest.approx(-1.75)
+        assert comp["collision_penalty"] == pytest.approx(-0.75)
+        r, _ = igm.image_goal_reward(
+            dict(DRIVING, off_road=True), disp_forward_1m(), True)
+        assert r == pytest.approx(-2.5)
+    finally:
+        monkeypatch.delenv("IG_OFFROAD_PENALTY", raising=False)
+        monkeypatch.delenv("IG_PERSISTENT_COLLISION_PENALTY", raising=False)
+        importlib.reload(igm)
+    assert igm.OFFROAD_PENALTY == pytest.approx(1.5)
+    assert igm.PERSISTENT_COLLISION_PENALTY == pytest.approx(1.5)
 
 
 def test_driving_against_the_lane_forward_loses_the_bonus():

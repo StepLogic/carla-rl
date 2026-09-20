@@ -151,7 +151,10 @@ os.environ.setdefault("DISCOUNT", "0.99")
 os.environ.setdefault("TOP_QUANTILES_DROP", "2")
 os.environ.setdefault("TQC_KAPPA", "1.0")
 os.environ.setdefault("TEMP_LR", "3e-4")
-os.environ.setdefault("TQC_TARGET_MIN", "-260")
+# Floor raised 2026-09-20 with the flat penalties (worst goal row -4.0 ->
+# discounted floor -400 at gamma=0.99); the launcher now pins -450, so the
+# mirror must not fill the hole with the superseded window.
+os.environ.setdefault("TQC_TARGET_MIN", "-450")
 os.environ.setdefault("TQC_TARGET_MAX", "100")
 os.environ.setdefault("EXPLORE_PROB", "0.5")
 os.environ.setdefault("EXPLORE_GOAL_DIST_M", "100.0")

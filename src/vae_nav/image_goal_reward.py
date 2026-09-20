@@ -10,8 +10,8 @@ THE SHAPE (user spec 2026-09-18; in-lane bonus REMOVED, user decision
 2026-09-20):
 
     r_t = -1.0                              the base cost, EVERY step
-        - 0.75   if off the drivable surface (each step it persists)
-        - 0.75   if a collision has EVER happened this episode
+        - 1.5    if off the drivable surface (each step it persists)
+        - 1.5    if a collision has EVER happened this episode
         - K |v - v*|  if L_t                the velocity preference (2026-09-20),
                                             K = IG_SPEED_PREF_K, v* =
                                             TARGET_SPEED (20 km/h)
@@ -114,9 +114,14 @@ BASE_STEP_COST = float(os.environ.get("IG_BASE_STEP_COST", 1.0))
 # the speed preference, nothing more. The constant stays env-overridable via
 # IG_IN_LANE_BONUS for ablations; setting it above 0 restores the old term.
 IN_LANE_BONUS = float(os.environ.get("IG_IN_LANE_BONUS", 0.0))
-OFFROAD_PENALTY = float(os.environ.get("IG_OFFROAD_PENALTY", 0.75))
+OFFROAD_PENALTY = float(os.environ.get("IG_OFFROAD_PENALTY", 1.5))
+# Both flat penalties raised 0.75 -> 1.5 (user 2026-09-20) to restore the
+# in-lane/off-road contrast that the in-lane-bonus removal halved: the best
+# goal-mode row is -1.0 (in lane at v*), off-road and post-collision rows are
+# -2.5 and the worst stacks both at -4.0, so the contrast is back to 1.5/step
+# (the pre-removal ratio). Env-overridable as before for the old-row ablation.
 PERSISTENT_COLLISION_PENALTY = float(
-    os.environ.get("IG_PERSISTENT_COLLISION_PENALTY", 0.75))
+    os.environ.get("IG_PERSISTENT_COLLISION_PENALTY", 1.5))
 GOAL_DISTANCE_THRESHOLD_M = float(
     os.environ.get("IG_GOAL_DISTANCE_THRESHOLD_M", 2.0))
 GOAL_YAW_THRESHOLD_DEG = float(
@@ -343,9 +348,11 @@ def image_goal_reward(info, disp, has_collided, mode=GOAL):
     THE GOAL LEG (mode 1, the default): the ReViND invariant -- reward < 0
     at every step, success included -- is a property of the constants: the
     best case is -1.0 (in lane at the target speed, lane bonus removed
-    2026-09-20) and the worst stacks all three penalties. No terminal here
-    is ever positive. The formula is FROZEN pending user revision
-    (2026-09-20); goal-mode behaviour is byte-identical to before the split.
+    2026-09-20) and the worst stacks all three penalties (-4.0 under the
+    1.5 flats). No terminal here is ever positive. The flat penalties were
+    raised 0.75 -> 1.5 by user revision (2026-09-20, the same day's third
+    goal-leg change) to restore the in-lane/off-road contrast; everything
+    else in the leg stays as it was at the split.
 
     THE EXPLORE LEG (mode 0, user decision 2026-09-20): failures are
     TERMINAL and there is NO TIME PRESSURE. The leg's step reward is the
@@ -381,11 +388,12 @@ def image_goal_reward(info, disp, has_collided, mode=GOAL):
 
 
 def _image_goal_reward_goal(info, disp, has_collided):
-    """The goal leg of image_goal_reward: the CURRENT formula, byte-identical.
+    """The goal leg of image_goal_reward: the CURRENT formula (2026-09-20).
 
     r = -BASE_STEP_COST + IN_LANE_BONUS - SPEED_PREF_K |v - v*| (if in lane)
         - OFFROAD_PENALTY (if off-road) - PERSISTENT_COLLISION_PENALTY (if
-        the collision latch holds).
+        the collision latch holds). The two flat penalties are 1.5 (user
+        revision 2026-09-20; env-overridable for the 0.75-row ablation).
     """
     off_road = bool(info.get("off_road", False))
     crossed = bool(info.get("lane_invasion_any",
@@ -580,9 +588,11 @@ class TwoModeImageGoalReward(Wrapper):
     per-episode state, exactly as ImageGoalReward carries them. The mode is
     passed through, so the two legs do the rest.
 
-    GOAL MODE (mode 1): the image-goal task, UNCHANGED since 2026-09-18/20
-    and FROZEN pending user revision. The ReViND step reward (base cost,
-    flat penalties, speed preference); success = speed under
+    GOAL MODE (mode 1): the image-goal task, as revised by the user on
+    2026-09-20 (the flat penalties are 1.5; base cost, speed preference,
+    stop-window success and no bonus all as they were). The ReViND step
+    reward (base cost, flat penalties, speed preference); success = speed
+    under
     STOP_SPEED_MPS for STOP_WINDOW_STEPS consecutive steps while within
     GOAL_DISTANCE_THRESHOLD_M and within GOAL_YAW_THRESHOLD_DEG of the goal
     heading. The success step pays the ordinary reward -- no bonus, in either
@@ -629,16 +639,18 @@ class TwoModeImageGoalReward(Wrapper):
         # A SETTING THAT CHANGES THE REWARD MUST SAY SO ON SCREEN (the repo's
         # own rule after the observation-banner drift): the two knobs an
         # evaluator will ask about and the two constants the reward is
-        # computed from. BOTH BRANCHES are named: goal mode is unchanged
-        # (frozen pending user revision), explore mode is the terminal-
+        # computed from. BOTH BRANCHES are named: goal mode carries the 1.5
+        # flats (user revision 2026-09-20), explore mode is the terminal-
         # failure design of 2026-09-20.
         print(f"[TwoModeIG] unified image-goal reward, TWO modes: "
               f"explore_prob={self.explore_prob} force_mode={self.force_mode} "
               f"EXPLORE_GOAL_DIST_M={EXPLORE_GOAL_DIST_M:g} "
               f"IG_SPEED_PREF_K={SPEED_PREF_K:g} (v*={TARGET_SPEED_KMH:g} km/h);"
-              f" goal mode UNCHANGED (base cost, flat penalties, speed pref;"
-              f" sustained-stop success, no bonus; frozen pending user "
-              f"revision); explore mode: no base cost, no flat penalties, "
+              f" goal mode: base cost, flat penalties "
+              f"off={OFFROAD_PENALTY:g} coll={PERSISTENT_COLLISION_PENALTY:g}"
+              f" (raised 0.75 -> 1.5, user 2026-09-20), speed pref;"
+              f" sustained-stop success, no bonus; explore mode: no base "
+              f"cost, no flat penalties, "
               f"speed pref only -- off-road / crossing / collision TERMINATE "
               f"paying -IG_TERMINAL_PENALTY={TERMINAL_PENALTY:g} (invalid "
               f"too); explore arrival terminates with NO bonus; "

@@ -1,9 +1,9 @@
 """The 2-mode image-goal arm: ONE pure function, TWO modes, TWO contracts.
 
 THE INVARIANTS THE FILE GUARDS (user decision 2026-09-20 splits them):
-  - GOAL mode (mode 1): the ReViND reward is UNCHANGED and FROZEN -- every
-    step < 0, the sustained-stop success terminates and pays no bonus, and
-    off-road / crossings / collisions only cost per step.
+  - GOAL mode (mode 1): the ReViND reward with the 1.5 flats (user revision
+    2026-09-20) -- every step < 0, the sustained-stop success terminates and
+    pays no bonus, and off-road / crossings / collisions only cost per step.
   - EXPLORE mode (mode 0): NO TIME PRESSURE and TERMINAL FAILURES. The step
     reward is the velocity preference alone (r <= 0, exactly 0.0 in lane at
     v*), the FIRST off-road / crossing / collision step (and an invalid
@@ -207,7 +207,7 @@ def test_latch_persists_until_reset():
     env.info["collision_impulse"] = 5.0
     w.step(ACT)                                # the impact step
     env.info["collision_impulse"] = 0.0        # back on the road, undamaged
-    assert w.step(ACT)[1] == pytest.approx(-1.75)    # STILL paying
+    assert w.step(ACT)[1] == pytest.approx(-2.5)    # STILL paying
     w.reset()
     assert w.step(ACT)[1] == pytest.approx(-1.0)    # cleared
 
@@ -454,19 +454,22 @@ def test_goal_every_step_negative_and_explore_every_step_nonpositive():
                         assert comp["explore_end"] is None
 
 
-def test_goal_rows_are_unchanged_by_the_mode_split():
-    # The GOAL TABLE, asserted against the pure function's default (the
-    # single-mode arm's call form): every previous value still holds. The
-    # composition is a MASKED SUM: the goal leg is the reward and the
-    # explore leg is masked to 0.
+def test_goal_rows_carry_the_1_5_flats():
+    # The GOAL TABLE (user 2026-09-20 flat-penalty raise), asserted against
+    # the pure function's default (the single-mode arm's call form): every
+    # value of the 2026-09-20 revision. The composition is a MASKED SUM: the
+    # goal leg is the reward and the explore leg is masked to 0.
     table = [
         # (info overrides, has_collided, expected reward)
         ({}, False, -1.0),                                  # in-lane at v*
         ({"speed_kmh": 0.0}, False, -1.0 - 0.2 * (20.0 / 3.6)),   # parked
         ({"lane_invasion_any": True}, False, -1.0),         # crossing
-        ({"off_road": True}, False, -1.75),                 # off-road
-        ({}, True, -1.75),                                  # post-collision
-        ({"off_road": True}, True, -2.50),                  # off-road+coll
+                                                            # (unchanged:
+                                                            # crossed gates
+                                                            # only L_t)
+        ({"off_road": True}, False, -2.50),                 # off-road
+        ({}, True, -2.50),                                  # post-collision
+        ({"off_road": True}, True, -4.00),                  # off-road+coll
     ]
     for overrides, coll, want in table:
         info = dict(DRIVING)
@@ -587,11 +590,12 @@ def test_crossing_is_terminal_in_explore_but_not_in_goal():
 
 
 def test_off_road_is_terminal_in_explore_but_not_in_goal():
-    # GOAL (unchanged): off-road costs -1.75 per step and continues.
+    # GOAL (per-step): off-road costs -2.50 per step (the 1.5 flat, user
+    # 2026-09-20) and continues.
     w, _ = _wrap(mode=1, info={"off_road": True})
     _, reward, terminated, *_ = w.step(ACT)
     assert terminated is False
-    assert reward == pytest.approx(-1.75)
+    assert reward == pytest.approx(-2.5)
     # EXPLORE: the FIRST off-road step terminates at the flat penalty.
     w, _ = _wrap(mode=0, info={"off_road": True})
     _, reward, terminated, *_ = w.step(ACT)
@@ -616,7 +620,10 @@ def test_the_banner_names_the_knobs(capsys):
     assert "EXPLORE_GOAL_DIST_M" in out
     assert "IG_SPEED_PREF_K" in out
     assert "IG_TERMINAL_PENALTY" in out
-    assert "UNCHANGED" in out          # goal mode: frozen, named as such
+    # The flat values are named as such: the 2026-09-20 raise must be on
+    # screen (the setting-that-changes-the-reward rule).
+    assert "flat penalties off=1.5 coll=1.5" in out
+    assert "raised 0.75 -> 1.5" in out
 
 
 # ------------------------------------------------------------ the coherence ----

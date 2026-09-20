@@ -165,7 +165,11 @@ export IG_TERMINAL_PENALTY=5   # explore mode's terminal failure penalty
                                # pay this flat; goal mode never reads it
 export DISCOUNT=0.99 TOP_QUANTILES_DROP=2 TQC_KAPPA=1.0
 export TEMP_LR=3e-4                      # the v2 divergence fix (entropy brake)
-export TQC_TARGET_MIN=-260 TQC_TARGET_MAX=100   # ReViND window at gamma=0.99
+export TQC_TARGET_MIN=-450 TQC_TARGET_MAX=100   # ReViND window at gamma=0.99;
+                                 # floor raised 2026-09-20 with the flat
+                                 # penalties (worst goal row -4.0 ->
+                                 # discounted floor -400 at gamma=0.99,
+                                 # headroom below it)
 export EXPLORE_PROB=0.5 EXPLORE_GOAL_DIST_M=100.0
 export TARGET_SPEED=20.0 ENV_SKIP_IMAGE_FEATURES=1
 export MAX_EPISODE_STEPS=1000
@@ -295,7 +299,7 @@ echo "[Banner] EPISODE_HER=1 HER_MIN_DISP=5.0 IG_GOAL_DISTANCE_THRESHOLD_M=2.0"
 echo "[Banner] reward: IG_SPEED_PREF_K=0.2 TARGET_SPEED=20.0 km/h EXPLORE_GOAL_DIST_M=100.0 IG_IN_LANE_BONUS=0 (in-lane bonus removed 2026-09-20)"
 echo "[Banner] explore reward: terminal failures (off-road/crossed/collision/invalid) pay -IG_TERMINAL_PENALTY=5 and terminate; no base cost, no flat penalties -- speed pref only (user 2026-09-20)"
 echo "[Banner] learner: DISCOUNT=0.99 TOP_QUANTILES_DROP=2 TQC_KAPPA=1.0 TEMP_LR=3e-4"
-echo "[Banner] bounded critic: TQC_TARGET_MIN=-260 TQC_TARGET_MAX=100 (ReViND window)"
+echo "[Banner] bounded critic: TQC_TARGET_MIN=-450 TQC_TARGET_MAX=100 (ReViND window; floor raised 2026-09-20 with the 1.5 flat penalties, discounted floor -400)"
 echo "[Banner] modes: EXPLORE_PROB=0.5 | goal band ${GOAL_DIST_MIN}-${GOAL_DIST_TARGET} m"
 echo "[Banner] no OBS_WITH_COLLISION, no TQC_VALUE_FLOOR/CEILING, NO_TIMELIMIT unset"
 echo "[Banner] snapshot: results/run_env/${RUN_NAME}.env ($(wc -l < "results/run_env/${RUN_NAME}.env") vars)"

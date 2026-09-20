@@ -18,6 +18,9 @@ class _StubBuffer:
     def insert(self, row, mode=None):
         self.rows.append(row)
 
+    def __len__(self):
+        return len(self.rows)
+
 
 def _goal_block(fields):
     # The contract shape: returns (12,) from fields, deterministic.
@@ -177,3 +180,46 @@ def test_leg_rows_are_contiguous_and_end_exactly_once():
     # the terminal row's NEXT goal block is the goal itself (arrival state)
     assert legs[last]["next_observations"]["goal"][0] == \
         legs[last]["observations"]["goal"][0]
+
+
+# -- Task 6: HER skips explore episodes --------------------------------------
+
+def make_buffer():
+    return _buf()
+
+
+def run_episode(buf, mode, n):
+    """n steps spaced 10 m, no terminals, commanded `mode`; continues any
+    episode already staged in `buf` (run_row is the same call)."""
+    start = len(buf._txns)
+    for i in range(n):
+        x = float(start + i) * 10.0
+        buf.record(_tr(start + i),
+                   fields={"hero_pos": (x, 0.0), "hero_yaw": 0.0,
+                           "goal_pos": (1e6, 0.0),
+                           "action_history": np.zeros((4, 2))},
+                   pos=(x, 0.0), hit=False, mode=mode)
+
+
+def run_row(buf, mode, n):
+    run_episode(buf, mode, n)
+
+
+def test_explore_episode_is_never_relabelled():
+    buf = make_buffer(); run_episode(buf, mode=0, n=50)
+    before = len(buf.buffer)
+    assert buf.flush_episode() == 0
+    assert len(buf.buffer) == before          # rows were inserted at record()
+    assert buf.stats()["n_explore_eps"] == 1
+
+
+def test_goal_episode_still_relabels():
+    buf = make_buffer(); run_episode(buf, mode=1, n=50)  # with an arrival
+    assert buf.flush_episode() > 0
+
+
+def test_mixed_episode_defaults_to_goal_only_if_all_goal():
+    # a single episode is single-mode; a mode flip mid-episode (must not happen)
+    # is treated as explore -- the safe direction.
+    buf = make_buffer(); run_episode(buf, mode=1, n=10); run_row(buf, mode=0, n=5)
+    assert buf.flush_episode() == 0

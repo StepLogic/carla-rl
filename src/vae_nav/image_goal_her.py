@@ -41,6 +41,35 @@ class ImageGoalRelabelBuffer(EpisodeRelabelBuffer):
                          max_disp=max_disp, seed=seed, max_steps=max_steps,
                          time_to_goal=False, gated=False)
         self.n_entry_done = 0
+        # Episodes that were flown (at least partly) in EXPLORE mode. Hindsight
+        # relabelling is defined only for goal-mode episodes: an explore row's
+        # zeroed goal block and its reward are functions of the explore task,
+        # and rewriting the goal key onto such a trajectory would fabricate
+        # goal data the env never flew. These episodes are counted and skipped
+        # at flush; their on-policy rows were already inserted at record().
+        self.n_explore_eps = 0
+
+    def _reset_episode(self):
+        super()._reset_episode()
+        self._ep_modes = []
+
+    def record(self, transition, fields, pos, hit, lane=False,
+               speed_kmh=0.0, target_speed_kmh=0.0, mode=None):
+        """Stage one step, tracking the commanded mode for the flush-time skip.
+
+        The base's `mode` argument routes the ON-POLICY row only (and only when
+        gated=True, never here); this override additionally remembers it per
+        step so flush_episode can refuse to relabel a non-goal episode. A
+        step recorded without a mode defaults to GOAL, matching the base.
+        """
+        self._ep_modes.append(int(mode) if mode is not None else GOAL)
+        super().record(transition, fields, pos, hit, lane=lane,
+                       speed_kmh=speed_kmh,
+                       target_speed_kmh=target_speed_kmh, mode=mode)
+        # Mirror the base's max_steps trim so _ep_modes stays aligned with
+        # _txns (the base pops its oldest row before appending).
+        if len(self._ep_modes) > self.max_steps:
+            self._ep_modes.pop(0)
 
     def flush_episode(self, truncated=False):
         """Insert HINDSIGHT LEGS, one per relabel: rows from the leg start up
@@ -65,6 +94,20 @@ class ImageGoalRelabelBuffer(EpisodeRelabelBuffer):
         rows to the arrival -- order-leg-length rows per episode, the same
         order as the old single-row sweep.
         """
+        # EXPLORE EPISODES ARE NEVER RELABELLED. Hindsight goals are drawn
+        # from a trajectory's own positions; if that trajectory was flown in
+        # explore mode the rewritten goal key would credit goal-mode reward to
+        # transitions whose stored goal block and reward describe the explore
+        # task. The on-policy rows are already in the buffer (inserted at
+        # record() time), so there is nothing to insert and nothing to undo --
+        # the episode is dropped from the hindsight stream entirely. A
+        # mid-episode mode flip (must not happen) counts as explore: the safe
+        # direction.
+        if getattr(self, "_ep_modes", None) and 0 in self._ep_modes:
+            self.n_explore_eps += 1
+            self._ep_modes = []
+            self._reset_episode()
+            return 0
         self._truncated = bool(truncated)
         try:
             n = len(self._txns)
@@ -171,4 +214,5 @@ class ImageGoalRelabelBuffer(EpisodeRelabelBuffer):
     def stats(self):
         out = super().stats()
         out["her_entry_done"] = self.n_entry_done
+        out["n_explore_eps"] = self.n_explore_eps
         return out

@@ -211,6 +211,13 @@ class ModeRecorder:
             "reward": float(reward),
             "mode": info.get("mode"),
             "is_success": bool(info.get("is_success", False)),
+            # THE NATIVE ARRIVAL SIGNAL, captured RAW. CoreStateWrapper
+            # publishes info["arrived"] = passed_chckp (core_state.py:111) --
+            # the env's own arrival, unmerged with this arm's sustained-stop
+            # success. run_episodes latches the two TOGETHER into its record
+            # (arrived or is_success), so the recorder must take info
+            # directly for the unmerged column to exist at all.
+            "native_arrived": bool(info.get("arrived", False)),
             "explore_dist_m": (None if info.get("explore_dist_m") is None
                                else float(info["explore_dist_m"])),
             "explore_end": info.get("explore_end"),
@@ -280,15 +287,23 @@ def _per_episode_extras(recorder, forced_mode, records):
         }
         if forced_mode == GOAL:
             extras["success_steps"] = successes
-            # CROSS-CHECK THE TWO ARRIVAL SIGNALS. run_episodes latches
-            # success from info["is_success"]; if the two ever disagree, the
-            # records' success column is not measuring what the wrapper
-            # scored (the goals_reached/is_success trap, measured once at
-            # exactly 0.000 vs 0.617 on the same weights).
+            extras["native_arrived"] = any(s["native_arrived"] for s in steps)
+            # CROSS-CHECK THE TWO ARRIVAL DEFINITIONS. run_episodes' record
+            # success is a MERGED latch (native passed_chckp OR wrapper
+            # is_success); success_steps here is the wrapper's sustained
+            # stop alone. The two disagree exactly where the arm's
+            # definition does the work: a native arrival WITHOUT the
+            # sustained stop (record True, 0 steps) or a stop the env's own
+            # checkpoint logic never credited (0 native, success_steps>0).
+            # That disagreement is warned per episode and both signals are
+            # reported side by side -- never merged into one number.
             if bool(rec["success"]) != bool(successes):
                 print(f"[2ModeEval] WARNING episode {rec['episode']}: "
-                      f"record success={rec['success']} but "
-                      f"{successes} is_success steps", flush=True)
+                      f"record success={rec['success']} (merged: native "
+                      f"passed_chckp OR wrapper is_success) but "
+                      f"{successes} sustained-stop is_success steps; "
+                      f"native_arrived={extras['native_arrived']}",
+                      flush=True)
         else:
             # EXPLORE MODE: success is meaningless by construction (the
             # wrapper pins is_success=False), so the success columns are
@@ -319,15 +334,19 @@ def _summary_for(mode, records, extras):
     if mode == GOAL:
         # SUCCESS FROM THE WRAPPER'S is_success, the arm's own definition
         # (the sustained stop), reported BESIDE -- never merged with -- the
-        # native info["arrived"] the underlying env still publishes
-        # (core_state.py): the two disagree by construction (native = drove
-        # to the goal point; the arm's = drove there AND HELD the stop
-        # window), and the merged number would read as a score of neither.
+        # env's NATIVE arrival (info["arrived"] = passed_chckp,
+        # core_state.py:111), taken RAW from the recorder's per-step log:
+        # run_episodes' own record success is a MERGED latch of the two
+        # signals, so a "native" column read from it would be max(native,
+        # wrapper) under a native label. The two disagree by construction
+        # (native = drove to the env's goal point; the arm's = drove there
+        # AND HELD the stop window), and the merged number would read as a
+        # score of neither.
         summary["success_frac"] = round(
             float(sum(e["success_steps"] > 0 for e in extras))
             / len(extras), 4)
         summary["native_arrived_frac"] = round(
-            float(sum(r["arrived"] for r in records)) / len(records), 4)
+            float(sum(e["native_arrived"] for e in extras)) / len(extras), 4)
         summary["mean_travelled_m"] = round(
             float(sum(r["travelled_m"] for r in records)) / len(records), 1)
         summary["mean_required_m"] = round(
@@ -398,6 +417,19 @@ def main():
             f"REFUSING TO START: another eval holds {lock_path} (port "
             f"{args.port}). Two evals on one port race the server start.")
 
+    # CARLA_ROOT must be in place BEFORE ensure_carla runs, or the eval dies
+    # mid-launch on a bare KeyError('CARLA_ROOT') -- after the port refusal
+    # has passed and with nothing but the traceback to say what was missing.
+    carla_root = os.environ.get("CARLA_ROOT")
+    if not carla_root or not os.path.isdir(carla_root):
+        raise SystemExit(
+            f"REFUSING TO START: CARLA_ROOT={carla_root!r} is not a CARLA "
+            f"install directory. ensure_carla launches the simulator from "
+            f"it. Export it in the shell (e.g. "
+            f"CARLA_ROOT=/home/robotlab/Apps/CARLA_0.9.15) or source the "
+            f"run's snapshot: set -a; source "
+            f"results/run_env/carla_image_goal_2mode.env; set +a")
+
     with open(args.ckpt, "rb") as f:
         ck = pickle.load(f)
     if "agent" not in ck:
@@ -428,6 +460,13 @@ def main():
                               "IMAGE_GOAL", "EPISODE_HER", "DISCOUNT",
                               "TEMP_LR", "HER_MIN_DISP", "TOP_QUANTILES",
                               "MAX_EPISODE"))}
+    # THE BAND ACTUALLY USED, recorded in the flags block. run_episodes pins
+    # GOAL_DIST_MIN/MAX from the band at EVERY reset, but it does so on the
+    # live env -- so a flags snapshot taken before the first reset would
+    # show the ambient band (or nothing) instead of the one these episodes
+    # were drawn under.
+    flags["GOAL_DIST_MIN"] = str(float(args.band_lo))
+    flags["GOAL_DIST_MAX"] = str(float(args.band_hi))
     header = {"checkpoint": args.ckpt, "step": step, "identity": ident,
               "action_mode": args.action_mode, "seed0": args.seed,
               "town": args.town, "band": (args.band_lo, args.band_hi),

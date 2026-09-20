@@ -168,7 +168,14 @@ export GOAL_DIST_MIN="${GOAL_DIST_MIN:-5.0}" \
 export EXPERT_PROB=0.0
 export TOWN_LIST=configs/town_split.json ENV_TOWNS=Town01 TOWN_ROTATE_EPISODES=0
 export N_EVAL_EPISODES=0 N_EVAL_EXPLORE=0
-export RUN_NAME="${RUN_NAME:-carla_image_goal_2mode}" POLICY_FOLDER="${POLICY_FOLDER:-$RUN_NAME}"
+# ORDERING TRAP: RUN_NAME and POLICY_FOLDER must NOT share one export line.
+# In `export A=... B="${B:-$A}"` the words are expanded BEFORE export runs any
+# assignment, so with RUN_NAME unset and `set -u` active the $RUN_NAME in the
+# second argument dies ("RUN_NAME: unbound variable") before the default is
+# applied. Two lines, RUN_NAME first; the smoke only survived because the
+# controller happened to pass RUN_NAME in its env.
+export RUN_NAME="${RUN_NAME:-carla_image_goal_2mode}"
+export POLICY_FOLDER="${POLICY_FOLDER:-$RUN_NAME}"
 export MAX_STEPS="${MAX_STEPS:-1000000}" SEED=42 RESUME=1
 
 # ---- the pairing's guard plumbing (NOT experiment values) ---------------------

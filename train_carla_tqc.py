@@ -1387,6 +1387,9 @@ def main():
                                                       np.zeros((4, 2)))},
                     pos=inf["hero_pos"], hit=bool(inf.get("collision", False)),
                     lane=bool(inf.get("lane_invasion", False)),
+                    # Third dirty event for the image-goal arm's flush-time
+                    # cut; the base buffer ignores it (no such kwarg there).
+                    off_road=bool(inf.get("off_road", False)),
                     speed_kmh=float(inf.get("speed_kmh", 0.0) or 0.0),
                     target_speed_kmh=float(inf.get("target_speed_kmh", 0.0) or 0.0),
                     # ROUTES THE ON-POLICY ROW. Without this the relabel buffer

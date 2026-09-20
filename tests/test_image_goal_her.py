@@ -223,3 +223,168 @@ def test_mixed_episode_defaults_to_goal_only_if_all_goal():
     # is treated as explore -- the safe direction.
     buf = make_buffer(); run_episode(buf, mode=1, n=10); run_row(buf, mode=0, n=5)
     assert buf.flush_episode() == 0
+
+# -- Task 17: the relabel stream is cut at the first dirty event --------------
+
+def _record_step(buf, i, x, lane=False, hit=False, off_road=False, mode=None):
+    """One step carrying its own index in the observations, so a test can read
+    which staged step an inserted row came from (_clean keeps the key)."""
+    t = _tr(i)
+    t["observations"]["idx"] = np.array([float(i)], np.float32)
+    buf.record(t, fields={"hero_pos": (x, 0.0), "hero_yaw": 0.0,
+                          "goal_pos": (1e6, 0.0),
+                          "action_history": np.zeros((4, 2))},
+               pos=(x, 0.0), hit=bool(hit), lane=bool(lane),
+               off_road=bool(off_road), mode=mode)
+
+
+def _dirty_episode(buf, xs, lane=(), hit=(), off_road=(), mode=None):
+    for i, x in enumerate(xs):
+        _record_step(buf, i, x, lane=i in lane, hit=i in hit,
+                     off_road=i in off_road, mode=mode)
+
+
+def _hindsight_rows(buf):
+    # On-policy rows carry the flown goal block (99.0) and no idx key; the
+    # relabelled rows were rebuilt for the hindsight goal and keep idx.
+    return [r for r in buf.rows if "idx" in r["observations"]
+            and float(r["observations"]["goal"][0]) != 99.0]
+
+
+def _assert_rows_equal(a, b):
+    assert len(a) == len(b)
+    for ra, rb in zip(a, b):
+        assert float(ra["rewards"]) == float(rb["rewards"])
+        assert float(ra["dones"]) == float(rb["dones"])
+        assert float(ra["masks"]) == float(rb["masks"])
+        assert np.array_equal(ra["actions"], rb["actions"])
+        for side in ("observations", "next_observations"):
+            assert set(ra[side]) == set(rb[side])
+            for k in ra[side]:
+                assert np.array_equal(ra[side][k], rb[side][k]), (side, k)
+
+
+def test_clean_episode_is_byte_identical_to_the_old_call():
+    # The old call site passed no off_road at all; the new default (False)
+    # and the cut machinery must leave a clean episode's flush untouched.
+    xs = [0.0, 10.0, 20.0, 30.0, 40.0]
+    old = _buf()
+    for i, x in enumerate(xs):        # old-style record: no off_road kwarg
+        _record_step(old, i, x)
+    new = _buf()
+    _dirty_episode(new, xs, off_road=())   # every step explicitly off_road=False
+    n_old, n_new = old.flush_episode(), new.flush_episode()
+    assert n_old == n_new > 0
+    _assert_rows_equal(old.rows, new.rows)
+    assert old.stats() == new.stats()
+    assert new.stats()["n_dirty_prefix_eps"] == 0
+
+
+def test_lane_at_step_k_confines_rows_and_goals_to_the_prefix():
+    xs = [0.0, 10.0, 20.0, 30.0, 40.0, 50.0]
+    buf = _buf()
+    _dirty_episode(buf, xs, lane={3})
+    inserted = buf.flush_episode()
+    assert inserted > 0, "a dirty episode's clean prefix must still contribute"
+    rows = _hindsight_rows(buf)
+    assert rows
+    # no inserted row came from, or was aimed at, index 3 or later
+    assert max(int(r["observations"]["idx"][0]) for r in rows) < 3
+    assert max(float(r["observations"]["goal"][0]) for r in rows) < xs[3]
+    assert buf.stats()["n_dirty_prefix_eps"] == 1
+
+
+@pytest.mark.parametrize("flag", ["hit", "off_road"])
+def test_collision_and_offroad_each_cut_the_stream(flag):
+    xs = [0.0, 10.0, 20.0, 30.0, 40.0]
+    buf = _buf()
+    _dirty_episode(buf, xs, **{flag: {2}})
+    assert buf.flush_episode() > 0
+    rows = _hindsight_rows(buf)
+    assert rows
+    assert max(int(r["observations"]["idx"][0]) for r in rows) < 2
+    assert max(float(r["observations"]["goal"][0]) for r in rows) < xs[2]
+    assert buf.stats()["n_dirty_prefix_eps"] == 1
+
+
+def test_first_of_three_dirty_events_is_the_cut():
+    # lane at 2, collision at 4, off-road at 5: the cut sits at 2. If the code
+    # cut at a later event instead, rows sourced from index 2 would appear.
+    xs = [0.0, 10.0, 20.0, 30.0, 40.0, 50.0]
+    buf = _buf()
+    _dirty_episode(buf, xs, lane={2}, hit={4}, off_road={5})
+    assert buf.flush_episode() > 0
+    rows = _hindsight_rows(buf)
+    assert rows
+    assert max(int(r["observations"]["idx"][0]) for r in rows) < 2
+    assert max(float(r["observations"]["goal"][0]) for r in rows) < xs[2]
+    assert buf.stats()["n_dirty_prefix_eps"] == 1
+
+
+def test_dirty_at_step_0_or_1_contributes_nothing_and_is_counted():
+    for first_dirty in (0, 1):
+        buf = _buf()
+        _dirty_episode(buf, [0.0, 10.0, 20.0, 30.0], lane={first_dirty})
+        before = len(buf.rows)
+        assert buf.flush_episode() == 0
+        assert len(buf.rows) == before   # on-policy rows were already in
+        assert buf.stats()["n_dirty_prefix_eps"] == 1
+        assert buf.stats()["n_explore_eps"] == 0
+
+
+def test_no_dirty_leaves_the_dirty_counter_untouched():
+    buf = _buf()
+    _episode(buf, [0.0, 10.0, 20.0, 30.0, 40.0])
+    buf.flush_episode()
+    assert buf.stats()["n_dirty_prefix_eps"] == 0
+
+
+def test_explore_skip_still_wins_over_the_cut():
+    # An explore episode that also went off-road is counted as explore, not
+    # dirty: the mode skip runs first (the safe direction).
+    buf = _buf()
+    _dirty_episode(buf, [0.0, 10.0, 20.0, 30.0], mode=0, off_road={2})
+    before = len(buf.rows)
+    assert buf.flush_episode() == 0
+    assert len(buf.rows) == before
+    stats = buf.stats()
+    assert stats["n_explore_eps"] == 1
+    assert stats["n_dirty_prefix_eps"] == 0
+
+
+def test_onpolicy_rows_are_unaffected_by_dirtiness():
+    # On-policy rows are inserted at record() time and the flush must not
+    # touch them, however dirty the episode was.
+    xs = [0.0, 10.0, 20.0, 30.0, 40.0]
+    buf = _buf()
+    for i, x in enumerate(xs):
+        _record_step(buf, i, x, lane=(i == 3))
+        buf.rows[-1]["rewards"] = np.float32(-1.75 if i == 2 else -0.25)
+    flown = [(np.array(r["observations"]["idx"]), float(r["rewards"]),
+              float(r["dones"]), float(r["masks"])) for r in buf.rows]
+    assert len(flown) == 5           # one per record, nothing from flush yet
+    inserted = buf.flush_episode()
+    assert inserted > 0
+    assert len(buf.rows) == 5 + inserted
+    after = [(np.array(r["observations"]["idx"]), float(r["rewards"]),
+              float(r["dones"]), float(r["masks"])) for r in buf.rows[:5]]
+    for (i1, rw1, d1, m1), (i2, rw2, d2, m2) in zip(flown, after):
+        assert np.array_equal(i1, i2) and rw1 == rw2 and d1 == d2 and m1 == m2
+    # the lane step's ON-POLICY row is exactly as flown: not terminal
+    assert float(buf.rows[3]["dones"]) == 0.0
+    assert float(buf.rows[3]["masks"]) == 1.0
+
+
+def test_per_step_lists_stay_aligned_when_max_steps_trims():
+    # Five steps into a 3-step window: the staged episode holds original
+    # indices 2,3,4. _ep_offroad must be trimmed in lockstep with the base's
+    # lists or the dirty step would shift under the cut.
+    buf = _buf(max_steps=3)
+    _dirty_episode(buf, [0.0, 10.0, 20.0, 30.0, 40.0], off_road={3})
+    assert len(buf._txns) == 3
+    assert buf._ep_offroad == [False, True, False]
+    assert [int(m) for m in buf._ep_modes] == [1, 1, 1]
+    # the dirty step survived the trim at staged index 1: the cut sees it and
+    # the remaining prefix [0, 1) has no goal candidate -> nothing inserted.
+    assert buf.flush_episode() == 0
+    assert buf.stats()["n_dirty_prefix_eps"] == 1

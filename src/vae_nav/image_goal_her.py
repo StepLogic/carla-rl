@@ -18,6 +18,16 @@ cannot appear mid-leg: success and hero destruction end the episode, and the
 env_error path discards the whole episode in the trainer. z = the coll key
 rides along untouched -- it depends on the trajectory up to t, never on which
 goal the step is credited to.
+
+THE DIRTY CUT (user 2026-09-20). A goal-mode episode's relabelable stream is
+CUT at the FIRST dirty event -- a lane-invasion step, a collision (hit) step,
+or an off-road step. Hindsight legs are drawn only from the clean prefix
+BEFORE that index: the dirty step and everything after it are neither goal
+sources nor inserted rows. A dirty episode therefore still CONTRIBUTES its
+clean prefix (this supersedes "skip dirty episodes entirely"); one with no
+clean prefix (dirty at step 0/1) contributes nothing. On-policy rows are
+ALWAYS kept -- they were inserted at record() time and are untouched by the
+cut. With no dirty event the flush is byte-identical to the pre-cut code.
 """
 import numpy as np
 
@@ -48,28 +58,41 @@ class ImageGoalRelabelBuffer(EpisodeRelabelBuffer):
         # goal data the env never flew. These episodes are counted and skipped
         # at flush; their on-policy rows were already inserted at record().
         self.n_explore_eps = 0
+        # Goal-mode episodes whose relabelable stream was cut at the first
+        # dirty event (lane / hit / off-road); counted in flush_episode.
+        self.n_dirty_prefix_eps = 0
 
     def _reset_episode(self):
         super()._reset_episode()
         self._ep_modes = []
+        # Off-road is goal-INDEPENDENT like lane and hit: the vehicle left the
+        # road whatever goal the step is later credited to. The base does not
+        # stage it (its record() signature is shared lineage with the gated
+        # arms), so this subclass stages it beside _ep_modes.
+        self._ep_offroad = []
 
     def record(self, transition, fields, pos, hit, lane=False,
-               speed_kmh=0.0, target_speed_kmh=0.0, mode=None):
-        """Stage one step, tracking the commanded mode for the flush-time skip.
+               speed_kmh=0.0, target_speed_kmh=0.0, mode=None, off_road=False):
+        """Stage one step, tracking the commanded mode and the off-road flag.
 
         The base's `mode` argument routes the ON-POLICY row only (and only when
         gated=True, never here); this override additionally remembers it per
         step so flush_episode can refuse to relabel a non-goal episode. A
         step recorded without a mode defaults to GOAL, matching the base.
+        `off_road` is staged per step for the flush-time dirty cut; it is NOT
+        forwarded to super() (the base's signature is shared lineage and has
+        no such parameter -- the base already stages _hit and _lane itself).
         """
         self._ep_modes.append(int(mode) if mode is not None else GOAL)
+        self._ep_offroad.append(bool(off_road))
         super().record(transition, fields, pos, hit, lane=lane,
                        speed_kmh=speed_kmh,
                        target_speed_kmh=target_speed_kmh, mode=mode)
-        # Mirror the base's max_steps trim so _ep_modes stays aligned with
-        # _txns (the base pops its oldest row before appending).
+        # Mirror the base's max_steps trim so _ep_modes and _ep_offroad stay
+        # aligned with _txns (the base pops its oldest row before appending).
         if len(self._ep_modes) > self.max_steps:
             self._ep_modes.pop(0)
+            self._ep_offroad.pop(0)
 
     def flush_episode(self, truncated=False):
         """Insert HINDSIGHT LEGS, one per relabel: rows from the leg start up
@@ -116,6 +139,31 @@ class ImageGoalRelabelBuffer(EpisodeRelabelBuffer):
             bounds = list(self._leg_ends)
             if not bounds or bounds[-1] != n:
                 bounds.append(n)
+            # THE DIRTY CUT. The first step that was dirty -- a lane crossing,
+            # a collision, or an off-road step -- ends the relabelable stream:
+            # hindsight legs are drawn only from the clean prefix before that
+            # index. The bound cap does the whole job geometrically: every
+            # goal candidate is drawn from range(start+1, end) with end <= the
+            # cut and every inserted row sits in [start, goal), so neither the
+            # goal frame nor a row can reach the dirty step or anything after
+            # it. _insert_leg, _insert_leg_rows and _relabelled are untouched,
+            # and with no dirty event the bounds are exactly today's, so the
+            # flush is byte-identical. The truncated timeout-frame exclusion
+            # stays relative to the full n: the capped bound already excludes
+            # the dirty frames.
+            cut = next((i for i in range(n)
+                        if self._lane[i] or self._hit[i] or self._ep_offroad[i]),
+                       None)
+            if cut is not None:
+                self.n_dirty_prefix_eps += 1
+                capped = []
+                start = 0
+                for b in bounds:
+                    b = min(b, cut)
+                    if b > start:      # else: empty or starts at/after the cut
+                        capped.append(b)
+                        start = b
+                bounds = capped
             inserted = 0
             self.last_pairs = []
             for _ in range(self.n_relabel):
@@ -215,4 +263,5 @@ class ImageGoalRelabelBuffer(EpisodeRelabelBuffer):
         out = super().stats()
         out["her_entry_done"] = self.n_entry_done
         out["n_explore_eps"] = self.n_explore_eps
+        out["n_dirty_prefix_eps"] = self.n_dirty_prefix_eps
         return out

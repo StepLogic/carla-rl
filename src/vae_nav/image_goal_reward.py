@@ -6,10 +6,10 @@ on what the deployed policy will have onboard: current proprioception and the
 goal. The reward itself may read privileged CARLA labels; the claim it supports
 does not depend on them at execution time.
 
-THE SHAPE (user spec 2026-09-18, revised twice in review):
+THE SHAPE (user spec 2026-09-18; in-lane bonus REMOVED, user decision
+2026-09-20):
 
     r_t = -1.0                              the base cost, EVERY step
-        + 0.75   if L_t                     the in-lane preference
         - 0.75   if off the drivable surface (each step it persists)
         - 0.75   if a collision has EVER happened this episode
         - K |v - v*|  if L_t                the velocity preference (2026-09-20),
@@ -18,6 +18,11 @@ THE SHAPE (user spec 2026-09-18, revised twice in review):
 
     L_t = on the drivable lane, moving in the route direction, no lane
           crossing this step, and no collision yet.
+
+The old +0.75 flat in-lane bonus is GONE from both modes (user 2026-09-20);
+the constant IN_LANE_BONUS stays as an env-overridable ablation knob
+(IG_IN_LANE_BONUS) and defaults to 0.0, so the formula above is the default
+behaviour. The speed-preference term stays gated on L_t exactly as it was.
 
 THE TWO USER DECISIONS THAT CHANGED IT FROM THE WRITTEN SPEC:
 
@@ -53,7 +58,7 @@ a lower-reward mode until reset, and it must be visible to the value function
 two different values depending on unseen history -- a Markov violation.
 
 WHY NOTHING HERE TERMINATES except success, invalid, and the clock. The spec
-removes every terminal escape: a crossing costs the bonus it loses, off-road
+removes every terminal escape: a crossing costs its -1.00 step, off-road
 costs per step, a crash costs per step from then on. Ending the episode early
 buys nothing -- termination STOPS a negative stream, and it is granted only for
 the thing the task is (stopped at the goal) or the thing the sim cannot
@@ -66,9 +71,11 @@ DEVIATIONS FROM THE WRITTEN SPEC, all deliberate:
     facing along the road as in the goal image;
   - "driving_with_route_direction" is measured, not asserted: displacement
     projected on the lane's forward vector, and a parked or creeping car
-    (speed under STOP_SPEED_MPS) is NOT punished for not moving -- otherwise
-    the sustained stop the success condition demands would cost the lane bonus
-    for its whole window and bias the agent against stopping;
+    (speed under STOP_SPEED_MPS) is NOT counted as driving the wrong way --
+    its L_t stays True, exactly as before (user 2026-09-20 keeps the
+    carve-out). Under the current constants the only in-lane term a parked
+    car feels is the speed preference, paid while it waits out the stop
+    window -- which is still the cheapest way to end the negative stream;
   - "simulator_invalid" is the hero being destroyed or not alive, which is all
     the health signal CARLA exposes here;
   - the timeout uses gym's `truncated`, and whether the offline TD target treats
@@ -95,7 +102,11 @@ SUCCESS_REWARD = float(os.environ.get("IG_SUCCESS_REWARD", 0.0))
 # terminates and pays the ordinary step reward. Setting it above 0 restores the
 # spec's original bonus.
 BASE_STEP_COST = float(os.environ.get("IG_BASE_STEP_COST", 1.0))
-IN_LANE_BONUS = float(os.environ.get("IG_IN_LANE_BONUS", 0.75))
+# The flat in-lane bonus was REMOVED from both modes (user decision
+# 2026-09-20): the default is 0.0, so in-lane driving pays the base cost and
+# the speed preference, nothing more. The constant stays env-overridable via
+# IG_IN_LANE_BONUS for ablations; setting it above 0 restores the old term.
+IN_LANE_BONUS = float(os.environ.get("IG_IN_LANE_BONUS", 0.0))
 OFFROAD_PENALTY = float(os.environ.get("IG_OFFROAD_PENALTY", 0.75))
 PERSISTENT_COLLISION_PENALTY = float(
     os.environ.get("IG_PERSISTENT_COLLISION_PENALTY", 0.75))
@@ -300,8 +311,9 @@ def image_goal_reward(info, disp, has_collided):
     """One step's reward, as a pure function. Returns (reward, components).
 
     The ReViND invariant -- reward < 0 at every step, success included -- is a
-    property of the constants: the best case is -1.0 + IN_LANE_BONUS < 0 and
-    the worst stacks all three penalties. No terminal here is ever positive.
+    property of the constants: the best case is -1.0 (in lane at the target
+    speed, lane bonus removed 2026-09-20) and the worst stacks all three
+    penalties. No terminal here is ever positive.
     """
     off_road = bool(info.get("off_road", False))
     crossed = bool(info.get("lane_invasion_any",
@@ -362,7 +374,9 @@ class ImageGoalReward(Wrapper):
         self._stop_window = 0
         self._prev = np.zeros(2)
         print(f"[ImageGoal] reward: -{BASE_STEP_COST:g} base "
-              f"+{IN_LANE_BONUS:g} in-lane  -{OFFROAD_PENALTY:g} off-road  "
+              f"(flat in-lane bonus removed 2026-09-20; "
+              f"IG_IN_LANE_BONUS={IN_LANE_BONUS:g})  "
+              f"-{OFFROAD_PENALTY:g} off-road  "
               f"-{PERSISTENT_COLLISION_PENALTY:g} persistent-collision  "
               f"speed_pref K={SPEED_PREF_K:g} x |v - {TARGET_SPEED_KMH:g} km/h|"
               f" in-lane  "

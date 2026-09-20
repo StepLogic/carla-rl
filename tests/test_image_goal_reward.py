@@ -2,24 +2,27 @@
 
 THE INVARIANT THE WHOLE FILE GUARDS, stated once here: with the success bonus
 removed (user decision 2026-09-18), EVERY step pays a negative reward --
-including the success step. The best score available to a step is -0.25
-(in-lane), the worst is -2.50 (post-collision, off-road). Termination buys
-nothing except the end of the negative stream, and it is granted only for the
-thing the task IS (sustained stop at the target viewpoint and heading), a
-destroyed hero, or the clock.
+including the success step. The best score available to a step is -1.0
+(in lane at the target speed; the flat in-lane bonus was REMOVED, user
+decision 2026-09-20), the worst is -2.50 (post-collision, off-road).
+Termination buys nothing except the end of the negative stream, and it is
+granted only for the thing the task IS (sustained stop at the target
+viewpoint and heading), a destroyed hero, or the clock.
 
 The reward table under test (user spec 2026-09-18; 2026-09-20 adds the
-velocity preference -SPEED_PREF_K * |v - v*| paid by every IN-LANE step, so
-the in-lane rows below are exact at v = TARGET_SPEED and lower by the term
-when the car crawls):
+velocity preference -SPEED_PREF_K * |v - v*| paid by every IN-LANE step and
+REMOVES the +0.75 flat in-lane bonus, so the in-lane rows below are exact at
+v = TARGET_SPEED and lower by the term when the car crawls or parks):
 
-    in-lane, no collision              -0.25
-    one-step lane crossing             -1.00
-    off-road                           -1.75
-    post-collision, back on the road   -1.75
-    post-collision AND off-road        -2.50
+    in-lane, at v* = 20 km/h, no collision    -1.00
+    parked in lane (L_t via the carve-out)    -1.5556  = -1.0 - 0.1*(20/3.6)
+    one-step lane crossing                    -1.00
+    off-road                                  -1.75
+    post-collision, back on the road          -1.75
+    post-collision AND off-road               -2.50
     success (sustained stop on target) ordinary reward, terminated, NO bonus
 """
+import importlib
 import os
 import sys
 
@@ -34,6 +37,7 @@ pytest.importorskip("gymnasium")
 import gymnasium as gym  # noqa: E402
 from gymnasium import spaces  # noqa: E402
 
+import vae_nav.image_goal_reward as igm  # noqa: E402
 from vae_nav.image_goal_reward import (IN_LANE_BONUS,  # noqa: E402
                                        SPEED_PREF_K, STOP_WINDOW_STEPS,
                                        TARGET_SPEED_KMH, ImageGoalReward,
@@ -104,9 +108,11 @@ def disp_forward_1m():
     return (1.0, 0.0)
 
 
-def test_in_lane_driving_pays_minus_a_quarter():
+def test_in_lane_driving_at_target_speed_pays_minus_one():
+    # The flat in-lane bonus is REMOVED (user 2026-09-20): at the target
+    # speed the step pays exactly the base cost and nothing more.
     w, _ = _wrap()
-    assert w.step(ACT)[1] == pytest.approx(-0.25)
+    assert w.step(ACT)[1] == pytest.approx(-1.0)
 
 
 def test_a_lane_crossing_step_pays_minus_one_and_continues():
@@ -139,7 +145,7 @@ def test_sub_threshold_impulse_does_not_latch():
     w.step(ACT)
     env.info["collision_impulse"] = 0.0
     assert w._has_collided is False
-    assert w.step(ACT)[1] == pytest.approx(-0.25)
+    assert w.step(ACT)[1] == pytest.approx(-1.0)
 
 
 def test_post_collision_off_road_pays_minus_250():
@@ -157,7 +163,7 @@ def test_the_flag_resets_between_episodes():
     w.step(ACT)
     env.info["collision_impulse"] = 0.0
     w.reset()
-    assert w.step(ACT)[1] == pytest.approx(-0.25)
+    assert w.step(ACT)[1] == pytest.approx(-1.0)
 
 
 # ------------------------------------------------- the ReViND invariant ----
@@ -183,7 +189,7 @@ def test_velocity_term_penalises_slow_driving_in_lane():
     assert comp["speed_penalty"] == pytest.approx(
         -SPEED_PREF_K * abs(_kmh_to_mps(10.0) - _kmh_to_mps(20.0)))
     r, _ = image_goal_reward(info, disp_forward_1m(), False)
-    assert r == pytest.approx(-0.25 + comp["speed_penalty"])
+    assert r == pytest.approx(-1.0 + comp["speed_penalty"])
 
 
 def test_velocity_term_zero_off_lane_or_parked_offroad():
@@ -234,7 +240,7 @@ def test_success_fires_on_the_last_window_step_and_pays_no_bonus():
     assert terminated is True and truncated is False
     comp = info["ig_reward_components"]
     assert comp["speed_penalty"] < 0.0        # v = 0 sits far from the target
-    assert reward == pytest.approx(-0.25 + comp["speed_penalty"])
+    assert reward == pytest.approx(-1.0 + comp["speed_penalty"])
     assert info["is_success"] is True
 
 
@@ -293,19 +299,41 @@ def test_the_envs_own_done_is_discarded():
 
 # ------------------------------------------------------- route direction ----
 
-def test_a_parked_car_keeps_the_lane_bonus():
-    # The sustained stop the success condition demands must not pay -1.00
-    # while it waits: a stationary car is not driving the wrong way, so the
-    # LANE BONUS still lands. It DOES pay the velocity preference (v = 0 is
-    # far from the 20 km/h target) -- the 2026-09-20 term, not a direction
-    # penalty -- and the reward below says so explicitly.
+def test_parked_in_lane_keeps_L_t_and_pays_minus_1556():
+    # The sustained stop the success condition demands still runs through the
+    # carve-out in _driving_with_route_direction: a stationary car is not
+    # driving the wrong way, so L_t stays True. The flat lane bonus is GONE
+    # (user 2026-09-20), so what L_t now grants the parked car is the SPEED
+    # PENALTY, which keeps applying: -1.0 - 0.1*(20/3.6) = -1.5556.
     w, _ = _stopped()
     _, reward, _, _, info = w.step(ACT)
     comp = info["ig_reward_components"]
-    assert comp["lane_bonus"] == pytest.approx(IN_LANE_BONUS)
+    assert comp["lane_bonus"] == pytest.approx(IN_LANE_BONUS)   # 0.0 now
     assert comp["speed_penalty"] == pytest.approx(
         -SPEED_PREF_K * TARGET_SPEED_KMH / 3.6)
-    assert reward == pytest.approx(-0.25 + comp["speed_penalty"])
+    assert reward == pytest.approx(-1.0 + comp["speed_penalty"])
+    assert reward == pytest.approx(-1.0 - 0.1 * (20.0 / 3.6))
+
+
+# ------------------------------------------------- the ablation override ----
+
+def test_ig_in_lane_bonus_env_override_restores_the_old_row(monkeypatch):
+    # IG_IN_LANE_BONUS stays env-overridable for ablations: with 0.75 in the
+    # env the removed term comes back and the old -0.25 in-lane row is exact.
+    # Reload-with-env, matching the coherence tests' pattern; the reload in
+    # the finally puts the shipped default (0.0) back for the later tests.
+    monkeypatch.setenv("IG_IN_LANE_BONUS", "0.75")
+    importlib.reload(igm)
+    try:
+        assert igm.IN_LANE_BONUS == pytest.approx(0.75)
+        r, comp = igm.image_goal_reward(dict(DRIVING), disp_forward_1m(),
+                                        False)
+        assert r == pytest.approx(-0.25)
+        assert comp["lane_bonus"] == pytest.approx(0.75)
+    finally:
+        monkeypatch.delenv("IG_IN_LANE_BONUS", raising=False)
+        importlib.reload(igm)
+    assert igm.IN_LANE_BONUS == pytest.approx(0.0)
 
 
 def test_driving_against_the_lane_forward_loses_the_bonus():

@@ -121,7 +121,7 @@ def test_mode_drawn_and_rewarded_identically():
     env_e.reset()
     out_e = env_e.step(ACT)
     assert out_e[4]["mode"] == 0
-    assert out_g[1] == out_e[1] == pytest.approx(-0.25)
+    assert out_g[1] == out_e[1] == pytest.approx(-1.0)
 
 
 def test_explore_prob_zero_and_one_draw_every_reset():
@@ -172,10 +172,13 @@ def test_goal_success_needs_sustained_stop():
     assert info["arrived_this_step"] is True
     # THE SUCCESS STEP PAYS THE ORDINARY REWARD: a parked car is in lane
     # (moving nothing is not driving the wrong way) and pays the velocity
-    # preference for being stopped, which is v = 0 against 20 km/h.
+    # preference for being stopped, which is v = 0 against 20 km/h. The flat
+    # lane bonus is REMOVED (user 2026-09-20), so the step is -1.5556.
     comp = info["ig_reward_components"]
     assert reward == pytest.approx(
         -1.0 + IN_LANE_BONUS - SPEED_PREF_K * TARGET_SPEED_KMH / 3.6)
+    assert reward == pytest.approx(
+        -1.0 - SPEED_PREF_K * TARGET_SPEED_KMH / 3.6)
     assert reward == comp["base"] + comp["lane_bonus"] + comp["speed_penalty"]
 
 
@@ -198,7 +201,7 @@ def test_latch_persists_until_reset():
     env.info["collision_impulse"] = 0.0        # back on the road, undamaged
     assert w.step(ACT)[1] == pytest.approx(-1.75)    # STILL paying
     w.reset()
-    assert w.step(ACT)[1] == pytest.approx(-0.25)    # cleared
+    assert w.step(ACT)[1] == pytest.approx(-1.0)    # cleared
 
 
 def test_latch_persists_in_explore_mode_too():
@@ -228,8 +231,8 @@ def test_explore_arrival_at_path(monkeypatch):
             break
     assert terminated is True and truncated is False
     assert w._path_m == pytest.approx(EXPLORE_ARRIVAL_M)
-    assert all(r == pytest.approx(-0.25) for r in rewards)
-    assert sum(rewards) == pytest.approx(-0.25 * len(rewards))
+    assert all(r == pytest.approx(-1.0) for r in rewards)
+    assert sum(rewards) == pytest.approx(-1.0 * len(rewards))
 
 
 def test_explore_short_of_the_path_keeps_driving(monkeypatch):

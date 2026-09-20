@@ -156,6 +156,9 @@ export PERCEPTION=vc1 VC1_READOUT=grid2
 export OBS_WITH_STATE=1 OBS_WITH_MODE=1
 export EPISODE_HER=1 HER_MIN_DISP=5.0 IG_GOAL_DISTANCE_THRESHOLD_M=2.0
 export IG_SPEED_PREF_K=0.1
+export IG_IN_LANE_BONUS=0    # flat in-lane bonus REMOVED (user 2026-09-20);
+                             # pinned explicitly so the 48-var snapshot
+                             # records it and the banner cannot disagree
 export DISCOUNT=0.99 TOP_QUANTILES_DROP=2 TQC_KAPPA=1.0
 export TEMP_LR=3e-4                      # the v2 divergence fix (entropy brake)
 export TQC_TARGET_MIN=-260 TQC_TARGET_MAX=100   # ReViND window at gamma=0.99
@@ -285,7 +288,7 @@ echo "[Banner] run=${RUN_NAME} policy_folder=${POLICY_FOLDER} interpreter=${PYTH
 echo "[Banner] 2-mode pairing: IMAGE_GOAL_TASK=1 GATED=1 GATED_ONE_CRITIC=1"
 echo "[Banner] PERCEPTION=vc1 VC1_READOUT=grid2 OBS_WITH_STATE=1 OBS_WITH_MODE=1"
 echo "[Banner] EPISODE_HER=1 HER_MIN_DISP=5.0 IG_GOAL_DISTANCE_THRESHOLD_M=2.0"
-echo "[Banner] reward: IG_SPEED_PREF_K=0.1 TARGET_SPEED=20.0 km/h EXPLORE_GOAL_DIST_M=100.0"
+echo "[Banner] reward: IG_SPEED_PREF_K=0.1 TARGET_SPEED=20.0 km/h EXPLORE_GOAL_DIST_M=100.0 IG_IN_LANE_BONUS=0 (in-lane bonus removed 2026-09-20)"
 echo "[Banner] learner: DISCOUNT=0.99 TOP_QUANTILES_DROP=2 TQC_KAPPA=1.0 TEMP_LR=3e-4"
 echo "[Banner] bounded critic: TQC_TARGET_MIN=-260 TQC_TARGET_MAX=100 (ReViND window)"
 echo "[Banner] modes: EXPLORE_PROB=0.5 | goal band ${GOAL_DIST_MIN}-${GOAL_DIST_TARGET} m"

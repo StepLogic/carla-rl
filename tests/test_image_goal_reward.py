@@ -328,6 +328,48 @@ def test_parked_in_lane_keeps_L_t_and_pays_minus_2111():
 
 # ------------------------------------------------- the ablation override ----
 
+def test_goal_truncation_constants_carry_the_ruled_defaults():
+    # The goal-mode truncation constants (user decision 2026-09-20, the
+    # controller's rulings on N): the module carries them env-overridable,
+    # and the shipped defaults ARE the ruling.
+    assert igm.OFFROAD_TRUNC_STEPS == 5
+    assert igm.STUCK_SPEED_MPS == pytest.approx(0.3)
+    assert igm.STUCK_STEPS == 100
+
+
+def test_goal_truncation_constants_env_override(monkeypatch):
+    # All three truncation constants are env-overridable like the other
+    # IG_* knobs: reload-with-env, and the finally restores the ruled
+    # defaults for the later tests.
+    monkeypatch.setenv("IG_OFFROAD_TRUNC_STEPS", "7")
+    monkeypatch.setenv("IG_STUCK_SPEED_MPS", "0.5")
+    monkeypatch.setenv("IG_STUCK_STEPS", "42")
+    importlib.reload(igm)
+    try:
+        assert igm.OFFROAD_TRUNC_STEPS == 7
+        assert igm.STUCK_SPEED_MPS == pytest.approx(0.5)
+        assert igm.STUCK_STEPS == 42
+        # the constants live in the module the wrapper reads at call time,
+        # so a wrapper built from the pre-reload class still truncates on
+        # the shortened off-road budget (its methods resolve the module's
+        # globals dict, which reload reuses)
+        w = igm.TwoModeImageGoalReward(
+            _StubEnv({"off_road": True}), explore_prob=0.0, force_mode=1)
+        w.reset()
+        w.step(ACT)
+        _, _, terminated, truncated, info = w.step(ACT)
+        assert truncated is False       # 2 < the overridden 7
+        assert info["ig_truncated"] is None
+    finally:
+        monkeypatch.delenv("IG_OFFROAD_TRUNC_STEPS", raising=False)
+        monkeypatch.delenv("IG_STUCK_SPEED_MPS", raising=False)
+        monkeypatch.delenv("IG_STUCK_STEPS", raising=False)
+        importlib.reload(igm)
+    assert igm.OFFROAD_TRUNC_STEPS == 5
+    assert igm.STUCK_SPEED_MPS == pytest.approx(0.3)
+    assert igm.STUCK_STEPS == 100
+
+
 def test_ig_in_lane_bonus_env_override_restores_the_old_row(monkeypatch):
     # IG_IN_LANE_BONUS stays env-overridable for ablations: with 0.75 in the
     # env the removed term comes back and the old -0.25 in-lane row is exact.

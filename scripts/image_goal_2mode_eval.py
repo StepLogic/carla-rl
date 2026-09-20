@@ -152,6 +152,11 @@ os.environ.setdefault("IG_SPEED_PREF_K", "0.2")
 # The explore branch's terminal failure penalty (user 2026-09-20): the
 # launcher pins 5, so the mirror fills the hole with the same value.
 os.environ.setdefault("IG_TERMINAL_PENALTY", "5")
+# Goal-mode truncation (user 2026-09-20): the launcher pins all three, so the
+# mirror fills the hole with the same values an eval replay must truncate by.
+os.environ.setdefault("IG_OFFROAD_TRUNC_STEPS", "5")
+os.environ.setdefault("IG_STUCK_SPEED_MPS", "0.3")
+os.environ.setdefault("IG_STUCK_STEPS", "100")
 os.environ.setdefault("DISCOUNT", "0.99")
 os.environ.setdefault("TOP_QUANTILES_DROP", "2")
 os.environ.setdefault("TQC_KAPPA", "1.0")

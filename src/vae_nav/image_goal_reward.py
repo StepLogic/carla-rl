@@ -63,11 +63,22 @@ costs per step, a crash costs per step from then on. Ending the episode early
 buys nothing -- termination STOPS a negative stream, and it is granted only for
 the thing the task is (stopped at the goal) or the thing the sim cannot
 recover from. This paragraph describes the GOAL leg of the pure function
-(and the whole single-mode arm). The TWO-MODE arm's EXPLORE leg diverges by
+(termination-wise; the single-mode arm keeps exactly these terminals). The
+TWO-MODE arm's EXPLORE leg diverges by
 user decision 2026-09-20: off-road, a lane crossing and a collision TERMINATE
 the explore episode, paying a flat -IG_TERMINAL_PENALTY, and the base cost and
 flat penalties are GONE from explore's step reward (the speed preference
-remains). The two legs are combined as a MASKED SUM -- each leg is zeroed
+remains). GOAL mode also gained TRUNCATION the same day (user decision
+2026-09-20): IG_OFFROAD_TRUNC_STEPS=5 consecutive off-road steps, or speed
+under IG_STUCK_SPEED_MPS=0.3 m/s for IG_STUCK_STEPS=100 consecutive steps
+outside the success spatial/yaw gate, set truncated=True with NO extra
+penalty (the truncating step pays its ordinary reward) and terminated stays
+False -- truncation stops the negative stream without buying the terminal
+escapes the spec removes, and a gate step never counts toward the stuck
+counter, so parking at the goal still succeeds. The counters live in
+TwoModeImageGoalReward (where the stop window lives); explore mode runs none
+of them and is byte-identical.
+The two legs are combined as a MASKED SUM -- each leg is zeroed
 outside its own mode -- not a formula swap; see image_goal_reward and
 TwoModeImageGoalReward for the explore contract.
 
@@ -146,6 +157,23 @@ TARGET_SPEED_KMH = float(os.environ.get("TARGET_SPEED", 20.0))
 # component is exactly 0.0 (in_lane is False on every one of them), so the
 # step pays exactly this. Goal mode never reads it.
 TERMINAL_PENALTY = float(os.environ.get("IG_TERMINAL_PENALTY", 5.0))
+# GOAL-MODE TRUNCATION (user decision 2026-09-20): a goal episode TRUNCATES
+# (truncated=True, NO extra penalty -- the truncating step pays its ordinary
+# reward) on sustained failure instead of running to the cap:
+#   - OFFROAD_TRUNC_STEPS consecutive off-road steps (the debounce for the
+#     single-frame polygon flicker the smoke run showed), or
+#   - speed under STUCK_SPEED_MPS for STUCK_STEPS consecutive steps, where a
+#     step inside the success spatial/yaw gate (route distance under
+#     GOAL_DISTANCE_THRESHOLD_M and |yaw error| under GOAL_YAW_THRESHOLD_DEG)
+#     is NEVER a stuck step: parking at the goal still reaches the sustained
+#     stop in STOP_WINDOW_STEPS=10 steps and can never be stuck-truncated
+#     first. Both counters reset on wrapper reset and whenever their
+#     condition fails that step (consecutive, non-consecutive-safe). Truncation
+#     is not termination: terminated stays False, success still wins the step
+#     it fires on, and TQC bounds are unchanged -- no new reward term exists.
+OFFROAD_TRUNC_STEPS = int(os.environ.get("IG_OFFROAD_TRUNC_STEPS", 5))
+STUCK_SPEED_MPS = float(os.environ.get("IG_STUCK_SPEED_MPS", 0.3))
+STUCK_STEPS = int(os.environ.get("IG_STUCK_STEPS", 100))
 
 IMAGE_GOAL_TASK = os.environ.get("IMAGE_GOAL_TASK", "0") == "1"
 
@@ -600,6 +628,24 @@ class TwoModeImageGoalReward(Wrapper):
     and collisions still only cost per step here; the latch
     info["has_collided"] feeds the persistent penalty.
 
+    GOAL-MODE TRUNCATION (user decision 2026-09-20): sustained failure no
+    longer runs to the cap. IG_OFFROAD_TRUNC_STEPS=5 CONSECUTIVE off-road
+    steps, or speed under IG_STUCK_SPEED_MPS=0.3 m/s for IG_STUCK_STEPS=100
+    CONSECUTIVE steps, set truncated=True (terminated stays False) with NO
+    extra penalty -- the truncating step pays its ordinary reward (the 5th
+    off-road step is -2.5; the stuck step is the usual speed-dependent row).
+    The cause travels in info["ig_truncated"] ("off_road" | "stuck", None
+    otherwise). The stuck counter NEVER counts a step inside the success
+    spatial/yaw gate (route distance under GOAL_DISTANCE_THRESHOLD_M and
+    |yaw error| under GOAL_YAW_THRESHOLD_DEG -- position and heading, NOT the
+    stop window's speed check), so parking at the goal reaches the sustained
+    stop in STOP_WINDOW_STEPS=10 steps and can never be stuck-truncated
+    first. Both counters reset on wrapper reset and whenever their condition
+    fails that step. ORDERING: success still wins -- it is evaluated first
+    (terminated=True) and a truncation never fires on a terminated step; the
+    off-road and stuck counters are independent and whichever fills first
+    truncates. Explore mode runs NEITHER counter.
+
     EXPLORE MODE (mode 0): drive EXPLORE_GOAL_DIST_M of CUMULATIVE PATH, with
     NO TIME PRESSURE and TERMINAL FAILURES (user decision 2026-09-20). The
     step reward is the velocity preference alone -- no base cost, no flat
@@ -636,6 +682,8 @@ class TwoModeImageGoalReward(Wrapper):
         self._path_m = 0.0
         self._has_collided = False
         self._stop_window = 0
+        self._offroad_steps = 0
+        self._stuck_steps = 0
         # A SETTING THAT CHANGES THE REWARD MUST SAY SO ON SCREEN (the repo's
         # own rule after the observation-banner drift): the two knobs an
         # evaluator will ask about and the two constants the reward is
@@ -654,6 +702,12 @@ class TwoModeImageGoalReward(Wrapper):
               f"speed pref only -- off-road / crossing / collision TERMINATE "
               f"paying -IG_TERMINAL_PENALTY={TERMINAL_PENALTY:g} (invalid "
               f"too); explore arrival terminates with NO bonus; "
+              f"goal-mode truncation (user 2026-09-20): "
+              f"IG_OFFROAD_TRUNC_STEPS={OFFROAD_TRUNC_STEPS} consecutive "
+              f"off-road steps or speed<"
+              f"{STUCK_SPEED_MPS:g} m/s x IG_STUCK_STEPS={STUCK_STEPS} "
+              f"consecutive steps outside the success gate truncate "
+              f"(truncated=True, no extra penalty); "
               f"max_steps={self.max_steps}.", flush=True)
 
     def reset(self, **kwargs):
@@ -669,9 +723,12 @@ class TwoModeImageGoalReward(Wrapper):
         self._prev = np.asarray(info.get("hero_pos", (0.0, 0.0)), np.float64)
         # THE PER-EPISODE STATE. The collision latch and the stop window are
         # the same objects ImageGoalReward owns; under one wrapper serving
-        # both modes they reset with the episode, not with the mode.
+        # both modes they reset with the episode, not with the mode. The
+        # goal-mode truncation counters (2026-09-20) join them.
         self._has_collided = False
         self._stop_window = 0
+        self._offroad_steps = 0
+        self._stuck_steps = 0
         info["mode"] = self.mode
         return obs, info
 
@@ -704,16 +761,49 @@ class TwoModeImageGoalReward(Wrapper):
             # target at speed never collects the window; any step that
             # breaks a check restarts it.
             on_position, on_heading = goal_at_target(info)
+            # THE SUCCESS SPATIAL/YAW GATE: position and heading only -- the
+            # stuck counter's exemption (below) uses it WITHOUT the stop
+            # window's speed check.
+            in_goal_gate = on_position and on_heading
             stopped = _speed_mps(info) < STOP_SPEED_MPS
-            if stopped and on_position and on_heading:
+            if stopped and in_goal_gate:
                 self._stop_window += 1
             else:
                 self._stop_window = 0
             success = self._stop_window >= STOP_WINDOW_STEPS
+
+            # GOAL-MODE TRUNCATION (user decision 2026-09-20): sustained
+            # failure truncates instead of running to the cap. Two
+            # independent, consecutive counters; each resets the step its
+            # condition fails. A step inside the success spatial/yaw gate
+            # NEVER counts toward stuck (parking at the goal must reach the
+            # sustained stop, not the truncation), so the gate is the same
+            # position/heading pair WITHOUT the speed check.
+            if bool(info.get("off_road", False)):
+                self._offroad_steps += 1
+            else:
+                self._offroad_steps = 0
+            if _speed_mps(info) < STUCK_SPEED_MPS and not in_goal_gate:
+                self._stuck_steps += 1
+            else:
+                self._stuck_steps = 0
+
             info["is_success"] = bool(success)
             info["arrived_this_step"] = bool(success)
+            # SUCCESS STILL WINS THE STEP (user ruling): terminated is
+            # evaluated first, and no truncation ever fires on a terminated
+            # step -- success or invalid keep their step.
             terminated = bool(success or invalid)
             truncated = (not terminated) and self._t >= self.max_steps
+            trunc_cause = None
+            if not terminated:
+                if self._offroad_steps >= OFFROAD_TRUNC_STEPS:
+                    trunc_cause = "off_road"
+                elif self._stuck_steps >= STUCK_STEPS:
+                    trunc_cause = "stuck"
+                if trunc_cause is not None:
+                    truncated = True
+            info["ig_truncated"] = trunc_cause
         else:
             # EXPLORE MODE (user decision 2026-09-20): failures are TERMINAL
             # and there is no time pressure. The pure function already paid

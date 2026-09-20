@@ -32,7 +32,8 @@ from gymnasium import spaces  # noqa: E402
 
 import vae_nav.image_goal_reward as igm  # noqa: E402
 from vae_nav.image_goal_reward import (  # noqa: E402
-    IN_LANE_BONUS, SPEED_PREF_K, STOP_WINDOW_STEPS, TARGET_SPEED_KMH,
+    IN_LANE_BONUS, OFFROAD_TRUNC_STEPS, SPEED_PREF_K, STOP_WINDOW_STEPS,
+    STUCK_SPEED_MPS, STUCK_STEPS, TARGET_SPEED_KMH,
     TERMINAL_PENALTY, TwoModeImageGoalReward, image_goal_reward)
 
 ACT = np.zeros(2, np.float32)
@@ -191,13 +192,191 @@ def test_goal_success_needs_sustained_stop():
 
 
 def test_goal_mode_still_truncates_at_the_cap_without_success():
-    # A goal episode that never stops runs to the cap like any other.
+    # A goal episode that never stops runs to the cap like any other. With
+    # the 2026-09-20 truncation counters, an in-lane driving episode fills
+    # NEITHER counter (5.556 m/s > STUCK_SPEED_MPS, never off-road), so the
+    # cap keeps being the cause and ig_truncated stays None.
     w, _ = _wrap(mode=1, max_steps=5)
     for _ in range(5):
         w.step(ACT)
-    obs, reward, terminated, truncated, _ = w.step(ACT)
+    obs, reward, terminated, truncated, info = w.step(ACT)
     assert truncated is True and terminated is False
+    assert info["ig_truncated"] is None
     assert reward < 0.0
+
+
+# ----------------------------------------- goal-mode truncation (2026-09-20) ----
+# The user ruling: OFFROAD_TRUNC_STEPS=5 consecutive off-road steps, or
+# STUCK_SPEED_MPS=0.3 m/s for STUCK_STEPS=100 consecutive steps, truncate
+# (truncated=True, terminated stays False, NO extra penalty); a step inside
+# the success spatial/yaw gate NEVER counts toward stuck; success still wins
+# the step it fires on; both counters reset whenever their condition fails.
+
+def test_offroad_truncates_on_the_fifth_consecutive_step():
+    # 4 steps off-road do not truncate; the 5th does, paying its ordinary
+    # reward (off-road: -1.0 - 1.5, no speed term -- not in lane) and
+    # reporting the cause, with terminated still False.
+    w, _ = _wrap(mode=1, info={"off_road": True})
+    for i in range(OFFROAD_TRUNC_STEPS - 1):
+        _, reward, terminated, truncated, info = w.step(ACT)
+        assert (terminated, truncated, info["ig_truncated"]) \
+            == (False, False, None), f"fired early at step {i + 1}"
+        assert reward == pytest.approx(-2.5)
+    _, reward, terminated, truncated, info = w.step(ACT)
+    assert truncated is True and terminated is False
+    assert info["ig_truncated"] == "off_road"
+    # THE TRUNCATING STEP PAYS THE ORDINARY REWARD: no new penalty term.
+    assert reward == pytest.approx(-2.5)
+    comp = info["ig_reward_components"]
+    assert comp["base"] == pytest.approx(-1.0)
+    assert comp["offroad_penalty"] == pytest.approx(-1.5)
+    assert comp["base"] + comp["offroad_penalty"] + comp["speed_penalty"] \
+        + comp["lane_bonus"] + comp["collision_penalty"] \
+        == pytest.approx(reward)      # the four-term sum identity, unbroken
+
+
+def test_offroad_counter_resets_when_back_on_road():
+    # Non-consecutive off-road: 2 off, 1 on, 2 off -- the counter resets the
+    # step the condition fails, so no truncation ever fires.
+    w, env = _wrap(mode=1)
+    env.info["off_road"] = True
+    w.step(ACT)
+    w.step(ACT)
+    env.info["off_road"] = False
+    _, _, _, truncated, info = w.step(ACT)
+    assert truncated is False and info["ig_truncated"] is None
+    env.info["off_road"] = True
+    for _ in range(2):
+        _, _, _, truncated, info = w.step(ACT)
+        assert truncated is False and info["ig_truncated"] is None
+
+
+def test_stuck_truncates_at_100_low_speed_steps_outside_the_gate():
+    # Parked 50 m from the goal: every step is low speed AND outside the
+    # spatial/yaw gate, so the stuck counter runs 1..100 and the 100th
+    # truncates, paying the parked-in-lane row (-1.0 - K*v*).
+    w, _ = _wrap(mode=1, info={"speed_kmh": 0.0,
+                               "route_distance_to_goal_m": 50.0},
+                 advance=(0.0, 0.0))
+    for i in range(STUCK_STEPS - 1):
+        _, _, terminated, truncated, info = w.step(ACT)
+        assert (terminated, truncated, info["ig_truncated"]) \
+            == (False, False, None), f"fired early at step {i + 1}"
+    _, reward, terminated, truncated, info = w.step(ACT)
+    assert truncated is True and terminated is False
+    assert info["ig_truncated"] == "stuck"
+    assert reward == pytest.approx(
+        -1.0 - SPEED_PREF_K * TARGET_SPEED_KMH / 3.6)   # the usual row
+
+
+def test_parking_inside_the_gate_reaches_success_not_stuck_truncation():
+    # THE RULING THE STOP-WINDOW DESIGN DEPENDS ON: a parked car on target
+    # and on heading sits inside the success spatial/yaw gate, so the stuck
+    # counter never counts a single step of the sustained stop -- the 10th
+    # gate step TERMINATES with success, never stuck-truncating first (and
+    # 100 gate steps would otherwise blow the 100-step stuck budget).
+    w, _ = _stopped()
+    for i in range(STOP_WINDOW_STEPS - 1):
+        _, _, terminated, truncated, info = w.step(ACT)
+        assert (terminated, truncated, info["ig_truncated"]) \
+            == (False, False, None)
+        assert w._stuck_steps == 0
+    _, _, terminated, truncated, info = w.step(ACT)
+    assert terminated is True and truncated is False
+    assert info["is_success"] is True
+    assert info["ig_truncated"] is None
+
+
+def test_stuck_counter_skips_gate_steps():
+    # 100 NON-CONSECUTIVE low-speed steps interleaved with gate steps never
+    # truncate: every gate step resets the stuck counter (a gate step is
+    # never a stuck step), so no run reaches STUCK_STEPS.
+    w, env = _wrap(mode=1, info={"speed_kmh": 0.0,
+                                 "route_distance_to_goal_m": 1.0},
+                   advance=(0.0, 0.0))
+    for i in range(STUCK_STEPS + 10):
+        # in the gate this step (1.0 m), out of it the next (50 m) ...
+        env.info["route_distance_to_goal_m"] = (
+            1.0 if i % 2 == 0 else 50.0)
+        _, _, terminated, truncated, info = w.step(ACT)
+        assert (terminated, truncated, info["ig_truncated"]) \
+            == (False, False, None), f"truncated/terminated at step {i + 1}"
+        assert w._stuck_steps <= 1
+
+
+def test_success_wins_a_step_both_a_counter_fills():
+    # THE ORDERING RULING: success is evaluated first. Park on target for 5
+    # clean gate steps, then 5 more WITH the car flagged off-road: the stop
+    # window reaches 10 and the off-road counter reaches 5 on the SAME step,
+    # and success keeps it -- terminated=True, no truncation, no cause.
+    w, env = _stopped()
+    for _ in range(5):
+        _, _, terminated, truncated, info = w.step(ACT)
+        assert (terminated, truncated, info["ig_truncated"]) \
+            == (False, False, None)
+    env.info["off_road"] = True
+    for i in range(4):                 # counter 1..4: still under the budget
+        _, _, terminated, truncated, info = w.step(ACT)
+        assert (terminated, truncated, info["ig_truncated"]) \
+            == (False, False, None)
+    _, reward, terminated, truncated, info = w.step(ACT)
+    assert terminated is True and truncated is False
+    assert info["is_success"] is True
+    assert info["ig_truncated"] is None
+    # the step still pays its ordinary (off-road) reward
+    assert reward == pytest.approx(-2.5)
+
+
+def test_explore_mode_runs_no_truncation_counters():
+    # EXPLORE MODE UNTOUCHED (user decision 2026-09-20): a parked explore
+    # episode far from the goal would blow the stuck budget in 100 steps if
+    # the counters leaked into explore; it must instead run clean past them,
+    # and explore info carries no ig_truncated key at all.
+    w, _ = _wrap(mode=0, info={"speed_kmh": 0.0,
+                               "route_distance_to_goal_m": 50.0},
+                 advance=(0.0, 0.0))
+    for _ in range(STUCK_STEPS + 10):
+        _, _, terminated, truncated, info = w.step(ACT)
+        assert (terminated, truncated) == (False, False)
+        assert "ig_truncated" not in info
+
+
+def test_goal_truncation_counters_env_override(monkeypatch):
+    # The three truncation constants are env-overridable (reload-with-env,
+    # the file's own pattern): with the counters shortened, the wrapper
+    # truncates on the shortened budget -- and the finally restores the
+    # ruled defaults.
+    monkeypatch.setenv("IG_OFFROAD_TRUNC_STEPS", "2")
+    monkeypatch.setenv("IG_STUCK_SPEED_MPS", "0.5")
+    monkeypatch.setenv("IG_STUCK_STEPS", "3")
+    importlib.reload(igm)
+    try:
+        assert igm.OFFROAD_TRUNC_STEPS == 2
+        assert igm.STUCK_SPEED_MPS == pytest.approx(0.5)
+        assert igm.STUCK_STEPS == 3
+        w, _ = _wrap(mode=1, info={"off_road": True})
+        w.step(ACT)
+        _, _, terminated, truncated, info = w.step(ACT)
+        assert (terminated, truncated, info["ig_truncated"]) \
+            == (False, True, "off_road")
+        # the raised stuck speed threshold catches the 20 km/h fixture too:
+        # 5.556 m/s is not under 0.5, so drive the PARKED row instead
+        w2, _ = _wrap(mode=1, info={"speed_kmh": 0.0,
+                                    "route_distance_to_goal_m": 50.0},
+                      advance=(0.0, 0.0))
+        w2.step(ACT)
+        w2.step(ACT)
+        _, _, terminated, truncated, info = w2.step(ACT)
+        assert (terminated, truncated, info["ig_truncated"]) \
+            == (False, True, "stuck")
+    finally:
+        monkeypatch.delenv("IG_OFFROAD_TRUNC_STEPS", raising=False)
+        monkeypatch.delenv("IG_STUCK_SPEED_MPS", raising=False)
+        monkeypatch.delenv("IG_STUCK_STEPS", raising=False)
+        importlib.reload(igm)
+    assert igm.OFFROAD_TRUNC_STEPS == 5
+    assert igm.STUCK_SPEED_MPS == pytest.approx(0.3)
+    assert igm.STUCK_STEPS == 100
 
 
 # --------------------------------------------------- the collision latch ----
@@ -624,6 +803,11 @@ def test_the_banner_names_the_knobs(capsys):
     # screen (the setting-that-changes-the-reward rule).
     assert "flat penalties off=1.5 coll=1.5" in out
     assert "raised 0.75 -> 1.5" in out
+    # The goal-mode truncation is on screen with its constants (the
+    # setting-that-changes-the-reward rule).
+    assert "goal-mode truncation" in out
+    assert f"IG_OFFROAD_TRUNC_STEPS={OFFROAD_TRUNC_STEPS}" in out
+    assert f"IG_STUCK_STEPS={STUCK_STEPS}" in out
 
 
 # ------------------------------------------------------------ the coherence ----

@@ -157,7 +157,7 @@ export OBS_WITH_STATE=1 OBS_WITH_MODE=1
 export EPISODE_HER=1 HER_MIN_DISP=5.0 IG_GOAL_DISTANCE_THRESHOLD_M=2.0
 export IG_SPEED_PREF_K=0.1
 export IG_IN_LANE_BONUS=0    # flat in-lane bonus REMOVED (user 2026-09-20);
-                             # pinned explicitly so the 48-var snapshot
+                             # pinned explicitly so the 49-var snapshot
                              # records it and the banner cannot disagree
 export DISCOUNT=0.99 TOP_QUANTILES_DROP=2 TQC_KAPPA=1.0
 export TEMP_LR=3e-4                      # the v2 divergence fix (entropy brake)

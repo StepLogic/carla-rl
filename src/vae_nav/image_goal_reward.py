@@ -295,9 +295,13 @@ def _driving_with_route_direction(info, disp):
 
     Displacement projected on the lane's own forward vector, positive when the
     car moves the way the road points. A parked or creeping car moves nothing
-    and is NOT counted against the lane bonus: the sustained stop the success
-    condition demands would otherwise pay -1.00 while it waits, and the agent
-    would be paid to roll through the goal instead of stopping on it.
+    and is NOT counted as driving the wrong way: the carve-out keeps L_t True
+    at standstill so the goal-mode stop condition does not pay -1.00 while it
+    waits out the stop window. Since the 2026-09-20 removal of the flat
+    in-lane bonus, L_t True at standstill also means a parked car still pays
+    the speed term -SPEED_PREF_K * |v - v*| (it reads v = 0 against the
+    20 km/h target) in both modes -- stopping remains the cheapest way to end
+    the negative stream, so the agent is never paid to roll through the goal.
     """
     if _speed_mps(info) < STOP_SPEED_MPS:
         return True

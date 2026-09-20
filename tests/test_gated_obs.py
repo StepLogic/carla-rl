@@ -8,9 +8,11 @@ partly normalised away. Its own key gives it its own projection, and it leaves
 the 4-vector layout untouched.
 
 WHAT THIS FILE PROTECTS, beyond the layout. OBS_WITH_GOAL=0 has an existing,
-load-bearing meaning: omit the 12-d goal block, 144 -> 132. run_lanefollow_nogoal.sh
+load-bearing meaning: omit the 4-d goal block, 136 -> 132. run_lanefollow_nogoal.sh
 depends on it and every carla_lanefollow_nogoal checkpoint is 132-d because of
-it. The gate must NOT overload that flag. Gating needs the goal PRESENT and
+it. (The goal block was 12-d and 144-d before the action history moved into
+the mode-independent `state` block; the arm it names is unchanged in kind.)
+The gate must NOT overload that flag. Gating needs the goal PRESENT and
 zeroed, because one actor cannot accept two input shapes.
 """
 import importlib
@@ -157,32 +159,35 @@ def test_gated_space_has_all_four_keys_at_the_pinned_widths():
     m = _reload(**GATED)
     space = _wrapper(m).observation_space
     assert set(space.spaces) == {"goal", "latent", "vector", "mode"}
-    assert space["goal"].shape == (12,)
+    assert space["goal"].shape == (4,)
     assert space["latent"].shape == (128,)
     assert space["vector"].shape == (4,)
     assert space["mode"].shape == (1,)
 
 
-def test_gated_observation_is_145_wide():
+def test_gated_observation_is_137_wide():
+    # 4 goal + 128 latent + 4 vector + 1 mode. Was 145 when the goal block
+    # still carried the 8 history slots (now in the `state` block).
     m = _reload(**GATED)
     space = _wrapper(m).observation_space
-    assert sum(int(np.prod(s.shape)) for s in space.spaces.values()) == 145
+    assert sum(int(np.prod(s.shape)) for s in space.spaces.values()) == 137
 
 
 def test_goal_free_arm_is_still_132_wide():
     # THE REGRESSION GUARD. run_lanefollow_nogoal.sh and every
     # carla_lanefollow_nogoal checkpoint depend on OBS_WITH_GOAL=0 meaning
-    # exactly "omit the 12-d block". Adding the mode key must not change it.
+    # exactly "omit the goal block". Adding the mode key must not change it.
     m = _reload(OBS_WITH_MODE="0", OBS_WITH_GOAL="0", OBS_WITH_VECTOR="1")
     space = _wrapper(m).observation_space
     assert set(space.spaces) == {"latent", "vector"}
     assert sum(int(np.prod(s.shape)) for s in space.spaces.values()) == 132
 
 
-def test_goal_conditioned_arm_is_still_144_wide():
+def test_goal_conditioned_arm_is_still_136_wide():
+    # 4 goal + 128 latent + 4 vector; 144 before the history left the block.
     m = _reload(OBS_WITH_MODE="0", OBS_WITH_GOAL="1", OBS_WITH_VECTOR="1")
     space = _wrapper(m).observation_space
-    assert sum(int(np.prod(s.shape)) for s in space.spaces.values()) == 144
+    assert sum(int(np.prod(s.shape)) for s in space.spaces.values()) == 136
 
 
 def test_identity_records_whether_the_run_was_gated():
@@ -201,7 +206,7 @@ def test_the_banner_lists_the_mode_key_and_the_total_width(capsys):
     _wrapper(m)
     out = capsys.readouterr().out
     assert "'mode': (1,)" in out, out
-    assert "145-d" in out, out
+    assert "137-d" in out, out
     assert "GATED" in out, out
 
 
@@ -219,5 +224,5 @@ def test_the_banner_is_unchanged_for_the_goal_conditioned_arm(capsys):
     _wrapper(m)
     out = capsys.readouterr().out
     assert "'mode'" not in out
-    assert "144-d" in out, out
+    assert "136-d" in out, out
     assert "GATED" not in out

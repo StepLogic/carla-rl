@@ -1,6 +1,7 @@
 """Observation wrapper: goal geometry + frozen VAE latent.
 
-    obs = {"goal": (12,) float32, "latent": (128,) float32}
+    obs = {"goal": (4,) float32, "latent": (128,) float32}
+    (+ {"state": (10,) float32} when OBS_WITH_STATE=1)
 
 WHY TWO KEYS RATHER THAN ONE FLAT VECTOR. jaxrl2's PixelMultiplexer gives every
 non-image observation key its own Dense(latent_dim) -> LayerNorm -> tanh
@@ -8,7 +9,8 @@ projection before concatenating. Two keys therefore means the VAE latent gets
 its own normalisation instead of sharing one with the goal offsets.
 
 That matters because the two blocks live on different scales. The goal offset is
-in metres (order 1-30 in CARLA), the action history is in [-0.5, 0.5], and a VAE
+in metres (order 1-30 in CARLA), the state block's history is in [-0.5, 0.5],
+and a VAE
 posterior mean is roughly unit-normal. The peer Habitat repo put all of these in
 one flat 28-d vector behind a single LayerNorm -- and their own audit found the
 16-beam ring in that vector was raw metres in [0, 10] while the goal offset was
@@ -33,7 +35,41 @@ except ImportError:  # older gym in some of this repo's envs
 from vae_nav.latent_source import LatentSource
 
 N_ACTION_HISTORY = 4
-GOAL_DIM = 2 + 2 + 2 * N_ACTION_HISTORY      # offset, sin/cos yaw, action hist
+# THE GOAL BLOCK IS 4-D: [forward, left, sin yaw, cos yaw].
+#
+# The action history that used to close the block has moved into the
+# mode-independent `state` block below. It had to move: apply_mode zeroes the
+# goal block in explore mode, and the applied-control history is precisely the
+# Markov state a goal-free policy must KEEP -- zeroing it with the goal would
+# leave the explore critic unable to tell its own past. GOAL_DIM shrank from 12
+# to 4 UNCONDITIONALLY (it is not gated behind OBS_WITH_STATE), so agents built
+# before this change cannot load checkpoints trained after it -- policy_io
+# fails loudly, which is the intended behaviour.
+GOAL_DIM = 2 + 2                              # offset, sin/cos yaw
+
+# OBS_WITH_STATE=1 ADDS THE MODE-INDEPENDENT `state` BLOCK.
+#
+#     state = [has_collided, clip(speed_kmh / TARGET_SPEED, 0, 1),
+#              *action_history.flatten()]              -- (10,)
+#
+# TWO PROPERTIES THE GOAL BLOCK CANNOT HAVE. First, apply_mode NEVER touches
+# it: the state block is what the explore mode needs to keep its own history
+# and collision flag, and identical steps in both modes produce identical
+# state blocks by construction. Second, it is built in _observation from info
+# plus the wrapper's own history deque -- it is NOT part of goal_block, so HER
+# relabelling never rewrites it (it is goal-independent, like `latent`).
+#
+# THIS IS NOT A RENAME OF `coll`. OBS_WITH_COLLISION keeps its own flag, its
+# own key and its 1-d width for the single-mode arm (v1/v2); that path is
+# byte-identical to before. The 2-mode coherence check refuses the pairing
+# with OBS_WITH_COLLISION=1 so the two keys can never silently share a run.
+#
+# TARGET_SPEED is read at module import, like every other flag here: the state
+# block bakes the ratio into the observation, so a run that changes
+# TARGET_SPEED mid-flight would change what its own observation means.
+WITH_STATE = os.environ.get("OBS_WITH_STATE", "0") == "1"
+STATE_DIM = 2 + 2 * N_ACTION_HISTORY          # collision, speed ratio, history
+TARGET_SPEED = float(os.environ.get("TARGET_SPEED", 20.0))
 
 # THE ENV'S 4-VECTOR: [steer, throttle, speed/target_speed, mask_goal].
 #
@@ -45,13 +81,13 @@ GOAL_DIM = 2 + 2 + 2 * N_ACTION_HISTORY      # offset, sin/cos yaw, action hist
 # It MUST be on whenever the reward is speed-gated. A reward that pays only
 # below target speed is not learnable if the policy cannot observe its own
 # speed -- the gate would be an unobservable coin flip from the agent's point of
-# view. The goal block carries offsets and action history but no speed.
+# view. The goal block carries offsets but no speed.
 WITH_VECTOR = os.environ.get("OBS_WITH_VECTOR", "0") == "1"
 VECTOR_DIM = 4
 
 # OBS_WITH_GOAL=0 REMOVES THE GOAL SPECIFICATION FROM THE OBSERVATION.
 #
-# The key is OMITTED, not zero-filled. A permanently-zero 12-vector is not free:
+# The key is OMITTED, not zero-filled. A permanently-zero goal vector is not free:
 # it is a channel the encoder must learn to ignore, and it makes a goal-free run
 # indistinguishable from a goal-conditioned one by shape alone. Omitting it makes
 # the difference visible in the observation space and in the [VAEGoal] line.
@@ -83,14 +119,14 @@ WITH_GOAL = os.environ.get("OBS_WITH_GOAL", "1") == "1"
 # the 4-vector layout untouched so existing checkpoints stay readable.
 #
 # THIS FLAG DOES NOT OVERLOAD OBS_WITH_GOAL, and must not be made to. That flag
-# has a load-bearing meaning -- omit the 12-d block, 144 -> 132 -- which
+# has a load-bearing meaning -- omit the 4-d block, 136 -> 132 -- which
 # run_lanefollow_nogoal.sh and every carla_lanefollow_nogoal checkpoint depend
 # on. Gating needs the goal PRESENT and zeroed, because one actor cannot accept
 # two input shapes. The two flags are orthogonal and the pairing is checked in
 # check_gated_coherence below.
 #
-# COST, STATED PLAINLY: the gated observation is 145-d, which matches neither
-# existing arm (144 goal-conditioned, 132 goal-free). policy_io.load_agent_state
+# COST, STATED PLAINLY: the gated observation is 137-d, which matches neither
+# existing arm (136 goal-conditioned, 132 goal-free). policy_io.load_agent_state
 # will refuse both, correctly. A gated run is therefore FROM SCRATCH, not a
 # fine-tune, and that is the main reason the three-way comparison costs a full
 # training budget.
@@ -163,6 +199,7 @@ class VAEGoalWrapper(Wrapper):
         self.with_goal = WITH_GOAL
         self.with_mode = WITH_MODE
         self.with_collision = WITH_COLLISION
+        self.with_state = WITH_STATE
         check_gated_coherence()
         if not self.with_goal:
             _goal_reward = (os.environ.get("LANE_FOLLOW", "0") == "1"
@@ -190,6 +227,12 @@ class VAEGoalWrapper(Wrapper):
             space["mode"] = spaces.Box(0.0, 1.0, (MODE_DIM,), np.float32)
         if self.with_collision:
             space["coll"] = spaces.Box(0.0, 1.0, (COLL_DIM,), np.float32)
+        if self.with_state:
+            # Unbounded like `goal`: entry 0 is 0/1 and entry 1 is clipped to
+            # [0, 1] by construction, but the history slots carry raw applied
+            # controls, and a wrong bound here would silently clip real data.
+            space["state"] = spaces.Box(-np.inf, np.inf, (STATE_DIM,),
+                                        np.float32)
         self.observation_space = spaces.Dict(space)
         # THE BANNER MUST LIST EVERY KEY IN THE SPACE. It is the one place an
         # operator confirms the observation layout of a live run, and a gated
@@ -202,6 +245,7 @@ class VAEGoalWrapper(Wrapper):
               + (f", 'vector': ({VECTOR_DIM},)" if self.with_vector else "")
               + (f", 'mode': ({MODE_DIM},)" if self.with_mode else "")
               + (f", 'coll': ({COLL_DIM},)" if self.with_collision else "")
+              + (f", 'state': ({STATE_DIM},)" if self.with_state else "")
               + f"}} = {total}-d backend='{self.source.name}'"
               + ("  [GATED: goal block zeroed in explore mode]"
                  if self.with_mode else "")
@@ -209,19 +253,24 @@ class VAEGoalWrapper(Wrapper):
 
     # -- THE transform. HER relabelling calls this, never a second copy. ----
     def goal_block(self, fields):
-        """Build the 12-d goal block from plain per-step fields.
+        """Build the 4-d goal block from plain per-step fields.
 
-        `fields` carries only what the block needs:
+        `fields` carries what the block needs:
             hero_pos  (2,)  world x, y
             hero_yaw  float radians
             goal_pos  (2,)  world x, y
-            action_history  (N_ACTION_HISTORY, 2)
 
-        Kept a pure function of those so hindsight relabelling can recompute it
-        arithmetically on a worker thread, with no simulator access. This is the
-        peer repo's PointGoalRelabelBuffer contract: relabelled states are
-        produced by the wrapper's OWN transform, so they cannot drift from
-        on-policy ones.
+        EXTRA KEYS ARE IGNORED -- in particular `action_history`, which the
+        trainer's record() call still passes. The history moved to the
+        mode-independent `state` block (see OBS_WITH_STATE above); the goal
+        block being goal-only is what lets apply_mode zero it in explore mode
+        without erasing the policy's Markov state.
+
+        Kept a pure function of the pose fields so hindsight relabelling can
+        recompute it arithmetically on a worker thread, with no simulator
+        access. This is the peer repo's PointGoalRelabelBuffer contract:
+        relabelled states are produced by the wrapper's OWN transform, so they
+        cannot drift from on-policy ones.
         """
         hero = np.asarray(fields["hero_pos"], np.float64)
         goal = np.asarray(fields["goal_pos"], np.float64)
@@ -245,17 +294,8 @@ class VAEGoalWrapper(Wrapper):
         forward = d[0] * cy + d[1] * sy          # d . forward
         left = -(-d[0] * sy + d[1] * cy)         # -(d . right)
 
-        hist = np.asarray(fields.get("action_history",
-                                     np.zeros((N_ACTION_HISTORY, 2))), np.float32)
-        hist = hist.reshape(-1)[:2 * N_ACTION_HISTORY]
-        if hist.size < 2 * N_ACTION_HISTORY:
-            hist = np.pad(hist, (0, 2 * N_ACTION_HISTORY - hist.size))
-
-        return np.concatenate([
-            np.array([forward, left], np.float32),
-            np.array([np.sin(yaw), np.cos(yaw)], np.float32),
-            hist.astype(np.float32),
-        ]).astype(np.float32)
+        return np.array([forward, left, np.sin(yaw), np.cos(yaw)],
+                        np.float32)
 
     # -- gym plumbing ------------------------------------------------------
     def _fields(self, info):
@@ -300,7 +340,30 @@ class VAEGoalWrapper(Wrapper):
         if self.with_collision:
             out["coll"] = np.array(
                 [float(bool(info.get("has_collided", False)))], np.float32)
+        if self.with_state:
+            # BUILT OUTSIDE the mode handling above, and apply_mode must never
+            # reach it: the state block is mode-INDEPENDENT. Explore mode
+            # needs this block's history and collision flag precisely because
+            # the goal block it shares an episode with is zeroed. Identical
+            # steps under both modes therefore produce byte-identical state
+            # blocks.
+            out["state"] = self._state_block(info)
         return out
+
+    def _state_block(self, info):
+        """[has_collided, clip(speed/TARGET_SPEED, 0, 1), *history.flatten()]."""
+        speed = float(info.get("speed_kmh", 0.0))
+        if not np.isfinite(speed):
+            # Same convention image_goal_reward took for a nan speed: map to
+            # stopped rather than poison the whole block with a nan.
+            speed = 0.0
+        ratio = min(1.0, max(0.0, speed / TARGET_SPEED))
+        hist = np.asarray(self._hist, np.float32).reshape(-1)
+        return np.concatenate([
+            np.array([float(bool(info.get("has_collided", False))),
+                      ratio], np.float32),
+            hist.astype(np.float32),
+        ]).astype(np.float32)
 
     def reset(self, **kwargs):
         out = self.env.reset(**kwargs)
@@ -336,10 +399,15 @@ class VAEGoalWrapper(Wrapper):
         ident["goal_dim"] = GOAL_DIM
         ident["n_action_history"] = N_ACTION_HISTORY
         # Recorded so evaluation cannot silently pair a gated checkpoint with a
-        # plain agent. The shapes differ (145 against 144), so the loader would
+        # plain agent. The shapes differ (137 against 136), so the loader would
         # refuse anyway, but this names the reason.
         ident["with_mode"] = self.with_mode
         ident["with_vector"] = bool(self.with_vector)
         ident["with_goal"] = bool(self.with_goal)
         ident["with_coll"] = bool(self.with_collision)
+        # Recorded for the same reason as with_coll: evaluation cannot
+        # silently pair a state-block checkpoint with an agent built without
+        # the key (the pytree shapes differ, so the loader refuses anyway).
+        ident["with_state"] = bool(self.with_state)
+        ident["target_speed"] = TARGET_SPEED
         return ident

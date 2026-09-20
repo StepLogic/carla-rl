@@ -289,14 +289,41 @@ echo "[Banner] snapshot: results/run_env/${RUN_NAME}.env ($(wc -l < "results/run
 # pgrep -x CANNOT match: /proc/PID/comm is capped at 15 chars, so the 23-char
 # 'CarlaUE4-Linux-Shipping' truncates and an exact-name match never fires. The
 # bracket stops a concurrent cleanup matching THIS script's argv.
+#
+# THE KILL IS SCOPED TO THIS RUN'S OWN PORTS BY DEFAULT (KILL_ALL=0). The old
+# kill-9-ALL-CARLA sweep is a shared-box hazard: other sessions on this box
+# start and stop servers concurrently, and this script kills at LAUNCH and
+# again in the EXIT trap, so an unscoped sweep would destroy a peer's live run
+# (measured 2026-09-20: a peer server on port 2000 serving an eval while a
+# smoke launch on 2010 would have killed it, and its EXIT would have killed
+# it again). ensure_carla starts every server with an explicit -carla-port=P
+# in its argv, so matching this run's CARLA_PORTS/CARLA_PORT values -- BOTH
+# exported above this point -- scopes the kill to servers this run owns.
+# KILL_ALL=1 restores the exact old kill-all sweep: the user's standing
+# kill-all rule belongs to a SOLO 1M launch, and the controller sets
+# KILL_ALL=1 explicitly there. WHO SETS WHAT: the 50k smoke on a shared box
+# runs scoped (KILL_ALL unset or 0, its own CARLA_PORT); the 1M launch runs
+# KILL_ALL=1.
 kill_servers() {
+  local _pat _ports pids p
+  if [ "${KILL_ALL:-0}" = "1" ]; then
+    _pat='[C]arlaUE4-Linux-Shipping'
+  else
+    # Accept "2000", "2000,2010" or "2000 2010": normalise any separator list
+    # to an alternation. The trailing ([[:space:]]|$) stops 200 from matching
+    # a 2000 server's argv, not just 2000 matching 20001.
+    _ports="$(printf '%s\n' "${CARLA_PORTS:-${CARLA_PORT:-2000}}" \
+              | tr -s ' ,;' '\n' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//' \
+              | sed '/^$/d' | paste -sd'|' -)"
+    _pat="[C]arlaUE4-Linux-Shipping .*-carla-port=(${_ports:?})([[:space:]]|\$)"
+  fi
   for _ in 1 2 3 4 5; do
-    mapfile -t pids < <(pgrep -f '[C]arlaUE4-Linux-Shipping')
+    mapfile -t pids < <(pgrep -f "$_pat")
     [ ${#pids[@]} -eq 0 ] && return 0
     for p in "${pids[@]}"; do kill -9 "$p" 2>/dev/null; done
     sleep 3
   done
-  pgrep -f '[C]arlaUE4-Linux-Shipping' >/dev/null && \
+  pgrep -f "$_pat" >/dev/null && \
     echo "WARNING: a CARLA server survived 5 kill attempts" >&2
 }
 cleanup() { kill_servers; echo "=== 2-mode image-goal run done ==="; }
@@ -318,7 +345,8 @@ ckpt_step() {
 #        tail -f logs/${RUN_NAME}.log
 #      expect, in order: the [Banner] spec table above, [Scrub] lines if the
 #      calling shell carried anything, [Towns] frozen split, [Latent]
-#      backend 'vc1' (grid2 readout), [CARLA] starting/ready on port 2000,
+#      backend 'vc1' (grid2 readout), [CARLA] starting/ready on the run's
+#      port (CARLA_PORT -- 2000 is the 1M default; the smoke ran 2010),
 #      [GatedConfig] OK ... (check_gated_run passing the pairing),
 #      [TwoModeIG] unified image-goal reward ... both modes, [VAEGoal]
 #      obs={... 'state': (10,), 'mode': ...} WITHOUT a 'coll' key,

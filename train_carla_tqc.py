@@ -136,10 +136,34 @@ def make_expert(env, action_space):
         return None
 
 
-def build_agent(observation_space, action_space, seed):
-    """TQC with the peer's config of record, kappa derived from the reward."""
-    from jaxrl2.agents import TQCLearner
+def wants_one_critic():
+    """THE ONE-CRITIC ROUTE: GATED=1 AND GATED_ONE_CRITIC=1.
 
+    The 2-mode image-goal pairing (IMAGE_GOAL_TASK=1 AND GATED=1, which
+    check_gated_run requires to run with GATED_ONE_CRITIC=1) trains a UNIFIED
+    reward through ONE critic, so the two-critic GatedTQCLearner is the wrong
+    learner for it and the ModeSplitBuffer is the wrong buffer. Extracted as a
+    function so the branch condition is pinned by a test
+    (tests/test_gated_one_critic_route.py) and checkable without a simulator,
+    exactly as _two_mode_image_goal is. Reads the environment LIVE rather than
+    the module-level GATED constant: the routing must follow the environment
+    the caller sees, not the one at import.
+    """
+    return (os.environ.get("GATED", "0") == "1"
+            and os.environ.get("GATED_ONE_CRITIC", "0") == "1")
+
+
+def agent_kwargs(action_space=None):
+    """The TQC build kwargs, shared by every learner route.
+
+    THE GATED EXTRAS ARE ROUTE-CONDITIONAL. The two-critic route passes the
+    kwargs only GatedTQCLearner understands (both discounts, the warm-start
+    knobs, the value bounds). The one-critic route passes NONE of them:
+    jaxrl2's TQCLearner takes no **kwargs and would reject every one, and its
+    critic bounds arrive instead through TQC_TARGET_MIN/MAX, read at import in
+    critic_updater. Everything else -- the peer's config of record, kappa
+    derived from the reward -- is identical on every route.
+    """
     kwargs = dict(
         actor_lr=3e-4,
         critic_lr=3e-4,
@@ -193,14 +217,7 @@ def build_agent(observation_space, action_space, seed):
         # cannot learn this task" rather than like a misconfigured head.
         action_space=action_space,
     )
-    n_drop = kwargs["top_quantiles_to_drop_per_net"] * kwargs["num_qs"]
-    total = kwargs["num_quantiles"] * kwargs["num_qs"]
-    print(f"[Algo] TQC num_qs={kwargs['num_qs']} "
-          f"n_quantiles={kwargs['num_quantiles']} "
-          f"drop_per_net={kwargs['top_quantiles_to_drop_per_net']} "
-          f"(truncating {n_drop} of {total}) kappa={kwargs['kappa']:g}")
-    if os.environ.get("GATED", "0") == "1":
-        from vae_nav.gated_tqc_learner import GatedTQCLearner
+    if os.environ.get("GATED", "0") == "1" and not wants_one_critic():
         # TWO CRITICS, and NOT for the reason the Habitat agent has two. There
         # the split was a discount mismatch, 1.0 against 0.99. Both lane arms
         # here run at 0.99, so EXPLORE_DISCOUNT defaults to the same value and
@@ -244,6 +261,32 @@ def build_agent(observation_space, action_space, seed):
             if (ceiling is not None or "TQC_VALUE_CEILING" in os.environ)
             else None,
         )
+    return kwargs
+
+
+def build_agent(observation_space, action_space, seed):
+    """TQC with the peer's config of record, kappa derived from the reward."""
+    from jaxrl2.agents import TQCLearner
+
+    kwargs = agent_kwargs(action_space)
+    n_drop = kwargs["top_quantiles_to_drop_per_net"] * kwargs["num_qs"]
+    total = kwargs["num_quantiles"] * kwargs["num_qs"]
+    print(f"[Algo] TQC num_qs={kwargs['num_qs']} "
+          f"n_quantiles={kwargs['num_quantiles']} "
+          f"drop_per_net={kwargs['top_quantiles_to_drop_per_net']} "
+          f"(truncating {n_drop} of {total}) kappa={kwargs['kappa']:g}")
+    if wants_one_critic():
+        # ONE critic, mode-conditioned via the obs dict. Bounds come from
+        # TQC_TARGET_MIN/MAX (read at import in critic_updater) -- coherence
+        # refuses to start the run without them. agent_kwargs already left the
+        # GatedTQCLearner-only kwargs off this route; the pops stay as a guard
+        # so a future kwarg added to the shared dict cannot reach the plain
+        # learner silently.
+        plain = dict(kwargs); plain.pop("value_floor", None); plain.pop("value_ceiling", None)
+        return TQCLearner(seed, observation_space.sample(),
+                          action_space.sample(), **plain)
+    if os.environ.get("GATED", "0") == "1":
+        from vae_nav.gated_tqc_learner import GatedTQCLearner
         return GatedTQCLearner(seed, observation_space.sample(),
                                action_space.sample(), **kwargs)
     return TQCLearner(seed, observation_space.sample(), action_space.sample(),
@@ -882,7 +925,7 @@ def main():
 
     agent = build_agent(venv.observation_space, venv.action_space, SEED)
     _capacity = int(os.environ.get("REPLAY_CAPACITY", 1_000_000))
-    if os.environ.get("GATED", "0") == "1":
+    if GATED and not wants_one_critic():
         from vae_nav.mode_split_buffer import ModeSplitBuffer
         # MODE-STRATIFIED, and the reason is measured rather than theoretical.
         # A uniformly sampled shared buffer gives each critic whatever share of
@@ -899,6 +942,11 @@ def main():
             venv.observation_space, venv.action_space, _capacity,
             goal_frac=float(os.environ.get("GOAL_BATCH_FRAC", 0.5)))
     else:
+        # THE ONE-CRITIC ROUTE AND THE PLAIN ROUTE ALIKE. A single plain
+        # ReplayBuffer: the unified-reward arm has ONE critic, so there is no
+        # second critic to stratify a batch for, and the mode bit already rides
+        # INSIDE the observation dict (OBS_WITH_MODE), where the one critic
+        # reads it. No GOAL_BATCH_FRAC split.
         buffer = ReplayBuffer(venv.observation_space, venv.action_space,
                               _capacity)
 
@@ -1354,7 +1402,7 @@ def main():
                 if inf.get("arrived_this_step"):
                     hers[i].end_leg()
             else:
-                if GATED:
+                if GATED and not wants_one_critic():
                     # Routed by the mode this transition was collected under.
                     # Defaults to GOAL if absent, matching the observation
                     # wrapper, so a missing GatedReward degrades to the
@@ -1362,6 +1410,8 @@ def main():
                     # filing every row as exploration.
                     buffer.insert(tr, mode=int(inf.get("mode", 1)))
                 else:
+                    # The one-critic route's plain ReplayBuffer takes no mode
+                    # kwarg -- the mode rides inside the observation dict.
                     buffer.insert(tr)
 
             if final_infos[i] is not None:
@@ -1668,6 +1718,12 @@ def main():
                             return np.mean(recent[key]) if recent[key] else default
                         n_g, n_e = len(recent["ret_goal"]), len(recent["ret_explore"])
                         frac_g = n_g / max(1, n_g + n_e)
+                        # On the ONE-CRITIC route the batch mix is NOT fixed:
+                        # the single plain buffer samples uniformly, so the
+                        # GOAL_BATCH_FRAC parenthetical would be a lie there.
+                        _mix = ("" if wants_one_critic() else
+                                " (batch mix is FIXED at GOAL_BATCH_FRAC "
+                                "regardless)")
                         print(f"[GatedEp{total_eps:5d}] "
                               f"GOAL   n={n_g:3d} succ={_m('succ_goal'):.3f} "
                               f"ret={_m('ret_goal'):8.1f} (= -steps) "
@@ -1686,9 +1742,8 @@ def main():
                               f"dist={_m('dist_explore'):6.1f}m "
                               f"ends[{_endstr}] "
                               f"coll={_m('coll_explore'):.3f} "
-                              f"| episode mix goal={frac_g:.2f} "
-                              f"(batch mix is FIXED at GOAL_BATCH_FRAC "
-                              f"regardless)", flush=True)
+                              f"| episode mix goal={frac_g:.2f}"
+                              f"{_mix}", flush=True)
                 if hers is not None:
                     # THE DISPATCH IS ON A CLASS ATTRIBUTE, not an isinstance
                     # import: the base call site stays `flush_episode()` bare

@@ -381,6 +381,18 @@ def ensure_carla(port, timeout=180.0):
     return port
 
 
+def _two_mode_image_goal():
+    """THE 2-MODE PAIRING: IMAGE_GOAL_TASK=1 AND GATED=1.
+
+    Extracted as a function so the branch condition is pinned by a test
+    (tests/test_make_env_two_mode_branch.py) and make_env's branch order is
+    checkable without a simulator. GATED=1 alone must NOT select this arm --
+    the frozen gated arms take their own branch below.
+    """
+    return (os.environ.get("IMAGE_GOAL_TASK", "0") == "1"
+            and os.environ.get("GATED", "0") == "1")
+
+
 def make_env(town, seed, latent_source, eval_mode=False, port=None):
     """One env, one town, one server. Wrapper order is shared with eval."""
     from rlib_integration.carla_env import CarlaEnv
@@ -463,10 +475,45 @@ def make_env(town, seed, latent_source, eval_mode=False, port=None):
     # LANE FOLLOWING uses the env's own per-step distance reward instead of the
     # sparse +600 arrival. LANE_FOLLOW=1 selects it; the sparse path is
     # untouched so existing goal-navigation runs are bit-identical.
+    # THE 2-MODE IMAGE-GOAL ARM: IMAGE_GOAL_TASK=1 AND GATED=1. One reward
+    # (TwoModeImageGoalReward) serves both the image-goal task and the
+    # goal-free explore task, selected by the mode bit drawn at reset. Placed
+    # BEFORE the single-mode IMAGE_GOAL_TASK branch -- which returns early --
+    # so this pairing can never be captured by it; and before the GATED
+    # branch, so the frozen two-critic gated stack (GatedReward over
+    # LaneFollowReward, the mode-split learner) cannot be half-applied to an
+    # arm whose design is ONE bounded critic under one reward.
+    if _two_mode_image_goal():
+        from vae_nav.image_goal_reward import (TwoModeImageGoalReward,
+                                               image_goal_coherence)
+        from vae_nav.gated_config import check_gated_run
+
+        # BOTH GUARDS RUN HERE, before a server start and before any GPU
+        # memory is taken. image_goal_coherence dispatches on the pairing and
+        # demands every flag the 2-mode learner depends on (OBS_WITH_STATE,
+        # OBS_WITH_MODE, VC-1, one critic, HER, the value bounds) and refuses
+        # the single-mode arm's flags; check_gated_run then checks the
+        # run-level split -- skipping its OBS_WITH_VECTOR requirement for this
+        # pairing, whose velocity lives in the `state` block.
+        image_goal_coherence()
+        check_gated_run()
+
+        env = TwoModeImageGoalReward(
+            env,
+            explore_prob=float(os.environ.get("EXPLORE_PROB", 0.5)),
+            force_mode=(int(os.environ.get("EVAL_FORCE_MODE", 1)) if eval_mode else None),
+            max_steps=(10 ** 9 if os.environ.get("NO_TIMELIMIT", "0") == "1"
+                       else int(os.environ.get("MAX_EPISODE_STEPS", 1000))),
+            seed=seed)
+        env = VAEGoalWrapper(env, source=latent_source)
+        return TimeLimit(env, max_episode_steps=MAX_EPISODE_STEPS)
     # IMAGE-GOAL ARM. One reward, one mode, VC-1 features: reach the goal
     # image's viewpoint and stop there. Placed before the GATED branch and
     # returning early, for the same reason the gated and explorer branches
     # are: so no part of either existing stack can be half-applied.
+    #
+    # Since 2026-09-20 the IMAGE_GOAL_TASK=1 + GATED=1 pairing is taken ABOVE
+    # by the 2-mode arm; this branch is the single-mode arm only.
     if os.environ.get("IMAGE_GOAL_TASK", "0") == "1":
         # IG_MAX_STEPS (imported aliased: this file's own module-level
         # MAX_STEPS is the 200k training-step budget, a different thing).

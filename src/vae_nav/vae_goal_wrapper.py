@@ -164,11 +164,20 @@ def check_gated_coherence():
             "goal-free arm (OBS_WITH_GOAL=0, OBS_WITH_MODE=0), which is the "
             "third leg of the ablation rather than a mode of this one.")
     if not WITH_VECTOR:
-        raise ValueError(
-            "OBS_WITH_MODE=1 requires the vector block (OBS_WITH_VECTOR=1). "
-            "BOTH gated rewards are speed-gated -- they pay progress only below "
-            "target speed -- so a policy that cannot observe its own speed sees "
-            "the gate as an unobservable coin flip and the critic fits noise.")
+        # THE 2-MODE IMAGE-GOAL PAIRING (IMAGE_GOAL_TASK=1 with GATED=1) keeps
+        # its velocity in the mode-independent `state` block -- the same skip
+        # check_gated_run makes -- so the requirement below does not apply to
+        # it. Read from os.environ, not from the module constants: the pairing
+        # is decided per run, and a GATED run without IMAGE_GOAL_TASK (the
+        # frozen arms) is unchanged.
+        _two_mode = (os.environ.get("IMAGE_GOAL_TASK", "0") == "1"
+                     and os.environ.get("GATED", "0") == "1")
+        if not _two_mode:
+            raise ValueError(
+                "OBS_WITH_MODE=1 requires the vector block (OBS_WITH_VECTOR=1). "
+                "BOTH gated rewards are speed-gated -- they pay progress only below "
+                "target speed -- so a policy that cannot observe its own speed sees "
+                "the gate as an unobservable coin flip and the critic fits noise.")
 
 
 def apply_mode(goal_block, mode):

@@ -47,16 +47,28 @@ def check_gated_run(env=None):
             "genuinely absent that is the separate goal-free arm, which is the "
             "third leg of the ablation rather than a mode of this one.")
 
-    if not _flag(env, "OBS_WITH_VECTOR"):
+    # THE 2-MODE IMAGE-GOAL PAIRING (IMAGE_GOAL_TASK=1) keeps its velocity in
+    # the mode-independent `state` block (image_goal_coherence demands
+    # OBS_WITH_STATE=1 there) instead of the 4-d `vector` block, so the
+    # requirement below does not apply to it. Every other GATED arm -- the
+    # frozen ones -- still requires OBS_WITH_VECTOR=1.
+    if not _flag(env, "OBS_WITH_VECTOR") and not _flag(env, "IMAGE_GOAL_TASK"):
         raise ValueError(
             "GATED=1 requires the vector block (OBS_WITH_VECTOR=1). BOTH gated "
             "rewards are speed-gated, so a policy that cannot observe its own "
             "speed sees the gate as an unobservable coin flip.")
 
     perception = str(env.get("PERCEPTION", "vae")).lower()
-    if perception not in ("vae", "", "mobilenet"):
+    # PERCEPTION=vc1|vc1_vitb is the 2-mode image-goal arm's backend (added
+    # additively; the vae/mobilenet acceptance is unchanged). The checkpoint
+    # risk the mobilenet WARNING describes applies to vc1 too -- 768-d
+    # observation, no checkpoint shared with any vae or mobilenet run in
+    # either direction -- and is refused at load time the same way, by
+    # LatentSource.assert_matches / policy_io naming both sides.
+    if perception not in ("vae", "", "mobilenet", "vc1", "vc1_vitb"):
         raise ValueError(
-            f"GATED=1 accepts PERCEPTION=vae or mobilenet, not {perception!r}.")
+            f"GATED=1 accepts PERCEPTION=vae, mobilenet, vc1 or vc1_vitb, "
+            f"not {perception!r}.")
     if perception == "mobilenet":
         # RELAXED 2026-09-11 on the user's instruction. This used to be a hard
         # refusal, on the grounds that MobileNet's 384-d latent changes the

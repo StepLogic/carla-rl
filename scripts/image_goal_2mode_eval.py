@@ -141,7 +141,9 @@ os.environ.setdefault("OBS_WITH_VECTOR", "0")
 os.environ.setdefault("EPISODE_HER", "1")
 os.environ.setdefault("HER_MIN_DISP", "5.0")
 os.environ.setdefault("IG_GOAL_DISTANCE_THRESHOLD_M", "2.0")
-os.environ.setdefault("IG_SPEED_PREF_K", "0.1")
+# Raised from 0.1 (user 2026-09-20, both modes): the launcher now pins 0.2,
+# so the mirror must not fill the hole with the superseded weight.
+os.environ.setdefault("IG_SPEED_PREF_K", "0.2")
 os.environ.setdefault("DISCOUNT", "0.99")
 os.environ.setdefault("TOP_QUANTILES_DROP", "2")
 os.environ.setdefault("TQC_KAPPA", "1.0")

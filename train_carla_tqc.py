@@ -1379,6 +1379,25 @@ def main():
                       rewards=np.float32(rewards[i]), masks=np.float32(mask),
                       dones=np.float32(float(dones[i])), next_observations=n_i)
             if hers is not None:
+                # THE CALL SITE IS SHARED BETWEEN BUFFER CLASSES: `hers` holds
+                # an ImageGoalRelabelBuffer only when IMAGE_GOAL_TASK=1 and a
+                # plain EpisodeRelabelBuffer otherwise. `off_road` exists only
+                # on the image-goal subclass (its flush-time dirty cut), so it
+                # is passed ONLY there -- the base record() has no such kwarg
+                # and would raise TypeError on every step. Same class-attribute
+                # dispatch the flush site below uses.
+                _rec_kwargs = dict(
+                    speed_kmh=float(inf.get("speed_kmh", 0.0) or 0.0),
+                    target_speed_kmh=float(inf.get("target_speed_kmh", 0.0)
+                                           or 0.0),
+                    # ROUTES THE ON-POLICY ROW. Without this the relabel buffer
+                    # inserts with no mode and the split buffer defaults every
+                    # row to GOAL, filing every explore transition as goal data.
+                    # Hindsight copies are forced to GOAL inside the buffer.
+                    mode=int(inf.get("mode", 1)))
+                if getattr(hers[i], "IMAGE_GOAL", False):
+                    # Third dirty event for the image-goal arm's flush-time cut.
+                    _rec_kwargs["off_road"] = bool(inf.get("off_road", False))
                 hers[i].record(
                     tr,
                     fields={"hero_pos": inf["hero_pos"], "hero_yaw": inf["hero_yaw"],
@@ -1387,16 +1406,7 @@ def main():
                                                       np.zeros((4, 2)))},
                     pos=inf["hero_pos"], hit=bool(inf.get("collision", False)),
                     lane=bool(inf.get("lane_invasion", False)),
-                    # Third dirty event for the image-goal arm's flush-time
-                    # cut; the base buffer ignores it (no such kwarg there).
-                    off_road=bool(inf.get("off_road", False)),
-                    speed_kmh=float(inf.get("speed_kmh", 0.0) or 0.0),
-                    target_speed_kmh=float(inf.get("target_speed_kmh", 0.0) or 0.0),
-                    # ROUTES THE ON-POLICY ROW. Without this the relabel buffer
-                    # inserts with no mode and the split buffer defaults every
-                    # row to GOAL, filing every explore transition as goal data.
-                    # Hindsight copies are forced to GOAL inside the buffer.
-                    mode=int(inf.get("mode", 1)))
+                    **_rec_kwargs)
                 # CLOSE THE LEG ON ARRIVAL. Must come AFTER record(), so the
                 # arriving transition belongs to the leg it completed rather
                 # than opening the next one. Without this a chained episode is

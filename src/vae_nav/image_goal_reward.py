@@ -118,21 +118,115 @@ TARGET_SPEED_KMH = float(os.environ.get("TARGET_SPEED", 20.0))
 
 IMAGE_GOAL_TASK = os.environ.get("IMAGE_GOAL_TASK", "0") == "1"
 
+# The two modes of the gated image-goal arm, matching vae_nav.gated_reward.
+GOAL, EXPLORE = 1, 0
+
+# The explore arm's arrival distance. IMPORTED, not redefined: the 2-mode arm
+# shares the gated explore arm's semantics (cumulative path, not net
+# displacement) and must never drift from the frozen constant's meaning.
+from vae_nav.gated_reward import EXPLORE_GOAL_DIST_M  # noqa: E402
+
 
 def image_goal_coherence():
     """Refuse image-goal configurations that cannot learn, BEFORE CARLA starts.
 
     Mirrors gated_config.check_gated_run: a run that starts and then dies at
     step 1 has still cost a server start, a world load and a GPU share.
+
+    TWO BRANCHES, chosen on GATED:
+
+      GATED=1 (the 2-mode pairing, TwoModeImageGoalReward): the pairing is
+      REQUIRED, not refused -- it is the arm this module now serves -- but a
+      2-mode run must state every flag its learner depends on, and must NOT
+      carry any flag from the single-mode arm it replaces. The refusals are
+      exact pairings, not style: OBS_WITH_COLLISION=1 would put the single
+      arm's `coll` key beside the 2-mode arm's `state` key, whose first two
+      slots already carry has_collided; a stacked reward would be dead code
+      below a wrapper that reads none of its info keys; NO_TIMELIMIT=1 is a
+      trace-collection setting that would remove the TimeLimit wrapper and
+      leave only the reward's own cap.
+
+      GATED=0 (the single-mode arm, ImageGoalReward): the original checks,
+      unchanged.
     """
     if not IMAGE_GOAL_TASK:
         return
     if os.environ.get("GATED", "0") == "1":
-        raise SystemExit(
-            "IMAGE_GOAL_TASK=1 with GATED=1 is not a supported pairing: the "
-            "image-goal arm is a single-mode run. GatedReward draws a mode "
-            "per episode and two critics; ImageGoalReward defines its own "
-            "single reward and termination. Run one or the other.")
+        if os.environ.get("OBS_WITH_STATE", "0") != "1":
+            raise SystemExit(
+                "IMAGE_GOAL_TASK=1 with GATED=1 requires OBS_WITH_STATE=1. "
+                "Both modes publish has_collided and speed through the "
+                "mode-independent `state` block; without it neither critic "
+                "sees its own Markov state and the persistent collision "
+                "penalty makes the reward depend on history the critic "
+                "cannot see.")
+        if os.environ.get("OBS_WITH_MODE", "0") != "1":
+            raise SystemExit(
+                "IMAGE_GOAL_TASK=1 with GATED=1 requires OBS_WITH_MODE=1: "
+                "the mode is commanded per episode, so the actor must see "
+                "the bit or the two modes are indistinguishable to it.")
+        if os.environ.get("PERCEPTION", "vae").lower() not in ("vc1",
+                                                               "vc1_vitb"):
+            raise SystemExit(
+                "IMAGE_GOAL_TASK=1 expects PERCEPTION=vc1. The arm's "
+                "checkpoint identity, latent width (768) and edge-weight "
+                "calibration are tied to the VC-1 backend; running it on "
+                "another encoder is an experiment change, not a run option.")
+        if os.environ.get("VC1_READOUT", "cls").lower() not in ("cls",
+                                                                "grid2"):
+            raise SystemExit(
+                "IMAGE_GOAL_TASK=1 with GATED=1 requires VC1_READOUT=cls or "
+                "grid2. The readout is part of the encoder's output shape; "
+                "anything else changes the observation under a pairing the "
+                "plan's checkpoints were sized for.")
+        if os.environ.get("GATED_ONE_CRITIC", "0") != "1":
+            raise SystemExit(
+                "IMAGE_GOAL_TASK=1 with GATED=1 requires GATED_ONE_CRITIC=1. "
+                "The unified reward puts both modes on ONE scale (every step "
+                "< 0), so the two-critic split has nothing left to justify "
+                "and the single bounded critic is the arm's design; a "
+                "two-critic learner under one reward would train a second "
+                "critic on the same signal and double the replay cost.")
+        if os.environ.get("EPISODE_HER", "0") != "1":
+            raise SystemExit(
+                "IMAGE_GOAL_TASK=1 with GATED=1 requires EPISODE_HER=1: goal "
+                "mode's returns are sparse against the 1000-step cap, and "
+                "without hindsight relabelling the goal critic fits almost "
+                "nothing but failures.")
+        for _bound in ("TQC_TARGET_MIN", "TQC_TARGET_MAX"):
+            if not os.environ.get(_bound):
+                raise SystemExit(
+                    f"IMAGE_GOAL_TASK=1 with GATED=1 requires {_bound} set. "
+                    "The reward is all-negative but unbounded above by "
+                    "nothing except the step cap, and the one bounded critic "
+                    "the arm runs clips its targets explicitly; running "
+                    "without both bounds is the configuration the bounded "
+                    "critic exists to replace, not a variant of it.")
+        if os.environ.get("OBS_WITH_COLLISION", "0") == "1":
+            raise SystemExit(
+                "IMAGE_GOAL_TASK=1 with GATED=1 refuses OBS_WITH_COLLISION=1: "
+                "the single-mode arm's 1-d `coll` key shares a run with the "
+                "2-mode arm's 10-d `state` block, whose first two slots "
+                "ALREADY carry has_collided and the speed ratio. Two keys "
+                "for one flag means the critic's Markov repair is applied "
+                "twice under different widths; the state block is the one "
+                "the 2-mode arm trains on.")
+        if (os.environ.get("LANE_FOLLOW", "0") == "1"
+                or os.environ.get("LANE_EXPLORE", "0") == "1"
+                or os.environ.get("TIME_TO_GOAL", "0") == "1"):
+            raise SystemExit(
+                "IMAGE_GOAL_TASK=1 must not stack another reward wrapper: "
+                "its own reward is TwoModeImageGoalReward, and a second "
+                "reward below it would be dead code the run banner would "
+                "not reflect.")
+        if os.environ.get("NO_TIMELIMIT", "0") == "1":
+            raise SystemExit(
+                "IMAGE_GOAL_TASK=1 with GATED=1 refuses NO_TIMELIMIT=1: it "
+                "is a training run, and the trainer's TimeLimit must agree "
+                "with the reward's own max_steps cap. NO_TIMELIMIT is a "
+                "trace-collection setting; on a training run it silently "
+                "changes what a 'done' step means.")
+        return
     if os.environ.get("OBS_WITH_COLLISION", "0") != "1":
         raise SystemExit(
             "IMAGE_GOAL_TASK=1 requires OBS_WITH_COLLISION=1. The persistent "
@@ -332,5 +426,151 @@ class ImageGoalReward(Wrapper):
         info["collision_impulse"] = impulse
         info["ig_reward_components"] = components
         info["mode"] = 1                          # goal-conditioned task
+        info["gated_reward"] = reward
+        return obs, reward, terminated, truncated, info
+
+
+class TwoModeImageGoalReward(Wrapper):
+    """ONE reward, TWO modes, drawn per reset -- the 2-mode image-goal arm.
+
+    STRUCTURE MIRRORS GatedReward (mode draw at reset, `_t`, `_prev`,
+    `_path_m`) but the reward is the SAME pure function for both modes:
+    image_goal_reward(info, disp, has_collided), with its persistent
+    collision latch and sustained-stop window carried HERE as per-episode
+    state, exactly as ImageGoalReward carries them. That is the whole design
+    change from the gated arm: GatedReward selected between two incompatible
+    reward scales (and hence two critics); this wrapper selects between two
+    TERMINATION rules under one all-negative reward, so one bounded critic
+    serves both.
+
+    GOAL MODE (mode 1): the image-goal task. Success = speed under
+    STOP_SPEED_MPS for STOP_WINDOW_STEPS consecutive steps while within
+    GOAL_DISTANCE_THRESHOLD_M and within GOAL_YAW_THRESHOLD_DEG of the goal
+    heading. The success step pays the ordinary reward -- no bonus, in either
+    mode; termination is the only thing success buys.
+
+    EXPLORE MODE (mode 0): drive EXPLORE_GOAL_DIST_M of CUMULATIVE PATH.
+    Arrival TERMINATES and pays NOTHING: info["explore_end"]="reached" and
+    the reward is that step's ordinary (negative) reward, so the episode
+    return is exactly the sum of its step rewards. This is the deliberate
+    departure from GatedReward, which paid EXPLORE_ARRIVAL_BONUS: under the
+    unified all-negative reward any positive terminal would break the
+    invariant, and the per-step cost ending IS the incentive.
+
+    NOTHING ELSE TERMINATES in either mode: a lane crossing or an off-road
+    step costs its reward and continues; a crash latches
+    info["has_collided"] until reset and continues; the env's own `done` is
+    discarded; the clock truncates at max_steps. info["is_success"] is the
+    goal mode's success only -- explore arrival is not task success and must
+    not feed the HER/eval success counters as one.
+    """
+
+    def __init__(self, env, explore_prob=0.5, force_mode=None, max_steps=1000,
+                 seed=0):
+        super().__init__(env)
+        self.explore_prob = float(explore_prob)
+        self.force_mode = force_mode
+        self.max_steps = int(max_steps)
+        self._rng = np.random.default_rng(seed)
+        self.mode = GOAL
+        self._t = 0
+        self._prev = np.zeros(2)
+        self._path_m = 0.0
+        self._has_collided = False
+        self._stop_window = 0
+        # A SETTING THAT CHANGES THE REWARD MUST SAY SO ON SCREEN (the repo's
+        # own rule after the observation-banner drift): the two knobs an
+        # evaluator will ask about and the two constants the reward is
+        # computed from.
+        print(f"[TwoModeIG] unified image-goal reward, BOTH modes: "
+              f"explore_prob={self.explore_prob} force_mode={self.force_mode} "
+              f"EXPLORE_GOAL_DIST_M={EXPLORE_GOAL_DIST_M:g} "
+              f"IG_SPEED_PREF_K={SPEED_PREF_K:g} (v*={TARGET_SPEED_KMH:g} km/h);"
+              f" goal success = speed<{STOP_SPEED_MPS:g} m/s x"
+              f"{STOP_WINDOW_STEPS} steps while dist<"
+              f"{GOAL_DISTANCE_THRESHOLD_M:g} m and |yaw|<"
+              f"{GOAL_YAW_THRESHOLD_DEG:g} deg; explore arrival terminates "
+              f"with NO bonus; max_steps={self.max_steps}.", flush=True)
+
+    def reset(self, **kwargs):
+        out = self.env.reset(**kwargs)
+        obs, info = out if isinstance(out, tuple) else (out, {})
+        # DRAWN ONCE PER EPISODE, never mid-episode: the mode must be constant
+        # for a transition's whole return, exactly as in GatedReward.
+        self.mode = (int(self.force_mode) if self.force_mode is not None
+                     else (EXPLORE if self._rng.random() < self.explore_prob
+                           else GOAL))
+        self._t = 0
+        self._path_m = 0.0
+        self._prev = np.asarray(info.get("hero_pos", (0.0, 0.0)), np.float64)
+        # THE PER-EPISODE STATE. The collision latch and the stop window are
+        # the same objects ImageGoalReward owns; under one wrapper serving
+        # both modes they reset with the episode, not with the mode.
+        self._has_collided = False
+        self._stop_window = 0
+        info["mode"] = self.mode
+        return obs, info
+
+    def step(self, action):
+        obs, _env_r, _env_term, _env_trunc, info = self.env.step(action)
+        self._t += 1
+        pos = np.asarray(info.get("hero_pos", (0.0, 0.0)), np.float64)
+        disp = pos - self._prev
+        self._prev = pos
+        self._path_m += float(np.linalg.norm(disp))
+        info["explore_dist_m"] = float(self._path_m)
+
+        # THE PERSISTENT COLLISION FLAG, one latch for both modes (ONE
+        # reward): latched on impulse magnitude, not on the event flag, so
+        # the sensor's re-reports cannot re-charge the penalty.
+        impulse = float(info.get("collision_impulse", 0.0) or 0.0)
+        if impulse > COLLISION_IMPULSE_THRESHOLD:
+            self._has_collided = True
+
+        # THE UNIFIED REWARD. Both branches call the SAME pure function; the
+        # mode changes what TERMINATES, never what a step pays.
+        reward, components = image_goal_reward(info, disp, self._has_collided)
+
+        invalid = bool(info.get("simulator_invalid", False))
+        if self.mode == GOAL:
+            # THE SUSTAINED STOP, goal mode only. A car that reaches the
+            # target at speed never collects the window; any step that
+            # breaks a check restarts it.
+            on_position, on_heading = goal_at_target(info)
+            stopped = _speed_mps(info) < STOP_SPEED_MPS
+            if stopped and on_position and on_heading:
+                self._stop_window += 1
+            else:
+                self._stop_window = 0
+            success = self._stop_window >= STOP_WINDOW_STEPS
+            info["is_success"] = bool(success)
+            info["arrived_this_step"] = bool(success)
+            terminated = bool(success or invalid)
+            truncated = (not terminated) and self._t >= self.max_steps
+        else:
+            # EXPLORE MODE. No stop window and NO ARRIVAL BONUS: reaching the
+            # path distance terminates and pays that step's ordinary reward,
+            # which is the same "ending the stream is the prize" contract the
+            # goal arm has.
+            info["is_success"] = False
+            info["arrived_this_step"] = False
+            terminated = False
+            truncated = self._t >= self.max_steps
+            if invalid:
+                terminated, truncated = True, False
+                info["explore_end"] = "invalid"
+            elif (EXPLORE_GOAL_DIST_M > 0.0
+                    and self._path_m >= EXPLORE_GOAL_DIST_M):
+                # ARRIVAL BEATS THE CAP BUT NOT A FAILURE: a car that crosses
+                # a line on the step it passes the distance still crossed it.
+                terminated, truncated = True, False
+                info["explore_end"] = "reached"
+            elif truncated:
+                info["explore_end"] = "cap"
+
+        info["mode"] = self.mode
+        info["has_collided"] = self._has_collided
+        info["collision_impulse"] = impulse
+        info["ig_reward_components"] = components
         info["gated_reward"] = reward
         return obs, reward, terminated, truncated, info

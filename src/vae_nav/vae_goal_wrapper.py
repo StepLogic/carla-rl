@@ -162,6 +162,24 @@ MODE_DIM = 1
 WITH_COLLISION = os.environ.get("OBS_WITH_COLLISION", "0") == "1"
 COLL_DIM = 1
 
+# OBS_LATENT_AS_PIXELS=1 PUBLISHES THE SOURCE LATENT AS A (7, 7, 768) `pixels`
+# KEY INSTEAD OF THE FLAT `latent` KEY (v8).
+#
+# Same content, reshaped: VC-1's grid2 readout (VcSource, VC1_READOUT=grid2)
+# is a (7, 7, 768) patch-token grid -- 196 ViT-B tokens 2x2 average-pooled --
+# flattened to 37632 for the flat-latent arms. The shape, not a new key name,
+# is what selects the encoder: jaxrl2's is_image_space routes any ndim >= 3
+# key through the conv D4PGEncoder, while a flat key would get a Dense
+# projection. Default off: every existing arm keeps the flat `latent` key
+# byte-identical.
+#
+# The (7, 7, 768) shape is pinned to the grid2 readout. A source with any
+# other latent_dim is refused at construction (SystemExit) rather than
+# reshaped into a meaningless grid.
+LATENT_AS_PIXELS = os.environ.get("OBS_LATENT_AS_PIXELS", "0") == "1"
+PIXELS_SHAPE = (7, 7, 768)
+PIXELS_DIM = PIXELS_SHAPE[0] * PIXELS_SHAPE[1] * PIXELS_SHAPE[2]
+
 # Must match vae_nav.gated_reward. Inverting these silently swaps which critic
 # trains on which mode, and nothing downstream would raise.
 GOAL, EXPLORE = 1, 0
@@ -220,6 +238,14 @@ class VAEGoalWrapper(Wrapper):
         self.source = source if source is not None else LatentSource(
             os.environ.get("VAE_CKPT", ""), latent_dim=latent_dim)
         self.latent_dim = self.source.latent_dim
+        if LATENT_AS_PIXELS and self.latent_dim != PIXELS_DIM:
+            raise SystemExit(
+                f"OBS_LATENT_AS_PIXELS=1 publishes a {PIXELS_SHAPE} pixel "
+                f"grid, which needs a {PIXELS_DIM}-d source (the VC-1 grid2 "
+                f"readout), but this source's latent_dim is "
+                f"{self.latent_dim}. Reshaping a different latent into the "
+                "grid would silently corrupt the tokens -- set VC1_READOUT="
+                "grid2 or turn the flag off.")
         self._hist = deque([np.zeros(2, np.float32)] * N_ACTION_HISTORY,
                            maxlen=N_ACTION_HISTORY)
 
@@ -243,9 +269,13 @@ class VAEGoalWrapper(Wrapper):
                     "Use LANE_EXPLORE=1 (LaneExploreReward), which drops "
                     "delta_distance and projects onto the lane instead of the "
                     "destination.")
-        space = {
-            "latent": spaces.Box(-np.inf, np.inf, (self.latent_dim,), np.float32),
-        }
+        space = {}
+        if LATENT_AS_PIXELS:
+            space["pixels"] = spaces.Box(-np.inf, np.inf, PIXELS_SHAPE,
+                                         np.float32)
+        else:
+            space["latent"] = spaces.Box(-np.inf, np.inf, (self.latent_dim,),
+                                         np.float32)
         if self.with_goal:
             space["goal"] = spaces.Box(-np.inf, np.inf, (GOAL_DIM,), np.float32)
         if self.with_vector:
@@ -269,7 +299,8 @@ class VAEGoalWrapper(Wrapper):
         total = sum(int(np.prod(s.shape)) for s in space.values())
         print("[VAEGoal] obs={"
               + (f"'goal': ({GOAL_DIM},), " if self.with_goal else "")
-              + f"'latent': ({self.latent_dim},)"
+              + (f"'pixels': {PIXELS_SHAPE}" if LATENT_AS_PIXELS
+                 else f"'latent': ({self.latent_dim},)")
               + (f", 'vector': ({VECTOR_DIM},)" if self.with_vector else "")
               + (f", 'mode': ({MODE_DIM},)" if self.with_mode else "")
               + (f", 'coll': ({COLL_DIM},)" if self.with_collision else "")
@@ -341,7 +372,11 @@ class VAEGoalWrapper(Wrapper):
                 "VAEGoalWrapper needs the full-resolution RGB frame in info['rgb'] "
                 "to encode. The env's downsampled 84x84 greyscale observation is "
                 "not what the VAE was trained on.")
-        out = {"latent": self.source.latent(rgb).astype(np.float32)}
+        latent = self.source.latent(rgb).astype(np.float32)
+        if LATENT_AS_PIXELS:
+            out = {"pixels": latent.reshape(PIXELS_SHAPE)}
+        else:
+            out = {"latent": latent}
         if self.with_goal:
             out["goal"] = self.goal_block(self._fields(info))
         if self.with_vector:
@@ -450,5 +485,9 @@ class VAEGoalWrapper(Wrapper):
         # flag (10-d with the default 1, 9-d with 0), so evaluation must not
         # silently pair a 9-d checkpoint with a 10-d agent.
         ident["with_state_collision"] = bool(STATE_COLLISION)
+        # The obs KEY the image pathway rode in on: a `pixels` checkpoint is
+        # conv-encoded, a `latent` checkpoint gets a Dense projection, and the
+        # pytree shapes differ -- recorded so eval names the mismatch.
+        ident["latent_as_pixels"] = bool(LATENT_AS_PIXELS)
         ident["target_speed"] = TARGET_SPEED
         return ident

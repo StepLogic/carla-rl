@@ -409,3 +409,73 @@ def test_the_banner_shows_the_9d_state_width(capsys):
     out = capsys.readouterr().out
     assert "'state': (9,)" in out, out
     assert "'state': (10,)" not in out, out
+
+
+# --------------------------------------------- the v8 pixels obs key ----
+
+class _PixelsStubSource(_StubSource):
+    """37632-d source standing in for the VC-1 grid2 readout.
+
+    latent() returns arange so the reshape under test is visible in values,
+    not just in shape.
+    """
+
+    def __init__(self, latent_dim=37632):
+        self.latent_dim = latent_dim
+
+    def latent(self, rgb):
+        return np.arange(self.latent_dim, dtype=np.float32)
+
+
+def test_pixels_key_replaces_latent_when_requested():
+    # OBS_LATENT_AS_PIXELS=1 (v8): the flat `latent` key is REPLACED, not
+    # joined, by `pixels` with the (7, 7, 768) VC-1 grid2 shape. Same content:
+    # values equal the source vector reshaped.
+    m = _reload(OBS_LATENT_AS_PIXELS="1", OBS_WITH_STATE="0",
+                OBS_WITH_GOAL="1", OBS_WITH_VECTOR="0", OBS_WITH_MODE="0")
+    w = m.VAEGoalWrapper(_StateStubEnv(), source=_PixelsStubSource())
+    obs, _info = w.reset()
+    assert "latent" not in obs
+    assert "pixels" in obs
+    assert obs["pixels"].shape == (7, 7, 768)
+    assert obs["pixels"].dtype == np.float32
+    np.testing.assert_array_equal(
+        obs["pixels"], np.arange(37632, dtype=np.float32).reshape(7, 7, 768))
+    obs, _r, _t, _tr, _i = w.step(np.zeros(2, np.float32))
+    assert "pixels" in obs and "latent" not in obs
+    assert w.observation_space["pixels"].shape == (7, 7, 768)
+    assert "latent" not in w.observation_space.spaces
+    assert set(w.observation_space.spaces) == {"goal", "pixels"}
+
+
+def test_pixels_flag_refuses_a_non_grid_source():
+    # The (7, 7, 768) shape is pinned to the VC-1 ViT-B grid2 readout; any
+    # other latent_dim must exit at construction rather than be reshaped into
+    # a meaningless grid.
+    m = _reload(OBS_LATENT_AS_PIXELS="1", OBS_WITH_STATE="0",
+                OBS_WITH_GOAL="1", OBS_WITH_VECTOR="0", OBS_WITH_MODE="0")
+    with pytest.raises(SystemExit, match="37632"):
+        m.VAEGoalWrapper(_StateStubEnv(), source=_StubSource())
+
+
+def test_default_keeps_the_flat_latent_key():
+    # THE REGRESSION GUARD. With the flag unset every existing arm keeps the
+    # flat `latent` key byte-identical, and no `pixels` key appears.
+    os.environ.pop("OBS_LATENT_AS_PIXELS", None)
+    m = _reload(OBS_WITH_STATE="0", OBS_WITH_GOAL="1", OBS_WITH_VECTOR="0",
+                OBS_WITH_MODE="0")
+    w = m.VAEGoalWrapper(_StateStubEnv(), source=_StubSource())
+    obs, _info = w.reset()
+    assert "pixels" not in obs
+    assert "latent" in obs and obs["latent"].shape == (128,)
+    assert set(w.observation_space.spaces) == {"goal", "latent"}
+
+
+def test_the_banner_shows_pixels_instead_of_latent(capsys):
+    m = _reload(OBS_LATENT_AS_PIXELS="1", OBS_WITH_STATE="0",
+                OBS_WITH_GOAL="1", OBS_WITH_VECTOR="0", OBS_WITH_MODE="0")
+    m.VAEGoalWrapper(_StateStubEnv(), source=_PixelsStubSource())
+    out = capsys.readouterr().out
+    assert "'pixels': (7, 7, 768)" in out, out
+    assert "'latent'" not in out, out
+    assert "37636-d" in out, out  # 4 goal + 37632 pixels

@@ -32,6 +32,7 @@ import time
 from datetime import datetime
 
 import numpy as np
+from collections.abc import Mapping
 
 # distrax 0.1.5 against jax 0.6.2: distrax's jacobian inference reaches for
 # jax.core.Var, which JAX removed in 0.6.0. Only the rescaled-tanh policy path
@@ -153,6 +154,32 @@ def wants_one_critic():
             and os.environ.get("GATED_ONE_CRITIC", "0") == "1")
 
 
+def agent_encoder():
+    """The conv-encoder selection, D2 of the v8 design.
+
+    "none" (the default) is today's behaviour exactly: no encoder kwarg is
+    passed, so TQCLearner keeps its own default and every existing run is
+    unchanged. "d4pg" routes image-like obs keys (the (7, 7, 768) VC-1 token
+    grid published under `pixels`) through jaxrl2's D4PG conv trunk. Anything
+    else exits: a typo here would otherwise silently fall back to "none" --
+    TQCLearner's `else` branch -- and the run would look healthy while
+    training a placeholder for perception.
+    """
+    enc = os.environ.get("AGENT_ENCODER", "none").strip().lower()
+    if enc not in ("none", "d4pg"):
+        raise SystemExit(
+            f"AGENT_ENCODER={enc!r} is not supported; use 'none' or 'd4pg'.")
+    return enc
+
+
+def _int_list(env_name, default):
+    """A comma-separated int list from the environment, spaces stripped."""
+    raw = os.environ.get(env_name, "").strip()
+    if not raw:
+        return tuple(default)
+    return tuple(int(part) for part in raw.split(",") if part.strip())
+
+
 def agent_kwargs(action_space=None):
     """The TQC build kwargs, shared by every learner route.
 
@@ -217,6 +244,24 @@ def agent_kwargs(action_space=None):
         # cannot learn this task" rather than like a misconfigured head.
         action_space=action_space,
     )
+    # THE V8 CONV COMPRESSOR IS A CONFIG, NOT A NEW MODULE (design D2).
+    # jaxrl2's PixelMultiplexer already applies the conv D4PGEncoder to
+    # image-like keys and per-key Dense+LayerNorm to flat keys, so the
+    # compressor is exactly these kwargs. The keys are added ONLY when
+    # AGENT_ENCODER selects an encoder: TQCLearner takes no **kwargs on the
+    # one-critic route, and the default dict must stay byte-identical to
+    # today's for every existing arm.
+    _encoder = agent_encoder()
+    if _encoder != "none":
+        # cnn_padding stays TQCLearner's "VALID" default -- the spec's
+        # 7x7x768 -> 1x1x512 geometry assumes it.
+        kwargs.update(
+            encoder=_encoder,
+            cnn_features=_int_list("CNN_FEATURES", (32, 32, 32, 32)),
+            cnn_filters=_int_list("CNN_FILTERS", (3, 3, 3, 3)),
+            cnn_strides=_int_list("CNN_STRIDES", (2, 1, 1, 1)),
+            latent_dim=int(os.environ.get("AGENT_LATENT_DIM", 50)),
+        )
     if os.environ.get("GATED", "0") == "1" and not wants_one_critic():
         # TWO CRITICS, and NOT for the reason the Habitat agent has two. There
         # the split was a discount mismatch, 1.0 against 0.99. Both lane arms
@@ -264,6 +309,68 @@ def agent_kwargs(action_space=None):
     return kwargs
 
 
+def agent_view(obs):
+    """The obs as the AGENT must see it, when the conv compressor is on.
+
+    jaxrl2's D4PGEncoder flattens its last two input axes before its conv
+    stack (`jnp.reshape(x, (*x.shape[:-2], -1))`, d4pg_encoder.py:30), so the
+    (7, 7, 768) token grid would reach the convolutions as a (7, 5376)
+    rank-2 array and the network construction itself dies ("conv_general_
+    diluted lhs and rhs must have the same number of dimensions"). With a
+    trailing singleton the flatten is a no-op and the conv stack sees exactly
+    the geometry design D2 states: H=7, W=7, C=768, valid padding, strides
+    2,2,1 -> 1x1x512. The view is pure (numpy adds an axis without copying)
+    and IDEMPOTENT, applied at every agent boundary -- construction, acting,
+    eval and update -- so the learner never sees another shape, while the
+    env, the observation space and the replay buffer all keep publishing
+    (7, 7, 768) exactly as design D1 specifies.
+
+    Inert unless AGENT_ENCODER selects an encoder and the obs carries a
+    `pixels` key, so every existing arm's inputs are untouched.
+    """
+    if agent_encoder() == "none" or not isinstance(obs, Mapping):
+        return obs
+    rebuilt = {}
+    changed = False
+    for key, value in obs.items():
+        if key == "pixels":
+            px = np.asarray(value)
+            if px.shape[-1] != 1:
+                value = px[..., None]
+                changed = True
+        elif isinstance(value, Mapping):
+            nested = agent_view(value)
+            changed = changed or nested is not value
+            value = nested
+        rebuilt[key] = value
+    if not changed:
+        return obs
+    return rebuilt if isinstance(obs, dict) else type(obs)(rebuilt)
+
+
+def apply_augment_override(learner):
+    """The token-grid augmentation override, applied POST-CONSTRUCTION.
+
+    TQCLearner hardcodes `self.augument = not encoder is None` inside its
+    constructor, and both the plain and the Gated update paths forward that
+    attribute into the jitted step (`augument=self.augument`), which applies
+    DrQ's batched_random_crop to the image-like obs. Cropping a (7, 7, 768)
+    ViT token grid DROPS TOKENS -- each position is a distinct semantic unit,
+    not a pixel -- so with AGENT_AUGMENT_PIXELS=0 the attribute is flipped
+    here, after construction, on every route that built a learner with a conv
+    encoder. NO edit to the jaxrl2 repo, which is shared and never modified.
+
+    With AGENT_AUGMENT_PIXELS unset (the default "1") this is a no-op and
+    today's behaviour is preserved bit for bit.
+    """
+    if (agent_encoder() != "none"
+            and os.environ.get("AGENT_AUGMENT_PIXELS", "1") != "1"):
+        learner.augument = False
+        print("[Algo] AGENT_AUGMENT_PIXELS=0: augmentation OFF -- a random "
+              "crop of the (7,7,768) token grid would drop tokens")
+    return learner
+
+
 def build_agent(observation_space, action_space, seed):
     """TQC with the peer's config of record, kappa derived from the reward."""
     from jaxrl2.agents import TQCLearner
@@ -275,6 +382,18 @@ def build_agent(observation_space, action_space, seed):
           f"n_quantiles={kwargs['num_quantiles']} "
           f"drop_per_net={kwargs['top_quantiles_to_drop_per_net']} "
           f"(truncating {n_drop} of {total}) kappa={kwargs['kappa']:g}")
+    if kwargs.get("encoder"):
+        # The v7 lesson: the run banner must carry every flag the trainer
+        # read, so a snapshot can be checked against the live process.
+        print(f"[Algo] conv compressor: encoder={kwargs['encoder']} "
+              f"cnn_features={kwargs['cnn_features']} "
+              f"cnn_filters={kwargs['cnn_filters']} "
+              f"cnn_strides={kwargs['cnn_strides']} "
+              f"latent_dim={kwargs['latent_dim']}")
+    # The construction obs goes through the encoder view: with the conv
+    # compressor on, pixels must reach D4PGEncoder as (7, 7, 768, 1) -- see
+    # agent_view. Without an encoder this is the sampled obs, unchanged.
+    obs_sample = agent_view(observation_space.sample())
     if wants_one_critic():
         # ONE critic, mode-conditioned via the obs dict. Bounds come from
         # TQC_TARGET_MIN/MAX (read at import in critic_updater) -- coherence
@@ -283,14 +402,17 @@ def build_agent(observation_space, action_space, seed):
         # so a future kwarg added to the shared dict cannot reach the plain
         # learner silently.
         plain = dict(kwargs); plain.pop("value_floor", None); plain.pop("value_ceiling", None)
-        return TQCLearner(seed, observation_space.sample(),
-                          action_space.sample(), **plain)
+        return apply_augment_override(
+            TQCLearner(seed, obs_sample,
+                       action_space.sample(), **plain))
     if os.environ.get("GATED", "0") == "1":
         from vae_nav.gated_tqc_learner import GatedTQCLearner
-        return GatedTQCLearner(seed, observation_space.sample(),
-                               action_space.sample(), **kwargs)
-    return TQCLearner(seed, observation_space.sample(), action_space.sample(),
-                      **kwargs)
+        return apply_augment_override(
+            GatedTQCLearner(seed, obs_sample,
+                            action_space.sample(), **kwargs))
+    return apply_augment_override(
+        TQCLearner(seed, obs_sample, action_space.sample(),
+                   **kwargs))
 
 
 # Shared across every TRAINING env rebuild -- see the note in make_env.
@@ -756,7 +878,7 @@ def run_explore_evaluation(agent, town, n_episodes, latent_source, step=0,
             obs, info = env.reset(seed=sd)
             done, steps = False, 0
             while not done and steps < cap:
-                obs, _r, term, trunc, info = env.step(agent.eval_actions(obs))
+                obs, _r, term, trunc, info = env.step(agent.eval_actions(agent_view(obs)))
                 steps += 1
                 done = bool(term or trunc)
             rows.append({"steps": steps,
@@ -819,7 +941,7 @@ def run_evaluation(agent, episodes, latent_source, identity, step=0,
                 recorder.record(info.get("rgb"), info)
             done, steps, success = False, 0, False
             while not done and steps < MAX_EPISODE_STEPS:
-                action = agent.eval_actions(obs)
+                action = agent.eval_actions(agent_view(obs))
                 obs, _r, term, trunc, info = env.step(action)
                 done, steps = bool(term or trunc), steps + 1
                 success = success or bool(info.get("is_success", False))
@@ -1341,7 +1463,8 @@ def main():
             #     ValueError: assignment destination is read-only
             # It only triggers once training has started AND an oracle episode
             # is active, so it survived 5000 steps before firing.
-            actions = np.array(agent.sample_actions(obs), dtype=np.float32,
+            actions = np.array(agent.sample_actions(agent_view(obs)),
+                               dtype=np.float32,
                                copy=True)
         # Oracle overrides the policy for whole episodes. Its actions live in
         # the agent's own action space, so these are ordinary off-policy rows
@@ -1866,7 +1989,7 @@ def main():
             # With k_goal=600 the sane range for Q is roughly [-5, 600]; values
             # far outside it mean the critic is diverging rather than learning,
             # which no amount of reward or HER tuning would fix.
-            _info = agent.update(batch, utd_ratio=UTD_RATIO)
+            _info = agent.update(agent_view(batch), utd_ratio=UTD_RATIO)
             if _info is not None:
                 last_update_info = {k: float(np.asarray(v).mean())
                                     for k, v in _info.items()

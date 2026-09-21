@@ -6,9 +6,12 @@ on what the deployed policy will have onboard: current proprioception and the
 goal. The reward itself may read privileged CARLA labels; the claim it supports
 does not depend on them at execution time.
 
-THE SHAPE (user spec 2026-09-18; 2026-09-20 removed the flat in-lane bonus
-and the evening batch made the speed term a POSITIVE SATURATING BONUS in
-both legs and made GOAL-mode failures TERMINAL):
+THE SHAPE (user spec 2026-09-18; 2026-09-20 removed the flat in-lane bonus,
+the evening batch made the speed term a POSITIVE SATURATING BONUS in both
+legs and made GOAL-mode failures TERMINAL, and the NIGHT batch of the same
+day REVERTED the goal-mode termination -- failures are NON-terminal again,
+the flat -5 riding on every FAILING step -- and added STEERING SMOOTHNESS
+to both legs):
 
     GOAL leg (mode 1):
     r_t = -1.0                              the base cost, EVERY step
@@ -18,13 +21,18 @@ both legs and made GOAL-mode failures TERMINAL):
                                             at v >= v*, exactly 0 parked
         - 1.5    if off the drivable surface (each step it persists)
         - 1.5    if a collision has EVER happened this episode
-        [- 5.0    on a FAILING step -- the TWO-MODE goal branch terminates
-                  on the first off-road / crossing / collision step and pays
-                  this flat on top of the ordinary reward (wrapper-level)]
+        - W |steer_t - steer_(t-1)|         steering smoothness, EVERY step,
+                                            W = IG_STEER_SMOOTH_W, ungated
+                                            (parked and failing steps
+                                            included; wrapper-level)
+        [- 5.0    on a FAILING step -- paid by the TWO-MODE goal branch on
+                  every failing step (off-road / lane crossing / collision
+                  impulse); NON-terminal since user 2026-09-20 night]
 
     EXPLORE leg (mode 0):
     r_t = + K min(v, v*)/v*  if L_t         the SAME saturating bonus, alone
                                             (no base cost, no flat penalties)
+        - W |steer_t - steer_(t-1)|         the same smoothness, ungated
 
     L_t = on the drivable lane, moving in the route direction, no lane
           crossing this step, and no collision yet.
@@ -34,7 +42,11 @@ both legs now carry the same positive saturating bonus and differ only in
 base cost, flat penalties and terminal design. The old +0.75 flat in-lane
 bonus stays gone; the constant IN_LANE_BONUS remains an env-overridable
 ablation knob (IG_IN_LANE_BONUS) defaulting to 0.0. The speed term stays
-gated on L_t exactly as it was.
+gated on L_t exactly as it was. STEERING SMOOTHNESS (user 2026-09-20 night)
+is the one term that is UNGATED: -IG_STEER_SMOOTH_W * |steer_t -
+steer_(t-1)| on EVERY step of BOTH legs, including parked and failing ones
+(the wrapper tracks the previous action's steer, reset to 0.0; |steer| <= 1
+each side, so |delta| <= 2 and the term is at most -1.0).
 
 THE TWO USER DECISIONS THAT CHANGED IT FROM THE WRITTEN SPEC:
 
@@ -69,23 +81,29 @@ a lower-reward mode until reset, and it must be visible to the value function
 (Phase 2: critic conditioning z = has_collided) or the same apparent image has
 two different values depending on unseen history -- a Markov violation.
 
-WHAT TERMINATES (user decisions 2026-09-20, evening batch). Success, invalid
-and the clock terminate as before. This paragraph describes the GOAL leg of
-the pure function (termination-wise; the single-mode arm keeps exactly these
-terminals). The TWO-MODE arm's GOAL branch diverges further by user decision
-2026-09-20 evening: the FIRST off-road step, lane crossing or collision
-TERMINATES the goal episode (terminated=True, truncated=False -- a
-termination, not a truncation, so info["ig_truncated"] stays None), paying
-the ordinary reward plus a flat -IG_TERMINAL_PENALTY on that step. The old
-|v-v*| penalty and Task 16's OFFROAD_TRUNC_STEPS debounce counter are GONE:
-the first off-road step ends the episode, so there is nothing left to
-debounce. The STUCK truncation (speed under IG_STUCK_SPEED_MPS=0.3 m/s for
-IG_STUCK_STEPS=100 consecutive steps outside the success spatial/yaw gate ->
-truncated=True, ordinary reward, no penalty) is KEPT exactly as reviewed --
-truncation stops the negative stream without buying the terminal escapes,
-and a gate step never counts toward the stuck counter, so parking at the
-goal still succeeds. The counters live in TwoModeImageGoalReward (where the
-stop window lives); explore mode runs none of them.
+WHAT TERMINATES (user decisions 2026-09-20, evening batch and night batch).
+Success, invalid and the clock terminate as before. This paragraph describes
+the GOAL leg of the pure function (termination-wise; the single-mode arm
+keeps exactly these terminals). The TWO-MODE arm's GOAL branch's evening
+decision -- the FIRST off-road step, lane crossing or collision TERMINATES
+the goal episode -- was REVERTED the same night (user 2026-09-20 night):
+goal-mode failures are NON-TERMINAL again, and the flat -IG_TERMINAL_PENALTY
+is paid on EVERY failing step (off-road / crossing / collision-impulse step)
+instead of only on the terminating one -- sustained off-road pays
+-7.5/step (ordinary -2.5 + -5), and of the collision steps only the one
+whose impulse fires pays the extra -5 (later latched steps pay -2.5, the
+persistent latch unchanged). Success still wins a step it shares with a
+failure (the step pays its ordinary row, no flat), and a simulator-invalid
+step terminates exactly as before. The old |v-v*| penalty and Task 16's
+OFFROAD_TRUNC_STEPS debounce counter stay GONE: the flat is per failing
+step now, so there is nothing left to debounce. The STUCK truncation
+(speed under IG_STUCK_SPEED_MPS=0.3 m/s for IG_STUCK_STEPS=100 consecutive
+steps outside the success spatial/yaw gate -> truncated=True, ordinary
+reward, no penalty) is KEPT exactly as reviewed -- truncation stops the
+negative stream without buying the terminal escapes, and a gate step never
+counts toward the stuck counter, so parking at the goal still succeeds.
+The counters live in TwoModeImageGoalReward (where the stop window lives);
+explore mode runs none of them.
 The two legs are combined as a MASKED SUM -- each leg is zeroed
 outside its own mode -- not a formula swap; see image_goal_reward and
 TwoModeImageGoalReward for the explore contract.
@@ -162,14 +180,24 @@ STOP_WINDOW_STEPS = int(os.environ.get("IG_STOP_WINDOW_STEPS", 10))
 SPEED_PREF_K = float(os.environ.get("IG_SPEED_PREF_K", 0.2))
 TARGET_SPEED_KMH = float(os.environ.get("TARGET_SPEED", 20.0))
 # The failing step's flat penalty (user decisions 2026-09-20): a failing
-# step (off-road / lane-crossing / collision) TERMINATES its episode and
-# pays this flat on top of the ordinary reward. In EXPLORE the leg pays it
-# directly; in GOAL mode the two-mode wrapper pays it when it terminates on
-# the first failure (the single-mode arm does not terminate on failures and
-# never reads it). The failing step's ordinary component is exactly 0.0 in
-# explore (in_lane is False on every one of them), so the explore failing
-# step pays exactly this.
+# step (off-road / lane-crossing / collision impulse). In EXPLORE the leg
+# pays it and the step TERMINATES (user 2026-09-20 evening). In GOAL mode
+# the two-mode wrapper pays it on EVERY failing step -- NON-terminal since
+# the user's 2026-09-20 night ruling (Task 18 section A's first-failure
+# termination is reverted; the single-mode arm does not terminate on
+# failures and never reads it). The failing step's ordinary component is
+# exactly 0.0 in explore BEFORE smoothness (in_lane is False on every one
+# of them), so the explore failing step pays -TERMINAL_PENALTY minus its
+# smoothness term.
 TERMINAL_PENALTY = float(os.environ.get("IG_TERMINAL_PENALTY", 5.0))
+# STEERING SMOOTHNESS (user decision 2026-09-20 night, BOTH modes): every
+# step of both legs pays -STEER_SMOOTH_W * |steer_t - steer_(t-1)|. The
+# wrapper tracks the previous action's steer (reset to 0.0); |steer| <= 1 on
+# each side, so |delta| <= 2 and the term is at most -1.0/step. UNGATED, by
+# ruling: it applies to parked steps and failing steps too. The pure
+# function takes the delta as an argument (steer_delta); a caller that
+# passes none pays none -- the single-mode arm keeps its frozen rows.
+STEER_SMOOTH_W = float(os.environ.get("IG_STEER_SMOOTH_W", 0.5))
 # GOAL-MODE STUCK TRUNCATION (user decision 2026-09-20): a goal episode
 # TRUNCATES (truncated=True, NO extra penalty -- the truncating step pays its
 # ordinary reward) on sustained low speed instead of running to the cap:
@@ -182,8 +210,9 @@ TERMINAL_PENALTY = float(os.environ.get("IG_TERMINAL_PENALTY", 5.0))
 # fails that step (consecutive, non-consecutive-safe). Truncation
 # is not termination: terminated stays False, success still wins the step
 # it fires on. The OFFROAD_TRUNC_STEPS off-road counter this block once
-# carried is REMOVED (user 2026-09-20 evening): the first off-road step now
-# TERMINATES the goal episode, so there is nothing left to debounce.
+# carried is REMOVED (user 2026-09-20 evening): since that evening's
+# terminal batch and the night revert, the failing-step flat is paid per
+# failing step with no debounce, so there is nothing left to debounce.
 STUCK_SPEED_MPS = float(os.environ.get("IG_STUCK_SPEED_MPS", 0.3))
 STUCK_STEPS = int(os.environ.get("IG_STUCK_STEPS", 100))
 
@@ -386,7 +415,7 @@ def _speed_bonus(info, in_lane):
     return SPEED_PREF_K * min(v, v_star) / v_star
 
 
-def image_goal_reward(info, disp, has_collided, mode=GOAL):
+def image_goal_reward(info, disp, has_collided, mode=GOAL, steer_delta=0.0):
     """One step's reward, as a pure function. Returns (reward, components).
 
     ONE REWARD, A MASKED SUM OF TWO LEGS (user amendment 2026-09-20). The
@@ -400,33 +429,44 @@ def image_goal_reward(info, disp, has_collided, mode=GOAL):
     components carry both masked terms ("goal_reward_term",
     "explore_reward_term") so a log line can show the composition.
 
+    STEER_DELTA (user decision 2026-09-20 night): the smoothness term
+    -STEER_SMOOTH_W * |steer_delta| rides in BOTH legs, on EVERY step,
+    ungated (parked and failing steps included). The wrapper tracks the
+    previous action's steer and passes the delta; a caller that omits it
+    (the single-mode arm, the row-table tests) pays none and gets the
+    pre-smoothness rows exactly.
+
     THE GOAL LEG (mode 1, the default): the ReViND invariant -- reward < 0
     at every step, success included -- is a property of the constants: the
     best case is -0.8 (in lane at v*, the saturating bonus at full tilt) and
     the worst ordinary row stacks all three penalties (-4.0 under the 1.5
-    flats). No terminal here is ever positive. The flat penalties were
-    raised 0.75 -> 1.5 by user revision (2026-09-20) to restore the
-    in-lane/off-road contrast; the speed term became the saturating bonus
-    and the two-mode branch made failures terminal the same evening.
+    flats), smoothness subtracting further. No terminal here is ever
+    positive. The flat penalties were raised 0.75 -> 1.5 by user revision
+    (2026-09-20) to restore the in-lane/off-road contrast. The failing-step
+    flat is NOT added here (the wrapper pays it per failing step); see the
+    leg's docstring.
 
     THE EXPLORE LEG (mode 0, user decisions 2026-09-20): failures are
     TERMINAL and there is NO TIME PRESSURE. The leg's step reward is the
     same saturating speed bonus the goal leg carries, alone (no base
     cost, no off-road penalty, no persistent-collision penalty), so a clean
-    in-lane step at v* pays exactly +SPEED_PREF_K and the explore invariant
-    is -TERMINAL_PENALTY <= r <= SPEED_PREF_K, with r > 0 possible. The
-    FIRST off-road step, lane crossing or collision terminates
-    the episode and pays a flat -TERMINAL_PENALTY: on each of those steps
-    in_lane is False by construction, the ordinary component is exactly 0.0,
-    and the failing step pays exactly -TERMINAL_PENALTY. A simulator-invalid
-    step terminates and pays the same flat. The failure cause travels out in
-    components["explore_end"] ("off_road" / "crossed" / "collision" /
-    "invalid"); arrival at EXPLORE_GOAL_DIST_M and the step cap stay
-    wrapper-level, and neither pays a penalty.
+    in-lane step at v* pays exactly +SPEED_PREF_K. The FIRST off-road step,
+    lane crossing or collision terminates the episode and pays a flat
+    -TERMINAL_PENALTY minus its smoothness term (the "exactly -5"
+    construction of user 2026-09-20 evening is superseded by the ungated
+    smoothness, user 2026-09-20 night): on each of those steps in_lane is
+    False by construction, the ordinary component is exactly 0.0, and the
+    failing step pays -TERMINAL_PENALTY - STEER_SMOOTH_W*|steer_delta|. A
+    simulator-invalid step terminates and pays the same flat. The failure
+    cause travels out in components["explore_end"] ("off_road" / "crossed" /
+    "collision" / "invalid"); arrival at EXPLORE_GOAL_DIST_M and the step
+    cap stay wrapper-level, and neither pays a penalty.
     """
-    goal_r, goal_comp = _image_goal_reward_goal(info, disp, has_collided)
+    goal_r, goal_comp = _image_goal_reward_goal(info, disp, has_collided,
+                                                steer_delta=steer_delta)
     explore_r, explore_comp = _image_goal_reward_explore(info, disp,
-                                                         has_collided)
+                                                         has_collided,
+                                                         steer_delta=steer_delta)
     # THE MASK. Each leg is zeroed outside its own mode; since the mode is
     # exclusive per episode exactly one term is nonzero and the sum equals
     # the leg the episode is in.
@@ -443,24 +483,25 @@ def image_goal_reward(info, disp, has_collided, mode=GOAL):
     return r, comp
 
 
-def _image_goal_reward_goal(info, disp, has_collided):
+def _image_goal_reward_goal(info, disp, has_collided, steer_delta=0.0):
     """The goal leg of image_goal_reward: the CURRENT formula (2026-09-20
-    evening).
+    night).
 
     r = -BASE_STEP_COST + IN_LANE_BONUS + SPEED_PREF_K min(v, v*)/v* (if in
         lane) - OFFROAD_PENALTY (if off-road) - PERSISTENT_COLLISION_PENALTY
-        (if the collision latch holds). The speed term is the SATURATING
-        BONUS (user 2026-09-20 evening); the |v - v*| penalty form is gone.
-        The two flat penalties are 1.5 (user revision 2026-09-20;
-        env-overridable for the 0.75-row ablation). The best row is -0.8
-        (in lane at v*), parked in lane is exactly the base cost, and every
-        row stays < 0 -- the ReViND invariant survives the bonus.
+        (if the collision latch holds)
+        - STEER_SMOOTH_W |steer_t - steer_(t-1)|   EVERY step, ungated.
+    The speed term is the SATURATING BONUS (user 2026-09-20 evening); the
+    |v - v*| penalty form is gone. The two flat penalties are 1.5 (user
+    revision 2026-09-20; env-overridable for the 0.75-row ablation). The
+    best row is -0.8 (in lane at v*, delta 0), parked in lane is exactly the
+    base cost, and every row stays < 0 -- the ReViND invariant survives the
+    bonus and the smoothness subtracts only.
 
     The failing-step flat (-IG_TERMINAL_PENALTY) is NOT added here: the
-    pure function cannot know whether the caller terminates on failures
-    (the single-mode arm does not), so the two-mode wrapper pays it when it
-    terminates the episode (mirroring explore, whose leg owns the flat
-    because explore ALWAYS terminates on one).
+    pure function cannot know the caller's failure policy (the single-mode
+    arm pays it never), so the two-mode wrapper pays it on every failing
+    step (per the user's 2026-09-20 night ruling, non-terminal).
     """
     off_road = bool(info.get("off_road", False))
     crossed = bool(info.get("lane_invasion_any",
@@ -472,6 +513,7 @@ def _image_goal_reward_goal(info, disp, has_collided):
         and not has_collided)
 
     speed_bonus = _speed_bonus(info, in_lane)
+    smooth = -STEER_SMOOTH_W * abs(float(steer_delta))
 
     r = -BASE_STEP_COST
     if in_lane:
@@ -480,6 +522,7 @@ def _image_goal_reward_goal(info, disp, has_collided):
         r -= OFFROAD_PENALTY
     if has_collided:
         r -= PERSISTENT_COLLISION_PENALTY
+    r += smooth
     r = float(np.nan_to_num(r, nan=0.0))
     return r, {
         "base": -BASE_STEP_COST,
@@ -488,24 +531,27 @@ def _image_goal_reward_goal(info, disp, has_collided):
         "offroad_penalty": -OFFROAD_PENALTY if off_road else 0.0,
         "collision_penalty": (-PERSISTENT_COLLISION_PENALTY
                               if has_collided else 0.0),
+        "steer_smooth": smooth,
         "in_lane": in_lane,
         "off_road": off_road,
     }
 
 
-def _image_goal_reward_explore(info, disp, has_collided):
+def _image_goal_reward_explore(info, disp, has_collided, steer_delta=0.0):
     """The explore leg of image_goal_reward (user decisions 2026-09-20).
 
     No base cost, no flat penalties: the ordinary step is the SAME
     saturating speed bonus the goal leg carries (user 2026-09-20 evening --
-    the |v - v*| penalty form is gone, so explore rows are >= 0 and the
-    leg's range is [-TERMINAL_PENALTY, +SPEED_PREF_K]). The FIRST failure
-    terminates and pays a flat -TERMINAL_PENALTY, exactly, because in_lane
+    the |v - v*| penalty form is gone, so explore rows are >= 0). The FIRST
+    failure terminates and pays a flat -TERMINAL_PENALTY, because in_lane
     is False on every failing step (off-road, crossing and collision each
     zero the ordinary component by construction, and the invalid step's
     proprioception is garbage -- the destroyed hero's speed is not read as
-    an ordinary reward). The cause order is the spec's: invalid > off-road >
-    crossing > collision.
+    an ordinary reward). SINCE THE 2026-09-20 NIGHT BATCH the "exactly -5"
+    construction is superseded: the ungated smoothness term rides on the
+    failing step too, so it pays -TERMINAL_PENALTY - STEER_SMOOTH_W *
+    |steer_delta| (a sign-flip step pays -6.0). The cause order is the
+    spec's: invalid > off-road > crossing > collision.
     """
     off_road = bool(info.get("off_road", False))
     crossed = bool(info.get("lane_invasion_any",
@@ -517,6 +563,7 @@ def _image_goal_reward_explore(info, disp, has_collided):
         and not has_collided)
 
     speed_bonus = _speed_bonus(info, in_lane)
+    smooth = -STEER_SMOOTH_W * abs(float(steer_delta))
 
     invalid = bool(info.get("simulator_invalid", False))
     if invalid:
@@ -535,9 +582,11 @@ def _image_goal_reward_explore(info, disp, has_collided):
         speed_bonus = 0.0
     else:
         r = speed_bonus
+    r += smooth
     r = float(np.nan_to_num(r, nan=0.0))
     return r, {
         "speed_penalty": speed_bonus,
+        "steer_smooth": smooth,
         "in_lane": in_lane,
         "off_road": off_road,
         "terminal_penalty": (-TERMINAL_PENALTY if cause is not None else 0.0),
@@ -651,26 +700,33 @@ class TwoModeImageGoalReward(Wrapper):
     passed through, so the two legs do the rest.
 
     GOAL MODE (mode 1): the image-goal task, as revised by the user on
-    2026-09-20 (the flat penalties are 1.5) and the evening batch (the speed
-    term is the SATURATING BONUS; failures are TERMINAL). The step reward is
-    base cost, flat penalties, and the saturating speed bonus gated on L_t;
-    success = speed under
-    STOP_SPEED_MPS for STOP_WINDOW_STEPS consecutive steps while within
-    GOAL_DISTANCE_THRESHOLD_M and within GOAL_YAW_THRESHOLD_DEG of the goal
-    heading. The success step pays the ordinary reward -- no bonus, in either
-    mode; termination is the only thing success buys. THE FIRST off-road
-    step, lane crossing or collision (impulse over the latch threshold)
-    TERMINATES the goal episode, paying the ordinary reward plus a flat
-    -IG_TERMINAL_PENALTY on that step -- off-road -7.5, crossed -6.0,
-    collision -7.5 (the latch sets has_collided -> L_t false -> bonus 0),
-    all with terminated=True and NO ig_truncated cause (a termination, not
-    a truncation).
+    2026-09-20 (the flat penalties are 1.5), the evening batch (the speed
+    term is the SATURATING BONUS) and the NIGHT batch (failures
+    NON-terminal again -- Task 18 section A's termination is REVERTED).
+    The step reward is base cost, flat penalties, the saturating speed
+    bonus gated on L_t, and the ungated smoothness term; success = speed
+    under STOP_SPEED_MPS for STOP_WINDOW_STEPS consecutive steps while
+    within GOAL_DISTANCE_THRESHOLD_M and within GOAL_YAW_THRESHOLD_DEG of
+    the goal heading. The success step pays the ordinary reward -- no
+    bonus, in either mode; termination is the only thing success buys.
+    FAILURES ARE NON-TERMINAL (user 2026-09-20 night): every FAILING step
+    (a step with off_road, a lane crossing, or a collision impulse over
+    the latch threshold) pays a flat -IG_TERMINAL_PENALTY on top of its
+    ordinary row, and the episode CONTINUES -- sustained off-road pays
+    -7.5/step (ordinary -2.5 + -5), a crossing step -6.0, the latching
+    collision step -7.5 then -2.5/step while the latch holds (only the
+    impulse-firing step pays the extra -5). ig_truncated stays None on
+    failing steps (only stuck sets it). Success still wins a step it
+    shares with a failure (ordinary row, no flat), and an invalid step
+    terminates as before.
 
     GOAL-MODE STUCK TRUNCATION (user decision 2026-09-20): sustained low
     speed no longer runs to the cap. Speed under IG_STUCK_SPEED_MPS=0.3 m/s
     for IG_STUCK_STEPS=100 CONSECUTIVE steps sets truncated=True (terminated
     stays False) with NO extra penalty -- the truncating step pays its
-    ordinary reward. The cause travels in info["ig_truncated"] ("stuck",
+    ordinary reward (a failing truncating step still pays its failing-step
+    flat: the flat rides on every failing step, the truncation itself adds
+    nothing). The cause travels in info["ig_truncated"] ("stuck",
     None otherwise). The stuck counter NEVER counts a step inside the success
     spatial/yaw gate (route distance under GOAL_DISTANCE_THRESHOLD_M and
     |yaw error| under GOAL_YAW_THRESHOLD_DEG -- position and heading, NOT the
@@ -678,24 +734,26 @@ class TwoModeImageGoalReward(Wrapper):
     stop in STOP_WINDOW_STEPS=10 steps and can never be stuck-truncated
     first. The counter resets on wrapper reset and whenever the condition
     fails that step. The OFFROAD_TRUNC_STEPS counter this branch once
-    carried is REMOVED (2026-09-20 evening): the first off-road step
-    terminates, so there is nothing to debounce. ORDERING: success still
-    wins -- it is evaluated first (terminated=True) and neither a
-    failure-termination nor a truncation fires on a terminated step; a
-    failure beats the stuck truncation (it terminates). Explore mode runs
-    NO counter.
+    carried is REMOVED (2026-09-20 evening): the failing-step flat is per
+    failing step now, so there is nothing to debounce. ORDERING: success
+    and invalid still win the step -- they are evaluated first (terminated)
+    and a success/invalid step pays NO failing-step flat; the stuck
+    truncation fires on a non-terminated step. Explore mode runs NO
+    counter.
 
     EXPLORE MODE (mode 0): drive EXPLORE_GOAL_DIST_M of CUMULATIVE PATH, with
     NO TIME PRESSURE and TERMINAL FAILURES (user decisions 2026-09-20). The
     step reward is the SAME saturating speed bonus the goal leg carries --
     no base cost, no flat penalties -- so a clean in-lane step at v* pays
     exactly +IG_SPEED_PREF_K, a parked step exactly 0.0, and the explore
-    invariant is -IG_TERMINAL_PENALTY <= r <= +IG_SPEED_PREF_K (positive
+    invariant is -IG_TERMINAL_PENALTY - max smoothness <= r <=
+    +IG_SPEED_PREF_K, i.e. [-6.0, +0.2] under the shipped W=0.5 (positive
     explore rewards are legal, user 2026-09-20 evening). The FIRST off-road
     step
     (info["explore_end"]="off_road"), lane crossing ("crossed") or collision
     ("collision", the latch just set) TERMINATES the episode, paying a flat
-    -IG_TERMINAL_PENALTY on that step; a simulator-invalid step terminates
+    -IG_TERMINAL_PENALTY minus that step's smoothness term (user
+    2026-09-20 night); a simulator-invalid step terminates
     and pays the same flat ("invalid"). Arrival at EXPLORE_GOAL_DIST_M still
     terminates with NO bonus ("reached") and pays that step's ordinary
     reward (+IG_SPEED_PREF_K at v*). max_steps still TRUNCATES ("cap"): with
@@ -706,9 +764,10 @@ class TwoModeImageGoalReward(Wrapper):
 
     The persistent-collision LATCH stays for info["has_collided"] statistics
     in both modes; in explore it now coincides with termination (the first
-    latching step ends the episode), in goal mode the latching step is the
-    terminating one (the persistent penalty and the terminal flat stack on
-    it, -7.5). info["is_success"] is the goal mode's success only --
+    latching step ends the episode), in goal mode the latching step is a
+    FAILING step (ordinary -2.5 + the flat -5 = -7.5) and later latched
+    steps pay -2.5 without it. info["is_success"] is the goal mode's
+    success only --
     explore arrival is not task success and must not feed the HER/eval
     success counters as one.
     """
@@ -727,34 +786,42 @@ class TwoModeImageGoalReward(Wrapper):
         self._has_collided = False
         self._stop_window = 0
         self._stuck_steps = 0
+        self._prev_steer = 0.0
         # A SETTING THAT CHANGES THE REWARD MUST SAY SO ON SCREEN (the repo's
         # own rule after the observation-banner drift): the two knobs an
         # evaluator will ask about and the two constants the reward is
         # computed from. BOTH BRANCHES are named: goal mode carries the 1.5
-        # flats and the 2026-09-20-evening terminal failures, explore mode
-        # is the terminal-failure design of 2026-09-20 with the bonus.
+        # flats, the NON-terminal failing-step flat of the 2026-09-20 night
+        # batch and the ungated smoothness; explore mode is the
+        # terminal-failure design of 2026-09-20 with the bonus and the same
+        # smoothness.
         print(f"[TwoModeIG] unified image-goal reward, TWO modes: "
               f"explore_prob={self.explore_prob} force_mode={self.force_mode} "
               f"EXPLORE_GOAL_DIST_M={EXPLORE_GOAL_DIST_M:g} "
               f"IG_SPEED_PREF_K={SPEED_PREF_K:g} (v*={TARGET_SPEED_KMH:g} km/h,"
               f" saturating bonus, user 2026-09-20 evening);"
+              f" steering smoothness -IG_STEER_SMOOTH_W={STEER_SMOOTH_W:g} x "
+              f"|steer_t - steer_(t-1)| EVERY step BOTH modes, ungated "
+              f"(parked and failing steps included; user 2026-09-20 night);"
               f" goal mode: base cost, flat penalties "
               f"off={OFFROAD_PENALTY:g} coll={PERSISTENT_COLLISION_PENALTY:g}"
               f" (raised 0.75 -> 1.5, user 2026-09-20), speed bonus;"
-              f" sustained-stop success, no bonus; off-road / crossing / "
-              f"collision TERMINATE GOAL mode too, paying "
-              f"-IG_TERMINAL_PENALTY={TERMINAL_PENALTY:g} on top (user "
-              f"2026-09-20 evening); explore mode: no base cost, no flat "
-              f"penalties, speed bonus only -- off-road / crossing / "
-              f"collision TERMINATE "
-              f"paying -IG_TERMINAL_PENALTY={TERMINAL_PENALTY:g} (invalid "
-              f"too); explore arrival terminates with NO bonus; "
+              f" sustained-stop success, no bonus; failures NON-terminal "
+              f"(user 2026-09-20 night, first-failure termination reverted):"
+              f" every FAILING step (off-road / crossing / collision impulse)"
+              f" pays -IG_TERMINAL_PENALTY={TERMINAL_PENALTY:g} on its "
+              f"ordinary row (off-road -7.5/step, crossed -6.0, the "
+              f"latching collision step -7.5 then -2.5 latched); explore "
+              f"mode: no base cost, no flat penalties, speed bonus only -- "
+              f"off-road / crossing / collision TERMINATE "
+              f"paying -IG_TERMINAL_PENALTY={TERMINAL_PENALTY:g} minus "
+              f"smoothness (invalid too); explore arrival terminates with "
+              f"NO bonus; "
               f"goal-mode stuck truncation (user 2026-09-20): "
               f"speed<"
               f"{STUCK_SPEED_MPS:g} m/s x IG_STUCK_STEPS={STUCK_STEPS} "
               f"consecutive steps outside the success gate truncate "
-              f"(truncated=True, no extra penalty; the off-road debounce "
-              f"counter is gone -- first off-road step terminates); "
+              f"(truncated=True, ordinary reward); "
               f"max_steps={self.max_steps}.", flush=True)
 
     def reset(self, **kwargs):
@@ -771,10 +838,13 @@ class TwoModeImageGoalReward(Wrapper):
         # THE PER-EPISODE STATE. The collision latch and the stop window are
         # the same objects ImageGoalReward owns; under one wrapper serving
         # both modes they reset with the episode, not with the mode. The
-        # goal-mode truncation counters (2026-09-20) join them.
+        # goal-mode truncation counters (2026-09-20) join them, as does the
+        # previous action's steer (2026-09-20 night: reset to 0.0, so the
+        # episode's first step pays smoothness from a standstill command).
         self._has_collided = False
         self._stop_window = 0
         self._stuck_steps = 0
+        self._prev_steer = 0.0
         info["mode"] = self.mode
         return obs, info
 
@@ -786,6 +856,18 @@ class TwoModeImageGoalReward(Wrapper):
         self._prev = pos
         self._path_m += float(np.linalg.norm(disp))
         info["explore_dist_m"] = float(self._path_m)
+
+        # THE PREVIOUS ACTION'S STEER (user decision 2026-09-20 night): the
+        # smoothness term's delta, tracked HERE beside the stop window and
+        # the counters -- per-episode state the pure function must not
+        # carry. The action's first slot is the commanded steer (|steer| <=
+        # 1 on each side, so |delta| <= 2 and the term is at most -1.0);
+        # reset to 0.0 on wrapper reset. Ungated: the delta rides on parked
+        # and failing steps too, both modes.
+        _act = np.asarray(action, np.float64).ravel()
+        _steer = float(_act[0]) if _act.size else 0.0
+        _steer_delta = _steer - self._prev_steer
+        self._prev_steer = _steer
 
         # THE PERSISTENT COLLISION FLAG, one latch for both modes (ONE
         # reward): latched on impulse magnitude, not on the event flag, so
@@ -799,7 +881,8 @@ class TwoModeImageGoalReward(Wrapper):
         # (goal leg in goal) + (explore leg in explore), and what terminates
         # changes with the mode.
         reward, components = image_goal_reward(info, disp, self._has_collided,
-                                               mode=self.mode)
+                                               mode=self.mode,
+                                               steer_delta=_steer_delta)
 
         invalid = bool(info.get("simulator_invalid", False))
         if self.mode == GOAL:
@@ -824,8 +907,8 @@ class TwoModeImageGoalReward(Wrapper):
             # stuck (parking at the goal must reach the sustained stop, not
             # the truncation), so the gate is the same position/heading pair
             # WITHOUT the speed check. The off-road counter this block once
-            # carried is GONE (2026-09-20 evening): the first off-road step
-            # TERMINATES below, so there is nothing to debounce.
+            # carried is GONE (2026-09-20 evening): the failing-step flat is
+            # paid per failing step below, so there is nothing to debounce.
             if _speed_mps(info) < STUCK_SPEED_MPS and not in_goal_gate:
                 self._stuck_steps += 1
             else:
@@ -834,29 +917,33 @@ class TwoModeImageGoalReward(Wrapper):
             info["is_success"] = bool(success)
             info["arrived_this_step"] = bool(success)
             # SUCCESS/INVALID STILL WIN THE STEP (user ruling): terminated is
-            # evaluated first, and neither a failure-termination nor a
-            # truncation ever fires on a terminated step.
+            # evaluated first, and a success/invalid step pays no
+            # failing-step flat.
             terminated = bool(success or invalid)
             truncated = (not terminated) and self._t >= self.max_steps
-            # GOAL-MODE TERMINAL FAILURES (user decision 2026-09-20 evening):
-            # the FIRST off-road step, lane crossing or collision terminates
-            # (truncated stays False, ig_truncated stays None -- a
-            # termination, not a truncation) and pays the ordinary reward
-            # plus the flat -IG_TERMINAL_PENALTY, mirroring explore. The
-            # flat lands in components["terminal_penalty"] so the sum
-            # identity stays exact (the key is always present, 0.0 on clean
-            # steps, exactly like the explore leg's); success and invalid
-            # keep their step and pay no flat. ORDINARY ROWS: off-road -2.5
-            # (+ -5 = -7.5), crossed -1.0 (+ -5 = -6.0), collision -2.5
-            # (+ -5 = -7.5, the latch sets has_collided -> L_t false ->
-            # bonus 0).
+            # GOAL-MODE FAILURES ARE NON-TERMINAL (user decision 2026-09-20
+            # night; Task 18 section A's first-failure termination is
+            # REVERTED): every FAILING step -- a step with off_road, a lane
+            # crossing, or a collision impulse over the latch threshold --
+            # pays the flat -IG_TERMINAL_PENALTY on top of its ordinary row
+            # (smoothness already inside it), and the episode CONTINUES:
+            # terminated stays False, truncated stays False, and
+            # info["ig_truncated"] stays None (only stuck sets it).
+            # Sustained off-road pays -7.5/step (ordinary -2.5 + -5); of the
+            # collision steps only the impulse-firing one pays the extra -5
+            # (the latch keeps -1.5/step; later latched steps pay -2.5, not
+            # -7.5). The flat lands in components["terminal_penalty"] so
+            # the sum identity stays exact (the key is always present, 0.0
+            # on clean steps, exactly like the explore leg's); success and
+            # invalid keep their step and pay no flat.
             components.setdefault("terminal_penalty", 0.0)
             if not terminated:
                 crossed = bool(info.get("lane_invasion_any",
                                         info.get("lane_any", False)))
                 off_road = bool(info.get("off_road", False))
-                if off_road or crossed or self._has_collided:
-                    terminated, truncated = True, False
+                failed = (off_road or crossed
+                          or impulse > COLLISION_IMPULSE_THRESHOLD)
+                if failed:
                     reward -= TERMINAL_PENALTY
                     components["terminal_penalty"] = -TERMINAL_PENALTY
             trunc_cause = None
@@ -867,7 +954,8 @@ class TwoModeImageGoalReward(Wrapper):
         else:
             # EXPLORE MODE (user decision 2026-09-20): failures are TERMINAL
             # and there is no time pressure. The pure function already paid
-            # the flat -IG_TERMINAL_PENALTY and stamped the cause into
+            # the flat -IG_TERMINAL_PENALTY minus this step's smoothness
+            # term and stamped the cause into
             # components["explore_end"] when this step failed (invalid >
             # off-road > crossing > collision); the wrapper only decides
             # WHICH terminal won: invalid/failure beats arrival beats cap.

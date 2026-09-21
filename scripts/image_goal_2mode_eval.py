@@ -152,21 +152,26 @@ os.environ.setdefault("IG_SPEED_PREF_K", "0.2")
 # The failing step's flat penalty (user 2026-09-20, evening batch): the
 # launcher pins 5, so the mirror fills the hole with the same value.
 os.environ.setdefault("IG_TERMINAL_PENALTY", "5")
+# Steering smoothness (user 2026-09-20 night, BOTH modes, ungated): the
+# launcher pins 0.5, so the mirror fills the hole with the same weight an
+# eval replay must pay.
+os.environ.setdefault("IG_STEER_SMOOTH_W", "0.5")
 # Goal-mode stuck truncation (user 2026-09-20): the launcher pins both, so
 # the mirror fills the hole with the same values an eval replay must
 # truncate by. (The IG_OFFROAD_TRUNC_STEPS mirror is gone: the off-road
-# debounce counter was removed the same evening -- the first off-road step
-# TERMINATES goal mode now.)
+# debounce counter was removed the same evening -- the failing-step flat is
+# paid per failing step, non-terminal since the night batch.)
 os.environ.setdefault("IG_STUCK_SPEED_MPS", "0.3")
 os.environ.setdefault("IG_STUCK_STEPS", "100")
 os.environ.setdefault("DISCOUNT", "0.99")
 os.environ.setdefault("TOP_QUANTILES_DROP", "2")
 os.environ.setdefault("TQC_KAPPA", "1.0")
 os.environ.setdefault("TEMP_LR", "3e-4")
-# Floor raised 2026-09-20 evening with the terminal failures (worst goal row
-# -7.5 -> discounted floor -750 at gamma=0.99); the launcher now pins -800, so
+# Floor raised 2026-09-20 evening with the terminal failures, then again the
+# same night (user decision, worst sustained goal row -10.0 -> discounted
+# floor -1000 at gamma=0.99); the launcher now pins -1050, so
 # the mirror must not fill the hole with the superseded window.
-os.environ.setdefault("TQC_TARGET_MIN", "-800")
+os.environ.setdefault("TQC_TARGET_MIN", "-1050")
 os.environ.setdefault("TQC_TARGET_MAX", "100")
 os.environ.setdefault("EXPLORE_PROB", "0.5")
 os.environ.setdefault("EXPLORE_GOAL_DIST_M", "100.0")

@@ -9,15 +9,19 @@ under the 1.5 flats of user decision 2026-09-20). Termination buys nothing
 except the end of the negative stream, and it is granted only for the thing
 the task IS (sustained stop at the target viewpoint and heading), a
 destroyed hero, or the clock -- the SINGLE-MODE arm keeps exactly these
-terminals; the two-mode arm's goal branch additionally terminates on
-failures (test_two_mode_image_goal.py's business).
+terminals; the two-mode arm's goal branch pays the failing-step flat on
+every failing step NON-terminally and adds the ungated steering smoothness
+(test_two_mode_image_goal.py's business).
 
 The reward table under test (user spec 2026-09-18; 2026-09-20 REMOVES the
 +0.75 flat in-lane bonus, RAISES the two flat penalties 0.75 -> 1.5, and the
 evening batch turns the speed term into the positive SATURATING bonus
 +IG_SPEED_PREF_K * min(v, v*)/v* paid by every IN-LANE step, so the in-lane
 rows below are exact at v = TARGET_SPEED and lower by the pro-rated bonus
-when the car crawls):
+when the car crawls; the 2026-09-20 night batch adds the UNGATED steering
+smoothness -IG_STEER_SMOOTH_W * |steer_t - steer_(t-1)|, which the
+SINGLE-MODE arm never pays -- its wrapper passes no steer_delta, so every
+row below is exact at delta 0):
 
     in-lane, at v* = 20 km/h, no collision    -0.80  = -1.0 + K
     parked in lane (L_t via the carve-out)    -1.00  (bonus 0 at v = 0)
@@ -162,9 +166,10 @@ def test_sub_threshold_impulse_does_not_latch():
 
 
 def test_post_collision_off_road_pays_minus_400():
-    # The WORST row: both flats stack (-1.0 - 1.5 - 1.5 = -4.0). The 2-mode
-    # arm's TQC_TARGET_MIN floor (-800) is sized against its terminal rows
-    # (-7.5); this stacked row is the single-mode arm's worst.
+    # The WORST ordinary row: both flats stack (-1.0 - 1.5 - 1.5 = -4.0).
+    # The 2-mode arm's TQC_TARGET_MIN floor (-1050) is sized against its
+    # worst SUSTAINED row (-10.0 = off-road + latch + failing + max
+    # smoothness); this stacked row is the single-mode arm's worst.
     w, env = _wrap()
     env.info["collision_impulse"] = 5.0
     w.step(ACT)
@@ -346,12 +351,29 @@ def test_parked_in_lane_keeps_L_t_and_pays_exactly_the_base_cost():
 def test_goal_truncation_constants_carry_the_ruled_defaults():
     # The stuck-truncation constants (user decision 2026-09-20): the module
     # carries them env-overridable, and the shipped defaults ARE the
-    # ruling. (IG_OFFROAD_TRUNC_STEPS is gone -- the 2026-09-20 evening
-    # batch made the first off-road step TERMINATE, so there is no off-road
+    # ruling. (IG_OFFROAD_TRUNC_STEPS is gone -- the failing-step flat is
+    # paid per failing step with no debounce, so there is no off-road
     # budget left to rule on.)
     assert igm.STUCK_SPEED_MPS == pytest.approx(0.3)
     assert igm.STUCK_STEPS == 100
     assert not hasattr(igm, "OFFROAD_TRUNC_STEPS")
+    # The steering smoothness weight (user 2026-09-20 night) ships at 0.5,
+    # env-overridable as IG_STEER_SMOOTH_W.
+    assert igm.STEER_SMOOTH_W == pytest.approx(0.5)
+
+
+def test_smoothness_term_rides_in_the_goal_leg_only_when_asked():
+    # The smoothness term is an ARGUMENT, not a state: a caller that passes
+    # a steer_delta pays -W*|delta| in the goal leg (every step, ungated);
+    # the default call form (the single-mode arm's) pays none and keeps the
+    # frozen rows exactly.
+    r, comp = image_goal_reward(DRIVING, (1.0, 0.0), False,
+                                steer_delta=2.0)
+    assert comp["steer_smooth"] == pytest.approx(-1.0)
+    assert r == pytest.approx(-1.0 + SPEED_PREF_K - 1.0)     # -1.8, still < 0
+    r0, comp0 = image_goal_reward(DRIVING, (1.0, 0.0), False)
+    assert comp0["steer_smooth"] == pytest.approx(0.0)
+    assert r0 == pytest.approx(-1.0 + SPEED_PREF_K)          # -0.8, unchanged
 
 
 def test_goal_truncation_constants_env_override(monkeypatch):

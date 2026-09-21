@@ -6,8 +6,9 @@
 #
 # ONE CRITIC, NOT THE FROZEN GATED STACK. The unified TwoModeImageGoalReward
 # puts both modes on one scale (the goal leg all-negative, the explore leg
-# bounded in [-IG_TERMINAL_PENALTY, +IG_SPEED_PREF_K]), so the two-critic
-# GatedTQCLearner + ModeSplitBuffer split has nothing left to justify: under
+# bounded in [-IG_TERMINAL_PENALTY - max smoothness, +IG_SPEED_PREF_K]), so
+# the two-critic GatedTQCLearner + ModeSplitBuffer split has nothing left to
+# justify: under
 # GATED_ONE_CRITIC=1 the trainer routes to the PLAIN TQCLearner and a single
 # plain ReplayBuffer (the mode bit rides inside the observation dict). The
 # critic's targets are clipped by the GLOBAL TQC_TARGET_MIN/MAX window --
@@ -163,29 +164,46 @@ export IG_IN_LANE_BONUS=0    # flat in-lane bonus REMOVED (user 2026-09-20);
                              # pinned explicitly so the snapshot records it
                              # and the banner cannot disagree
 export IG_TERMINAL_PENALTY=5   # the failing step's flat penalty
-                               # (user 2026-09-20, evening batch): off-road/
-                               # crossed/collision terminate BOTH modes and
-                               # pay this flat on top of the ordinary reward
-                               # (explore's leg pays it; the two-mode goal
-                               # branch pays it on the first failure);
-                               # invalid terminates explore only and pays it
+                               # (user 2026-09-20 evening batch, revised the
+                               # same night): EXPLORE failures terminate and
+                               # pay this flat minus their smoothness term;
+                               # GOAL-mode failures are NON-TERMINAL (user
+                               # 2026-09-20 night -- Task 18 section A's
+                               # first-failure termination reverted) and the
+                               # flat rides on EVERY failing step
+                               # (off-road/crossed/collision impulse),
+                               # sustained off-road -7.5/step, only the
+                               # impulse-firing collision step pays it
+                               # (later latched steps -2.5); success and
+                               # invalid steps pay no flat
+export IG_STEER_SMOOTH_W=0.5   # steering smoothness (user 2026-09-20
+                               # night, BOTH modes): -W * |steer_t -
+                               # steer_(t-1)| on EVERY step, ungated --
+                               # parked and failing steps included; the
+                               # wrapper tracks the previous action's
+                               # steer (reset 0.0; |steer| <= 1 a side, so
+                               # the term is at most -1.0)
 export IG_STUCK_SPEED_MPS=0.3 IG_STUCK_STEPS=100
                                # goal-mode stuck truncation (user 2026-09-20):
                                # speed under 0.3 m/s for 100 consecutive steps
                                # outside the success spatial/yaw gate truncates
-                               # the goal episode (truncated=True, NO extra
-                               # penalty; gate steps never count toward
-                               # stuck). The IG_OFFROAD_TRUNC_STEPS debounce
-                               # counter is GONE (user 2026-09-20 evening):
-                               # the first off-road step TERMINATES goal mode
-                               # now, so there is nothing left to debounce
+                               # the goal episode (truncated=True, ordinary
+                               # reward, no extra penalty; gate steps never
+                               # count toward stuck). The IG_OFFROAD_TRUNC_
+                               # STEPS debounce counter is GONE (user
+                               # 2026-09-20 evening): the failing-step flat is
+                               # paid per failing step with no debounce, so
+                               # there is nothing left to debounce
 export DISCOUNT=0.99 TOP_QUANTILES_DROP=2 TQC_KAPPA=1.0
 export TEMP_LR=3e-4                      # the v2 divergence fix (entropy brake)
-export TQC_TARGET_MIN=-800 TQC_TARGET_MAX=100   # ReViND window at gamma=0.99;
+export TQC_TARGET_MIN=-1050 TQC_TARGET_MAX=100   # ReViND window at gamma=0.99;
                                  # floor raised 2026-09-20 evening with the
-                                 # terminal failures (worst goal row -7.5 ->
-                                 # discounted floor -750 at gamma=0.99,
-                                 # headroom below it)
+                                 # terminal failures, then again the same
+                                 # night (user decision): the worst SUSTAINED
+                                 # goal row is off-road + collided latch +
+                                 # failing + max smoothness = -1.0 -1.5 -1.5
+                                 # -5.0 -1.0 = -10.0 -> discounted floor
+                                 # -1000 at gamma=0.99, headroom below it
 export EXPLORE_PROB=0.5 EXPLORE_GOAL_DIST_M=100.0
 export TARGET_SPEED=20.0 ENV_SKIP_IMAGE_FEATURES=1
 export MAX_EPISODE_STEPS=1000
@@ -270,7 +288,8 @@ for _k in IMAGE_GOAL_TASK GATED GATED_ONE_CRITIC \
           PERCEPTION VC1_READOUT \
           OBS_WITH_STATE OBS_WITH_MODE OBS_WITH_GOAL OBS_WITH_VECTOR \
           EPISODE_HER HER_MIN_DISP IG_GOAL_DISTANCE_THRESHOLD_M \
-          IG_SPEED_PREF_K IG_STUCK_SPEED_MPS \
+          IG_SPEED_PREF_K IG_TERMINAL_PENALTY IG_STEER_SMOOTH_W \
+          IG_STUCK_SPEED_MPS \
           IG_STUCK_STEPS TEMP_LR \
           TQC_TARGET_MIN TQC_TARGET_MAX \
           DISCOUNT TOP_QUANTILES_DROP TQC_KAPPA \
@@ -313,12 +332,12 @@ echo "[Banner] run=${RUN_NAME} policy_folder=${POLICY_FOLDER} interpreter=${PYTH
 echo "[Banner] 2-mode pairing: IMAGE_GOAL_TASK=1 GATED=1 GATED_ONE_CRITIC=1"
 echo "[Banner] PERCEPTION=vc1 VC1_READOUT=grid2 OBS_WITH_STATE=1 OBS_WITH_MODE=1"
 echo "[Banner] EPISODE_HER=1 HER_MIN_DISP=5.0 IG_GOAL_DISTANCE_THRESHOLD_M=2.0"
-echo "[Banner] reward: IG_SPEED_PREF_K=0.2 (saturating bonus, user 2026-09-20 evening) TARGET_SPEED=20.0 km/h EXPLORE_GOAL_DIST_M=100.0 IG_IN_LANE_BONUS=0 (in-lane bonus removed 2026-09-20)"
-echo "[Banner] goal reward: -1.0 base + saturating speed bonus in lane - 1.5 off-road - 1.5 collision; off-road/crossed/collision TERMINATE paying -IG_TERMINAL_PENALTY=5 on top (off-road -7.5, crossed -6.0, collision -7.5; user 2026-09-20 evening)"
-echo "[Banner] explore reward: + saturating speed bonus only (0.2/step max, 0 parked); terminal failures (off-road/crossed/collision/invalid) pay -IG_TERMINAL_PENALTY=5 and terminate; no base cost, no flat penalties (user 2026-09-20)"
-echo "[Banner] goal-mode stuck truncation: speed<IG_STUCK_SPEED_MPS=0.3 m/s for IG_STUCK_STEPS=100 consecutive steps outside the gate truncates (truncated=True, NO extra penalty; the off-road debounce counter is gone -- first off-road step terminates; user 2026-09-20)"
+echo "[Banner] reward: IG_SPEED_PREF_K=0.2 (saturating bonus, user 2026-09-20 evening) TARGET_SPEED=20.0 km/h EXPLORE_GOAL_DIST_M=100.0 IG_IN_LANE_BONUS=0 (in-lane bonus removed 2026-09-20) IG_STEER_SMOOTH_W=0.5 (steering smoothness, EVERY step BOTH modes, ungated; user 2026-09-20 night)"
+echo "[Banner] goal reward: -1.0 base + saturating speed bonus in lane - 1.5 off-road - 1.5 collision - 0.5*|delta-steer| smoothness; failures NON-terminal (user 2026-09-20 night, first-failure termination reverted): every failing step pays -IG_TERMINAL_PENALTY=5 on its ordinary row (off-road -7.5/step, crossed -6.0, the latching collision step -7.5 then -2.5 latched)"
+echo "[Banner] explore reward: + saturating speed bonus only (0.2/step max, 0 parked) - 0.5*|delta-steer| smoothness every step; terminal failures (off-road/crossed/collision/invalid) pay -IG_TERMINAL_PENALTY=5 minus smoothness and terminate; no base cost, no flat penalties (user 2026-09-20)"
+echo "[Banner] goal-mode stuck truncation: speed<IG_STUCK_SPEED_MPS=0.3 m/s for IG_STUCK_STEPS=100 consecutive steps outside the gate truncates (truncated=True, ordinary reward; failures non-terminal since 2026-09-20 night; the off-road debounce counter is gone)"
 echo "[Banner] learner: DISCOUNT=0.99 TOP_QUANTILES_DROP=2 TQC_KAPPA=1.0 TEMP_LR=3e-4"
-echo "[Banner] bounded critic: TQC_TARGET_MIN=-800 TQC_TARGET_MAX=100 (ReViND window; floor raised 2026-09-20 evening with the terminal failures, worst goal row -7.5, discounted floor -750)"
+echo "[Banner] bounded critic: TQC_TARGET_MIN=-1050 TQC_TARGET_MAX=100 (ReViND window; floor raised 2026-09-20 night, worst sustained goal row -10.0 = off-road + collided latch + failing + max smoothness, discounted floor -1000 at gamma=0.99)"
 echo "[Banner] modes: EXPLORE_PROB=0.5 | goal band ${GOAL_DIST_MIN}-${GOAL_DIST_TARGET} m"
 echo "[Banner] no OBS_WITH_COLLISION, no TQC_VALUE_FLOOR/CEILING, NO_TIMELIMIT unset"
 echo "[Banner] snapshot: results/run_env/${RUN_NAME}.env ($(wc -l < "results/run_env/${RUN_NAME}.env") vars)"

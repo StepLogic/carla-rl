@@ -15,12 +15,20 @@ and asserts the three things a unit test cannot see together:
    (`encoder_pixels`), and a fake forward through the documented trunk --
    PixelMultiplexer with the v8 conv stack -- produces the documented width:
    vision 512 + one 512 projection per flat key = the 2048 concat;
-2. the /255 quirk is survivable: jaxrl2's normalise-if-max>1 branch is
-   COMMENTED OUT upstream (pixel_multiplexer.py:113-117), so VC-1 token
-   magnitudes reach the conv stack unnormalised. The obs fixture therefore
-   carries raw token magnitudes (well above 1) and every output and loss is
-   asserted finite -- this pins finiteness at production magnitudes, NOT that
-   normalisation happens;
+2. raw VC-1 token magnitudes are survivable. In the jaxrl2 this repo pins
+   (carla-rl/dependencies/jaxrl2, submodule 56eb813 -- the copy jaxrl2.__file__
+   resolves to), every normalise-if-max>1 -> /255 branch is COMMENTED OUT:
+   pixel_multiplexer.py:113-117 and the sibling multiplexers carry the dead
+   cond, and D4PGEncoder.__call__ has no /255 at all -- verified against the
+   LOADED BYTECODE, which contains no 255 constant, and against a scaling
+   experiment: standalone, the conv stack is linear (a 2550x input scales its
+   output 2550x). Tokens therefore reach the conv stack at raw magnitude.
+   (End to end the image branch is still input-scale-invariant -- a 2550x
+   input produced the same output -- but through the post-conv
+   Dense+LayerNorm, not through any /255.) The obs fixture carries raw
+   magnitudes (well above 1) and every output and loss is asserted finite.
+   This pins finiteness at production magnitudes, NOT that /255 normalisation
+   happens;
 3. a one-update smoke on a mixed batch (goal rows first + explore rows) runs
    on the real jitted path with `augument is False` (AGENT_AUGMENT_PIXELS=0),
    and every loss it reports is finite.
@@ -194,7 +202,7 @@ def _batch(n=8, seed=0):
 
     def obs(n_rows):
         # Raw VC-1 token magnitudes: O(1), so well above the 0-1 range a
-        # /255-normalised image would carry -- see the module docstring.
+        # /255-normalised image would carry -- see module docstring point 2.
         pixels = (rng.normal(size=(n_rows, 7, 7, 768)) * 2.0).astype(np.float32)
         return {"goal": rng.normal(size=(n_rows, 4)).astype(np.float32),
                 "pixels": pixels,
@@ -240,10 +248,10 @@ def test_tqc_learner_initialises_with_the_compressor_under_the_v8_flags(
     assert agent.augument is False
     _assert_compressor_params(agent, ("_critic",), _act_space().shape[0])
 
-    # ONE FAKE FORWARD, both heads, at raw token magnitudes (the /255 quirk:
-    # upstream normalises only in a commented-out branch, so this is what the
-    # conv stack really receives). Actions must match the action space; the
-    # critic's quantiles must be finite.
+    # ONE FAKE FORWARD, both heads, at raw token magnitudes (no /255 exists in
+    # this jaxrl2's live path -- see module docstring point 2, so this is what
+    # the conv stack really receives). Actions must match the action space;
+    # the critic's quantiles must be finite.
     obs = train_carla_tqc.agent_view(_obs_space().sample())
     act = agent.eval_actions(obs)
     assert act.shape == _act_space().shape
@@ -319,7 +327,10 @@ def test_plain_update_smoke_on_a_mixed_batch(plain_agent):
     assert agent.augument is False
     info = agent.update(train_carla_tqc.agent_view(_batch()))
     _assert_finite_info(info, "critic_loss", "actor_loss")
-    # the update really moved the critic, i.e. the smoke stepped a real update
+    # the smoke executed a real update step and reports per-sample TD errors
+    # (this asserts the step ran and returned diagnostics -- NOT that any
+    # parameter moved, which a single update's random-init gradient could not
+    # prove either way)
     assert np.asarray(info["td_errors"]).size > 0
 
 

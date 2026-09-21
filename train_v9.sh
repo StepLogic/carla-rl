@@ -95,6 +95,13 @@ export XLA_PYTHON_CLIENT_PREALLOCATE=false
 # History: 0.2 = 2.46 GB OOM'd the two-env resume (RESOURCE_EXHAUSTED) --
 # two windowed Low servers (~7.8-8.5 GB combined) + the torch VC-1 encoder
 # leave less than the old ceiling.
+# ALLOCATORS (two-town squeeze): the card is over budget by <1 GB with VC-1
+# ON GPU (user 2026-09-21). platform = cuda_malloc_async, no BFC arena
+# overhead; expandable_segments stops torch's caching allocator from
+# holding freed blocks. Both are pure memory-management changes -- no
+# computation, observation or result changes.
+export XLA_PYTHON_CLIENT_ALLOCATOR=platform
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 export VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/nvidia_icd.json
 export __NV_PRIME_RENDER_OFFLOAD=1 __VK_LAYER_NV_optimus=NVIDIA_only __GLX_VENDOR_LIBRARY_NAME=nvidia
 # Overridable so a SMOKE RUN uses this identical flag set rather than a copy of it: a duplicated flag list is a list

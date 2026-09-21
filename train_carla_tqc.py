@@ -1121,8 +1121,18 @@ def main():
     if _buf_obs_space is not venv.observation_space:
         from vae_nav.episode_her import Fp16PixelsBuffer
         buffer = Fp16PixelsBuffer(buffer)
-        print("[Buffer] pixels stored as float16 (BUFFER_PIXELS_FP16=1, "
-              "~34 GB at 450k), restored to float32 on sample")
+        # CAPACITY-DERIVED ESTIMATE, NOT A HARDCODED NUMBER: fp16 pixels are
+        # 2 bytes per element, and the ReplayBuffer preallocates a
+        # next_observations mirror besides, hence the factor 2. The banner
+        # must track REPLAY_CAPACITY so a changed capacity cannot silently
+        # stale the printed size (the "~34 GB at 450k" figure was written
+        # against a different capacity and drifted).
+        _px_el = int(np.prod(_buf_obs_space["pixels"].shape))
+        _fp16_gb = _capacity * _px_el * 2 * 2 / 2 ** 30
+        print(f"[Buffer] pixels stored as float16 (BUFFER_PIXELS_FP16=1, "
+              f"REPLAY_CAPACITY={_capacity}, fp16 ~{_fp16_gb:.0f} GB incl. "
+              f"the next_observations mirror; fp32 would be ~{_fp16_gb * 2:.0f} GB), "
+              "restored to float32 on sample")
 
     # HER IS PER ENV. Environments finish episodes at different times, and a
     # shared relabel buffer would splice transitions from different towns into

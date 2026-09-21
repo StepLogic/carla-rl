@@ -13,7 +13,9 @@
 #     CNN_STRIDES=2,2,1 -> AGENT_LATENT_DIM=512. AUGMENTATION OFF
 #     (AGENT_AUGMENT_PIXELS=0 -- drq-style image aug on patch tokens is not
 #     meaningful). BUFFER_PIXELS_FP16=1: the 37632-float-per-step pixel rows
-#     are stored fp16 (~34 GB at 450k instead of ~68 GB fp32).
+#     are stored fp16 -- at the 300k capacity below that is ~45 GB including
+#     the next_observations mirror (fp32 would be ~90 GB and does not fit
+#     125 GB RAM beside the run's other residents).
 #
 #   COHERENCE RULING (ledger ruling on the Tasks 1+2 review): run_gated.sh
 #     hardcodes OBS_WITH_VECTOR=1 and both gated coherence checks demanded it,
@@ -84,6 +86,9 @@ export OBS_WITH_STATE=1 OBS_STATE_COLLISION=0 OBS_LATENT_AS_PIXELS=1
 export AGENT_ENCODER=d4pg CNN_FEATURES=64,128,512 CNN_FILTERS=3,3,1
 export CNN_STRIDES=2,2,1 AGENT_LATENT_DIM=512 AGENT_AUGMENT_PIXELS=0
 export BUFFER_PIXELS_FP16=1 VC1_READOUT=grid2
+# BUFFER CAPS AT 300k TRANSITIONS (user 2026-09-21; MAX_STEPS stays 450k): after 300k the FIFO wrap keeps the
+# most recent ~300k rows; fp16 ~45 GB incl. next_obs mirror (fp32 ~90 GB).
+export REPLAY_CAPACITY="${REPLAY_CAPACITY:-300000}"
 # CARLA_ROOT IS REQUIRED AND HAS NO DEFAULT: train_carla_tqc.py:319 does a bare os.environ["CARLA_ROOT"] and would
 # KeyError on the first env build. No script on this path exports it, and it is absent from every run_env snapshot --
 # runs have been working only because an interactive shell happened to carry it. A detached run must not depend on
@@ -176,8 +181,9 @@ kill_all_carla
 # v8 ADDS SIX PREFIXES for the same reason: OBS_LATENT_ and OBS_STATE_ (the
 # coherence ruling's flag pair) and AGENT_/CNN_/BUFFER_/VC1_ (the compressor
 # config) match NONE of the inherited alternations, so without them the
-# snapshot would silently drop every v8-defining flag.
-env | grep -E "^(GATED|OBS_WITH|OBS_STATE|OBS_LATENT|PERCEPTION|STEP_COST|DISCOUNT|EXPLORE|GOAL|LANE|COLLISION|WEDGE|POTENTIAL|TARGET_SPEED|MAX_THROTTLE|MAX_STEER|MIN_THROTTLE|ENV_|EXPERT|N_EVAL|JUNCTION|STRAIGHT|EVAL_TOWNS|CARLA|TOWN|RUN_GATED|ACTOR|AGENT|CNN|BUFFER|VC1)[A-Z0-9_]*=" \
+# snapshot would silently drop every v8-defining flag. REPLAY (the 300k
+# capacity, user 2026-09-21) matches none of them either.
+env | grep -E "^(GATED|OBS_WITH|OBS_STATE|OBS_LATENT|PERCEPTION|STEP_COST|DISCOUNT|EXPLORE|GOAL|LANE|COLLISION|WEDGE|POTENTIAL|TARGET_SPEED|MAX_THROTTLE|MAX_STEER|MIN_THROTTLE|ENV_|EXPERT|N_EVAL|JUNCTION|STRAIGHT|EVAL_TOWNS|CARLA|TOWN|RUN_GATED|ACTOR|AGENT|CNN|BUFFER|VC1|REPLAY)[A-Z0-9_]*=" \
   | sort > "results/run_env/${RUN_NAME}.env"
 # ARTEFACT CHECK ON THE SNAPSHOT ITSELF: every flag this run is ABOUT must be in the record, or the record is a lie
 # and any later eval replaying it silently differs from training. Abort rather than train against a bad provenance.
@@ -188,7 +194,7 @@ for _k in COLLISION_TERMINAL GATED_GOAL_LANE_TERMINAL WEDGE_TRUNCATE EXPLORE_OFF
           CARLA_QUALITY CARLA_ROOT CARLA_OFFSCREEN CARLA_PORTS TOWN_LIST TOWN_ROTATE_EPISODES RUN_GATED_START_SERVER N_EVAL_EPISODES N_EVAL_EXPLORE ACTOR_FREEZE_STEPS PERCEPTION ACTOR_Q_NORM \
           OBS_WITH_VECTOR OBS_WITH_STATE OBS_STATE_COLLISION OBS_LATENT_AS_PIXELS \
           AGENT_ENCODER CNN_FEATURES CNN_FILTERS CNN_STRIDES AGENT_LATENT_DIM AGENT_AUGMENT_PIXELS \
-          BUFFER_PIXELS_FP16 VC1_READOUT; do
+          BUFFER_PIXELS_FP16 VC1_READOUT REPLAY_CAPACITY; do
   grep -qE "^${_k}=" "results/run_env/${RUN_NAME}.env" || _missing="$_missing $_k"
 done
 if [ -n "$_missing" ]; then

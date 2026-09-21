@@ -66,12 +66,17 @@ export REPLAY_CAPACITY="${REPLAY_CAPACITY:-300000}"
 # runs have been working only because an interactive shell happened to carry it. A detached run must not depend on
 # ambient shell state.
 export CARLA_ROOT=/home/robotlab/Apps/CARLA_0.9.15
-# QUALITY=Low (user 2026-09-16). NOT already the case on this path: train_carla_tqc.py:320 and :441 both default to
-# "Epic" and override carla_core's own BASE_CORE_CONFIG "Low". Setting it here covers the server launch flag AND the
-# CarlaCore config in one place. MEASURED: a Low server holds ~4.85 GB against ~5.9 GB for Epic.
-# CONSEQUENCE ON RECORD: v6n trained on EPIC frames, so v7's images differ from v6n's. That is a SECOND difference
-# from v6n beside the termination/penalty change -- a v7-vs-v6n gap can no longer be attributed to termination alone.
-export CARLA_QUALITY=Low
+# QUALITY: EPIC FOR TOWN05 (user 2026-09-21, "Town05 at Epic"). Town05 at
+# Low SEGFAULTED this CARLA build 3/3 today (Signal 11 mid-run and during
+# load_world, zero episodes completed); Town05 has historically trained
+# whole runs at Epic (v4/v5 era), and one Epic server (~5.9 GB) + the
+# trainer fits the card on its own. Overridable so a different-quality run
+# can reuse this script without a copy.
+# NOTE ON RECORD: the Town01 v9 stint trained 140k steps on LOW frames, so a
+# resumed policy sees Epic frames for Town05 -- a cross-quality confound
+# within v9 (the known v6n-Epic/v7-Low kind).
+# MEASURED: a Low server holds ~4.85 GB against ~5.9 GB for Epic.
+export CARLA_QUALITY="${CARLA_QUALITY:-Epic}"
 # CLIENT TIMEOUT 180s (was 50s). Both 2026-09-21 deaths were the same shape:
 # a few episodes into Town10HD the server STOPPED ANSWERING for >50s (HD-map
 # streaming stall; it was alive -- killed only afterwards by the retry loop's

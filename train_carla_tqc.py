@@ -538,6 +538,19 @@ def ensure_carla(port, timeout=180.0):
            f"-quality-level={quality}",
            "-RenderOffScreen" if _offscreen else "-windowed",
            "-ResX=640", "-ResY=360", "-prefernvidia"]
+    # TEXTURE STREAMING POOL CAP (user 2026-09-21, two-town squeeze). UE4's
+    # streaming pool auto-grows into whatever VRAM is free -- MEASURED: a
+    # Town10HD server idled up to 5716 MiB on a mostly-empty card against
+    # 4290 during real training, and the servers boot FIRST, so they eat the
+    # space the jax learner needs and the learner OOMs (RESOURCE_EXHAUSTED on
+    # a 768 KB alloc, four attempts). The cap bounds the cache, not the
+    # detail: at Low/640x360 the working set sits under 2 GB, so frames are
+    # expected to be identical. Env var so the .env snapshot records it.
+    _pool = os.environ.get("CARLA_STREAMING_POOL")
+    if _pool:
+        # Shell-quoted because `shell` below joins cmd with spaces: UE4 needs
+        # the cvar and its value as ONE argv entry ("r.Streaming.PoolSize 2000").
+        cmd.append(f'"-ExecCmds=r.Streaming.PoolSize {_pool}"')
     # THE SERVER'S OWN OUTPUT GOES TO A FILE, NOT /dev/null. When the
     # simulator stops answering mid-run, its log is the only evidence of why
     # (Vulkan device lost, GPU OOM, a crash) -- and it was being discarded.

@@ -17,17 +17,20 @@
 # AGENT_ENCODER=none Dense trunk, OBS_WITH_STATE=1 (9-d block, no vector key),
 # ACTOR_Q_NORM=1, HER, EXPLORE mode untouched (fines, 100 m arrival, bonus 10),
 # REPLAY_CAPACITY=300k, EVAL_INTERVAL=5k checkpoints, windowed.
-# TOWNS (user 2026-09-21, "Run v9 for Town01 and Town10 simulatenously"): TWO
-# ENVS, ONE TOWN EACH -- env 0 = Town01@2000, env 1 = Town10HD@2004, no town
-# rotation (TOWN_ROTATE_EPISODES=0 gates the reload loop at :2060 outright, so
-# zero world reloads even with two towns; the rotation code is only ever
-# reached when ROTATE_EPISODES > 0). Both towns are TRAIN towns in
-# town_split_v7.json. Two servers measured to fit: Town10HD ~4.3 GB +
-# Town01 ~3.5 GB + jax cap 0.2 of 12.3 GB.
+# TOWNS (user 2026-09-21, "Run v9 for Town01 and Town10 simulatenously",
+# revised same day to "try town05 low"): TWO ENVS, ONE TOWN EACH --
+# env 0 = Town01@2000, env 1 = Town05@2004, no town rotation
+# (TOWN_ROTATE_EPISODES=0 gates the reload loop at :2060 outright, so zero
+# world reloads even with two towns; the rotation code is only ever reached
+# when ROTATE_EPISODES > 0). Both towns are TRAIN towns in
+# town_split_v7.json; Town05 is the split's highest lane-density map
+# (4.21%). Town10HD was dropped by the user because at Low it still streams
+# toward 5.7 GB and the card does not fit two windowed servers + torch
+# VC-1 + jax -- see the CARLA_STREAMING_POOL note below.
 # RESUME: the first v9 stint (Town01-only, same reward, stopped by user at
-# ~140k steps) left checkpoints through 95000. Same reward scale, so RESUME=1
-# restores actor/critics/temps and adds Town10HD to the data distribution --
-# buffer and Adam state start fresh (warm-start lesson).
+# ~140k steps) left checkpoints through 140000. Same reward scale, so
+# RESUME=1 restores actor/critics/temps and adds Town05 to the data
+# distribution -- buffer and Adam state start fresh (warm-start lesson).
 # NO v8 ROW IS COMPARABLE TO A v9 ROW. v8's 55k-step partial (10 checkpoints)
 # stays on disk as the pyramid diagnostic that motivated this change.
 cd /home/robotlab/scratch/carla-rl/.claude/worktrees/gated-impl || exit 1
@@ -150,7 +153,7 @@ export LANE_COLLISION_PENALTY=5.0 LANE_DEPARTURE_PENALTY=5.0
 # ---- GOAL SAMPLING ----------------------------------------------------------
 export JUNCTION_GOAL_FRAC=0.5 STRAIGHT_GOAL_FRAC=0.3
 
-# ---- TOWN: Town01 + Town10HD simultaneously (user 2026-09-21) ----
+# ---- TOWN: Town01 + Town05 simultaneously (user 2026-09-21) ----
 # TOWN_LIST points at a SEPARATE split rather than editing configs/town_split.json, which carries "Do not edit
 # without a new experiment name" and underpins every existing v4/v5/v6* result. town_split_v7.json moves Town10HD
 # from heldout to train and changes nothing else. Held-out evidence now rests on Town03 ALONE.
@@ -162,14 +165,24 @@ export TOWN_LIST=configs/town_split_v7.json
 # plus a Town01 server (~3.5 GB) -> ~8.3 GB of 12.3 GB. An earlier "does not fit" was WRONG: its probes booted
 # servers with no map (default Town10HD_Opt) and took the learner as ~2.3 GB from a comment instead of measuring.
 # Ports step by 4: CARLA uses port and port+1 (streaming), as run_carla_queue.sh does.
-# TOWN01 + TOWN10HD (user 2026-09-21, "Run v9 for Town01 and Town10
-# simulatenously"): one env per town, TWO servers, NO rotation. Env i =
-# town i @ port i (train_carla_tqc.py:1119-1137). TOWN_ROTATE_EPISODES=0
-# disables the reload loop outright (the :2060 gate is `ROTATE_EPISODES > 0
-# and len(rotation) > 1`), so there are ZERO world reloads -- the known
+# TOWN01 + TOWN05 (user 2026-09-21: "Run v9 for Town01 and Town10
+# simulatenously", revised same day to "try town05 low"): one env per town,
+# TWO servers, NO rotation. Env i = town i @ port i
+# (train_carla_tqc.py:1119-1137). TOWN_ROTATE_EPISODES=0 disables the reload
+# loop outright (the :2060 gate is `ROTATE_EPISODES > 0 and
+# len(rotation) > 1`), so there are ZERO world reloads -- the known
 # CARLA 0.9.15 crash vector never fires, even with two towns.
-# Town10HD = "Town10" in the user's request: the only Town10 in the split.
-export ENV_TOWNS=Town01,Town10HD
+# Town05 replaces Town10HD ("which other town can be run at low -- try
+# town05 low"): Town10HD's server streams toward 5.7 GB even at Low and the
+# card does not fit it alongside Town01's server + torch VC-1 + jax.
+export ENV_TOWNS=Town01,Town05
+# TEXTURE STREAMING POOL CAP (user 2026-09-21, "Cap streaming pool at 2000"):
+# UE4's streaming pool auto-grows into free VRAM -- MEASURED, a Town10HD
+# server idled to 5716 MiB on a mostly-empty card vs 4290 in real training --
+# and the servers boot first, so they eat the jax learner's space. 2000 MiB
+# bounds the texture CACHE (working set at Low/640x360 is under it; frames
+# expected identical). Read by train_carla_tqc.py's ensure_carla.
+export CARLA_STREAMING_POOL=2000
 # TOWN_ROTATE_EPISODES=0: with two towns and two envs each env holds its
 # town permanently; exported 0 to make that a written decision, not an
 # accident.
@@ -184,7 +197,7 @@ export CARLA_PORTS=2000,2004 CARLA_PORT=2000
 #
 # EVAL_TOWNS matches the training towns. In-training eval is OFF
 # (N_EVAL_EPISODES=0), so this is provenance only.
-export EVAL_TOWNS=Town01,Town10HD
+export EVAL_TOWNS=Town01,Town05
 # Headless: only ~12 MiB, but it removes the live-X-session dependency -- windowed, CarlaUE4 EXITS rather than
 # falling back if DISPLAY is wrong or the session locks, which an unattended 450k-step run must not depend on.
 # WINDOWED (user 2026-09-16: "the ui is not showing"). Needs the live X session on DISPLAY=:1, which run_gated.sh

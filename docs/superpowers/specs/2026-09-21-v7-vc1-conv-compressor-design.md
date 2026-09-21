@@ -94,9 +94,10 @@ State block becomes `[clip(speed/TARGET_SPEED, 0, 1), *8 prev controls]` =
 user decision time: goal mode terminates on collision anyway; in explore mode
 a policy that has crashed once sees no obs difference and learns only from the
 −5/step collision penalty. Implemented in `VAEGoalWrapper._state_block` behind
-the existing flag surface (a new env flag `OBS_WITH_COLLISION=0` mirrors the
-existing `OBS_WITH_*` pattern), with the v7-era behaviour restorable via the
-flag for any replay of old checkpoints.
+a NEW flag `OBS_STATE_COLLISION` (default 1 = current behaviour; v8 sets 0).
+It must NOT be named `OBS_WITH_COLLISION` — that flag already exists and means
+the separate image-goal `coll` obs key (vae_goal_wrapper.py:136-143); reusing
+the name would silently couple two unrelated switches.
 
 ### D4 — exact-v7 recipe, fresh 450k, workstation
 
@@ -107,7 +108,7 @@ launcher `train_v8.sh` deriving from `train_v7.sh` with:
 - `RUN_NAME=carla_gated_her_v8_vc1`, `PERCEPTION=vc1`,
   `VC1_READOUT=grid2` (already the vc1_source default), plus the new
   `AGENT_ENCODER=d4pg`, `CNN_FEATURES=64,128,512`, `CNN_FILTERS=3,3,1`,
-  `CNN_STRIDES=2,2,1`, `AGENT_LATENT_DIM=512`, `OBS_WITH_COLLISION=0`,
+  `CNN_STRIDES=2,2,1`, `AGENT_LATENT_DIM=512`, `OBS_STATE_COLLISION=0`,
   `AGENT_AUGMENT_PIXELS=0` exported into the snapshot (the v7 lesson: the
   snapshot must carry every flag the trainer reads).
 - Everything else byte-identical to the v7 recipe.

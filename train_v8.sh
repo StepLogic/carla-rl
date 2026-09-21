@@ -164,7 +164,11 @@ export TOWN_LIST=configs/town_split_v7.json
 # completed), so Town02-only removes the wedge trigger outright AND drops
 # all world reloads. Town02 is a TRAIN town in the frozen split. Held-out
 # evidence still rests on Town03 alone.
-export ENV_TOWNS=Town02
+# TOWN01 (user 2026-09-21: "run it train in town01" — second town call of the
+# day; the Town02-only relaunch then lost its CARLA server to a Signal 11
+# segfault during env build, ON Town02, so the Town10HD-only wedge theory is
+# dead too). Town01 is v6n/v7's own training town.
+export ENV_TOWNS=Town01
 # TOWN_ROTATE_EPISODES=0: with one requested town the trainer disables the
 # rotation itself; exported 0 to make that a written decision, not an
 # accident of the single-town branch.

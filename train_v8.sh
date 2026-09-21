@@ -131,7 +131,7 @@ export DISCOUNT=0.99 GATED_ALLOW_DISCOUNTED_SORB=1
 # -- the server Town01 is TRAINING on -- and reloads the world there. MEASURED 2026-09-16 at step 25k: that server
 # segfaulted (Signal 11), the trainer hung reconnecting for ~21 min, and because the checkpoint is written AFTER the
 # eval, nothing was saved -- so every restart would die at 25k forever. With 0 episodes run_evaluation builds no env
-# (rate=0.0) and the explore eval is skipped. Checkpoints are still written every EVAL_INTERVAL=25000.
+# (rate=0.0) and the explore eval is skipped. Checkpoints are written every EVAL_INTERVAL (5000 for v8).
 # EVALUATE CHECKPOINTS OFFLINE, on a separate server, after the run.
 export N_EVAL_EPISODES=0 N_EVAL_EXPLORE=0
 
@@ -146,7 +146,7 @@ export EXPLORE_OFF_ROAD_PENALTY=5.0 LANE_COLLISION_PENALTY=5.0
 # ---- GOAL SAMPLING ----------------------------------------------------------
 export JUNCTION_GOAL_FRAC=0.5 STRAIGHT_GOAL_FRAC=0.3
 
-# ---- TOWNS: Town01 + Town10HD, SIMULTANEOUSLY, one env each (user 2026-09-16) ----
+# ---- TOWN: Town02 ONLY (user 2026-09-21; earlier: Town01+Town10HD one env each) ----
 # TOWN_LIST points at a SEPARATE split rather than editing configs/town_split.json, which carries "Do not edit
 # without a new experiment name" and underpins every existing v4/v5/v6* result. town_split_v7.json moves Town10HD
 # from heldout to train and changes nothing else. Held-out evidence now rests on Town03 ALONE.
@@ -158,18 +158,24 @@ export TOWN_LIST=configs/town_split_v7.json
 # plus a Town01 server (~3.5 GB) -> ~8.3 GB of 12.3 GB. An earlier "does not fit" was WRONG: its probes booted
 # servers with no map (default Town10HD_Opt) and took the learner as ~2.3 GB from a comment instead of measuring.
 # Ports step by 4: CARLA uses port and port+1 (streaming), as run_carla_queue.sh does.
-# ONE ENV (user 2026-09-21): two windowed CARLA servers peak at ~11.9 GB of a
-# 12.3 GB card, leaving no room for torch VC-1 + jax on GPU (measured deaths:
-# cudnn conv probe, then jax CUDA init). The single server leaves ~6 GB. The
-# trainer's town rotation cycles the one env through the REQUESTED towns, so
-# both towns still train.
+# ONE TOWN (user 2026-09-21, "relaunch with only town02 training"): the
+# Town10HD stints wedged the CARLA server's RPC 5/5 with VRAM free (not the
+# documented load_world crash, not memory -- gdb stack capture was never
+# completed), so Town02-only removes the wedge trigger outright AND drops
+# all world reloads. Town02 is a TRAIN town in the frozen split. Held-out
+# evidence still rests on Town03 alone.
+export ENV_TOWNS=Town02
+# TOWN_ROTATE_EPISODES=0: with one requested town the trainer disables the
+# rotation itself; exported 0 to make that a written decision, not an
+# accident of the single-town branch.
+export TOWN_ROTATE_EPISODES=0
+# CHECKPOINT EVERY 5k (was 25k). Pure resilience, not an experiment change:
+# N_EVAL_EPISODES=0 already skips the eval, so EVAL_INTERVAL only sets
+# checkpoint cadence -- and every death this run has had happened BELOW the
+# 25k first checkpoint, i.e. cost the entire attempt. Restarting resumes
+# from the newest checkpoint instead.
+export EVAL_INTERVAL=5000
 export CARLA_PORTS=2000 CARLA_PORT=2000
-export ENV_TOWNS=Town01,Town10HD
-# ROTATION ON, every 20 episodes (the trainer's designed default). v7 disabled
-# it because 2 parallel envs were already town-pinned; with 1 env the rotation
-# IS the second town. Rebuilds reload the world every switch (~15s, 22 times
-# over 450k).
-export TOWN_ROTATE_EPISODES=20
 #
 # EVAL_TOWNS=Town01 keeps v6n's in-distribution overfitting test. UNSET IT to evaluate on held-out Town03 instead.
 export EVAL_TOWNS=Town01
@@ -210,7 +216,7 @@ _missing=""
 for _k in COLLISION_TERMINAL GATED_GOAL_LANE_TERMINAL WEDGE_TRUNCATE EXPLORE_OFF_ROAD_FATAL \
           GOAL_LANE_PENALTY GOAL_OFF_ROAD_PENALTY EXPLORE_OFF_ROAD_PENALTY LANE_COLLISION_PENALTY \
           JUNCTION_GOAL_FRAC STRAIGHT_GOAL_FRAC ENV_TOWNS EVAL_TOWNS \
-          CARLA_QUALITY CARLA_ROOT CARLA_OFFSCREEN CARLA_PORTS CARLA_CLIENT_TIMEOUT TOWN_LIST TOWN_ROTATE_EPISODES RUN_GATED_START_SERVER N_EVAL_EPISODES N_EVAL_EXPLORE ACTOR_FREEZE_STEPS PERCEPTION ACTOR_Q_NORM \
+          CARLA_QUALITY CARLA_ROOT CARLA_OFFSCREEN CARLA_PORTS CARLA_CLIENT_TIMEOUT TOWN_LIST TOWN_ROTATE_EPISODES EVAL_INTERVAL RUN_GATED_START_SERVER N_EVAL_EPISODES N_EVAL_EXPLORE ACTOR_FREEZE_STEPS PERCEPTION ACTOR_Q_NORM \
           OBS_WITH_VECTOR OBS_WITH_STATE OBS_STATE_COLLISION OBS_LATENT_AS_PIXELS \
           AGENT_ENCODER AGENT_LATENT_DIM AGENT_AUGMENT_PIXELS \
           VC1_READOUT REPLAY_CAPACITY; do

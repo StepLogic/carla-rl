@@ -74,6 +74,10 @@ export PERCEPTION=vc1 ACTOR_Q_NORM=1
 # with OBS_STATE_COLLISION=0. Slot 0 of that block is the same clipped speed
 # ratio the vector carried. train_v8.sh must export OBS_WITH_STATE=1 explicitly
 # because the wrapper default is "0".
+# OBS_WITH_VECTOR=0 is the coherence branch's own precondition (controller
+# ruling 2026-09-21 made run_gated.sh overridable for exactly this); the v8
+# layout is {goal, pixels, mode, state} with NO vector key.
+export OBS_WITH_VECTOR=0
 export OBS_WITH_STATE=1 OBS_STATE_COLLISION=0 OBS_LATENT_AS_PIXELS=1
 # THE CONV COMPRESSOR: d4pg conv encoder 64,128,512 -> 512-d latent, 3x3x1
 # filters at strides 2,2,1; patch-token augmentation off; fp16 pixel buffer.
@@ -182,7 +186,7 @@ for _k in COLLISION_TERMINAL GATED_GOAL_LANE_TERMINAL WEDGE_TRUNCATE EXPLORE_OFF
           GOAL_LANE_PENALTY GOAL_OFF_ROAD_PENALTY EXPLORE_OFF_ROAD_PENALTY LANE_COLLISION_PENALTY \
           JUNCTION_GOAL_FRAC STRAIGHT_GOAL_FRAC ENV_TOWNS EVAL_TOWNS \
           CARLA_QUALITY CARLA_ROOT CARLA_OFFSCREEN CARLA_PORTS TOWN_LIST TOWN_ROTATE_EPISODES RUN_GATED_START_SERVER N_EVAL_EPISODES N_EVAL_EXPLORE ACTOR_FREEZE_STEPS PERCEPTION ACTOR_Q_NORM \
-          OBS_WITH_STATE OBS_STATE_COLLISION OBS_LATENT_AS_PIXELS \
+          OBS_WITH_VECTOR OBS_WITH_STATE OBS_STATE_COLLISION OBS_LATENT_AS_PIXELS \
           AGENT_ENCODER CNN_FEATURES CNN_FILTERS CNN_STRIDES AGENT_LATENT_DIM AGENT_AUGMENT_PIXELS \
           BUFFER_PIXELS_FP16 VC1_READOUT; do
   grep -qE "^${_k}=" "results/run_env/${RUN_NAME}.env" || _missing="$_missing $_k"

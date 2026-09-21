@@ -264,7 +264,8 @@ export DELTA_MODE=positive
 export INCREMENTAL_ACTIONS=0
 export MAX_STEER=0.5 MAX_THROTTLE=0.4   # ported: 0.6 settled ~22 km/h
 export STEER_STEP=0.01 THROTTLE_STEP=0.01
-export OBS_WITH_VECTOR=1          # REQUIRED: BOTH gated rewards are speed-gated
+# v8 gated runs ship the 9-d state block instead of the vector (OBS_WITH_VECTOR=0); default unchanged.
+export OBS_WITH_VECTOR="${OBS_WITH_VECTOR:-1}"   # REQUIRED: BOTH gated rewards are speed-gated
 # OVERRIDABLE so run_gated_her.sh can flip exactly this one flag and nothing
 # else. The two arms must differ by hindsight alone or the comparison measures
 # the difference between two scripts rather than the effect of relabelling.

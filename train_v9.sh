@@ -168,13 +168,14 @@ export TOWN_LIST=configs/town_split_v7.json
 # reload loop can never fire; TOWN_ROTATE_EPISODES=0 makes that a written
 # decision.
 export ENV_TOWNS=Town05
-# TEXTURE STREAMING POOL CAP (user 2026-09-21, "Cap streaming pool at 2000"):
-# UE4's streaming pool auto-grows into free VRAM -- MEASURED, a Town10HD
-# server idled to 5716 MiB on a mostly-empty card vs 4290 in real training --
-# and the servers boot first, so they eat the jax learner's space. 2000 MiB
-# bounds the texture CACHE (working set at Low/640x360 is under it; frames
-# expected identical). Read by train_carla_tqc.py's ensure_carla.
-export CARLA_STREAMING_POOL=2000
+# TEXTURE STREAMING POOL CAP: TRIED AND REVERTED (2026-09-21). The
+# -ExecCmds="r.Streaming.PoolSize 2000" flag SEGFAULTED every Town05 world
+# load (Signal 11 during load_world, 3/3 servers), while a bare Town05 load
+# with the identical command MINUS the flag succeeded in 2 s -- a
+# discriminating probe, not a guess. The cap was approved for the
+# two-server squeeze, which is abandoned; single-server Town05 does not need
+# it. The ensure_carla wiring stays, inert unless CARLA_STREAMING_POOL is
+# set.
 # TOWN_ROTATE_EPISODES=0: single town, no world reloads by construction.
 export TOWN_ROTATE_EPISODES=0
 # CHECKPOINT EVERY 5k (was 25k). Pure resilience, not an experiment change:

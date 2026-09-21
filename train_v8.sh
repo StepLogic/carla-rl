@@ -100,6 +100,13 @@ export CARLA_ROOT=/home/robotlab/Apps/CARLA_0.9.15
 # CONSEQUENCE ON RECORD: v6n trained on EPIC frames, so v7's images differ from v6n's. That is a SECOND difference
 # from v6n beside the termination/penalty change -- a v7-vs-v6n gap can no longer be attributed to termination alone.
 export CARLA_QUALITY=Low
+# CLIENT TIMEOUT 180s (was 50s). Both 2026-09-21 deaths were the same shape:
+# a few episodes into Town10HD the server STOPPED ANSWERING for >50s (HD-map
+# streaming stall; it was alive -- killed only afterwards by the retry loop's
+# cleanup) and the client's C++ TimeoutException core-dumped the trainer,
+# unrecoverable in Python. 180s absorbs the stall; CARLA_CLIENT_TIMEOUT is
+# the env name collect_lane_data.py already uses.
+export CARLA_CLIENT_TIMEOUT=180
 export VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/nvidia_icd.json
 export __NV_PRIME_RENDER_OFFLOAD=1 __VK_LAYER_NV_optimus=NVIDIA_only __GLX_VENDOR_LIBRARY_NAME=nvidia
 # Overridable so a SMOKE RUN uses this identical flag set rather than a copy of it: a duplicated flag list is a list
@@ -197,7 +204,7 @@ _missing=""
 for _k in COLLISION_TERMINAL GATED_GOAL_LANE_TERMINAL WEDGE_TRUNCATE EXPLORE_OFF_ROAD_FATAL \
           GOAL_LANE_PENALTY GOAL_OFF_ROAD_PENALTY EXPLORE_OFF_ROAD_PENALTY LANE_COLLISION_PENALTY \
           JUNCTION_GOAL_FRAC STRAIGHT_GOAL_FRAC ENV_TOWNS EVAL_TOWNS \
-          CARLA_QUALITY CARLA_ROOT CARLA_OFFSCREEN CARLA_PORTS TOWN_LIST TOWN_ROTATE_EPISODES RUN_GATED_START_SERVER N_EVAL_EPISODES N_EVAL_EXPLORE ACTOR_FREEZE_STEPS PERCEPTION ACTOR_Q_NORM \
+          CARLA_QUALITY CARLA_ROOT CARLA_OFFSCREEN CARLA_PORTS CARLA_CLIENT_TIMEOUT TOWN_LIST TOWN_ROTATE_EPISODES RUN_GATED_START_SERVER N_EVAL_EPISODES N_EVAL_EXPLORE ACTOR_FREEZE_STEPS PERCEPTION ACTOR_Q_NORM \
           OBS_WITH_VECTOR OBS_WITH_STATE OBS_STATE_COLLISION OBS_LATENT_AS_PIXELS \
           AGENT_ENCODER CNN_FEATURES CNN_FILTERS CNN_STRIDES AGENT_LATENT_DIM AGENT_AUGMENT_PIXELS \
           BUFFER_PIXELS_FP16 VC1_READOUT REPLAY_CAPACITY; do

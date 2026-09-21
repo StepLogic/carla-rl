@@ -1175,7 +1175,12 @@ config = {
     "env_config": {
         "carla": {
             "host": "localhost",
-            "timeout": 50.0,
+            # CARLA_CLIENT_TIMEOUT: Town10HD stalls >50s mid-episode (HD-map
+            # streaming; measured 2026-09-21 -- the server stayed ALIVE but
+            # stopped answering, the client's C++ TimeoutException is not
+            # catchable in Python and core-dumped the trainer). 180s absorbs
+            # the stall; collect_lane_data.py already uses the same env name.
+            "timeout": float(os.environ.get("CARLA_CLIENT_TIMEOUT", 50.0)),
             "timestep": 0.1,
             "retries_on_error": 25,
             "resolution_x": 600,

@@ -145,12 +145,18 @@ export TOWN_LIST=configs/town_split_v7.json
 # plus a Town01 server (~3.5 GB) -> ~8.3 GB of 12.3 GB. An earlier "does not fit" was WRONG: its probes booted
 # servers with no map (default Town10HD_Opt) and took the learner as ~2.3 GB from a comment instead of measuring.
 # Ports step by 4: CARLA uses port and port+1 (streaming), as run_carla_queue.sh does.
-export CARLA_PORTS=2000,2004 CARLA_PORT=2000
+# ONE ENV (user 2026-09-21): two windowed CARLA servers peak at ~11.9 GB of a
+# 12.3 GB card, leaving no room for torch VC-1 + jax on GPU (measured deaths:
+# cudnn conv probe, then jax CUDA init). The single server leaves ~6 GB. The
+# trainer's town rotation cycles the one env through the REQUESTED towns, so
+# both towns still train.
+export CARLA_PORTS=2000 CARLA_PORT=2000
 export ENV_TOWNS=Town01,Town10HD
-# ROTATION OFF. With 2 envs over 2 towns, rot_idx=(rot_idx+n_envs)%len(rotation) returns the SAME town, but still
-# rebuilds the env and reloads the world every N episodes -- load_world being the operation known to crash CARLA
-# 0.9.15. ROTATE_EPISODES=0 fails the "> 0" test at train_carla_tqc.py:1615 and removes rotation entirely.
-export TOWN_ROTATE_EPISODES=0
+# ROTATION ON, every 20 episodes (the trainer's designed default). v7 disabled
+# it because 2 parallel envs were already town-pinned; with 1 env the rotation
+# IS the second town. Rebuilds reload the world every switch (~15s, 22 times
+# over 450k).
+export TOWN_ROTATE_EPISODES=20
 #
 # EVAL_TOWNS=Town01 keeps v6n's in-distribution overfitting test. UNSET IT to evaluate on held-out Town03 instead.
 export EVAL_TOWNS=Town01

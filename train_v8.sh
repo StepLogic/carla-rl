@@ -208,7 +208,7 @@ kill_all_carla
 # config) match NONE of the inherited alternations, so without them the
 # snapshot would silently drop every v8-defining flag. REPLAY (the 300k
 # capacity, user 2026-09-21) matches none of them either.
-env | grep -E "^(GATED|OBS_WITH|OBS_STATE|OBS_LATENT|PERCEPTION|STEP_COST|DISCOUNT|EXPLORE|GOAL|LANE|COLLISION|WEDGE|POTENTIAL|TARGET_SPEED|MAX_THROTTLE|MAX_STEER|MIN_THROTTLE|ENV_|EXPERT|N_EVAL|JUNCTION|STRAIGHT|EVAL_TOWNS|CARLA|TOWN|RUN_GATED|ACTOR|AGENT|CNN|BUFFER|VC1|REPLAY)[A-Z0-9_]*=" \
+env | grep -E "^(GATED|OBS_WITH|OBS_STATE|OBS_LATENT|PERCEPTION|STEP_COST|DISCOUNT|EXPLORE|GOAL|LANE|COLLISION|WEDGE|POTENTIAL|TARGET_SPEED|MAX_THROTTLE|MAX_STEER|MIN_THROTTLE|ENV_|EXPERT|N_EVAL|JUNCTION|STRAIGHT|EVAL|CARLA|TOWN|RUN_GATED|ACTOR|AGENT|CNN|BUFFER|VC1|REPLAY)[A-Z0-9_]*=" \
   | sort > "results/run_env/${RUN_NAME}.env"
 # ARTEFACT CHECK ON THE SNAPSHOT ITSELF: every flag this run is ABOUT must be in the record, or the record is a lie
 # and any later eval replaying it silently differs from training. Abort rather than train against a bad provenance.

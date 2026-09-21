@@ -31,7 +31,12 @@ module-level flags). "cls" (the default) is today's 768-d CLS embedding,
 byte-identical to the pre-readout code path. "grid2" instead returns the
 196 patch tokens (14x14x768, the model's own pre-pooling sequence minus the
 CLS token) average-pooled 2x2 to a (7, 7, 768) = 37632-d spatial grid, for
-the patch-grid observation. The token extraction is verified against the
+the patch-grid observation. "pyramid" (2026-09-21, the pooled v8) returns a
+3840-d vector: the mean over ALL 196 patch tokens concatenated with the mean
+of each 14x14 QUADRANT -- global scene semantics plus which quadrant the
+road / junction / obstacle sits in, the layout a steering critic needs, at
+1/10 the buffer footprint of grid2 (user choice among pooling options).
+The token extraction is verified against the
 live model by scripts/vc1_grid_probe.py: the CLS token of the normed
 sequence equals model(x) exactly (max abs diff 0.0), and
 model.classifier_feature is asserted to be "use_cls_token" -- anything else
@@ -45,9 +50,10 @@ VC1_MODEL_NAME = "vc1_vitb"
 VC1_EMBED_DIM = 768
 
 READOUT = os.environ.get("VC1_READOUT", "cls").lower()
-if READOUT not in ("cls", "grid2"):
-    raise SystemExit(f"VC1_READOUT={READOUT!r} is not cls|grid2")
+if READOUT not in ("cls", "grid2", "pyramid"):
+    raise SystemExit(f"VC1_READOUT={READOUT!r} is not cls|grid2|pyramid")
 VC1_GRID_DIM = 37632  # 14x14x768 tokens, 2x2 average-pooled -> 7x7x768
+VC1_PYRAMID_DIM = 5 * 768  # global mean + 4 quadrant means of the 14x14
 
 
 def pool_grid(tokens, pool=2):
@@ -57,15 +63,29 @@ def pool_grid(tokens, pool=2):
     return g.reshape(-1).astype(np.float32)
 
 
+def pool_pyramid(tokens):
+    """(196, 768) patch tokens -> (3840,) spatial pyramid.
+
+    Global mean over all 196 tokens, then the mean of each 7x7 quadrant of
+    the 14x14 patch map (top-left, top-right, bottom-left, bottom-right).
+    Order is [global, tl, tr, bl, br] -- the docstring's contract, and the
+    order any consumer of the 3840-d vector must assume.
+    """
+    t = np.asarray(tokens, np.float32).reshape(14, 14, 768)
+    quads = (t[:7, :7].mean(axis=(0, 1)), t[:7, 7:].mean(axis=(0, 1)),
+             t[7:, :7].mean(axis=(0, 1)), t[7:, 7:].mean(axis=(0, 1)))
+    return np.concatenate((t.mean(axis=(0, 1)),) + quads).astype(np.float32)
+
+
 def backend_name():
-    return VC1_MODEL_NAME if READOUT == "cls" else f"{VC1_MODEL_NAME}_grid2"
+    return VC1_MODEL_NAME if READOUT == "cls" else f"{VC1_MODEL_NAME}_{READOUT}"
 
 
 class VcSource:
     def __init__(self, model_name=VC1_MODEL_NAME, device=None):
         self.name = backend_name()
         self.latent_dim = VC1_GRID_DIM if READOUT == "grid2" \
-            else VC1_EMBED_DIM
+            else VC1_PYRAMID_DIM if READOUT == "pyramid" else VC1_EMBED_DIM
         # The trainer's town-leak check reads trained_on_towns on EVERY
         # backend (train_carla_tqc.py: a perception module trained on a
         # held-out town leaks it like a policy does). VC-1 is a web-scale
@@ -114,10 +134,10 @@ class VcSource:
         model = model.to(self.device).eval()
         # The grid recipe slices the normed pre-pooling sequence; verified
         # for this head type by scripts/vc1_grid_probe.py.
-        if READOUT == "grid2" \
+        if READOUT in ("grid2", "pyramid") \
                 and model.classifier_feature != "use_cls_token":
             raise SystemExit(
-                f"VC1_READOUT=grid2 needs classifier_feature "
+                f"VC1_READOUT={READOUT} needs classifier_feature "
                 f"'use_cls_token', got {model.classifier_feature!r} -- the "
                 f"patch-token recipe is wrong for this checkpoint.")
         for p in model.parameters():
@@ -125,12 +145,12 @@ class VcSource:
         return model, transform
 
     def latent(self, rgb):
-        """(H, W, 3) uint8 or float RGB -> (768,) float32 (cls) or
-        (37632,) float32 (grid2)."""
+        """(H, W, 3) uint8 or float RGB -> (768,) float32 (cls),
+        (37632,) float32 (grid2) or (3840,) float32 (pyramid)."""
         import torch
         with torch.no_grad():
             x = self._prepare(rgb).to(self.device)
-            if READOUT == "grid2":
+            if READOUT in ("grid2", "pyramid"):
                 # The patch-token recipe verified by scripts/vc1_grid_probe.py
                 # (vit.py forward_features without handle_outcome): the CLS
                 # token of this sequence equals self._model(x) exactly.
@@ -142,7 +162,10 @@ class VcSource:
                     (cls_tok, h + self._model.pos_embed[:, 1:, :]), dim=1)
                 h = self._model.blocks(h)
                 h = self._model.norm(h)
-                return pool_grid(h[0, 1:].cpu().numpy())
+                tokens = h[0, 1:].cpu().numpy()
+                if READOUT == "pyramid":
+                    return pool_pyramid(tokens)
+                return pool_grid(tokens)
             z = self._model(x)
         return z.squeeze(0).cpu().numpy().astype(np.float32)
 

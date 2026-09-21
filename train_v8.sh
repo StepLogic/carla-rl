@@ -6,16 +6,11 @@
 # ACTOR_Q_NORM=1, N_EVAL_EPISODES=0/N_EVAL_EXPLORE=0, towns, ports, MAX_STEPS.
 # WHAT CHANGES IS THE OBSERVATION ONLY:
 #
-#   COMPRESSOR (Tasks 1-3): PERCEPTION=vc1 with the VC-1 ViT-B grid2 readout
-#     published as a (7, 7, 768) `pixels` key (OBS_LATENT_AS_PIXELS=1,
-#     VC1_READOUT=grid2), compressed by the d4pg conv encoder
-#     AGENT_ENCODER=d4pg CNN_FEATURES=64,128,512 CNN_FILTERS=3,3,1
-#     CNN_STRIDES=2,2,1 -> AGENT_LATENT_DIM=512. AUGMENTATION OFF
-#     (AGENT_AUGMENT_PIXELS=0 -- drq-style image aug on patch tokens is not
-#     meaningful). BUFFER_PIXELS_FP16=1: the 37632-float-per-step pixel rows
-#     are stored fp16 -- at the 300k capacity below that is ~45 GB including
-#     the next_observations mirror (fp32 would be ~90 GB and does not fit
-#     125 GB RAM beside the run's other residents).
+#   COMPRESSOR (Tasks 1-3): PERCEPTION=vc1 with the VC-1 ViT-B readout.
+#     SUPERSEDED 2026-09-21 by the POOLED READOUT below -- the (7,7,768)
+#     grid + d4pg conv compressor is replaced by the 3840-d pyramid vector
+#     on the flat-latent path. Kept here only to mark what the earlier
+#     grid2 commits (3b85b3b..eb1b7bb) described.
 #
 #   COHERENCE RULING (ledger ruling on the Tasks 1+2 review): run_gated.sh
 #     hardcodes OBS_WITH_VECTOR=1 and both gated coherence checks demanded it,
@@ -79,15 +74,19 @@ export PERCEPTION=vc1 ACTOR_Q_NORM=1
 # OBS_WITH_VECTOR=0 is the coherence branch's own precondition (controller
 # ruling 2026-09-21 made run_gated.sh overridable for exactly this); the v8
 # layout is {goal, pixels, mode, state} with NO vector key.
+#   POOLED READOUT (user 2026-09-21, "go with option 2"): VC1_READOUT=pyramid
+#     replaces the (7,7,768) patch grid + d4pg conv compressor with a 3840-d
+#     vector -- global mean + four 14x14-quadrant means (5x768) -- riding the
+#     PROVEN v7 FLAT-LATENT path (AGENT_ENCODER=none, Dense, no conv). Keeps
+#     global semantics + quadrant layout; buffer drops ~10x (300k x 3840 fp32
+#     ~9 GB incl. next_obs mirror), so BUFFER_PIXELS_FP16 is moot (no pixels
+#     key) and the 300k capacity stays.
 export OBS_WITH_VECTOR=0
-export OBS_WITH_STATE=1 OBS_STATE_COLLISION=0 OBS_LATENT_AS_PIXELS=1
-# THE CONV COMPRESSOR: d4pg conv encoder 64,128,512 -> 512-d latent, 3x3x1
-# filters at strides 2,2,1; patch-token augmentation off; fp16 pixel buffer.
-export AGENT_ENCODER=d4pg CNN_FEATURES=64,128,512 CNN_FILTERS=3,3,1
-export CNN_STRIDES=2,2,1 AGENT_LATENT_DIM=512 AGENT_AUGMENT_PIXELS=0
-export BUFFER_PIXELS_FP16=1 VC1_READOUT=grid2
+export OBS_WITH_STATE=1 OBS_STATE_COLLISION=0 OBS_LATENT_AS_PIXELS=0
+export VC1_READOUT=pyramid AGENT_ENCODER=none AGENT_LATENT_DIM=512
+export AGENT_AUGMENT_PIXELS=0
 # BUFFER CAPS AT 300k TRANSITIONS (user 2026-09-21; MAX_STEPS stays 450k): after 300k the FIFO wrap keeps the
-# most recent ~300k rows; fp16 ~45 GB incl. next_obs mirror (fp32 ~90 GB).
+# most recent ~300k rows; pyramid latent ~9 GB fp32 incl. next_obs mirror.
 export REPLAY_CAPACITY="${REPLAY_CAPACITY:-300000}"
 # CARLA_ROOT IS REQUIRED AND HAS NO DEFAULT: train_carla_tqc.py:319 does a bare os.environ["CARLA_ROOT"] and would
 # KeyError on the first env build. No script on this path exports it, and it is absent from every run_env snapshot --
@@ -213,8 +212,8 @@ for _k in COLLISION_TERMINAL GATED_GOAL_LANE_TERMINAL WEDGE_TRUNCATE EXPLORE_OFF
           JUNCTION_GOAL_FRAC STRAIGHT_GOAL_FRAC ENV_TOWNS EVAL_TOWNS \
           CARLA_QUALITY CARLA_ROOT CARLA_OFFSCREEN CARLA_PORTS CARLA_CLIENT_TIMEOUT TOWN_LIST TOWN_ROTATE_EPISODES RUN_GATED_START_SERVER N_EVAL_EPISODES N_EVAL_EXPLORE ACTOR_FREEZE_STEPS PERCEPTION ACTOR_Q_NORM \
           OBS_WITH_VECTOR OBS_WITH_STATE OBS_STATE_COLLISION OBS_LATENT_AS_PIXELS \
-          AGENT_ENCODER CNN_FEATURES CNN_FILTERS CNN_STRIDES AGENT_LATENT_DIM AGENT_AUGMENT_PIXELS \
-          BUFFER_PIXELS_FP16 VC1_READOUT REPLAY_CAPACITY; do
+          AGENT_ENCODER AGENT_LATENT_DIM AGENT_AUGMENT_PIXELS \
+          VC1_READOUT REPLAY_CAPACITY; do
   grep -qE "^${_k}=" "results/run_env/${RUN_NAME}.env" || _missing="$_missing $_k"
 done
 if [ -n "$_missing" ]; then

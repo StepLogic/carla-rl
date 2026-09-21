@@ -385,7 +385,7 @@ export TQC_KAPPA=10.0
 export TEMP_LR=3e-4
 export EVAL_VIDEO=1
 export XLA_PYTHON_CLIENT_PREALLOCATE=false
-export XLA_PYTHON_CLIENT_MEM_FRACTION=0.4
+export XLA_PYTHON_CLIENT_MEM_FRACTION="${XLA_PYTHON_CLIENT_MEM_FRACTION:-0.4}"
 # A free-memory check is necessary but NOT sufficient: jax can still die with
 # RESOURCE_EXHAUSTED while instantiating a CUDA command buffer, which no byte
 # count predicts. This removes that allocation.

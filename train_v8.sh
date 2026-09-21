@@ -107,6 +107,13 @@ export CARLA_QUALITY=Low
 # unrecoverable in Python. 180s absorbs the stall; CARLA_CLIENT_TIMEOUT is
 # the env name collect_lane_data.py already uses.
 export CARLA_CLIENT_TIMEOUT=180
+# JAX VRAM CAP 0.2 (run_gated default 0.4 = 4.9 GB of a 12.3 GB card). The
+# Town10HD wedge is CARLA-side: per-process VRAM shows the trainer at only
+# ~1.1 GB while the server streams Town10HD toward the card ceiling. Capping
+# jax's reservation leaves CARLA a bigger address pool before its streaming
+# wedges the device. preallocate=false means this only caps the ceiling, it
+# does not reserve anything up front.
+export XLA_PYTHON_CLIENT_MEM_FRACTION=0.2
 export VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/nvidia_icd.json
 export __NV_PRIME_RENDER_OFFLOAD=1 __VK_LAYER_NV_optimus=NVIDIA_only __GLX_VENDOR_LIBRARY_NAME=nvidia
 # Overridable so a SMOKE RUN uses this identical flag set rather than a copy of it: a duplicated flag list is a list

@@ -1,6 +1,6 @@
 #!/bin/bash
 # TRAINING v9 (2026-09-21, user spec). THE v8 RECIPE (VC-1 pyramid readout,
-# 3854-d flat obs, Town01-only) WITH A REWRITTEN GOAL-MODE REWARD:
+# 3854-d flat obs) WITH A REWRITTEN GOAL-MODE REWARD:
 #
 #   COUNTING REGIME (GOAL_TRUNCATE_COUNTS=1): no terminal bills. Arrival
 #   (+10.0) is the ONLY terminus; every other end (collision, lane crossing,
@@ -16,10 +16,18 @@
 # EVERYTHING ELSE IS v8's, UNCHANGED: PERCEPTION=vc1 pyramid 3840-d,
 # AGENT_ENCODER=none Dense trunk, OBS_WITH_STATE=1 (9-d block, no vector key),
 # ACTOR_Q_NORM=1, HER, EXPLORE mode untouched (fines, 100 m arrival, bonus 10),
-# REPLAY_CAPACITY=300k, EVAL_INTERVAL=5k checkpoints, Town01-only, windowed.
-# FRESH RUN -- NO RESUME from v8 checkpoints: the v8 critic is fitted to the
-# 5.0-fine/no-bonus scale; restoring it under the v9 reward is exactly the
-# differently-scaled-reward restore the warm-start lesson forbids.
+# REPLAY_CAPACITY=300k, EVAL_INTERVAL=5k checkpoints, windowed.
+# TOWNS (user 2026-09-21, "Run v9 for Town01 and Town10 simulatenously"): TWO
+# ENVS, ONE TOWN EACH -- env 0 = Town01@2000, env 1 = Town10HD@2004, no town
+# rotation (TOWN_ROTATE_EPISODES=0 gates the reload loop at :2060 outright, so
+# zero world reloads even with two towns; the rotation code is only ever
+# reached when ROTATE_EPISODES > 0). Both towns are TRAIN towns in
+# town_split_v7.json. Two servers measured to fit: Town10HD ~4.3 GB +
+# Town01 ~3.5 GB + jax cap 0.2 of 12.3 GB.
+# RESUME: the first v9 stint (Town01-only, same reward, stopped by user at
+# ~140k steps) left checkpoints through 95000. Same reward scale, so RESUME=1
+# restores actor/critics/temps and adds Town10HD to the data distribution --
+# buffer and Adam state start fresh (warm-start lesson).
 # NO v8 ROW IS COMPARABLE TO A v9 ROW. v8's 55k-step partial (10 checkpoints)
 # stays on disk as the pyramid diagnostic that motivated this change.
 cd /home/robotlab/scratch/carla-rl/.claude/worktrees/gated-impl || exit 1
@@ -84,7 +92,7 @@ export VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/nvidia_icd.json
 export __NV_PRIME_RENDER_OFFLOAD=1 __VK_LAYER_NV_optimus=NVIDIA_only __GLX_VENDOR_LIBRARY_NAME=nvidia
 # Overridable so a SMOKE RUN uses this identical flag set rather than a copy of it: a duplicated flag list is a list
 # that drifts, and the whole point of the smoke is to exercise what the real run will exercise.
-#   smoke:  RUN_NAME=carla_gated_her_v8_smoke MAX_STEPS=2000 ./train_v8.sh
+#   smoke:  RUN_NAME=carla_gated_her_v9_smoke MAX_STEPS=2000 ./train_v9.sh
 RUN_NAME="${RUN_NAME:-carla_gated_her_v9_vc1}"
 export MAX_STEPS="${MAX_STEPS:-450000}"
 # RESUME FREEZE (user 2026-09-17, extending v7 450k -> 2M). RESUME restores actor, both critics, temps and curriculum
@@ -128,7 +136,7 @@ export LANE_COLLISION_PENALTY=5.0 LANE_DEPARTURE_PENALTY=5.0
 # ---- GOAL SAMPLING ----------------------------------------------------------
 export JUNCTION_GOAL_FRAC=0.5 STRAIGHT_GOAL_FRAC=0.3
 
-# ---- TOWN: Town02 ONLY (user 2026-09-21; earlier: Town01+Town10HD one env each) ----
+# ---- TOWN: Town01 + Town10HD simultaneously (user 2026-09-21) ----
 # TOWN_LIST points at a SEPARATE split rather than editing configs/town_split.json, which carries "Do not edit
 # without a new experiment name" and underpins every existing v4/v5/v6* result. town_split_v7.json moves Town10HD
 # from heldout to train and changes nothing else. Held-out evidence now rests on Town03 ALONE.
@@ -140,20 +148,17 @@ export TOWN_LIST=configs/town_split_v7.json
 # plus a Town01 server (~3.5 GB) -> ~8.3 GB of 12.3 GB. An earlier "does not fit" was WRONG: its probes booted
 # servers with no map (default Town10HD_Opt) and took the learner as ~2.3 GB from a comment instead of measuring.
 # Ports step by 4: CARLA uses port and port+1 (streaming), as run_carla_queue.sh does.
-# ONE TOWN (user 2026-09-21, "relaunch with only town02 training"): the
-# Town10HD stints wedged the CARLA server's RPC 5/5 with VRAM free (not the
-# documented load_world crash, not memory -- gdb stack capture was never
-# completed), so Town02-only removes the wedge trigger outright AND drops
-# all world reloads. Town02 is a TRAIN town in the frozen split. Held-out
-# evidence still rests on Town03 alone.
-# TOWN01 (user 2026-09-21: "run it train in town01" — second town call of the
-# day; the Town02-only relaunch then lost its CARLA server to a Signal 11
-# segfault during env build, ON Town02, so the Town10HD-only wedge theory is
-# dead too). Town01 is v6n/v7's own training town.
-export ENV_TOWNS=Town01
-# TOWN_ROTATE_EPISODES=0: with one requested town the trainer disables the
-# rotation itself; exported 0 to make that a written decision, not an
-# accident of the single-town branch.
+# TOWN01 + TOWN10HD (user 2026-09-21, "Run v9 for Town01 and Town10
+# simulatenously"): one env per town, TWO servers, NO rotation. Env i =
+# town i @ port i (train_carla_tqc.py:1119-1137). TOWN_ROTATE_EPISODES=0
+# disables the reload loop outright (the :2060 gate is `ROTATE_EPISODES > 0
+# and len(rotation) > 1`), so there are ZERO world reloads -- the known
+# CARLA 0.9.15 crash vector never fires, even with two towns.
+# Town10HD = "Town10" in the user's request: the only Town10 in the split.
+export ENV_TOWNS=Town01,Town10HD
+# TOWN_ROTATE_EPISODES=0: with two towns and two envs each env holds its
+# town permanently; exported 0 to make that a written decision, not an
+# accident.
 export TOWN_ROTATE_EPISODES=0
 # CHECKPOINT EVERY 5k (was 25k). Pure resilience, not an experiment change:
 # N_EVAL_EPISODES=0 already skips the eval, so EVAL_INTERVAL only sets
@@ -161,10 +166,11 @@ export TOWN_ROTATE_EPISODES=0
 # 25k first checkpoint, i.e. cost the entire attempt. Restarting resumes
 # from the newest checkpoint instead.
 export EVAL_INTERVAL=5000
-export CARLA_PORTS=2000 CARLA_PORT=2000
+export CARLA_PORTS=2000,2004 CARLA_PORT=2000
 #
-# EVAL_TOWNS=Town01 keeps v6n's in-distribution overfitting test. UNSET IT to evaluate on held-out Town03 instead.
-export EVAL_TOWNS=Town01
+# EVAL_TOWNS matches the training towns. In-training eval is OFF
+# (N_EVAL_EPISODES=0), so this is provenance only.
+export EVAL_TOWNS=Town01,Town10HD
 # Headless: only ~12 MiB, but it removes the live-X-session dependency -- windowed, CarlaUE4 EXITS rather than
 # falling back if DISPLAY is wrong or the session locks, which an unattended 450k-step run must not depend on.
 # WINDOWED (user 2026-09-16: "the ui is not showing"). Needs the live X session on DISPLAY=:1, which run_gated.sh

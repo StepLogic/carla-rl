@@ -209,12 +209,26 @@ def check_gated_coherence():
         # frozen arms) is unchanged.
         _two_mode = (os.environ.get("IMAGE_GOAL_TASK", "0") == "1"
                      and os.environ.get("GATED", "0") == "1")
-        if not _two_mode:
+        # THE v8 ESCAPE (ledger ruling, Tasks 1+2 review): OBS_WITH_VECTOR=0 is
+        # permitted when the 9-d state block carries the velocity --
+        # OBS_WITH_STATE=1 with OBS_STATE_COLLISION=0. The state block's slot 0
+        # IS the observable speed the progress reward assumes: the same clipped
+        # speed/TARGET_SPEED ratio the 4-d vector block carried, so dropping the
+        # vector does not blind the policy to its own speed. Checked through the
+        # module constants, exactly like WITH_VECTOR above: the constants are
+        # what built the observation, so they are what must satisfy the rule.
+        _v8_state_block = WITH_STATE and not STATE_COLLISION
+        if not _two_mode and not _v8_state_block:
             raise ValueError(
                 "OBS_WITH_MODE=1 requires the vector block (OBS_WITH_VECTOR=1). "
                 "BOTH gated rewards are speed-gated -- they pay progress only below "
                 "target speed -- so a policy that cannot observe its own speed sees "
-                "the gate as an unobservable coin flip and the critic fits noise.")
+                "the gate as an unobservable coin flip and the critic fits noise. "
+                "OBS_WITH_VECTOR=0 is permitted only when the velocity still "
+                "reaches the observation: the 2-mode image-goal pairing "
+                "(IMAGE_GOAL_TASK=1), or the v8 9-d state block (OBS_WITH_STATE=1 "
+                "with OBS_STATE_COLLISION=0), whose slot 0 is the same clipped "
+                "speed ratio.")
 
 
 def apply_mode(goal_block, mode):

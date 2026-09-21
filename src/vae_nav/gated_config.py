@@ -50,13 +50,28 @@ def check_gated_run(env=None):
     # THE 2-MODE IMAGE-GOAL PAIRING (IMAGE_GOAL_TASK=1) keeps its velocity in
     # the mode-independent `state` block (image_goal_coherence demands
     # OBS_WITH_STATE=1 there) instead of the 4-d `vector` block, so the
-    # requirement below does not apply to it. Every other GATED arm -- the
-    # frozen ones -- still requires OBS_WITH_VECTOR=1.
-    if not _flag(env, "OBS_WITH_VECTOR") and not _flag(env, "IMAGE_GOAL_TASK"):
+    # requirement below does not apply to it.
+    #
+    # THE v8 ESCAPE (ledger ruling, Tasks 1+2 review) skips the same
+    # requirement: OBS_WITH_VECTOR=0 is permitted with the 9-d state block
+    # (OBS_WITH_STATE=1 AND OBS_STATE_COLLISION=0), because the state block's
+    # slot 0 IS the observable speed the progress reward assumes -- the same
+    # clipped speed/TARGET_SPEED ratio the vector block carried. The collision
+    # flag must be dropped: only the 9-d block has the speed ratio at slot 0.
+    # With the flag unset every frozen arm keeps today's behaviour unchanged.
+    _v8_state_block = (_flag(env, "OBS_WITH_STATE")
+                       and not _flag(env, "OBS_STATE_COLLISION", "1"))
+    if (not _flag(env, "OBS_WITH_VECTOR") and not _flag(env, "IMAGE_GOAL_TASK")
+            and not _v8_state_block):
         raise ValueError(
             "GATED=1 requires the vector block (OBS_WITH_VECTOR=1). BOTH gated "
             "rewards are speed-gated, so a policy that cannot observe its own "
-            "speed sees the gate as an unobservable coin flip.")
+            "speed sees the gate as an unobservable coin flip. "
+            "OBS_WITH_VECTOR=0 is permitted only when the velocity still "
+            "reaches the observation: the 2-mode image-goal pairing "
+            "(IMAGE_GOAL_TASK=1), or the v8 9-d state block (OBS_WITH_STATE=1 "
+            "with OBS_STATE_COLLISION=0), whose slot 0 is the same clipped "
+            "speed ratio.")
 
     perception = str(env.get("PERCEPTION", "vae")).lower()
     # PERCEPTION=vc1|vc1_vitb is the 2-mode image-goal arm's backend (added

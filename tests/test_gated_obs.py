@@ -92,9 +92,45 @@ def test_gating_requires_the_goal_block():
 def test_gating_requires_the_vector_block():
     # BOTH gated rewards are speed-gated, so a policy that cannot observe its
     # own speed sees the gate as an unobservable coin flip.
-    m = _reload(OBS_WITH_MODE="1", OBS_WITH_GOAL="1", OBS_WITH_VECTOR="0")
+    m = _reload(OBS_WITH_MODE="1", OBS_WITH_GOAL="1", OBS_WITH_VECTOR="0",
+                OBS_WITH_STATE="0")
     with pytest.raises(ValueError, match="requires the vector block"):
         m.check_gated_coherence()
+
+
+def test_v8_state_block_replaces_the_vector_as_velocity_carrier():
+    # THE v8 ESCAPE (ledger ruling, Tasks 1+2 review). GATED with
+    # OBS_WITH_VECTOR=0 is permitted when the 9-d state block carries the
+    # velocity: OBS_WITH_STATE=1 with OBS_STATE_COLLISION=0. The state block's
+    # slot 0 IS the same clipped speed/TARGET_SPEED ratio the 4-d vector block
+    # carried, i.e. the observable speed both gated rewards' progress term
+    # assumes.
+    m = _reload(OBS_WITH_MODE="1", OBS_WITH_GOAL="1", OBS_WITH_VECTOR="0",
+                OBS_WITH_STATE="1", OBS_STATE_COLLISION="0")
+    m.check_gated_coherence()
+
+
+def test_v8_escape_requires_the_collision_flag_dropped():
+    # A 10-d state block is NOT the escape: its slot 0 is has_collided, and the
+    # speed ratio it also carries sits behind the collision flag rather than
+    # standing in for the vector's slot layout. That configuration must still
+    # fail with today's message.
+    m = _reload(OBS_WITH_MODE="1", OBS_WITH_GOAL="1", OBS_WITH_VECTOR="0",
+                OBS_WITH_STATE="1", OBS_STATE_COLLISION="1")
+    with pytest.raises(ValueError, match="requires the vector block"):
+        m.check_gated_coherence()
+
+
+def test_the_image_goal_escape_still_passes():
+    # The pre-existing escape is untouched: the 2-mode image-goal pairing keeps
+    # its velocity in the mode-independent `state` block by its own rule.
+    m = _reload(OBS_WITH_MODE="1", OBS_WITH_GOAL="1", OBS_WITH_VECTOR="0",
+                OBS_WITH_STATE="0", IMAGE_GOAL_TASK="1", GATED="1")
+    try:
+        m.check_gated_coherence()
+    finally:
+        os.environ.pop("IMAGE_GOAL_TASK", None)
+        os.environ.pop("GATED", None)
 
 
 def test_a_coherent_gated_configuration_is_accepted():

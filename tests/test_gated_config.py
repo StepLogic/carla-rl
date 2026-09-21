@@ -55,6 +55,35 @@ def test_rejects_a_gated_run_without_the_vector_block():
         check_gated_run(_env(OBS_WITH_VECTOR=0))
 
 
+def test_v8_state_block_replaces_the_vector_as_velocity_carrier():
+    # THE v8 ESCAPE, same rule the wrapper's check_gated_coherence applies.
+    # GATED with OBS_WITH_VECTOR=0 is permitted when the 9-d state block
+    # carries the velocity (OBS_WITH_STATE=1, OBS_STATE_COLLISION=0): slot 0
+    # IS the same clipped speed ratio the vector block carried, so the speed
+    # the gated rewards' progress term assumes still reaches the observation.
+    check_gated_run(_env(OBS_WITH_VECTOR=0, OBS_WITH_STATE=1,
+                         OBS_STATE_COLLISION=0))
+
+
+def test_v8_escape_requires_the_collision_flag_dropped():
+    # A 10-d state block (collision flag present) is not the escape: the check
+    # pins the 9-d block exactly, so this must fail with today's message.
+    with pytest.raises(ValueError, match="vector block"):
+        check_gated_run(_env(OBS_WITH_VECTOR=0, OBS_WITH_STATE=1,
+                             OBS_STATE_COLLISION=1))
+
+
+def test_vector_zero_alone_still_fails_with_todays_message():
+    # The default (unset everything) behaviour is byte-identical to before the
+    # v8 branch: no state block, no escape.
+    with pytest.raises(ValueError, match="vector block"):
+        check_gated_run(_env(OBS_WITH_VECTOR=0, OBS_WITH_STATE=0))
+
+
+def test_the_image_goal_escape_still_passes():
+    check_gated_run(_env(OBS_WITH_VECTOR=0, IMAGE_GOAL_TASK=1))
+
+
 def test_accepts_the_mobilenet_backend_with_a_warning(capsys):
     # RELAXED 2026-09-11 (user): this used to raise. The width risk it guarded
     # against is already caught at load time by the checkpoint's encoder

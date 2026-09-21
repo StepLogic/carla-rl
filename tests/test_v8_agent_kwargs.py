@@ -86,6 +86,28 @@ def test_unknown_encoder_is_rejected(clean_env):
         train_carla_tqc.agent_kwargs()
 
 
+def test_mismatched_cnn_lists_are_rejected(clean_env):
+    """CNN_FILTERS='3,,1' loses the empty segment in _int_list, and D4PGEncoder
+    zips the three lists -- a short list must fail the launch loudly, not
+    silently build a one-layer-shorter conv stack."""
+    clean_env.setenv("AGENT_ENCODER", "d4pg")
+    clean_env.setenv("CNN_FEATURES", "64,128,512")
+    clean_env.setenv("CNN_FILTERS", "3,,1")
+    clean_env.setenv("CNN_STRIDES", "2,2,1")
+    with pytest.raises(SystemExit):
+        train_carla_tqc.build_agent(None, None, 0)
+
+
+def test_augment_off_is_exactly_the_string_zero(clean_env):
+    """Only '0' turns augmentation off; any other value (garbage included)
+    means today's behaviour, per the brief's contract."""
+    clean_env.setenv("AGENT_ENCODER", "d4pg")
+    clean_env.setenv("AGENT_AUGMENT_PIXELS", "off")
+    learner = _StubLearner()
+    train_carla_tqc.apply_augment_override(learner)
+    assert learner.augument is True
+
+
 # -- the augmentation override --------------------------------------------
 
 class _StubLearner:

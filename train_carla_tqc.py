@@ -364,7 +364,7 @@ def apply_augment_override(learner):
     today's behaviour is preserved bit for bit.
     """
     if (agent_encoder() != "none"
-            and os.environ.get("AGENT_AUGMENT_PIXELS", "1") != "1"):
+            and os.environ.get("AGENT_AUGMENT_PIXELS", "1") == "0"):
         learner.augument = False
         print("[Algo] AGENT_AUGMENT_PIXELS=0: augmentation OFF -- a random "
               "crop of the (7,7,768) token grid would drop tokens")
@@ -392,7 +392,9 @@ def fp16_pixel_obs_space(obs_space):
     import gymnasium.spaces as gym_spaces
     px = spaces["pixels"]
     out = dict(spaces)
-    out["pixels"] = gym_spaces.Box(px.low, px.high, px.shape, np.float16)
+    out["pixels"] = gym_spaces.Box(px.low.astype(np.float16),
+                                   px.high.astype(np.float16), px.shape,
+                                   np.float16)
     return gym_spaces.Dict(out)
 
 
@@ -415,6 +417,19 @@ def build_agent(observation_space, action_space, seed):
               f"cnn_filters={kwargs['cnn_filters']} "
               f"cnn_strides={kwargs['cnn_strides']} "
               f"latent_dim={kwargs['latent_dim']}")
+        # EQUAL LENGTHS, ASSERTED NOT ASSUMED. D4PGEncoder zips the three
+        # lists, so a malformed CNN_FILTERS like "3,,1" -- _int_list drops the
+        # empty segment -- would SILENTLY shorten the conv stack by one layer
+        # and change the compressor's geometry instead of failing the launch.
+        _feats, _filts, _strs = (kwargs["cnn_features"], kwargs["cnn_filters"],
+                                 kwargs["cnn_strides"])
+        if not (len(_feats) == len(_filts) == len(_strs)):
+            raise SystemExit(
+                f"conv compressor misconfigured: cnn_features={_feats} "
+                f"cnn_filters={_filts} cnn_strides={_strs} must have equal "
+                "lengths. A short list silently truncates the conv stack "
+                "(D4PGEncoder zips the three lists) -- fix the CNN_* env "
+                "vars.")
     # The construction obs goes through the encoder view: with the conv
     # compressor on, pixels must reach D4PGEncoder as (7, 7, 768, 1) -- see
     # agent_view. Without an encoder this is the sampled obs, unchanged.

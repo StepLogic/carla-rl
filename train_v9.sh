@@ -88,13 +88,13 @@ export CARLA_CLIENT_TIMEOUT=180
 # wedges the device. preallocate=false means this only caps the ceiling, it
 # does not reserve anything up front.
 export XLA_PYTHON_CLIENT_PREALLOCATE=false
-export XLA_PYTHON_CLIENT_MEM_FRACTION=0.15
-# 0.15 (2026-09-21, two-town): 0.2 = 2.46 GB OOM'd the two-env resume
-# (RESOURCE_EXHAUSTED on a 768 KB alloc) -- two windowed Low servers
-# (~7.8-8.5 GB combined) + the torch VC-1 encoder left less than the old
-# ceiling. PREALLOCATE=false (user 2026-09-21): jax grabs memory as it needs
-# it instead of reserving the fraction up front; the fraction then only caps
-# the ceiling.
+# FRACTION CAP DROPPED (user 2026-09-21): with PREALLOCATE=false the cap only
+# stops jax from grabbing memory that is actually free -- the 0.15 ceiling
+# OOM'd on a 768 KB alloc while the card still had headroom. jax now takes
+# what it needs, bounded only by what the two CARLA servers leave.
+# History: 0.2 = 2.46 GB OOM'd the two-env resume (RESOURCE_EXHAUSTED) --
+# two windowed Low servers (~7.8-8.5 GB combined) + the torch VC-1 encoder
+# leave less than the old ceiling.
 export VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/nvidia_icd.json
 export __NV_PRIME_RENDER_OFFLOAD=1 __VK_LAYER_NV_optimus=NVIDIA_only __GLX_VENDOR_LIBRARY_NAME=nvidia
 # Overridable so a SMOKE RUN uses this identical flag set rather than a copy of it: a duplicated flag list is a list

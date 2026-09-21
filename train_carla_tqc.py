@@ -371,6 +371,31 @@ def apply_augment_override(learner):
     return learner
 
 
+def fp16_pixel_obs_space(obs_space):
+    """The obs space the REPLAY BUFFER stores, when BUFFER_PIXELS_FP16=1.
+
+    Wrapping the buffer to convert at insert is NOT enough: jaxrl2's
+    ReplayBuffer preallocates its storage arrays at the observation space's
+    per-key dtype (_init_replay_dict, replay_buffer.py:14-25), so a float32
+    pixels space would upcast every row back and the ~34 GB saving would
+    silently vanish. Float16 STORAGE therefore means building the buffer
+    with this space -- the env, the wrapper and the agent all keep the
+    float32 (7, 7, 768) space; only the buffer's preallocated arrays change.
+    Only the pixels key's dtype moves; shapes and every other key are
+    identical. Flag unset (the default): the same object, unchanged.
+    """
+    if os.environ.get("BUFFER_PIXELS_FP16", "0") != "1":
+        return obs_space
+    spaces = getattr(obs_space, "spaces", None)
+    if not spaces or "pixels" not in spaces:
+        return obs_space
+    import gymnasium.spaces as gym_spaces
+    px = spaces["pixels"]
+    out = dict(spaces)
+    out["pixels"] = gym_spaces.Box(px.low, px.high, px.shape, np.float16)
+    return gym_spaces.Dict(out)
+
+
 def build_agent(observation_space, action_space, seed):
     """TQC with the peer's config of record, kappa derived from the reward."""
     from jaxrl2.agents import TQCLearner
@@ -1047,6 +1072,13 @@ def main():
 
     agent = build_agent(venv.observation_space, venv.action_space, SEED)
     _capacity = int(os.environ.get("REPLAY_CAPACITY", 1_000_000))
+    # FP16 PIXELS STORAGE (v8). The buffer's obs space carries the pixels key
+    # as float16 when BUFFER_PIXELS_FP16=1 -- fp16_pixel_obs_space returns the
+    # agent's space untouched otherwise. Every row then reaches storage
+    # through the Fp16PixelsBuffer wrapper below, which recasts pixels at the
+    # shared record path (both HER subclasses and the non-HER path) and
+    # restores float32 on every sample.
+    _buf_obs_space = fp16_pixel_obs_space(venv.observation_space)
     if GATED and not wants_one_critic():
         from vae_nav.mode_split_buffer import ModeSplitBuffer
         # MODE-STRATIFIED, and the reason is measured rather than theoretical.
@@ -1061,7 +1093,7 @@ def main():
         # rather than correcting a known skew on insert is exactly what makes
         # the direction irrelevant.
         buffer = ModeSplitBuffer(
-            venv.observation_space, venv.action_space, _capacity,
+            _buf_obs_space, venv.action_space, _capacity,
             goal_frac=float(os.environ.get("GOAL_BATCH_FRAC", 0.5)))
     else:
         # THE ONE-CRITIC ROUTE AND THE PLAIN ROUTE ALIKE. A single plain
@@ -1069,8 +1101,13 @@ def main():
         # second critic to stratify a batch for, and the mode bit already rides
         # INSIDE the observation dict (OBS_WITH_MODE), where the one critic
         # reads it. No GOAL_BATCH_FRAC split.
-        buffer = ReplayBuffer(venv.observation_space, venv.action_space,
+        buffer = ReplayBuffer(_buf_obs_space, venv.action_space,
                               _capacity)
+    if _buf_obs_space is not venv.observation_space:
+        from vae_nav.episode_her import Fp16PixelsBuffer
+        buffer = Fp16PixelsBuffer(buffer)
+        print("[Buffer] pixels stored as float16 (BUFFER_PIXELS_FP16=1, "
+              "~34 GB at 450k), restored to float32 on sample")
 
     # HER IS PER ENV. Environments finish episodes at different times, and a
     # shared relabel buffer would splice transitions from different towns into

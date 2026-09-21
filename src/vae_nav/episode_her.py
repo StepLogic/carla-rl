@@ -32,11 +32,94 @@ TWO BUGS INHERITED AS GUARDS -- both were measured in the source repo:
       `self.collision = 'collision' in sensor_data.keys()`, which already is
       one -- the assert keeps it that way.
 """
+import os
+
 import numpy as np
 
 # Must match vae_nav.gated_reward and vae_nav.vae_goal_wrapper.
 GOAL, EXPLORE = 1, 0
 MODE_KEY = "mode"
+
+# THE PIXELS KEY, and the only key fp16 storage ever touches. Every other
+# obs key -- in particular the goal block, which HER relabel arithmetic
+# rewrites, and the mode bit the split buffer routes by -- stays float32.
+PIXELS_KEY = "pixels"
+FP16_FLAG = "BUFFER_PIXELS_FP16"
+
+
+def _recast_pixels(node, dtype):
+    """A copy of a row/batch tree with ONLY the `pixels` obs key recast.
+
+    Recursion is over Mappings, not dicts: jaxrl2's sample returns flax
+    FrozenDicts, which implement Mapping but do NOT subclass dict, so an
+    isinstance(x, dict) test would silently leave every batch unconverted
+    and hand the learner float16 observations. The container type is
+    preserved (FrozenDict in, FrozenDict out); untouched leaves are returned
+    by reference, and a node with nothing to recast comes back unchanged.
+    """
+    from collections.abc import Mapping
+
+    if not isinstance(node, Mapping):
+        return node
+    out = {}
+    changed = False
+    for key, value in node.items():
+        if key == PIXELS_KEY:
+            arr = np.asarray(value)
+            if arr.dtype != dtype:
+                value = arr.astype(dtype)
+                changed = True
+        elif isinstance(value, Mapping):
+            nested = _recast_pixels(value, dtype)
+            changed = changed or nested is not value
+            value = nested
+        out[key] = value
+    if not changed:
+        return node
+    return out if isinstance(node, dict) else type(node)(out)
+
+
+class Fp16PixelsBuffer:
+    """Wraps a replay buffer: `pixels` STORED as float16, returned as float32.
+
+    THE STORAGE DTYPE IS NOT SET HERE. jaxrl2's ReplayBuffer preallocates its
+    arrays at the observation space's per-key dtype, so float16 storage needs
+    the buffer built with a float16 `pixels` space -- the trainer does that
+    (fp16_pixel_obs_space). This wrapper's record-path conversion makes the
+    insert contract explicit and keeps behaviour correct even over a float32
+    store; its sample-path conversion is what guarantees the learner and the
+    trainer never see float16 observations.
+
+    BOTH HER SUBCLASSES are covered because EpisodeRelabelBuffer and
+    ImageGoalRelabelBuffer route every insert -- on-policy, non-HER and
+    hindsight alike -- through self.buffer.insert, and the trainer's every
+    sample through buffer.sample. BUFFER_PIXELS_FP16 unset (the default)
+    leaves the wrapper inert: byte-identical float32 storage as today.
+    """
+
+    def __init__(self, buffer, enabled=None):
+        self._inner = buffer
+        if enabled is None:
+            enabled = os.environ.get(FP16_FLAG, "0") == "1"
+        self.enabled = bool(enabled)
+
+    def __len__(self):
+        return len(self._inner)
+
+    def __getattr__(self, name):
+        # counts(), dataset_dict, anything the trainer or a test needs.
+        return getattr(self._inner, name)
+
+    def insert(self, tr, **kw):
+        if not self.enabled:
+            return self._inner.insert(tr, **kw)
+        return self._inner.insert(_recast_pixels(tr, np.float16), **kw)
+
+    def sample(self, *args, **kw):
+        batch = self._inner.sample(*args, **kw)
+        if not self.enabled:
+            return batch
+        return _recast_pixels(batch, np.float32)
 
 
 class EpisodeRelabelBuffer:

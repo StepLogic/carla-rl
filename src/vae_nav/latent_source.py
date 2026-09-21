@@ -161,7 +161,10 @@ def from_env(latent_dim=LATENT_DIM):
         return MobileNetSource(image_size=IMAGE_SIZE)
     if backend in ("vc1", "vc1_vitb"):
         from vae_nav.vc1_source import VcSource
-        return VcSource()
+        # VC1_DEVICE=cpu: two windowed CARLA servers + torch + jax do not fit
+        # in 12.3 GB (CARLA alone ~11.2 GB, measured). Identical computation
+        # on a different device -- the encoder is frozen either way.
+        return VcSource(device=os.environ.get("VC1_DEVICE") or None)
     if backend not in ("vae", ""):
         raise SystemExit(
             f"PERCEPTION='{backend}' is not a known backend. Use 'vae', "

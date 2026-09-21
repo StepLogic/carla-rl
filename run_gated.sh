@@ -389,7 +389,12 @@ export XLA_PYTHON_CLIENT_MEM_FRACTION=0.4
 # A free-memory check is necessary but NOT sufficient: jax can still die with
 # RESOURCE_EXHAUSTED while instantiating a CUDA command buffer, which no byte
 # count predicts. This removes that allocation.
-export XLA_FLAGS=--xla_gpu_enable_command_buffer=
+export XLA_FLAGS="${XLA_FLAGS:+$XLA_FLAGS }--xla_gpu_enable_command_buffer="
+# v8 (2026-09-21): torch VC-1 + jax must share the ~1 GB left beside two
+# windowed CARLA servers; the cudnn autotune probe dies there
+# (RESOURCE_EXHAUSTED on a 16-18 MB workspace). The picker flag falls back to
+# a default algorithm instead of probing -- selection only, no numerics.
+export XLA_FLAGS="${XLA_FLAGS:+$XLA_FLAGS }--xla_gpu_strict_conv_algorithm_picker=false"
 
 CARLA_SH=/home/robotlab/Apps/CARLA_0.9.15/CarlaUE4.sh
 # pgrep -x CANNOT match: /proc/PID/comm is capped at 15 chars, so the 23-char

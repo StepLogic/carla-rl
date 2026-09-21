@@ -586,6 +586,58 @@ def ensure_carla(port, timeout=180.0):
     return port
 
 
+def kill_carla_server(port):
+    """Kill the CARLA server on `port` so the next make_env RESPAWNS it.
+
+    Used by the town-rotation branch. Rotation rebuilds the env, whose env
+    build calls load_world -- and load_world on the LONG-LIVED shared server
+    is the one operation known to crash CARLA 0.9.15 (the note at the
+    rotation setup, :1248; measured live 2026-09-21: the v8 Town01->Town10HD
+    switch segfaulted the server, Signal 11 in logs/carla_py_2000_*.log, and
+    the trainer burned its 25 reconnect attempts against a dead port). A
+    FRESH server plus the env build's single load_world is the path every
+    startup already survives -- attempts 1 and 2 both built their envs
+    through it.
+
+    Kills by port, not by the _PY_SERVER slot: the slot holds only the most
+    recently spawned server, and ensure_carla's ready check is what turns the
+    kill into a respawn -- CARLA_START_SERVER=0 (attach-only) must not use
+    this, which the rotate branch guards.
+    """
+    import signal
+    import socket
+    port = int(port)
+    pat = f"-carla-port={port}"
+    killed = 0
+    for pid_dir in os.listdir("/proc"):
+        if not pid_dir.isdigit():
+            continue
+        try:
+            with open(f"/proc/{pid_dir}/cmdline", "rb") as f:
+                cmd = f.read().replace(b"\0", b" ").decode(errors="replace")
+        except OSError:
+            continue
+        if "CarlaUE4" in cmd and pat in cmd:
+            try:
+                os.killpg(int(pid_dir), signal.SIGKILL)
+            except (ProcessLookupError, PermissionError):
+                pass
+            killed += 1
+    if _PY_SERVER["port"] == port:
+        _PY_SERVER.update(proc=None, port=None)
+    if not killed:
+        return
+    # The port must stop ANSWERING before the caller rebuilds the env, or
+    # ensure_carla attaches to the dying server instead of spawning fresh.
+    t0 = time.time()
+    while time.time() - t0 < 15:
+        with socket.socket() as sk:
+            sk.settimeout(1.0)
+            if sk.connect_ex(("localhost", port)) != 0:
+                return
+        time.sleep(1.0)
+
+
 def _two_mode_image_goal():
     """THE 2-MODE PAIRING: IMAGE_GOAL_TASK=1 AND GATED=1.
 
@@ -2007,6 +2059,20 @@ def main():
                     port = CARLA_PORTS[i]
                     print(f"[Rotate] env{i}: -> {new_town} after "
                           f"{ep_done[i]} episodes (world reload ~15s)", flush=True)
+                    # RESPAWN, DON'T RELOAD. load_world on the long-lived
+                    # shared server is the one operation known to crash CARLA
+                    # 0.9.15 (:1248) -- the v8 Town01->Town10HD switch
+                    # segfaulted the server and 25 reconnect attempts died
+                    # against the port. Killing the server here turns the
+                    # switch into a fresh boot plus the env build's ONE
+                    # load_world, the path every startup survives;
+                    # ensure_carla (called inside make_env below) respawns.
+                    # Guarded on CARLA_START_SERVER because with =0 there is
+                    # no respawn path and this would leave no server at all.
+                    if os.environ.get("CARLA_START_SERVER", "1") == "1":
+                        kill_carla_server(port)
+                        print(f"[Rotate] env{i}: server killed for a fresh "
+                              f"spawn on {new_town}", flush=True)
                     new_obs, _ = venv.replace(
                         i, lambda t=new_town, p=port, ix=i: make_env(
                             t, SEED + step + ix, latent_source, port=p),

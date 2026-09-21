@@ -112,6 +112,32 @@ COLLISION_TERMINAL = os.environ.get("COLLISION_TERMINAL", "0") == "1"
 # Explore mode is untouched: its lane handling stays in explore_reward, and
 # LANE_INVASION_NOOP still governs it.
 LANE_TERMINAL = os.environ.get("GATED_GOAL_LANE_TERMINAL", "0") == "1"
+# GOAL MODE ("sorb" arm) ARRIVAL BONUS (v9, user 2026-09-21: "add +10 for
+# goal"). Paid on the arrival step INSTEAD of the old 0.0; default 0.0 keeps
+# every earlier arm identical. The explore arm's EXPLORE_ARRIVAL_BONUS is a
+# separate constant and is untouched.
+GOAL_ARRIVAL_BONUS = float(os.environ.get("GOAL_ARRIVAL_BONUS", 0.0))
+# v9 COUNTING REGIME (user 2026-09-21: "only truncate after N steps offroad,
+# 2 collisions or 2 lane crossings", later "make it 20" -- ALL THREE
+# thresholds are 20 STEPS, counted per step, cumulative within one goal
+# episode; event-dedup was offered and declined). When GOAL_TRUNCATE_COUNTS=1
+# the goal arm's terminal bills are REPLACED by counters the wrapper keeps:
+#   nothing terminates except arrival (+GOAL_ARRIVAL_BONUS, terminated=True);
+#   the episode truncates (truncated=True, mask=1.0, the critic bootstraps
+#   through the cut) when ANY of
+#     off-road steps  >= GOAL_OFFROAD_TRUNCATE_STEPS   (20)
+#     collision steps >= GOAL_COLLISION_TRUNCATE_STEPS (20)
+#     crossing steps  >= GOAL_CROSSING_TRUNCATE_STEPS  (20)
+#   and the truncating step pays its NORMAL per-step reward -- no
+#   remaining-clock bill, the bootstrap carries the cost (user's pick).
+# GOAL_COLLISION_PENALTY (default 10.0) fines each collision step, consistent
+# with the 10.0 lane/off-road fines; under the old bill regime collision was
+# billed terminally, so no per-step constant existed for it before.
+GOAL_TRUNCATE_COUNTS = os.environ.get("GOAL_TRUNCATE_COUNTS", "0") == "1"
+GOAL_OFFROAD_TRUNCATE_STEPS = int(os.environ.get("GOAL_OFFROAD_TRUNCATE_STEPS", 20))
+GOAL_COLLISION_TRUNCATE_STEPS = int(os.environ.get("GOAL_COLLISION_TRUNCATE_STEPS", 20))
+GOAL_CROSSING_TRUNCATE_STEPS = int(os.environ.get("GOAL_CROSSING_TRUNCATE_STEPS", 20))
+GOAL_COLLISION_PENALTY = float(os.environ.get("GOAL_COLLISION_PENALTY", 10.0))
 # POTENTIAL-BASED SHAPING on ALONG-ROAD progress. Phi = -K * route_remaining_m,
 # so the agent is paid K per metre of route progress and charged for
 # backtracking. Telescopes to a bounded constant, so it cannot be farmed, and by
@@ -194,7 +220,8 @@ def goal_reward(info, delta_mode="positive"):
 
 def goal_reward_sorb(info, t, max_steps=GOAL_MAX_STEPS, step_cost=STEP_COST,
                      wedge_truncate=WEDGE_TRUNCATE,
-                     collision_terminal=COLLISION_TERMINAL):
+                     collision_terminal=COLLISION_TERMINAL,
+                     offroad_steps=0, collision_steps=0, crossing_steps=0):
     """Minimum time. Returns (reward, terminated, truncated).
 
     Mirrors time_to_goal_reward.TimeToGoalReward exactly, as a pure function of
@@ -237,14 +264,37 @@ def goal_reward_sorb(info, t, max_steps=GOAL_MAX_STEPS, step_cost=STEP_COST,
         bool(info.get("off_road", False)))
 
     if reached:
-        return 0.0, True, False, True
+        # v9 (user 2026-09-21): arrival pays GOAL_ARRIVAL_BONUS (default 0.0
+        # keeps every earlier run byte-identical). The ONLY termination: every
+        # other end is a truncation, so the critic bootstraps through it.
+        return GOAL_ARRIVAL_BONUS, True, False, True
+    if GOAL_TRUNCATE_COUNTS:
+        # v9 counting regime (see the constants block): per-step fines, no
+        # terminal bills, truncate when any cumulative count trips. The
+        # truncating step pays its normal reward -- the wrapper's counters
+        # (offroad/collision/crossing steps) arrive as kwargs.
+        _r = -step_cost
+        if GOAL_OFF_ROAD_PENALTY and info.get("off_road"):
+            _r -= GOAL_OFF_ROAD_PENALTY
+        if GOAL_LANE_PENALTY and info.get("lane_any",
+                                          info.get("lane_invasion_any", False)):
+            _r -= GOAL_LANE_PENALTY
+        if GOAL_COLLISION_PENALTY and info.get("collision", False):
+            _r -= GOAL_COLLISION_PENALTY
+        truncated = (int(t) >= int(max_steps)
+                     or offroad_steps >= GOAL_OFFROAD_TRUNCATE_STEPS
+                     or collision_steps >= GOAL_COLLISION_TRUNCATE_STEPS
+                     or crossing_steps >= GOAL_CROSSING_TRUNCATE_STEPS)
+        return _r, False, truncated, False
     if wedged or crashed or departed:
         # THE BILL IS EXACT, NOT A PENALTY: this step plus every step left on
         # the clock, so the episode's return is exactly -step_cost * max_steps,
         # identical to simulating the frozen frames. Ending early is worth
         # precisely nothing, so a wedge is not an escape. TERMINATED, so the
         # critic does not bootstrap an unbounded gamma=1 chain from a state the
-        # agent never leaves.
+        # agent never leaves. LEGACY REGIME (GOAL_TRUNCATE_COUNTS=0): kept
+        # byte-identical to v4-v8 so old run_env snapshots replay exactly;
+        # v9's truncate-everything rule lives in the counting branch above.
         remaining = max(0, int(max_steps) - int(t))
         return -step_cost * (1 + remaining), True, False, False
     # PER-STEP DRIVING PENALTIES (default 0.0). NOT applied to the terminal
@@ -431,6 +481,11 @@ class GatedReward(Wrapper):
         self.mode = GOAL
         self._prev_remaining = None
         self._t = 0
+        # v9 counting regime: per-episode cumulative fault counters (steps,
+        # not events -- user "make it 20"). Zeroed per episode in reset().
+        self._offroad_steps = 0
+        self._collision_steps = 0
+        self._crossing_steps = 0
         self._prev = np.zeros(2)
         if self.goal_kind == "sorb":
             lo = -self.step_cost * self.goal_max_steps
@@ -438,6 +493,16 @@ class GatedReward(Wrapper):
                   f"goal_max_steps={self.goal_max_steps} "
                   f"-> goal return in [{lo:.1f}, 0.0]; only arrival terminates. "
                   f"REQUIRES DISCOUNT=1.0 for the goal critic.")
+        if self.goal_kind == "sorb" and GOAL_TRUNCATE_COUNTS:
+            print(f"[Gated] v9 COUNTING regime: no terminal bills; truncate "
+                  f"at offroad>={GOAL_OFFROAD_TRUNCATE_STEPS} "
+                  f"collision>={GOAL_COLLISION_TRUNCATE_STEPS} "
+                  f"crossing>={GOAL_CROSSING_TRUNCATE_STEPS} steps; "
+                  f"fines lane/off/coll="
+                  f"{GOAL_LANE_PENALTY}/{GOAL_OFF_ROAD_PENALTY}/"
+                  f"{GOAL_COLLISION_PENALTY}; "
+                  f"arrival bonus={GOAL_ARRIVAL_BONUS} is the only terminus",
+                  flush=True)
         else:
             print(f"[Gated] goal=SHAPED (delta+projected), returns ~order 100")
         print(f"[Gated] explore lane rule: mode={EXPLORE_LANE_MODE} "
@@ -472,6 +537,9 @@ class GatedReward(Wrapper):
         self.mode = (int(self.force_mode) if self.force_mode is not None
                      else (EXPLORE if self._rng.random() < self.explore_prob else GOAL))
         self._t = 0
+        self._offroad_steps = 0
+        self._collision_steps = 0
+        self._crossing_steps = 0
         self._path_m = 0.0
         self._prev = np.asarray(info.get("hero_pos", (0.0, 0.0)), np.float64)
         # The potential is a DIFFERENCE, so step 1 has nothing to difference
@@ -500,9 +568,19 @@ class GatedReward(Wrapper):
             # per-step cost, any terminal failure stops the meter and crashing
             # immediately becomes optimal. Only arrival ends the episode, so a
             # car that hits a wall simply pays the remaining bill.
+            # v9 counting regime: the fault counters are the WRAPPER's
+            # per-episode state (goal_reward_sorb stays a pure function), so
+            # they are updated here, from this step's info, before the call.
+            self._offroad_steps += int(bool(info.get("off_road", False)))
+            self._collision_steps += int(bool(info.get("collision", False)))
+            self._crossing_steps += int(bool(
+                info.get("lane_any", info.get("lane_invasion_any", False))))
             reward, terminated, truncated, arrived = goal_reward_sorb(
                 info, self._t, self.goal_max_steps, self.step_cost,
-                self.wedge_truncate)
+                self.wedge_truncate,
+                offroad_steps=self._offroad_steps,
+                collision_steps=self._collision_steps,
+                crossing_steps=self._crossing_steps)
             info["is_success"] = arrived
             # POTENTIAL-BASED SHAPING, GOAL MODE ONLY. Explore mode has no goal,
             # so route_remaining_m is meaningless there and the explore critic

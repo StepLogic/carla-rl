@@ -1694,7 +1694,14 @@ def main():
                     if int(fi.get("mode", 1)) == 1:
                         recent["ret_goal"].append(_ep_ret)
                         recent["len_goal"].append(_ep_len)
-                        recent["succ_goal"].append(_succ)
+                        # AGENT-DRIVEN SR ONLY (user 2026-09-21): the expert
+                        # drives a fixed share of episodes at 100% success,
+                        # so mixing it in inflates the goal success rate by
+                        # construction. succ_goal counts policy episodes
+                        # ONLY; oracle-driven episodes are excluded here (the
+                        # [Ep] line still reports the oracle split).
+                        if not is_expert_ep[i]:
+                            recent["succ_goal"].append(_succ)
                         recent["coll_goal"].append(_coll)
                     else:
                         recent["ret_explore"].append(_ep_ret)
@@ -1997,7 +2004,7 @@ def main():
                                 " (batch mix is FIXED at GOAL_BATCH_FRAC "
                                 "regardless)")
                         print(f"[GatedEp{total_eps:5d}] "
-                              f"GOAL   n={n_g:3d} succ={_m('succ_goal'):.3f} "
+                              f"GOAL   n={n_g:3d} succ(agent-only)={_m('succ_goal'):.3f} "
                               f"ret={_m('ret_goal'):8.1f} (~ -steps) "
                               f"len={_m('len_goal'):6.1f} "
                               f"coll={_m('coll_goal'):.3f}", flush=True)

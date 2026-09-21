@@ -28,7 +28,8 @@ args.episodes, exactly the old default); the JSON header records the
 effective counts as "episodes": {"goal": g, "explore": e, "default": n}.
 
 THE SHELL IS THE FIRST LAYER. PERCEPTION, VC1_READOUT, OBS_WITH_*,
-IG_SPEED_PREF_K, TARGET_SPEED and TQC_TARGET_MIN/MAX are read at MODULE
+IG_SPEED_PREF_K, IG_EXPLORE_SPEED_PREF_K, TARGET_SPEED and
+TQC_TARGET_MIN/MAX are read at MODULE
 IMPORT (vc1_source, image_goal_reward, jaxrl2's critic_updater), so an
 os.environ.setdefault inside this script is a SECOND layer, not the first --
 by the time it runs, an import-time read may already have consumed the
@@ -149,6 +150,10 @@ os.environ.setdefault("IG_GOAL_DISTANCE_THRESHOLD_M", "2.0")
 # Raised from 0.1 (user 2026-09-20, both modes): the launcher now pins 0.2,
 # so the mirror must not fill the hole with the superseded weight.
 os.environ.setdefault("IG_SPEED_PREF_K", "0.2")
+# The explore leg's own coefficient, raised 0.2 -> 2.0 (user 2026-09-21; the
+# goal leg keeps IG_SPEED_PREF_K=0.2): the launcher pins 2.0, so the mirror
+# fills the hole with the same bonus an eval replay must pay.
+os.environ.setdefault("IG_EXPLORE_SPEED_PREF_K", "2.0")
 # The failing step's flat penalty (user 2026-09-20, evening batch): the
 # launcher pins 5, so the mirror fills the hole with the same value.
 os.environ.setdefault("IG_TERMINAL_PENALTY", "5")
@@ -172,7 +177,10 @@ os.environ.setdefault("TEMP_LR", "3e-4")
 # floor -1000 at gamma=0.99); the launcher now pins -1050, so
 # the mirror must not fill the hole with the superseded window.
 os.environ.setdefault("TQC_TARGET_MIN", "-1050")
-os.environ.setdefault("TQC_TARGET_MAX", "100")
+# Ceiling raised 100 -> 2100 with the explore bonus raise (user 2026-09-21):
+# the explore leg's +2.0/step means a full 1000-step explore episode at v*
+# returns +2000, which MAX=100 would clip.
+os.environ.setdefault("TQC_TARGET_MAX", "2100")
 os.environ.setdefault("EXPLORE_PROB", "0.5")
 os.environ.setdefault("EXPLORE_GOAL_DIST_M", "100.0")
 os.environ.setdefault("TARGET_SPEED", "20.0")

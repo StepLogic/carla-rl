@@ -30,15 +30,19 @@ to both legs):
                   impulse); NON-terminal since user 2026-09-20 night]
 
     EXPLORE leg (mode 0):
-    r_t = + K min(v, v*)/v*  if L_t         the SAME saturating bonus, alone
-                                            (no base cost, no flat penalties)
+    r_t = + K min(v, v*)/v*  if L_t         the saturating bonus, alone
+                                            (no base cost, no flat
+                                            penalties); K = IG_EXPLORE_
+                                            SPEED_PREF_K, raised 0.2 -> 2.0
+                                            (user 2026-09-21)
         - W |steer_t - steer_(t-1)|         the same smoothness, ungated
 
     L_t = on the drivable lane, moving in the route direction, no lane
           crossing this step, and no collision yet.
 
 The |v - v*| PENALTY form is GONE in both modes (user 2026-09-20 evening):
-both legs now carry the same positive saturating bonus and differ only in
+both legs carry the same positive saturating bonus (each with its own K --
+goal 0.2, explore 2.0 since user 2026-09-21) and differ only in
 base cost, flat penalties and terminal design. The old +0.75 flat in-lane
 bonus stays gone; the constant IN_LANE_BONUS remains an env-overridable
 ablation knob (IG_IN_LANE_BONUS) defaulting to 0.0. The speed term stays
@@ -64,14 +68,16 @@ THE TWO USER DECISIONS THAT CHANGED IT FROM THE WRITTEN SPEC:
 
 THE SPEED TERM (user spec 2026-09-20 evening). While L_t holds, each step
 also earns +IG_SPEED_PREF_K * min(v, v*)/v* with v* = TARGET_SPEED/3.6: a
-bonus that saturates at IG_SPEED_PREF_K (0.2) once v reaches v* and is
-exactly 0 when parked. It is a bonus times the in-lane indicator. In the
-goal leg the base cost dominates it (best row -0.8, every row < 0 -- the
-ReViND property survives), and in the explore leg it IS the whole reward
-(+0.2/step max; positive explore rewards are legal by the same decision).
-A car off the lane, crossing, off-road or post-collision pays its ordinary
-rows and NOT this term (its indicator is false); an unreadable speed reads
-as stopped, not as a free pass.
+bonus that saturates at the leg's own K once v reaches v* and is exactly 0
+when parked. It is a bonus times the in-lane indicator. The GOAL leg keeps
+K = IG_SPEED_PREF_K (0.2) -- there the base cost dominates it (best row
+-0.8, every row < 0 -- the ReViND property survives) -- while the EXPLORE
+leg's coefficient was RAISED 0.2 -> 2.0 (user 2026-09-21,
+IG_EXPLORE_SPEED_PREF_K): the bonus is the explore leg's whole reward and
+it now earns up to +2.0/step at v >= v* (positive explore rewards are
+legal by the same decision). A car off the lane, crossing, off-road or
+post-collision pays its ordinary rows and NOT this term (its indicator is
+false); an unreadable speed reads as stopped, not as a free pass.
 
 WHY COLLISION IS A STATE, NOT AN EVENT. One impact is one sensor reading;
 the DAMAGE persists. A one-time event penalty is paid once and then forgotten,
@@ -178,6 +184,9 @@ STOP_WINDOW_STEPS = int(os.environ.get("IG_STOP_WINDOW_STEPS", 10))
 # decision 2026-09-20, both modes); the bonus form is the same evening's
 # follow-up decision.
 SPEED_PREF_K = float(os.environ.get("IG_SPEED_PREF_K", 0.2))
+EXPLORE_SPEED_PREF_K = float(os.environ.get("IG_EXPLORE_SPEED_PREF_K", 2.0))
+# explore-leg bonus raised 0.2 -> 2.0 (user 2026-09-21); the goal leg keeps
+# IG_SPEED_PREF_K=0.2.
 TARGET_SPEED_KMH = float(os.environ.get("TARGET_SPEED", 20.0))
 # The failing step's flat penalty (user decisions 2026-09-20): a failing
 # step (off-road / lane-crossing / collision impulse). In EXPLORE the leg
@@ -400,19 +409,20 @@ def _driving_with_route_direction(info, disp):
     return bool(float(np.dot(np.asarray(disp, np.float64), fwd)) > 0.0)
 
 
-def _speed_bonus(info, in_lane):
-    """The saturating speed bonus (user spec 2026-09-20 evening), shared by
-    BOTH legs: +SPEED_PREF_K * min(v, v*)/v* while in lane -- +K/step at or
-    above v* = TARGET_SPEED/3.6, pro-rated below it, exactly 0 when parked.
-    Not in lane -> 0.0 (the term is gated on L_t like the penalty it
-    replaced)."""
+def _speed_bonus(info, in_lane, k=None):
+    """The saturating speed bonus (user spec 2026-09-20 evening), carried by
+    BOTH legs: +k * min(v, v*)/v* while in lane -- +k/step at or above
+    v* = TARGET_SPEED/3.6, pro-rated below it, exactly 0 when parked. k
+    defaults to SPEED_PREF_K (the goal leg's 0.2); the explore leg passes
+    its own EXPLORE_SPEED_PREF_K (2.0, user 2026-09-21). Not in lane ->
+    0.0 (the term is gated on L_t like the penalty it replaced)."""
     if not in_lane:
         return 0.0
     v = _speed_mps(info)
     if math.isnan(v):
         v = 0.0    # an unreadable speed reads as stopped, not as a free pass
     v_star = TARGET_SPEED_KMH / 3.6
-    return SPEED_PREF_K * min(v, v_star) / v_star
+    return (SPEED_PREF_K if k is None else k) * min(v, v_star) / v_star
 
 
 def image_goal_reward(info, disp, has_collided, mode=GOAL, steer_delta=0.0):
@@ -449,8 +459,10 @@ def image_goal_reward(info, disp, has_collided, mode=GOAL, steer_delta=0.0):
     THE EXPLORE LEG (mode 0, user decisions 2026-09-20): failures are
     TERMINAL and there is NO TIME PRESSURE. The leg's step reward is the
     same saturating speed bonus the goal leg carries, alone (no base
-    cost, no off-road penalty, no persistent-collision penalty), so a clean
-    in-lane step at v* pays exactly +SPEED_PREF_K. The FIRST off-road step,
+    cost, no off-road penalty, no persistent-collision penalty), but with
+    its OWN coefficient: a clean in-lane step at v* pays exactly
+    +EXPLORE_SPEED_PREF_K (+2.0, user 2026-09-21 -- the goal leg keeps
+    +SPEED_PREF_K = 0.2). The FIRST off-road step,
     lane crossing or collision terminates the episode and pays a flat
     -TERMINAL_PENALTY minus its smoothness term (the "exactly -5"
     construction of user 2026-09-20 evening is superseded by the ungated
@@ -542,7 +554,10 @@ def _image_goal_reward_explore(info, disp, has_collided, steer_delta=0.0):
 
     No base cost, no flat penalties: the ordinary step is the SAME
     saturating speed bonus the goal leg carries (user 2026-09-20 evening --
-    the |v - v*| penalty form is gone, so explore rows are >= 0). The FIRST
+    the |v - v*| penalty form is gone, so explore rows are >= 0), but with
+    its OWN coefficient EXPLORE_SPEED_PREF_K (+2.0/step at v*, raised 0.2
+    -> 2.0, user 2026-09-21; the goal leg keeps IG_SPEED_PREF_K=0.2). The
+    FIRST
     failure terminates and pays a flat -TERMINAL_PENALTY, because in_lane
     is False on every failing step (off-road, crossing and collision each
     zero the ordinary component by construction, and the invalid step's
@@ -562,7 +577,7 @@ def _image_goal_reward_explore(info, disp, has_collided, steer_delta=0.0):
         and not crossed
         and not has_collided)
 
-    speed_bonus = _speed_bonus(info, in_lane)
+    speed_bonus = _speed_bonus(info, in_lane, k=EXPLORE_SPEED_PREF_K)
     smooth = -STEER_SMOOTH_W * abs(float(steer_delta))
 
     invalid = bool(info.get("simulator_invalid", False))
@@ -744,10 +759,13 @@ class TwoModeImageGoalReward(Wrapper):
     EXPLORE MODE (mode 0): drive EXPLORE_GOAL_DIST_M of CUMULATIVE PATH, with
     NO TIME PRESSURE and TERMINAL FAILURES (user decisions 2026-09-20). The
     step reward is the SAME saturating speed bonus the goal leg carries --
-    no base cost, no flat penalties -- so a clean in-lane step at v* pays
-    exactly +IG_SPEED_PREF_K, a parked step exactly 0.0, and the explore
+    no base cost, no flat penalties -- but with the explore leg's OWN
+    coefficient: a clean in-lane step at v* pays exactly
+    +IG_EXPLORE_SPEED_PREF_K (+2.0, user 2026-09-21; the goal leg keeps
+    +IG_SPEED_PREF_K=0.2), a parked step exactly 0.0, and the explore
     invariant is -IG_TERMINAL_PENALTY - max smoothness <= r <=
-    +IG_SPEED_PREF_K, i.e. [-6.0, +0.2] under the shipped W=0.5 (positive
+    +IG_EXPLORE_SPEED_PREF_K, i.e. [-6.0, +2.0] under the shipped W=0.5
+    (positive
     explore rewards are legal, user 2026-09-20 evening). The FIRST off-road
     step
     (info["explore_end"]="off_road"), lane crossing ("crossed") or collision
@@ -756,9 +774,11 @@ class TwoModeImageGoalReward(Wrapper):
     2026-09-20 night); a simulator-invalid step terminates
     and pays the same flat ("invalid"). Arrival at EXPLORE_GOAL_DIST_M still
     terminates with NO bonus ("reached") and pays that step's ordinary
-    reward (+IG_SPEED_PREF_K at v*). max_steps still TRUNCATES ("cap"): with
-    no base cost a truncated clean episode returns ~+0.2/step, and the cap
-    stays as a safety
+    reward (+IG_EXPLORE_SPEED_PREF_K at v*). max_steps still TRUNCATES
+    ("cap"): with no base cost a truncated clean episode returns
+    ~+2.0/step (an explore cap return of ~+2000 over the 1000-step cap --
+    the bounded critic's TQC_TARGET_MAX must leave headroom for it), and
+    the cap stays as a safety
     bound. ORDERING: invalid > failure > reached > cap -- a failure on the
     step the path reaches 100 m is still a failure; arrival beats the cap.
 
@@ -798,7 +818,10 @@ class TwoModeImageGoalReward(Wrapper):
         print(f"[TwoModeIG] unified image-goal reward, TWO modes: "
               f"explore_prob={self.explore_prob} force_mode={self.force_mode} "
               f"EXPLORE_GOAL_DIST_M={EXPLORE_GOAL_DIST_M:g} "
-              f"IG_SPEED_PREF_K={SPEED_PREF_K:g} (v*={TARGET_SPEED_KMH:g} km/h,"
+              f"IG_SPEED_PREF_K={SPEED_PREF_K:g} (goal leg) "
+              f"IG_EXPLORE_SPEED_PREF_K={EXPLORE_SPEED_PREF_K:g} "
+              f"(explore leg; raised 0.2 -> 2.0, user 2026-09-21) "
+              f"(v*={TARGET_SPEED_KMH:g} km/h,"
               f" saturating bonus, user 2026-09-20 evening);"
               f" steering smoothness -IG_STEER_SMOOTH_W={STEER_SMOOTH_W:g} x "
               f"|steer_t - steer_(t-1)| EVERY step BOTH modes, ungated "

@@ -6,7 +6,8 @@
 #
 # ONE CRITIC, NOT THE FROZEN GATED STACK. The unified TwoModeImageGoalReward
 # puts both modes on one scale (the goal leg all-negative, the explore leg
-# bounded in [-IG_TERMINAL_PENALTY - max smoothness, +IG_SPEED_PREF_K]), so
+# bounded in [-IG_TERMINAL_PENALTY - max smoothness, +IG_EXPLORE_SPEED_PREF_K],
+# i.e. [-6.0, +2.0] after the explore raise), so
 # the two-critic GatedTQCLearner + ModeSplitBuffer split has nothing left to
 # justify: under
 # GATED_ONE_CRITIC=1 the trainer routes to the PLAIN TQCLearner and a single
@@ -160,6 +161,10 @@ export EPISODE_HER=1 HER_MIN_DISP=5.0 IG_GOAL_DISTANCE_THRESHOLD_M=2.0
 export IG_SPEED_PREF_K=0.2     # raised from 0.1 (user 2026-09-20, both modes);
                                # the SATURATING BONUS form (user 2026-09-20
                                # evening) -- +0.2/step max at v >= v*, 0 parked
+export IG_EXPLORE_SPEED_PREF_K=2.0
+                               # explore leg 2.0, goal leg 0.2; user
+                               # 2026-09-21 (the explore leg's own
+                               # coefficient, +2.0/step max at v >= v*)
 export IG_IN_LANE_BONUS=0    # flat in-lane bonus REMOVED (user 2026-09-20);
                              # pinned explicitly so the snapshot records it
                              # and the banner cannot disagree
@@ -196,14 +201,23 @@ export IG_STUCK_SPEED_MPS=0.3 IG_STUCK_STEPS=100
                                # there is nothing left to debounce
 export DISCOUNT=0.99 TOP_QUANTILES_DROP=2 TQC_KAPPA=1.0
 export TEMP_LR=3e-4                      # the v2 divergence fix (entropy brake)
-export TQC_TARGET_MIN=-1050 TQC_TARGET_MAX=100   # ReViND window at gamma=0.99;
+export TQC_TARGET_MIN=-1050 TQC_TARGET_MAX=2100   # window at gamma=0.99;
                                  # floor raised 2026-09-20 evening with the
                                  # terminal failures, then again the same
                                  # night (user decision): the worst SUSTAINED
                                  # goal row is off-road + collided latch +
                                  # failing + max smoothness = -1.0 -1.5 -1.5
                                  # -5.0 -1.0 = -10.0 -> discounted floor
-                                 # -1000 at gamma=0.99, headroom below it
+                                 # -1000 at gamma=0.99, headroom below it.
+                                 # MAX raised 100 -> 2100 (make-it-work,
+                                 # user 2026-09-21): the explore leg's own
+                                 # +2.0/step bonus means a full 1000-step
+                                 # explore episode at v* returns +2000, which
+                                 # MAX=100 would clip -- destroying the
+                                 # explore value signal; 2100 is headroom
+                                 # over that cap return. TQC_TARGET_MIN stays
+                                 # -1050 (the goal leg's worst rows
+                                 # unchanged)
 export EXPLORE_PROB=0.5 EXPLORE_GOAL_DIST_M=100.0
 export TARGET_SPEED=20.0 ENV_SKIP_IMAGE_FEATURES=1
 export MAX_EPISODE_STEPS=1000
@@ -288,7 +302,8 @@ for _k in IMAGE_GOAL_TASK GATED GATED_ONE_CRITIC \
           PERCEPTION VC1_READOUT \
           OBS_WITH_STATE OBS_WITH_MODE OBS_WITH_GOAL OBS_WITH_VECTOR \
           EPISODE_HER HER_MIN_DISP IG_GOAL_DISTANCE_THRESHOLD_M \
-          IG_SPEED_PREF_K IG_TERMINAL_PENALTY IG_STEER_SMOOTH_W \
+          IG_SPEED_PREF_K IG_EXPLORE_SPEED_PREF_K \
+          IG_TERMINAL_PENALTY IG_STEER_SMOOTH_W \
           IG_STUCK_SPEED_MPS \
           IG_STUCK_STEPS TEMP_LR \
           TQC_TARGET_MIN TQC_TARGET_MAX \
@@ -332,12 +347,12 @@ echo "[Banner] run=${RUN_NAME} policy_folder=${POLICY_FOLDER} interpreter=${PYTH
 echo "[Banner] 2-mode pairing: IMAGE_GOAL_TASK=1 GATED=1 GATED_ONE_CRITIC=1"
 echo "[Banner] PERCEPTION=vc1 VC1_READOUT=grid2 OBS_WITH_STATE=1 OBS_WITH_MODE=1"
 echo "[Banner] EPISODE_HER=1 HER_MIN_DISP=5.0 IG_GOAL_DISTANCE_THRESHOLD_M=2.0"
-echo "[Banner] reward: IG_SPEED_PREF_K=0.2 (saturating bonus, user 2026-09-20 evening) TARGET_SPEED=20.0 km/h EXPLORE_GOAL_DIST_M=100.0 IG_IN_LANE_BONUS=0 (in-lane bonus removed 2026-09-20) IG_STEER_SMOOTH_W=0.5 (steering smoothness, EVERY step BOTH modes, ungated; user 2026-09-20 night)"
+echo "[Banner] reward: IG_SPEED_PREF_K=0.2 (goal leg; saturating bonus, user 2026-09-20 evening) IG_EXPLORE_SPEED_PREF_K=2.0 (explore leg; raised 0.2 -> 2.0, user 2026-09-21) TARGET_SPEED=20.0 km/h EXPLORE_GOAL_DIST_M=100.0 IG_IN_LANE_BONUS=0 (in-lane bonus removed 2026-09-20) IG_STEER_SMOOTH_W=0.5 (steering smoothness, EVERY step BOTH modes, ungated; user 2026-09-20 night)"
 echo "[Banner] goal reward: -1.0 base + saturating speed bonus in lane - 1.5 off-road - 1.5 collision - 0.5*|delta-steer| smoothness; failures NON-terminal (user 2026-09-20 night, first-failure termination reverted): every failing step pays -IG_TERMINAL_PENALTY=5 on its ordinary row (off-road -7.5/step, crossed -6.0, the latching collision step -7.5 then -2.5 latched)"
-echo "[Banner] explore reward: + saturating speed bonus only (0.2/step max, 0 parked) - 0.5*|delta-steer| smoothness every step; terminal failures (off-road/crossed/collision/invalid) pay -IG_TERMINAL_PENALTY=5 minus smoothness and terminate; no base cost, no flat penalties (user 2026-09-20)"
+echo "[Banner] explore reward: + saturating speed bonus only (IG_EXPLORE_SPEED_PREF_K=2.0/step max, 0 parked) - 0.5*|delta-steer| smoothness every step; terminal failures (off-road/crossed/collision/invalid) pay -IG_TERMINAL_PENALTY=5 minus smoothness and terminate; no base cost, no flat penalties (user 2026-09-20; explore bound [-6.0, +2.0])"
 echo "[Banner] goal-mode stuck truncation: speed<IG_STUCK_SPEED_MPS=0.3 m/s for IG_STUCK_STEPS=100 consecutive steps outside the gate truncates (truncated=True, ordinary reward; failures non-terminal since 2026-09-20 night; the off-road debounce counter is gone)"
 echo "[Banner] learner: DISCOUNT=0.99 TOP_QUANTILES_DROP=2 TQC_KAPPA=1.0 TEMP_LR=3e-4"
-echo "[Banner] bounded critic: TQC_TARGET_MIN=-1050 TQC_TARGET_MAX=100 (ReViND window; floor raised 2026-09-20 night, worst sustained goal row -10.0 = off-road + collided latch + failing + max smoothness, discounted floor -1000 at gamma=0.99)"
+echo "[Banner] bounded critic: TQC_TARGET_MIN=-1050 TQC_TARGET_MAX=2100 (window; floor raised 2026-09-20 night, worst sustained goal row -10.0 = off-road + collided latch + failing + max smoothness, discounted floor -1000 at gamma=0.99; ceiling raised 100 -> 2100 with the explore bonus 0.2 -> 2.0, user 2026-09-21 -- explore cap return +2000 over the 1000-step cap at v*)"
 echo "[Banner] modes: EXPLORE_PROB=0.5 | goal band ${GOAL_DIST_MIN}-${GOAL_DIST_TARGET} m"
 echo "[Banner] no OBS_WITH_COLLISION, no TQC_VALUE_FLOOR/CEILING, NO_TIMELIMIT unset"
 echo "[Banner] snapshot: results/run_env/${RUN_NAME}.env ($(wc -l < "results/run_env/${RUN_NAME}.env") vars)"

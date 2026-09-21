@@ -44,6 +44,21 @@ def _reload(**env):
 
 GATED = dict(OBS_WITH_MODE="1", OBS_WITH_GOAL="1", OBS_WITH_VECTOR="1")
 
+# The v8 flags are new; the older tests in this file do not know to set them,
+# and _reload above restores nothing on purpose. So each of these tests must
+# set every v8 flag it depends on, and this fixture removes them afterwards so
+# neither this file's later tests nor the files that follow inherit a v8
+# layout they never asked for (OBS_LATENT_AS_PIXELS=1 in particular exits on
+# the 128-d stub source).
+_V8_FLAGS = ("OBS_STATE_COLLISION", "OBS_LATENT_AS_PIXELS")
+
+
+@pytest.fixture(autouse=True)
+def _clear_v8_obs_flags():
+    yield
+    for k in _V8_FLAGS:
+        os.environ.pop(k, None)
+
 
 # ---------------------------------------------------------------- flags ----
 
@@ -271,3 +286,126 @@ def test_the_banner_is_unchanged_for_the_goal_conditioned_arm(capsys):
     assert "'mode'" not in out
     assert "136-d" in out, out
     assert "GATED" not in out
+
+
+# ------------------------------------------------ the v8 state block ----
+
+class _StateStubEnv(gym.Env):
+    """Publishes rgb, speed, collision and applied controls, as the env does.
+
+    `applied` is consumed one (steer, throttle) pair per step, the way the
+    wrapper's history deque is actually filled on a real run.
+    """
+    metadata = {}
+
+    def __init__(self, speed_kmh=0.0, has_collided=False, applied=None,
+                 mode=None, vector=None):
+        self._applied = list(applied or [])
+        self.speed_kmh = float(speed_kmh)
+        self.has_collided = bool(has_collided)
+        self.mode = mode
+        self.vector = vector
+        self.t = 0
+        self.observation_space = spaces.Dict({})
+        self.action_space = spaces.Box(
+            np.array([-0.5, 0.0], np.float32), np.array([0.5, 1.0], np.float32))
+
+    def _raw_obs(self):
+        # OBS_WITH_VECTOR reads the vector key from the env's raw observation,
+        # not from info (mirroring train_env_config_v4_image_goal).
+        return {} if self.vector is None else {"vector": self.vector}
+
+    def _info(self):
+        info = {"rgb": np.zeros((2, 2, 3), np.uint8),
+                "hero_pos": (0.0, 0.0), "hero_yaw": 0.0,
+                "goal_pos": (10.0, 0.0), "has_collided": self.has_collided,
+                "speed_kmh": self.speed_kmh}
+        if self.mode is not None:
+            info["mode"] = self.mode
+        i = self.t - 1
+        if 0 <= i < len(self._applied):
+            info["applied_steer"], info["applied_throttle"] = self._applied[i]
+        return info
+
+    def reset(self, **kw):
+        self.t = 0
+        return self._raw_obs(), self._info()
+
+    def step(self, a):
+        self.t += 1
+        return self._raw_obs(), 0.0, False, False, self._info()
+
+
+def _driven(module, hist, **env_kw):
+    """A wrapper driven by `hist` applied controls; returns (wrapper, obs)."""
+    w = module.VAEGoalWrapper(_StateStubEnv(applied=hist, **env_kw),
+                              source=_StubSource())
+    w.reset()
+    obs = None
+    for _ in range(len(hist)):
+        obs, _r, _t, _tr, _i = w.step(np.zeros(2, np.float32))
+    return w, obs
+
+
+def test_state_block_is_9d_without_collision():
+    # OBS_STATE_COLLISION=0 (v8): [ratio, *history.flatten()] -- the speed
+    # ratio is entry 0 and has_collided appears NOWHERE, even when the env
+    # reports a collision on the very step.
+    m = _reload(OBS_STATE_COLLISION="0", OBS_WITH_STATE="1",
+                OBS_WITH_GOAL="1", OBS_WITH_VECTOR="0", OBS_WITH_MODE="0",
+                TARGET_SPEED="20.0")
+    assert m.STATE_DIM == 9
+    hist = [(0.1, 0.5), (0.2, 0.4), (0, 0), (0, 0)]
+    _w, obs = _driven(m, hist, speed_kmh=10.0, has_collided=True)
+    s = obs["state"]
+    assert s.shape == (9,)
+    assert s.dtype == np.float32
+    # Layout pinned: [ratio, *history.flatten()], history oldest first.
+    np.testing.assert_allclose(s, [0.5, 0.1, 0.5, 0.2, 0.4, 0, 0, 0, 0],
+                               atol=1e-6)
+    assert 1.0 not in s  # the collision flag never rides the 9-d block
+
+
+def test_state_block_stays_10d_with_the_collision_flag():
+    # THE REGRESSION GUARD. Default (unset) and explicit "1" both keep the
+    # current 10-d block [has_collided, ratio, *history.flatten()].
+    hist = [(0.1, 0.5), (0.2, 0.4), (0, 0), (0, 0)]
+    for coll_env in (None, "1"):
+        os.environ.pop("OBS_STATE_COLLISION", None)
+        kw = {} if coll_env is None else {"OBS_STATE_COLLISION": coll_env}
+        m = _reload(OBS_WITH_STATE="1", OBS_WITH_GOAL="1",
+                    OBS_WITH_VECTOR="0", OBS_WITH_MODE="0",
+                    TARGET_SPEED="20.0", **kw)
+        assert m.STATE_DIM == 10
+        _w, obs = _driven(m, hist, speed_kmh=10.0, has_collided=True)
+        s = obs["state"]
+        assert s.shape == (10,)
+        np.testing.assert_allclose(
+            s, [1.0, 0.5, 0.1, 0.5, 0.2, 0.4, 0, 0, 0, 0], atol=1e-6)
+    os.environ.pop("OBS_STATE_COLLISION", None)
+
+
+def test_9d_state_block_is_identical_in_both_modes():
+    # The mode-independence invariant survives the narrower block: identical
+    # steps in goal and explore mode produce byte-identical 9-d state blocks.
+    m = _reload(OBS_STATE_COLLISION="0", OBS_WITH_STATE="1",
+                OBS_WITH_GOAL="1", OBS_WITH_VECTOR="1", OBS_WITH_MODE="1",
+                TARGET_SPEED="20.0")
+    hist = [(0.1, 0.5), (0.2, 0.4), (0, 0), (0, 0)]
+    _wg, obs_goal = _driven(m, hist, speed_kmh=10.0, mode=1,
+                            vector=np.zeros(4, np.float32))
+    _we, obs_explore = _driven(m, hist, speed_kmh=10.0, mode=0,
+                               vector=np.zeros(4, np.float32))
+    np.testing.assert_array_equal(obs_explore["state"], obs_goal["state"])
+    assert obs_explore["state"].shape == (9,)
+
+
+def test_the_banner_shows_the_9d_state_width(capsys):
+    # The banner is where an operator confirms a live run's layout, so the
+    # narrowed width must be visible there, not just in the space.
+    m = _reload(OBS_STATE_COLLISION="0", OBS_WITH_STATE="1",
+                OBS_WITH_GOAL="1", OBS_WITH_VECTOR="0", OBS_WITH_MODE="0")
+    _wrapper(m)
+    out = capsys.readouterr().out
+    assert "'state': (9,)" in out, out
+    assert "'state': (10,)" not in out, out

@@ -116,7 +116,8 @@ def _reload(**env):
 
 
 _LAYOUT_KEYS = ("OBS_WITH_STATE", "OBS_WITH_COLLISION", "OBS_WITH_GOAL",
-                "OBS_WITH_VECTOR", "OBS_WITH_MODE", "TARGET_SPEED")
+                "OBS_WITH_VECTOR", "OBS_WITH_MODE", "OBS_STATE_COLLISION",
+                "OBS_LATENT_AS_PIXELS", "TARGET_SPEED")
 
 
 @pytest.fixture(autouse=True)

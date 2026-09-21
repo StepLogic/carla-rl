@@ -1,7 +1,8 @@
 """Observation wrapper: goal geometry + frozen VAE latent.
 
     obs = {"goal": (4,) float32, "latent": (128,) float32}
-    (+ {"state": (10,) float32} when OBS_WITH_STATE=1)
+    (+ {"state": (10,) float32} when OBS_WITH_STATE=1, or (9,) when
+       OBS_STATE_COLLISION=0 additionally drops has_collided from the block)
 
 WHY TWO KEYS RATHER THAN ONE FLAT VECTOR. jaxrl2's PixelMultiplexer gives every
 non-image observation key its own Dense(latent_dim) -> LayerNorm -> tanh
@@ -68,7 +69,25 @@ GOAL_DIM = 2 + 2                              # offset, sin/cos yaw
 # block bakes the ratio into the observation, so a run that changes
 # TARGET_SPEED mid-flight would change what its own observation means.
 WITH_STATE = os.environ.get("OBS_WITH_STATE", "0") == "1"
-STATE_DIM = 2 + 2 * N_ACTION_HISTORY          # collision, speed ratio, history
+
+# OBS_STATE_COLLISION=0 DROPS has_collided FROM THE `state` BLOCK (v8).
+#
+#     state = [clip(speed_kmh / TARGET_SPEED, 0, 1),
+#              *action_history.flatten()]              -- (9,)  with the flag 0
+#     state = [has_collided, ratio, *history.flatten()]
+#                                              -- (10,)  with the default 1
+#
+# The user's reasoning at the 2026-09-21 decision: goal mode terminates on
+# collision anyway, and in explore mode a policy that has crashed once sees no
+# observation difference and learns only from the -5/step collision penalty.
+# Default 1 keeps the v7 behaviour byte-identical.
+#
+# THIS IS NOT OBS_WITH_COLLISION. That existing flag adds the SEPARATE 1-d
+# `coll` key for the image-goal arm and keeps its own meaning; reusing its
+# name would silently couple two unrelated switches, which is why this one is
+# named OBS_STATE_COLLISION and gates only the `state` block's first slot.
+STATE_COLLISION = os.environ.get("OBS_STATE_COLLISION", "1") == "1"
+STATE_DIM = (2 if STATE_COLLISION else 1) + 2 * N_ACTION_HISTORY
 TARGET_SPEED = float(os.environ.get("TARGET_SPEED", 20.0))
 
 # THE ENV'S 4-VECTOR: [steer, throttle, speed/target_speed, mask_goal].
@@ -360,7 +379,12 @@ class VAEGoalWrapper(Wrapper):
         return out
 
     def _state_block(self, info):
-        """[has_collided, clip(speed/TARGET_SPEED, 0, 1), *history.flatten()]."""
+        """[has_collided,] clip(speed/TARGET_SPEED, 0, 1), *history.flatten().
+
+        The leading has_collided is present only when OBS_STATE_COLLISION=1
+        (the default). With the flag 0 the block is 9-d and starts at the
+        speed ratio (see OBS_STATE_COLLISION above).
+        """
         speed = float(info.get("speed_kmh", 0.0))
         if not np.isfinite(speed):
             # Same convention image_goal_reward took for a nan speed: map to
@@ -368,9 +392,13 @@ class VAEGoalWrapper(Wrapper):
             speed = 0.0
         ratio = min(1.0, max(0.0, speed / TARGET_SPEED))
         hist = np.asarray(self._hist, np.float32).reshape(-1)
+        if STATE_COLLISION:
+            head = np.array([float(bool(info.get("has_collided", False))),
+                             ratio], np.float32)
+        else:
+            head = np.array([ratio], np.float32)
         return np.concatenate([
-            np.array([float(bool(info.get("has_collided", False))),
-                      ratio], np.float32),
+            head,
             hist.astype(np.float32),
         ]).astype(np.float32)
 
@@ -418,5 +446,9 @@ class VAEGoalWrapper(Wrapper):
         # silently pair a state-block checkpoint with an agent built without
         # the key (the pytree shapes differ, so the loader refuses anyway).
         ident["with_state"] = bool(self.with_state)
+        # Same reason as with_state: the state block's WIDTH depends on this
+        # flag (10-d with the default 1, 9-d with 0), so evaluation must not
+        # silently pair a 9-d checkpoint with a 10-d agent.
+        ident["with_state_collision"] = bool(STATE_COLLISION)
         ident["target_speed"] = TARGET_SPEED
         return ident

@@ -87,7 +87,11 @@ export CARLA_CLIENT_TIMEOUT=180
 # jax's reservation leaves CARLA a bigger address pool before its streaming
 # wedges the device. preallocate=false means this only caps the ceiling, it
 # does not reserve anything up front.
-export XLA_PYTHON_CLIENT_MEM_FRACTION=0.2
+export XLA_PYTHON_CLIENT_MEM_FRACTION=0.15
+# 0.15 (2026-09-21, two-town): 0.2 = 2.46 GB OOM'd the two-env resume
+# (RESOURCE_EXHAUSTED on a 768 KB alloc) -- two windowed Low servers
+# (~7.8-8.5 GB combined) + the torch VC-1 encoder left less than the old
+# ceiling. preallocate=false so this only caps what jax may grab.
 export VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/nvidia_icd.json
 export __NV_PRIME_RENDER_OFFLOAD=1 __VK_LAYER_NV_optimus=NVIDIA_only __GLX_VENDOR_LIBRARY_NAME=nvidia
 # Overridable so a SMOKE RUN uses this identical flag set rather than a copy of it: a duplicated flag list is a list

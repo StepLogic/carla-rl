@@ -139,7 +139,8 @@ class EpisodeRelabelBuffer:
                  k_dist_target_speed=0.0, k_dist_gate_mode="positive",
                  k_speed=0.0, speed_limit_kmh=0.0,
                  k_dist_delta_mode="positive", k_living=0.0,
-                 time_to_goal=False, step_cost=0.1, gated=False):
+                 time_to_goal=False, step_cost=0.1, gated=False,
+                 recost_counting=False):
         # GATED=True MAKES EVERY HINDSIGHT ROW A GOAL ROW, which is the whole
         # point of running HER on the gated arm: explore episodes wander much
         # further than the goal curriculum allows (measured ~370 steps against
@@ -187,6 +188,57 @@ class EpisodeRelabelBuffer:
                 "reward IS minimum time, so hindsight rows must be recosted the "
                 "same way or the goal critic is fitted to two different reward "
                 "functions over the same states.")
+
+        # RECOST UNDER THE COUNTING REGIME (v9, user 2026-09-22: hindsight rows
+        # must "match the reward of the current goal mode"). The min-time branch
+        # below was consistent while the goal reward WAS minimum time (v7/v8);
+        # GOAL_TRUNCATE_COUNTS replaced it with a different reward -- -1 per
+        # step, -fines on fault steps, +arrival bonus, truncate at cumulative
+        # fault-step counts -- and the min-time mirror silently fell behind.
+        # Measured on v9mb: hindsight rows were ~50% of the goal side of the
+        # buffer, so the 100.0 fines were diluted ~2x and the arrival value was
+        # bimodal (0 hindsight vs +10 on-policy for the same event).
+        #
+        # WHEN THIS IS ON the relabelled rows pay exactly what
+        # goal_reward_sorb's counting branch pays, with the CONSTANTS read from
+        # vae_nav.gated_reward -- the single source of truth the wrapper reads
+        # -- rather than re-read from the environment here, so the two
+        # implementations cannot drift.
+        self.recost = bool(recost_counting)
+        self.n_recost_truncated = 0   # legs cut by a tripped fault count
+        if self.recost:
+            if not (self.time_to_goal and self.gated):
+                raise ValueError(
+                    "recost_counting=True recosts hindsight rows under the "
+                    "gated arm's counting regime (goal_reward_sorb's "
+                    "GOAL_TRUNCATE_COUNTS branch); it requires time_to_goal=True "
+                    "and gated=True, which already force every hindsight row "
+                    "into GOAL mode.")
+            from vae_nav import gated_reward as _gr
+            if not _gr.GOAL_TRUNCATE_COUNTS:
+                raise SystemExit(
+                    "HER_RECOST=1 recosts hindsight rows under the counting "
+                    "regime, but GOAL_TRUNCATE_COUNTS is off -- the on-policy "
+                    "goal reward is the legacy bill regime, which has no "
+                    "per-step counting to mirror. Turn HER_RECOST off or "
+                    "enable the counting regime.")
+            if abs(self.step_cost - _gr.STEP_COST) > 1e-9:
+                raise SystemExit(
+                    f"HER_RECOST=1 with step_cost={self.step_cost} but the "
+                    f"goal wrapper pays STEP_COST={_gr.STEP_COST}. The "
+                    "recosted rows would describe a different per-step cost "
+                    "than the on-policy rows next to them.")
+            self._arrival_bonus = float(_gr.GOAL_ARRIVAL_BONUS)
+            self._fine_offroad = float(_gr.GOAL_OFF_ROAD_PENALTY)
+            self._fine_lane = float(_gr.GOAL_LANE_PENALTY)
+            self._fine_collision = float(_gr.GOAL_COLLISION_PENALTY)
+            self._trunc_offroad = int(_gr.GOAL_OFFROAD_TRUNCATE_STEPS)
+            self._trunc_collision = int(_gr.GOAL_COLLISION_TRUNCATE_STEPS)
+            self._trunc_crossing = int(_gr.GOAL_CROSSING_TRUNCATE_STEPS)
+            self._trunc_clock = int(_gr.GOAL_MAX_STEPS)
+            # TARGET-VELOCITY BONUS (v10, user 2026-09-22): mirrored below on
+            # the same clean-gate the reward uses. Default 0.0 is inert.
+            self._speed_bonus = float(_gr.GOAL_SPEED_BONUS)
         self.buffer = buffer
         # The wrapper's OWN goal-block transform. See module docstring.
         self.state_fn = state_fn
@@ -262,6 +314,7 @@ class EpisodeRelabelBuffer:
     def _reset_episode(self):
         self._txns, self._fields, self._pos, self._hit = [], [], [], []
         self._lane = []
+        self._offroad = []
         self._speed, self._target = [], []
         # Index just past the end of each LEG. A leg is the stretch between two
         # goal arrivals; with chaining off there is exactly one and everything
@@ -296,7 +349,7 @@ class EpisodeRelabelBuffer:
         return len(self.buffer)
 
     # -- per step ----------------------------------------------------------
-    def record(self, transition, fields, pos, hit, lane=False,
+    def record(self, transition, fields, pos, hit, lane=False, off_road=False,
                speed_kmh=0.0, target_speed_kmh=0.0, mode=None):
         """Stage one step. `fields` is what state_fn needs, ~100 bytes.
 
@@ -304,6 +357,13 @@ class EpisodeRelabelBuffer:
         and 0 for explore. It routes the ON-POLICY row to the right side of the
         mode-split buffer. Ignored entirely when gated=False, so the existing
         point-goal path is unchanged.
+
+        `lane` and `off_road` are this step's FAULT FLAGS -- the same keys
+        goal_reward_sorb's counting branch bills (lane_any/lane_invasion_any and
+        off_road from the env's info). They are per-STEP properties and
+        goal-independent, so every hindsight goal drawn from the step sees the
+        same flags; under recost_counting they are the fines' entire input.
+        Dead under the min-time branch, which deliberately ignores both.
         """
         if not isinstance(hit, (bool, np.bool_)):
             # GUARD (b).
@@ -314,13 +374,14 @@ class EpisodeRelabelBuffer:
                 "bootstrapping through them.")
         if len(self._txns) >= self.max_steps:
             for lst in (self._txns, self._fields, self._pos, self._hit,
-                        self._lane, self._speed, self._target):
+                        self._lane, self._offroad, self._speed, self._target):
                 lst.pop(0)
         self._txns.append(transition)
         self._fields.append(dict(fields))
         self._pos.append(np.asarray(pos, np.float64)[:2])
         self._hit.append(bool(hit))
         self._lane.append(bool(lane))
+        self._offroad.append(bool(off_road))
         self._speed.append(float(speed_kmh))
         self._target.append(float(target_speed_kmh))
         # The on-policy transition goes in immediately; only the hindsight
@@ -348,6 +409,32 @@ class EpisodeRelabelBuffer:
             return None
         return int(self.rng.choice(cand))
 
+    def _counting_end(self, start, end):
+        """Effective exclusive end of a leg under the counting regime.
+
+        Scans the leg accumulating the same three per-step fault counts the
+        wrapper feeds goal_reward_sorb (off-road, collision, crossing) and
+        returns the first step at which any count TRIPS its threshold, as an
+        exclusive end -- the relabelled episode ends there, the way the
+        on-policy episode truncates at the tripping step. The clock is
+        mirrored too, counted from the leg start: the relabelled episode's own
+        step index begins where its goal regime begins, and a leg longer than
+        GOAL_MAX_STEPS (an explore leg under a 2000-step cap, say) must
+        truncate like a goal one would. Returns `end` unchanged when nothing
+        trips, so an untruncated relabelled episode spans the whole leg.
+        """
+        off = coll = cross = 0
+        for j in range(start, end):
+            off += int(self._offroad[j])
+            coll += int(self._hit[j])
+            cross += int(self._lane[j])
+            if (off >= self._trunc_offroad
+                    or coll >= self._trunc_collision
+                    or cross >= self._trunc_crossing
+                    or (j - start) >= self._trunc_clock):
+                return j + 1
+        return end
+
     def flush_episode(self):
         """Insert hindsight copies for the finished episode, then clear."""
         n = len(self._txns)
@@ -365,10 +452,26 @@ class EpisodeRelabelBuffer:
         for _ in range(self.n_relabel):
             start = 0
             for end in bounds:
-                # `end` is the exclusive bound passed to _pick_goal, so a
-                # hindsight goal can never be drawn from a later leg.
-                for i in range(start, max(start, end - 1)):
-                    tp = self._pick_goal(i, end, self._pos)
+                # RECOST: the relabelled episode ends where the counting
+                # regime's would. Under the counting branch a cumulative
+                # fault-step count TRIPS the episode (truncate-not-terminate),
+                # so a hindsight goal drawn beyond that step is a goal the
+                # relabelled episode never had time to reach -- the arrival
+                # bonus it would pay is false supervision. The effective end
+                # comes from the fault counts alone (per-step properties,
+                # goal-independent); rows at and past the tripped step are
+                # dropped, exactly as the on-policy episode ends there. The
+                # tripped step itself produces no row (it has no future step
+                # inside the cut leg to draw a goal from), so a truncated
+                # relabelled episode loses its final transition -- the same
+                # convention that already drops every leg's last step.
+                e = self._counting_end(start, end) if self.recost else end
+                if self.recost and e < end:
+                    self.n_recost_truncated += 1
+                for i in range(start, max(start, e - 1)):
+                    # `end` is the exclusive bound passed to _pick_goal, so a
+                    # hindsight goal can never be drawn from a later leg.
+                    tp = self._pick_goal(i, e, self._pos)
                     if tp is not None:
                         pairs.append((i, tp))
                 start = end
@@ -446,6 +549,51 @@ class EpisodeRelabelBuffer:
         lane = self._lane[i]
 
         if self.time_to_goal:
+            if self.recost:
+                # THE COUNTING REGIME, mirrored from goal_reward_sorb's
+                # GOAL_TRUNCATE_COUNTS branch, with the constants read from
+                # vae_nav.gated_reward in __init__ so the two implementations
+                # cannot drift. Arrival pays ONLY the bonus and terminates
+                # exactly as the on-policy row does (terminated=True ->
+                # mask=0, done=1). Every other step pays the step cost plus
+                # THIS step's fines and bootstraps on. Truncation is not
+                # decided here: a tripped count cut the leg in flush_episode
+                # before any goal beyond it could be drawn, so no row inside a
+                # recosted leg is past its episode's end.
+                if reached:
+                    row["rewards"] = np.float32(self._arrival_bonus)
+                    row["masks"] = np.float32(0.0)
+                    row["dones"] = np.float32(1.0)
+                else:
+                    fine = ((self._fine_offroad if self._offroad[i] else 0.0)
+                            + (self._fine_lane if self._lane[i] else 0.0)
+                            + (self._fine_collision if self._hit[i] else 0.0))
+                    _r = -self.step_cost - fine
+                    # The velocity bonus, mirrored on the SAME clean gate as
+                    # goal_reward_sorb's counting branch: no off-road, no
+                    # crossing, no collision this step. Speeds are the staged
+                    # per-step values (self._speed / self._target, already
+                    # recorded by the trainer's HER record call); a missing or
+                    # non-positive target disables the term, exactly as the
+                    # reward does.
+                    if self._speed_bonus and not (self._offroad[i]
+                                                  or lane or hit):
+                        _vt = (self._target[i] if i < len(self._target)
+                               else 0.0)
+                        if _vt > 0.0:
+                            _v = self._speed[i] if i < len(self._speed) else 0.0
+                            _r += self._speed_bonus * max(
+                                0.0, 1.0 - abs(_v - _vt) / _vt)
+                    row["rewards"] = np.float32(_r)
+                    row["masks"] = np.float32(1.0)
+                    row["dones"] = np.float32(0.0)
+                if reached:
+                    self.n_paying += 1
+                if reached and float(
+                        np.linalg.norm(self._pos[i] - goal)) < self.goal_radius:
+                    self.n_free_positives += 1
+                return row
+
             # THE WHOLE REWARD. Mirrors TimeToGoalReward.step exactly.
             #
             # `hit` and `lane` are read above and deliberately NOT used: under
@@ -536,10 +684,13 @@ class EpisodeRelabelBuffer:
 
     def stats(self):
         frac = (self.n_free_positives / max(1, self.n_relabelled))
-        return {
+        out = {
             "her_legs": self.n_legs,
             "her_relabelled": self.n_relabelled,
             "her_free_positive_frac": frac,
             "her_paying": self.n_paying,
             "her_paying_frac": self.n_paying / max(1, self.n_relabelled),
         }
+        if self.recost:
+            out["her_recost_truncated_legs"] = self.n_recost_truncated
+        return out

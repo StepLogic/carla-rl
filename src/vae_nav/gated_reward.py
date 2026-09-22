@@ -138,6 +138,21 @@ GOAL_OFFROAD_TRUNCATE_STEPS = int(os.environ.get("GOAL_OFFROAD_TRUNCATE_STEPS", 
 GOAL_COLLISION_TRUNCATE_STEPS = int(os.environ.get("GOAL_COLLISION_TRUNCATE_STEPS", 20))
 GOAL_CROSSING_TRUNCATE_STEPS = int(os.environ.get("GOAL_CROSSING_TRUNCATE_STEPS", 20))
 GOAL_COLLISION_PENALTY = float(os.environ.get("GOAL_COLLISION_PENALTY", 10.0))
+# GOAL-MODE TARGET-VELOCITY BONUS (user 2026-09-22: "add a term to the goal
+# reward that favors moving at target velocity in the lane", "make it
+# positive", "make it max out at 0.5"). On a CLEAN step -- on-road and no
+# lane crossing THIS step -- a bonus of
+#     GOAL_SPEED_BONUS * max(0, 1 - |speed_kmh - target_speed_kmh|
+#                               / target_speed_kmh)
+# is ADDED to the step reward: it peaks at GOAL_SPEED_BONUS (0.5) when the
+# hero moves exactly at the env's target speed, tapers linearly to 0 at half
+# and double the target, and is floored at 0 so an absurd speed can never
+# make the term negative. Fault steps pay their fines and NO bonus (the
+# bonus is a preference about how well you drive, not a discount on driving
+# badly). Default 0.0 keeps every earlier run byte-identical. The speeds are
+# the env's own published per-step values (core_state.py: speed_kmh,
+# target_speed_kmh); a missing or non-positive target disables the term.
+GOAL_SPEED_BONUS = float(os.environ.get("GOAL_SPEED_BONUS", 0.0))
 # POTENTIAL-BASED SHAPING on ALONG-ROAD progress. Phi = -K * route_remaining_m,
 # so the agent is paid K per metre of route progress and charged for
 # backtracking. Telescopes to a bounded constant, so it cannot be farmed, and by
@@ -281,6 +296,22 @@ def goal_reward_sorb(info, t, max_steps=GOAL_MAX_STEPS, step_cost=STEP_COST,
             _r -= GOAL_LANE_PENALTY
         if GOAL_COLLISION_PENALTY and info.get("collision", False):
             _r -= GOAL_COLLISION_PENALTY
+        # TARGET-VELOCITY BONUS (see GOAL_SPEED_BONUS above): only on a CLEAN
+        # step -- on-road, no crossing and no collision THIS step; a fault
+        # step pays its fines and no bonus. Floored at 0 so an absurd speed
+        # cannot make the term negative; a missing or non-positive target
+        # disables it.
+        if GOAL_SPEED_BONUS:
+            _clean = (not info.get("off_road")
+                      and not info.get("lane_any",
+                                       info.get("lane_invasion_any", False))
+                      and not info.get("collision", False))
+            if _clean:
+                _v = float(info.get("speed_kmh", 0.0) or 0.0)
+                _vt = float(info.get("target_speed_kmh", 0.0) or 0.0)
+                if _vt > 0.0:
+                    _r += GOAL_SPEED_BONUS * max(
+                        0.0, 1.0 - abs(_v - _vt) / _vt)
         truncated = (int(t) >= int(max_steps)
                      or offroad_steps >= GOAL_OFFROAD_TRUNCATE_STEPS
                      or collision_steps >= GOAL_COLLISION_TRUNCATE_STEPS
@@ -501,7 +532,10 @@ class GatedReward(Wrapper):
                   f"fines lane/off/coll="
                   f"{GOAL_LANE_PENALTY}/{GOAL_OFF_ROAD_PENALTY}/"
                   f"{GOAL_COLLISION_PENALTY}; "
-                  f"arrival bonus={GOAL_ARRIVAL_BONUS} is the only terminus",
+                  f"arrival bonus={GOAL_ARRIVAL_BONUS} is the only terminus"
+                  + (f"; velocity bonus {GOAL_SPEED_BONUS} "
+                     f"(peak at target speed, clean steps only)"
+                     if GOAL_SPEED_BONUS else ""),
                   flush=True)
         else:
             print(f"[Gated] goal=SHAPED (delta+projected), returns ~order 100")

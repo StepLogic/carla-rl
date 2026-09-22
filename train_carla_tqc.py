@@ -1203,6 +1203,13 @@ def main():
     # shared relabel buffer would splice transitions from different towns into
     # one hindsight trajectory -- a "future" goal drawn from another map.
     hers = None
+    _recost = os.environ.get("HER_RECOST", "0") == "1"
+    if _recost and os.environ.get("IMAGE_GOAL_TASK", "0") == "1":
+        # The image-goal arm's hindsight rows keep the flown reward (it is
+        # goal-independent), so there is no counting regime to mirror and the
+        # recost kwarg does not exist on that class.
+        raise SystemExit("HER_RECOST=1 is the point-goal arm's counting-regime "
+                         "recost and is incompatible with IMAGE_GOAL_TASK=1")
     if os.environ.get("EPISODE_HER", "") == "1":
         hers = []
         for e in venv.envs:
@@ -1243,11 +1250,17 @@ def main():
                 # hindsight rows carry +600 arrivals into a buffer whose
                 # on-policy rows pay 0, and the critic fits two reward
                 # functions over one set of states.
-                # THE GATED ARM'S GOAL REWARD IS ALSO MINIMUM TIME, under a
+                # THE GATED ARM'S GOAL REWARD WAS ALSO MINIMUM TIME, under a
                 # different flag. GATED_GOAL_REWARD=sorb pays -STEP_COST per
                 # step and 0 on arrival exactly as TIME_TO_GOAL does, so the
                 # same recosting applies and omitting it here would put +k_goal
                 # arrivals into a buffer whose on-policy rows pay 0.
+                # THAT HELD UNTIL v9's COUNTING REGIME, which pays -fines on
+                # fault steps, +arrival on arrival and truncates at fault-step
+                # counts -- the min-time mirror fell behind (measured ~50% of
+                # the goal side of the v9mb buffer, fines diluted ~2x), so
+                # HER_RECOST=1 switches the mirror to the counting branch
+                # below.
                 time_to_goal=(os.environ.get("TIME_TO_GOAL", "") == "1"
                               or (GATED and os.environ.get(
                                   "GATED_GOAL_REWARD", "sorb").lower() == "sorb")),
@@ -1258,10 +1271,26 @@ def main():
                 n_relabel=int(os.environ.get("EPISODE_HER_N", 1)),
                 min_disp=float(os.environ.get("HER_MIN_DISP", GOAL_THRESHOLD)),
                 max_disp=float(os.environ.get("HER_MAX_DISP", np.inf)),
-                seed=SEED + len(hers)))
+                seed=SEED + len(hers),
+                # RECOST UNDER THE COUNTING REGIME (user 2026-09-22): without
+                # this the relabelled rows carry the old min-time reward -- no
+                # fines, 0 on arrival -- next to on-policy rows that pay
+                # -100-per-fault-step and +10 on arrival. Measured on v9mb:
+                # hindsight was ~50% of the goal side, so the fines were
+                # diluted ~2x. The buffer reads every coefficient from
+                # vae_nav.gated_reward itself, so the two cannot drift.
+                recost_counting=_recost))
         print(f"[EpisodeHER] on -- {len(hers)} per-env buffers, "
               f"n_relabel={hers[0].n_relabel} min_disp={hers[0].min_disp} "
-              f"goal_radius={hers[0].goal_radius}")
+              f"goal_radius={hers[0].goal_radius}"
+              + (f" | RECOST on: fines {hers[0]._fine_offroad}/"
+                 f"{hers[0]._fine_lane}/{hers[0]._fine_collision} "
+                 f"(offroad/lane/collision), arrival {hers[0]._arrival_bonus}, "
+                 f"truncate at {hers[0]._trunc_offroad}/"
+                 f"{hers[0]._trunc_crossing}/{hers[0]._trunc_collision} counts"
+                 + (f", velocity bonus {hers[0]._speed_bonus}"
+                    if getattr(hers[0], "_speed_bonus", 0.0) else "")
+                 if getattr(hers[0], "recost", False) else ""))
 
     identity = dict(latent_source.identity())
     identity.update({"train_towns": env_towns, "heldout_towns": heldout,
@@ -1640,14 +1669,23 @@ def main():
                     speed_kmh=float(inf.get("speed_kmh", 0.0) or 0.0),
                     target_speed_kmh=float(inf.get("target_speed_kmh", 0.0)
                                            or 0.0),
+                    # THE FAULT FLAGS THE COUNTING REGIME BILLS, staged per
+                    # step for HER_RECOST. `lane` must read the SAME key the
+                    # wrapper's counters read (gated_reward.py) -- the env
+                    # publishes `lane_invasion_any` (core_state.py), never a
+                    # bare `lane_invasion`, so the old read here staged False
+                    # on every step and any fine keyed on it would have been
+                    # silently free. `off_road` was image-goal-only because
+                    # only that subclass staged it; the base record() now
+                    # takes it too, so both arms stage the same flags.
+                    lane=bool(inf.get("lane_any",
+                                      inf.get("lane_invasion_any", False))),
+                    off_road=bool(inf.get("off_road", False)),
                     # ROUTES THE ON-POLICY ROW. Without this the relabel buffer
                     # inserts with no mode and the split buffer defaults every
                     # row to GOAL, filing every explore transition as goal data.
                     # Hindsight copies are forced to GOAL inside the buffer.
                     mode=int(inf.get("mode", 1)))
-                if getattr(hers[i], "IMAGE_GOAL", False):
-                    # Third dirty event for the image-goal arm's flush-time cut.
-                    _rec_kwargs["off_road"] = bool(inf.get("off_road", False))
                 hers[i].record(
                     tr,
                     fields={"hero_pos": inf["hero_pos"], "hero_yaw": inf["hero_yaw"],
@@ -1655,7 +1693,6 @@ def main():
                             "action_history": inf.get("action_history",
                                                       np.zeros((4, 2)))},
                     pos=inf["hero_pos"], hit=bool(inf.get("collision", False)),
-                    lane=bool(inf.get("lane_invasion", False)),
                     **_rec_kwargs)
                 # CLOSE THE LEG ON ARRIVAL. Must come AFTER record(), so the
                 # arriving transition belongs to the leg it completed rather

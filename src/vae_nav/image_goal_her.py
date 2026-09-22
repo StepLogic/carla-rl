@@ -80,8 +80,10 @@ class ImageGoalRelabelBuffer(EpisodeRelabelBuffer):
         step so flush_episode can refuse to relabel a non-goal episode. A
         step recorded without a mode defaults to GOAL, matching the base.
         `off_road` is staged per step for the flush-time dirty cut; it is NOT
-        forwarded to super() (the base's signature is shared lineage and has
-        no such parameter -- the base already stages _hit and _lane itself).
+        forwarded to super() -- the base now stages its own `_offroad` too
+        (for the counting-regime recost, which this arm refuses), but its copy
+        is unused here and keeping the two lists separate leaves the base's
+        behaviour untouched.
         """
         self._ep_modes.append(int(mode) if mode is not None else GOAL)
         self._ep_offroad.append(bool(off_road))

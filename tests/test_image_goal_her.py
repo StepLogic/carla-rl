@@ -15,7 +15,7 @@ class _StubBuffer:
     def __init__(self):
         self.rows = []
 
-    def insert(self, row, mode=None):
+    def insert(self, row, mode=None, segment=None):
         self.rows.append(row)
 
     def __len__(self):
@@ -393,38 +393,30 @@ def test_per_step_lists_stay_aligned_when_max_steps_trims():
 def test_trainer_call_shape_round_trips_the_plain_base_buffer():
     # THE TRAINER'S HER RECORD CALL IS SHARED BETWEEN BUFFER CLASSES: `hers`
     # holds an ImageGoalRelabelBuffer only when IMAGE_GOAL_TASK=1 and a plain
-    # EpisodeRelabelBuffer otherwise. The base record() has NO off_road kwarg
-    # and raises TypeError on it, so the call site must add the kwarg ONLY
-    # when the buffer is the image-goal subclass -- the same class-attribute
-    # dispatch the flush site uses. This test mirrors the trainer's exact
+    # EpisodeRelabelBuffer otherwise. Since HER_RECOST the base record() takes
+    # `off_road` as well (the counting regime bills it), so the trainer passes
+    # the fault flags -- lane from lane_any/lane_invasion_any and off_road --
+    # UNCONDITIONALLY to both classes. This test mirrors the trainer's exact
     # kwarg construction (train_carla_tqc.py, HER record call) against both
     # real signatures.
     from vae_nav.episode_her import EpisodeRelabelBuffer
 
     def record_like_trainer(buf, off_road):
-        kwargs = dict(speed_kmh=10.0, target_speed_kmh=20.0, mode=1)
-        if getattr(buf, "IMAGE_GOAL", False):
-            kwargs["off_road"] = off_road
+        kwargs = dict(speed_kmh=10.0, target_speed_kmh=20.0, mode=1,
+                      off_road=off_road,
+                      lane=False)   # the env's lane_any key, as the trainer reads it
         buf.record(_tr(0),
                    fields={"hero_pos": (0.0, 0.0), "hero_yaw": 0.0,
                            "goal_pos": (1e6, 0.0),
                            "action_history": np.zeros((4, 2))},
-                   pos=(0.0, 0.0), hit=False, lane=False, **kwargs)
+                   pos=(0.0, 0.0), hit=False, **kwargs)
 
-    # The plain base buffer is called WITHOUT off_road and records fine.
+    # The plain base buffer is called WITH the fault flags and records fine.
     base = EpisodeRelabelBuffer(_StubBuffer(), _goal_block, goal_radius=2.0,
                                 k_goal=0.0, k_collision=0.0)
     record_like_trainer(base, off_road=True)      # must not raise
     assert len(base.buffer) == 1
-
-    # The gate is load-bearing, not decorative: the base signature really
-    # rejects the kwarg.
-    with pytest.raises(TypeError):
-        base.record(_tr(0),
-                    fields={"hero_pos": (0.0, 0.0), "hero_yaw": 0.0,
-                            "goal_pos": (1e6, 0.0),
-                            "action_history": np.zeros((4, 2))},
-                    pos=(0.0, 0.0), hit=False, off_road=True)
+    assert base._offroad == [True]
 
     # The image-goal subclass receives the kwarg and stages it.
     img = _buf()

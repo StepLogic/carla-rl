@@ -95,7 +95,8 @@ def _mode_mask(batch):
 
 def _masked_critic_update(key, actor, critic, target_critic_params, temp, batch,
                           discount, backup_entropy, top_quantiles_to_drop,
-                          kappa, mask, value_floor=None, value_ceiling=None):
+                          kappa, mask, n_steps=None,
+                          value_floor=None, value_ceiling=None):
     """One critic's update, restricted to the rows `mask` selects.
 
     value_floor / value_ceiling clip this critic's TARGET only, and are applied
@@ -125,11 +126,39 @@ def _masked_critic_update(key, actor, critic, target_critic_params, temp, batch,
     # the wrong-mode rows are discarded by the mask below. That wastes compute
     # on half the batch and is deliberate: the alternative is dynamic control
     # flow inside a jitted function, whose shapes the compiler cannot fix.
+    #
+    # N-STEP BOOTSTRAP DISCOUNT (v11). With n-step returns the batch carries a
+    # per-row `n_steps` = the ACTUAL merged segment length n', and the discount
+    # becomes gamma**n' per row -- the buffer's reward sum was accumulated in
+    # this same gamma frame, so target = sum_k gamma^k r_{t+k} + gamma^n' * Q
+    # is exactly the n-step soft return. jaxrl2's tqc_target computes
+    # `discount * masks[:, None] * soft`: a FLAT (batch,) discount would
+    # broadcast there as (1, batch) x (batch, 1) -> (batch, batch) -- a silent
+    # outer product, and an instant shape error against soft (batch, kept)
+    # unless kept == batch, in which case it is quietly WRONG MATH. So the
+    # per-row discount is passed pre-shaped to (batch, 1), which multiplies
+    # masks column-wise exactly like the scalar does. The vendored code is
+    # still untouched. With n_steps absent (n_step = 1, every earlier run) the
+    # scalar path is byte-identical.
+    #
+    # ONE DELIBERATE SIMPLIFICATION, stated because it is a deviation from
+    # chaining the 1-step soft operator: the entropy correction -alpha*log pi
+    # is applied at the BOOTSTRAP state only, not at every intermediate step of
+    # the horizon. Chaining would need next_log_probs at each of the n'-1
+    # intermediate states under the CURRENT policy, which the buffer does not
+    # and cannot store. With the temperatures auto-tuned to the entropy target
+    # the correction is alpha * |log pi| ~ 0.01 per step -- two orders below the
+    # -1/step reward -- so the bias is negligible next to the variance n-step
+    # already accepts.
+    if n_steps is None:
+        step_discount = discount
+    else:
+        step_discount = (discount ** n_steps)[:, None]
     target = tqc_target(
         next_quantiles,
         jnp.nan_to_num(batch["rewards"]),
         batch["masks"],
-        discount=discount,
+        discount=step_discount,
         top_quantiles_to_drop=top_quantiles_to_drop,
         alpha=alpha,
         next_log_probs=next_log_probs,
@@ -247,11 +276,20 @@ def _gated_update_jit(rng, actor, critic, target_critic_params, temp,
     m_goal = _mode_mask(batch)
     m_explore = 1.0 - m_goal
 
+    # N-STEP (v11): the batch's per-row merged segment length, or None on the
+    # 1-step path. Key presence is a STATIC property of the batch structure, so
+    # this branch resolves at trace time and the jit never sees dynamic control
+    # flow. Both critics read the SAME array: it already encodes each row's
+    # own mode's n', and the row's own critic is the only one whose loss keeps
+    # it, so no per-critic split is needed.
+    n_steps = batch["n_steps"] if "n_steps" in batch else None
+
     rng, key_g = jax.random.split(rng)
     # GOAL CRITIC: bounded, because under the SORB reward it runs at gamma=1.0.
     new_critic, info_g = _masked_critic_update(
         key_g, actor, critic, target_critic_params, temp, batch, discount,
         backup_entropy, top_quantiles_to_drop, kappa, m_goal,
+        n_steps=n_steps,
         value_floor=value_floor, value_ceiling=value_ceiling)
 
     # EXPLORE CRITIC: UNBOUNDED, deliberately.
@@ -272,7 +310,8 @@ def _gated_update_jit(rng, actor, critic, target_critic_params, temp,
     rng, key_e = jax.random.split(rng)
     new_critic_e, info_e = _masked_critic_update(
         key_e, actor, critic_e, target_critic_e_params, temp_e, batch,
-        discount_e, backup_entropy, top_quantiles_to_drop, kappa, m_explore)
+        discount_e, backup_entropy, top_quantiles_to_drop, kappa, m_explore,
+        n_steps=n_steps)
 
     new_target_params = soft_target_update(
         new_critic.params, target_critic_params, tau)

@@ -140,7 +140,7 @@ class EpisodeRelabelBuffer:
                  k_speed=0.0, speed_limit_kmh=0.0,
                  k_dist_delta_mode="positive", k_living=0.0,
                  time_to_goal=False, step_cost=0.1, gated=False,
-                 recost_counting=False):
+                 recost_counting=False, segment_tag=0):
         # GATED=True MAKES EVERY HINDSIGHT ROW A GOAL ROW, which is the whole
         # point of running HER on the gated arm: explore episodes wander much
         # further than the goal curriculum allows (measured ~370 steps against
@@ -206,6 +206,15 @@ class EpisodeRelabelBuffer:
         # implementations cannot drift.
         self.recost = bool(recost_counting)
         self.n_recost_truncated = 0   # legs cut by a tripped fault count
+        # N-STEP SEGMENT IDS. Every inserted row carries one, so the mode-split
+        # buffer's n-step assembly (n_step > 1) knows which successors chain
+        # and which do not. Ids are GLOBAL and UNIQUE per run: the caller's env
+        # index is tagged into the high bits (two envs both starting their
+        # counters at 1 would otherwise alias, and two towns' trajectories
+        # would merge). With n_step=1 the ids are written and ignored.
+        self._segment_tag = int(segment_tag) * (2 ** 32)
+        self._seg_ctr = 0
+        self._cur_seg = self._next_segment()
         if self.recost:
             if not (self.time_to_goal and self.gated):
                 raise ValueError(
@@ -311,6 +320,11 @@ class EpisodeRelabelBuffer:
         self.n_onpolicy_success = 0
         self.n_legs = 0
 
+    def _next_segment(self):
+        """A fresh, never-reused segment id (n-step assembly, see __init__)."""
+        self._seg_ctr += 1
+        return self._segment_tag + self._seg_ctr
+
     def _reset_episode(self):
         self._txns, self._fields, self._pos, self._hit = [], [], [], []
         self._lane = []
@@ -320,6 +334,13 @@ class EpisodeRelabelBuffer:
         # goal arrivals; with chaining off there is exactly one and everything
         # below is a no-op.
         self._leg_ends = []
+        # THE ON-POLICY N-STEP SEGMENT ENDS WITH THE EPISODE. flush_episode runs
+        # at every episode end -- arrival, trip, timeout, collision -- so a cut
+        # here covers every termination the counting regime does not bill as
+        # terminal. (end_leg below covers arrivals; the two may both fire on an
+        # arriving episode and burn an id, which is harmless: ids are never
+        # reused.)
+        self._cur_seg = self._next_segment()
 
     def end_leg(self):
         """Close the current leg. Called by the trainer on every arrival.
@@ -344,6 +365,10 @@ class EpisodeRelabelBuffer:
         n = len(self._txns)
         if n and (not self._leg_ends or self._leg_ends[-1] != n):
             self._leg_ends.append(n)
+        # The arriving transition above belongs to the leg it completed; the
+        # NEXT leg's on-policy rows start a new n-step segment (an arrival is
+        # where the goal -- and the relabelled MDP -- changes).
+        self._cur_seg = self._next_segment()
 
     def __len__(self):
         return len(self.buffer)
@@ -389,9 +414,11 @@ class EpisodeRelabelBuffer:
         #
         # ROUTED BY ITS OWN MODE when gated. Inserting without one lets the
         # mode-split buffer default every row to GOAL, which would file every
-        # explore transition as goal data.
+        # explore transition as goal data. The n-step segment id chains this
+        # row to the episode's previous on-policy rows (n_step > 1 only).
         self._insert(self._clean(transition),
-                     mode if mode is not None else GOAL)
+                     mode if mode is not None else GOAL,
+                     segment=self._cur_seg)
 
     # -- at episode end ----------------------------------------------------
     def _pick_goal(self, i, n, pos):
@@ -476,8 +503,24 @@ class EpisodeRelabelBuffer:
                         pairs.append((i, tp))
                 start = end
 
+        # N-STEP SEGMENTS FOR HINDSIGHT ROWS. One relabelled MDP is a RUN of
+        # pairs sharing the same hindsight goal tp at CONSECUTIVE steps i --
+        # its rows chain into n-step returns exactly as an on-policy episode
+        # does. A tp change or a step gap starts a new segment. (Duplicate
+        # (i, tp) pairs across relabel passes are singletons, so no row ever
+        # chains through a copy of itself.)
+        seg_ids = []
+        cur_seg = None
+        prev_pair = None
+        for pair in pairs:
+            if (prev_pair is None or pair[1] != prev_pair[1]
+                    or pair[0] != prev_pair[0] + 1):
+                cur_seg = self._next_segment()
+            seg_ids.append(cur_seg)
+            prev_pair = pair
+
         inserted = 0
-        for (i, tp) in pairs:
+        for (i, tp), seg in zip(pairs, seg_ids):
             goal = self._pos[tp]
             row = self._relabelled(i, goal, n)
             # EVERY HINDSIGHT ROW IS A GOAL ROW, whatever mode the episode was
@@ -485,7 +528,7 @@ class EpisodeRelabelBuffer:
             # explore episodes wander far further than the goal curriculum
             # allows, so relabelling them supplies goal data at distances the
             # curriculum cannot reach.
-            self._insert(row, GOAL)
+            self._insert(row, GOAL, segment=seg)
             inserted += 1
 
         self.last_pairs = pairs
@@ -666,15 +709,16 @@ class EpisodeRelabelBuffer:
             self.n_free_positives += 1
         return row
 
-    def _insert(self, row, mode):
+    def _insert(self, row, mode, segment=None):
         """Insert one row, routed by mode when gated.
 
         The plain jaxrl2 ReplayBuffer's insert takes no mode argument, so the
         ungated path must call it exactly as before -- passing one would break
-        every existing run.
+        every existing run. The n-step segment id rides the same gate: only the
+        mode-split buffer accepts one.
         """
         if self.gated:
-            self.buffer.insert(row, mode=int(mode))
+            self.buffer.insert(row, mode=int(mode), segment=segment)
         else:
             self.buffer.insert(row)
 

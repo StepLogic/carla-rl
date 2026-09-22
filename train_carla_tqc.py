@@ -1159,8 +1159,23 @@ def main():
     # shared record path (both HER subclasses and the non-HER path) and
     # restores float32 on every sample.
     _buf_obs_space = fp16_pixel_obs_space(venv.observation_space)
+    # N-STEP RETURNS (v11, user picked n-step over a gamma change for the
+    # far-field saturation). 1 = every earlier run, byte-identical. n > 1
+    # merges each sampled row with up to n-1 same-segment successors at sample
+    # time (mode_split_buffer) and the learner raises its bootstrap discount to
+    # gamma**n'. Segment ids come from the HER buffers, so n > 1 requires the
+    # gated two-critic route WITH EPISODE_HER=1; anything else is refused
+    # rather than silently degraded.
+    N_STEP = int(os.environ.get("N_STEP", "1"))
     if GATED and not wants_one_critic():
         from vae_nav.mode_split_buffer import ModeSplitBuffer
+        if N_STEP > 1 and os.environ.get("EPISODE_HER", "") != "1":
+            raise SystemExit(
+                f"N_STEP={N_STEP} needs EPISODE_HER=1: the n-step segments are "
+                "assigned by the per-env relabel buffers (episode ends, leg "
+                "ends, hindsight-goal runs), and a non-HER caller has no "
+                "boundaries to offer -- silent 1-step behaviour would be a "
+                "flag that does nothing.")
         # MODE-STRATIFIED, and the reason is measured rather than theoretical.
         # A uniformly sampled shared buffer gives each critic whatever share of
         # the batch the environment happened to produce. The peer measured one
@@ -1172,10 +1187,28 @@ def main():
         # 500 for explore, so GOAL rows dominate. Fixing composition on SAMPLE
         # rather than correcting a known skew on insert is exactly what makes
         # the direction irrelevant.
+        #
+        # THE DISCOUNTS COME FROM THE AGENT, not re-read from the environment:
+        # the merged reward sum must be accumulated in exactly the frame the
+        # learner's gamma**n' bootstrap assumes, and the agent is the single
+        # source of both gammas.
         buffer = ModeSplitBuffer(
             _buf_obs_space, venv.action_space, _capacity,
-            goal_frac=float(os.environ.get("GOAL_BATCH_FRAC", 0.5)))
+            goal_frac=float(os.environ.get("GOAL_BATCH_FRAC", 0.5)),
+            n_step=N_STEP, discount_goal=float(agent.discount),
+            discount_explore=float(agent.discount_e))
+        if N_STEP > 1:
+            print(f"[Buffer] n-step returns: N_STEP={N_STEP}, "
+                  f"gamma_goal={agent.discount} gamma_explore={agent.discount_e}"
+                  " -- merged reward sums + gamma**n' bootstrap; the TD fixed "
+                  "point is unchanged, the path to it is shorter")
     else:
+        if N_STEP > 1:
+            raise SystemExit(
+                f"N_STEP={N_STEP} is the gated two-critic route's feature: the "
+                "one-critic/plain route samples a plain jaxrl2 ReplayBuffer and "
+                "its learner cannot read the per-row gamma**n' bootstrap. A "
+                "silent no-op would be a flag that lies.")
         # THE ONE-CRITIC ROUTE AND THE PLAIN ROUTE ALIKE. A single plain
         # ReplayBuffer: the unified-reward arm has ONE critic, so there is no
         # second critic to stratify a batch for, and the mode bit already rides
@@ -1244,6 +1277,10 @@ def main():
                 k_speed=K_SPEED, speed_limit_kmh=SPEED_LIMIT_KMH,
                 k_dist_delta_mode=K_DIST_DELTA_MODE,
                 k_living=K_LIVING,
+                # N-STEP SEGMENT TAG: this env's index in the high bits, so two
+                # envs' ids can never alias and two towns' trajectories can
+                # never merge into one n-step segment.
+                segment_tag=len(hers),
                 # Under TIME_TO_GOAL every sparse coefficient above is dead and
                 # the relabelled reward is 0-on-arrival / -step_cost otherwise.
                 # Passing the flag is MANDATORY, not optional: without it the

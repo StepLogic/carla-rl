@@ -53,7 +53,7 @@ class FakeBuffer:
     def __init__(self):
         self.rows = []
 
-    def insert(self, row, mode=None):
+    def insert(self, row, mode=None, segment=None):
         self.rows.append((row, mode))
 
     def __len__(self):

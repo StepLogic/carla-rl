@@ -206,6 +206,11 @@ class EpisodeRelabelBuffer:
         # implementations cannot drift.
         self.recost = bool(recost_counting)
         self.n_recost_truncated = 0   # legs cut by a tripped fault count
+        # Set by flush_episode each time: which counting cap the finished
+        # on-policy episode tripped first ("off_road" / "collision" /
+        # "crossing" / "clock" / "reached"; "?" when unknown). The trainer's
+        # [Ep] / GatedEp GOAL lines report it; nothing else reads it.
+        self.last_end_reason = "?"
         # N-STEP SEGMENT IDS. Every inserted row carries one, so the mode-split
         # buffer's n-step assembly (n_step > 1) knows which successors chain
         # and which do not. Ids are GLOBAL and UNIQUE per run: the caller's env
@@ -465,6 +470,41 @@ class EpisodeRelabelBuffer:
     def flush_episode(self):
         """Insert hindsight copies for the finished episode, then clear."""
         n = len(self._txns)
+        # ON-POLICY END REASON (logging only; user 2026-09-23 "report goal
+        # arm lane crossings"): which counting cap the episode tripped FIRST,
+        # in time order, from the same fault counters the recost leg-cutter
+        # and the reward's counting branch read. Goal chaining means an
+        # arrival resamples the goal instead of ending the episode, so the
+        # fallback for an un-tripped episode is the clock (or, for an
+        # episode the env ended another way -- invalid, expert smoke -- the
+        # trainer's side decides what to record; this stays a best-effort
+        # label). Under recost the caps are gated_reward's GOAL_* constants;
+        # without recost there is nothing to compare against, so the label
+        # stays "?" rather than guessing.
+        if not self.recost:
+            self.last_end_reason = "?"
+        elif n < 2:
+            self.last_end_reason = "?"
+        else:
+            off = coll = cross = 0
+            for j in range(n):
+                coll += int(self._hit[j])
+                cross += int(self._lane[j])
+                off += int(self._offroad[j])
+                if off >= self._trunc_offroad:
+                    self.last_end_reason = "off_road"
+                    break
+                if coll >= self._trunc_collision:
+                    self.last_end_reason = "collision"
+                    break
+                if cross >= self._trunc_crossing:
+                    self.last_end_reason = "crossing"
+                    break
+                if (j + 1) >= self._trunc_clock:
+                    self.last_end_reason = "clock"
+                    break
+            else:
+                self.last_end_reason = "reached"
         if n < 2:
             self._reset_episode()
             return 0

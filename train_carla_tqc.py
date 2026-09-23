@@ -1539,7 +1539,12 @@ def main():
               # crossing, off-road, a collision, the step cap, or the new
               # 100 m arrival.
               "dist_explore": deque(maxlen=100),
-              "end_explore": deque(maxlen=100)}
+              "end_explore": deque(maxlen=100),
+              # Goal-side end reasons (user 2026-09-23): which counting cap
+              # the on-policy GOAL episode tripped, from the HER buffer's
+              # fault counters (episode_her.last_end_reason). Agent-driven
+              # episodes only, like succ_goal.
+              "end_goal": deque(maxlen=100)}
     LOG_EVERY = int(os.environ.get("LOG_EVERY_EPISODES", 10))
     total_eps = 0
     # Histogram of WHY episodes end. Without it "return 0.0" is the only
@@ -2059,6 +2064,11 @@ def main():
                           f"ret={np.mean(recent['return']):8.1f} "
                           f"| policy={np.mean(recent['success_policy']) if recent['success_policy'] else float('nan'):.3f}"
                           f"(n={len(recent['success_policy'])}) "
+                          # GOAL-ARM LANE CROSSINGS (user 2026-09-23): share of
+                          # agent-driven goal episodes in the window ended by
+                          # the crossing cap (episode_her.last_end_reason).
+                          f"cross={(sum(1 for _r in recent['end_goal'] if _r == 'crossing') / max(1, len(recent['end_goal']))) if recent['end_goal'] else float('nan'):.3f}"
+                          f"(n={len(recent['end_goal'])}) "
                           f"oracle={np.mean(recent['success_oracle']) if recent['success_oracle'] else float('nan'):.3f}"
                           f"(n={len(recent['success_oracle'])}) buffer={len(buffer)}"
                           + (f" her={hers[i].stats()['her_relabelled']}"
@@ -2084,6 +2094,13 @@ def main():
                             return np.mean(recent[key]) if recent[key] else default
                         n_g, n_e = len(recent["ret_goal"]), len(recent["ret_explore"])
                         frac_g = n_g / max(1, n_g + n_e)
+                        # GOAL-ARM LANE CROSSINGS (user 2026-09-23): share of
+                        # agent-driven goal episodes in the window that ended
+                        # on the crossing cap.
+                        from collections import Counter as _Cg
+                        _ge = _Cg(recent["end_goal"])
+                        _gt = max(1, sum(_ge.values()))
+                        _cross = _ge.get("crossing", 0) / _gt
                         # On the ONE-CRITIC route the batch mix is NOT fixed:
                         # the single plain buffer samples uniformly, so the
                         # GOAL_BATCH_FRAC parenthetical would be a lie there.
@@ -2092,6 +2109,7 @@ def main():
                                 "regardless)")
                         print(f"[GatedEp{total_eps:5d}] "
                               f"GOAL   n={n_g:3d} succ(agent-only)={_m('succ_goal'):.3f} "
+                              f"cross={_cross:.2f} "
                               f"ret={_m('ret_goal'):8.1f} (~ -steps) "
                               f"len={_m('len_goal'):6.1f} "
                               f"coll={_m('coll_goal'):.3f}", flush=True)
@@ -2124,6 +2142,12 @@ def main():
                             truncated=bool(fi.get("truncated", False)))
                     else:
                         hers[i].flush_episode()
+                    # GOAL-SIDE END REASON (user 2026-09-23): the buffer just
+                    # classified this episode from its fault counters. Record
+                    # agent-driven goal episodes only, matching succ_goal.
+                    if (int(fi.get("mode", 1)) == 1 and not is_expert_ep[i]):
+                        recent["end_goal"].append(
+                            str(getattr(hers[i], "last_end_reason", "?")))
 
                 # New episode -> re-roll the oracle coin and replan.
                 # Uses the POST-RESET info, not `fi`: `fi` is the finished

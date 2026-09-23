@@ -325,3 +325,46 @@ def test_her_bonus_absent_when_weight_zero(counting):
             assert float(row["rewards"]) == BONUS
         else:
             assert float(row["rewards"]) == pytest.approx(-STEP_COST)
+
+# -- v10.1: the on-policy end-reason label (logging only, user 2026-09-23) ----
+
+
+def test_end_reason_crossing_wins_the_earliest_trip(counting):
+    her, _buf = make_buffer()
+    drive(her, 25, lane_steps=range(5, 25))
+    her.flush_episode()
+    assert her.last_end_reason == "crossing"
+
+
+def test_end_reason_collision_beats_a_later_crossing(counting):
+    her, _buf = make_buffer()
+    drive(her, 25, hit_steps=range(5, 25), lane_steps=range(10, 25))
+    her.flush_episode()
+    assert her.last_end_reason == "collision"
+
+
+def test_end_reason_clock_when_nothing_trips(counting):
+    her, _buf = make_buffer()
+    drive(her, 12)
+    her.flush_episode()
+    assert her.last_end_reason == "reached"
+
+
+def test_end_reason_unknown_without_recost():
+    buf = FakeBuffer()
+    her = EpisodeRelabelBuffer(
+        buf, goal_block, goal_radius=RADIUS, step_cost=0.1,
+        time_to_goal=True, k_goal=600.0, k_collision=5.0, k_lane=5.0,
+        k_living=0.5, k_dist=1.0, seed=0)
+    drive(her, 12)
+    her.flush_episode()
+    assert her.last_end_reason == "?"
+
+
+def test_end_reason_resets_between_episodes(counting):
+    her, _buf = make_buffer()
+    drive(her, 25, lane_steps=range(5, 25))
+    her.flush_episode()
+    drive(her, 12)
+    her.flush_episode()
+    assert her.last_end_reason == "reached"

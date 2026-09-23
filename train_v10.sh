@@ -269,7 +269,15 @@ export GATED_GOAL_MAX_STEPS=1000
 # (harmless here, but INIT_FROM is the clean warm-start path). On later
 # attempts this run's own checkpoints exist, RESUME wins, INIT_FROM is
 # skipped automatically (it only fires at step == 0).
-export INIT_FROM=checkpoints/carla_gated_her_v9mb_vc1/checkpoint_450000.pkl
+# CALLER-OVERRIDABLE (from-scratch 2M rerun, user 2026-09-22 "start from
+# scratch"): pass INIT_FROM= (empty) and the trainer's `if init_from and
+# step == 0` gate sees the empty string as unset -- no warm start. NOTE THE
+# MISSING COLON: "${INIT_FROM-default}" defaults only when UNSET; the
+# colon form "${INIT_FROM:-default}" ALSO substitutes on the empty string,
+# which would have silently re-armed the warm start on a from-scratch
+# launch (caught in the snapshot check before it bit). The default stays
+# v9mb's checkpoint for every earlier caller.
+export INIT_FROM="${INIT_FROM-checkpoints/carla_gated_her_v9mb_vc1/checkpoint_450000.pkl}"
 
 # ---- TOWN: Town05 ONLY (user 2026-09-21, "use only town05") ----
 # TOWN_LIST points at a SEPARATE split rather than editing configs/town_split.json, which carries "Do not edit

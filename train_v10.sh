@@ -229,7 +229,10 @@ export TQC_VALUE_FLOOR=-3500
 export HER_RECOST=1
 # TARGET-VELOCITY BONUS WEIGHT (user 2026-09-22: "Make it positive", "make it
 # max out at 0.5"). See the header block for the full design.
-export GOAL_SPEED_BONUS=0.5
+# NO-COLON expansion (user 2026-09-22 "redo velocity constant to 0.75"): only
+# an UNSET variable takes the 0.5 default -- the colon form would ALSO
+# substitute on an empty string and hide the caller's intent.
+export GOAL_SPEED_BONUS="${GOAL_SPEED_BONUS-0.5}"
 export COLLISION_TERMINAL=0 GATED_GOAL_LANE_TERMINAL=0 WEDGE_TRUNCATE=0
 
 # ---- EXPLORE mode: SAME FINE (user 2026-09-22, "use the same fine in ------

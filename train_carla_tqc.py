@@ -2075,8 +2075,22 @@ def main():
                                       + ("" if _qe is None
                                          else f" q_scale_e={_qe:.3f}"),
                                       flush=True)
+                    # success= IS AGENT-ONLY (user 2026-09-24, "report only
+                    # agent success rate"). The old value averaged EVERY
+                    # episode -- expert-driven goal episodes (~0.9 success),
+                    # agent goal episodes, and gated explore episodes, whose
+                    # success is ~0 by construction -- so it tracked the
+                    # expert share and the mode mix, not the policy. Gated
+                    # runs report agent-driven GOAL episodes (succ_goal);
+                    # single-mode runs report agent-driven episodes. Logging
+                    # only: the curriculum reads the success_policy deque,
+                    # never this text. policy= (agent, both modes) and
+                    # oracle= keep their old meaning so existing log
+                    # comparisons still line up.
+                    _agent = recent["succ_goal"] if GATED else recent["success_policy"]
                     print(f"[Ep {total_eps:5d}] step={step:7d} town={venv.names[i]:8s} "
-                          f"success={np.mean(recent['success']):.3f} "
+                          f"success={np.mean(_agent) if _agent else float('nan'):.3f}"
+                          f"(n={len(_agent)}) "
                           f"collision={np.mean(recent['collision']):.3f} "
                           f"goals={np.mean(recent['goals']) if recent['goals'] else 0.0:.2f} "
                           f"len={np.mean(recent['length']):6.1f} "

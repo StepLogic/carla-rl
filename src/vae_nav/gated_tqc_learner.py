@@ -96,7 +96,8 @@ def _mode_mask(batch):
 def _masked_critic_update(key, actor, critic, target_critic_params, temp, batch,
                           discount, backup_entropy, top_quantiles_to_drop,
                           kappa, mask, n_steps=None,
-                          value_floor=None, value_ceiling=None):
+                          value_floor=None, value_ceiling=None,
+                          alpha_scale=1.0):
     """One critic's update, restricted to the rows `mask` selects.
 
     value_floor / value_ceiling clip this critic's TARGET only, and are applied
@@ -120,7 +121,16 @@ def _masked_critic_update(key, actor, critic, target_critic_params, temp, batch,
     next_actions, next_log_probs = dist.sample_and_log_prob(seed=key)
     next_quantiles = target_critic.apply_fn(
         {"params": target_critic_params}, batch["next_observations"], next_actions)
-    alpha = temp.apply_fn({"params": temp.params}) if backup_entropy else 0.0
+    # alpha_scale (QNORM_CRITIC_ALPHA, default 1.0 = off). Under ACTOR_Q_NORM
+    # the actor divides its -Q term by the mode's running value spread s, so
+    # the temperature it effectively experiences is alpha * s -- while this
+    # backup still soft-maximises against plain alpha, and the two disagree
+    # by exactly the factor the normalisation introduced. Scaling the
+    # CRITIC'S entropy term by the same s makes the backup match. Default 1.0
+    # multiplies by one and the target is byte-identical to the pre-flag
+    # computation.
+    alpha = (alpha_scale * temp.apply_fn({"params": temp.params})
+             if backup_entropy else 0.0)
 
     # THE TARGET IS COMPUTED FOR EVERY ROW, at this critic's own discount, and
     # the wrong-mode rows are discarded by the mask below. That wastes compute
@@ -258,7 +268,8 @@ def _gated_update_jit(rng, actor, critic, target_critic_params, temp,
                       top_quantiles_to_drop, kappa,
                       value_floor=None, value_ceiling=None,
                       enable_update_temperature=True, augument=True,
-                      share_encoder=True, q_scale_g=1.0, q_scale_e=1.0):
+                      share_encoder=True, q_scale_g=1.0, q_scale_e=1.0,
+                      alpha_scale_g=1.0, alpha_scale_e=1.0):
     if share_encoder:
         # From the GOAL critic, matching the ungated path exactly. Sharing from
         # both would need a rule for combining them, and any such rule is a
@@ -290,7 +301,8 @@ def _gated_update_jit(rng, actor, critic, target_critic_params, temp,
         key_g, actor, critic, target_critic_params, temp, batch, discount,
         backup_entropy, top_quantiles_to_drop, kappa, m_goal,
         n_steps=n_steps,
-        value_floor=value_floor, value_ceiling=value_ceiling)
+        value_floor=value_floor, value_ceiling=value_ceiling,
+        alpha_scale=alpha_scale_g)
 
     # EXPLORE CRITIC: UNBOUNDED, deliberately.
     #
@@ -311,7 +323,7 @@ def _gated_update_jit(rng, actor, critic, target_critic_params, temp,
     new_critic_e, info_e = _masked_critic_update(
         key_e, actor, critic_e, target_critic_e_params, temp_e, batch,
         discount_e, backup_entropy, top_quantiles_to_drop, kappa, m_explore,
-        n_steps=n_steps)
+        n_steps=n_steps, alpha_scale=alpha_scale_e)
 
     new_target_params = soft_target_update(
         new_critic.params, target_critic_params, tau)
@@ -368,6 +380,7 @@ class GatedTQCLearner(TQCLearner):
                  actor_freeze_updates: int = 0,
                  actor_q_norm: bool = False,
                  actor_q_norm_tau: float = 0.01,
+                 qnorm_critic_alpha: bool = False,
                  value_floor: Optional[float] = None,
                  value_ceiling: Optional[float] = None, **kwargs):
         super().__init__(seed, observations, actions, **kwargs)
@@ -398,6 +411,15 @@ class GatedTQCLearner(TQCLearner):
         # (std ~ 0) cannot blow the gradient up.
         self.actor_q_norm = bool(actor_q_norm)
         self.actor_q_norm_tau = float(actor_q_norm_tau)
+        # QNORM_CRITIC_ALPHA (opt-in, default off). With ACTOR_Q_NORM the
+        # actor's -Q term is divided by the per-mode value spread s, so its
+        # effective entropy temperature is alpha * s -- while the critics'
+        # backups soft-maximise against plain alpha. With this flag on, each
+        # critic's entropy term is scaled by the SAME s its mode's actor rows
+        # divide by, so the two sides of the TD equation agree again. Off by
+        # default because it changes the critic target: it is a separate
+        # experiment, tested one flag at a time (TQC_VALUE_CEILING first).
+        self.qnorm_critic_alpha = bool(qnorm_critic_alpha)
         self._q_scale_g = None
         self._q_scale_e = None
         self._updates = 0
@@ -428,7 +450,8 @@ class GatedTQCLearner(TQCLearner):
               f"target_entropy_e={self.target_entropy_e} "
               f"explore_actor_warmup={self.explore_actor_warmup} "
               f"actor_freeze_updates={self.actor_freeze_updates} "
-              f"actor_q_norm={self.actor_q_norm}")
+              f"actor_q_norm={self.actor_q_norm} "
+              f"qnorm_critic_alpha={self.qnorm_critic_alpha}")
         print(f"[Gated] goal critic target clip {bounds}; "
               f"explore critic UNCLIPPED (its range is its own, not the goal arm's)")
         if self.discount >= 1.0 and self.value_floor is None:
@@ -458,7 +481,17 @@ class GatedTQCLearner(TQCLearner):
             enable_update_temperature=enable_update_temperature,
             augument=self.augument, share_encoder=self.share_encoder,
             q_scale_g=(float(self._q_scale_g) if (self.actor_q_norm and self._q_scale_g) else 1.0),
-            q_scale_e=(float(self._q_scale_e) if (self.actor_q_norm and self._q_scale_e) else 1.0))
+            q_scale_e=(float(self._q_scale_e) if (self.actor_q_norm and self._q_scale_e) else 1.0),
+            # QNORM_CRITIC_ALPHA: the critics' entropy backups see the same
+            # per-mode spread the actor divides Q by. Reuses the running
+            # scales (set only after the first batch carrying each mode) and
+            # stays 1.0 -- byte-identical -- unless BOTH flags are on.
+            alpha_scale_g=(float(self._q_scale_g)
+                           if (self.actor_q_norm and self.qnorm_critic_alpha
+                               and self._q_scale_g) else 1.0),
+            alpha_scale_e=(float(self._q_scale_e)
+                           if (self.actor_q_norm and self.qnorm_critic_alpha
+                               and self._q_scale_e) else 1.0))
 
         self._rng = rng
         frozen = self._updates < self.actor_freeze_updates

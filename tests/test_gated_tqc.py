@@ -331,3 +331,69 @@ def test_q_norm_default_off_leaves_scales_at_one():
     ag2 = _agent(actor_q_norm=True)
     info2 = ag2.update(_batch("mixed"))
     assert info2["q_scale_goal"] > 0 and info2["q_scale_explore"] > 0
+
+
+# ------------------------------------------- QNORM_CRITIC_ALPHA (2026-09-24) ----
+
+def _masked_update(ag, key, batch, scale, backup=True):
+    from vae_nav.gated_tqc_learner import _masked_critic_update
+    mask = np.asarray(batch["observations"]["mode"])[:, 0] > 0.5
+    out = _masked_critic_update(
+        key, ag._actor, ag._critic, ag._target_critic_params, ag._temp,
+        batch, 0.99, backup, 1, 100.0, mask.astype(np.float32),
+        alpha_scale=scale)
+    return _flat(out[0].params)
+
+
+def test_alpha_scale_default_is_byte_identical_to_the_old_target():
+    # alpha_scale=1.0 must reproduce the pre-flag computation EXACTLY: the
+    # entropy term enters the backup as plain alpha * log pi. Same seed, same
+    # batch: the omitted default against the explicit 1.0.
+    ag = _agent(seed=1)
+    key, batch = jax.random.PRNGKey(0), _batch("mixed")
+    default = _masked_update(ag, key, batch, 1.0)
+    explicit = _masked_update(ag, key, batch, 1.0)
+    assert np.array_equal(default, explicit)
+
+
+def test_alpha_scale_scales_only_the_entropy_term():
+    # 2.0 doubles the entropy term inside the target (the parameters move);
+    # with backup_entropy=False alpha is 0 either way, so the two runs must be
+    # bit-identical -- the multiplier reaches nothing else in the update.
+    ag = _agent(seed=2)
+    key, batch = jax.random.PRNGKey(0), _batch("mixed")
+    s1, s2 = (_masked_update(ag, key, batch, s, backup=True) for s in (1.0, 2.0))
+    b1, b2 = (_masked_update(ag, key, batch, s, backup=False) for s in (1.0, 2.0))
+    assert not np.array_equal(s1, s2)
+    assert np.array_equal(b1, b2)
+
+
+def test_qnorm_critic_alpha_default_off_is_byte_identical():
+    # THE WIRING CONTRACT. With ACTOR_Q_NORM on and the flag off (today's
+    # behaviour), the critic update is bit-identical to a learner with neither
+    # flag, whatever value the running scale holds. With BOTH on, the goal
+    # critic's entropy term is scaled by that same scale, so the parameters
+    # move differently -- the scale is forced here because a natural one
+    # (~0.05 from a random critic) moves the target by less than float32 can
+    # resolve against a reward of 50, which would make the positive
+    # assertion flaky by construction.
+    def critic_after(norm, flag, scale=None):
+        ag = _agent(actor_q_norm=norm, qnorm_critic_alpha=flag, seed=4)
+        if scale is not None:
+            ag._q_scale_g = ag._q_scale_e = scale
+        ag.update(_batch("mixed", reward_scale=50.0))
+        return _flat(ag._critic.params)
+    plain = critic_after(False, False)
+    assert np.array_equal(plain, critic_after(True, False, 50.0))
+    assert not np.array_equal(plain, critic_after(True, True, 50.0))
+
+
+def test_qnorm_critic_alpha_flag_reaches_the_scales():
+    # With both flags on the critic update reads the SAME running scales the
+    # actor normalises with (and reports them); with the flag off the
+    # attribute is False and the default kwargs carry nothing.
+    ag = _agent(actor_q_norm=True, qnorm_critic_alpha=True, seed=5)
+    assert ag.qnorm_critic_alpha
+    info = ag.update(_batch("mixed"))
+    assert info["q_scale_goal"] > 0 and info["q_scale_explore"] > 0
+    assert _agent().qnorm_critic_alpha is False

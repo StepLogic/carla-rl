@@ -300,6 +300,14 @@ def agent_kwargs(action_space=None):
             # the goal critic's ~750-wide range and the explore critic's range
             # pull the shared actor equally (option C, 2026-09-11).
             actor_q_norm=os.environ.get("ACTOR_Q_NORM", "0") == "1",
+            # QNORM_CRITIC_ALPHA=1, only with ACTOR_Q_NORM=1: the critics'
+            # entropy backups scale alpha by the same per-mode value spread
+            # the actor divides Q by. Opt-in and off by default -- it changes
+            # the critic target, so it is a separate experiment (see
+            # GatedTQCLearner.qnorm_critic_alpha).
+            qnorm_critic_alpha=(os.environ.get("ACTOR_Q_NORM", "0") == "1"
+                                and os.environ.get("QNORM_CRITIC_ALPHA",
+                                                   "0") == "1"),
             value_floor=float(os.environ.get("TQC_VALUE_FLOOR", floor))
             if (floor is not None or "TQC_VALUE_FLOOR" in os.environ) else None,
             value_ceiling=float(os.environ.get("TQC_VALUE_CEILING", ceiling))
@@ -2008,9 +2016,17 @@ def main():
                         flag = ""
                         if abs(q) > 2000:
                             flag = "  <-- Q FAR OUTSIDE [-5, 600]: critic diverging"
+                        # q_scale_* (logging only): the per-mode value spread
+                        # ACTOR_Q_NORM divides the actor's -Q by. Present in
+                        # the update info only when the normalisation is on;
+                        # its drift is what QNORM_CRITIC_ALPHA couples the
+                        # critics' entropy backups to.
+                        _qs = last_update_info.get("q_scale_goal")
                         print(f"[Critic{total_eps:5d}] q={q:10.2f} "
                               f"critic_loss={cl:12.2f} td={td:9.3f} "
-                              f"actor_entropy={ent:7.3f}{flag}", flush=True)
+                              f"actor_entropy={ent:7.3f}{flag}"
+                              + ("" if _qs is None else f" q_scale={_qs:.3f}"),
+                              flush=True)
                         if GATED:
                             # THE SECOND CRITIC IS INVISIBLE IN THE LINE ABOVE,
                             # which reports only the goal critic. A starved or
@@ -2044,6 +2060,7 @@ def main():
                                       f"critic line above)", flush=True)
                             else:
                                 _g = last_update_info
+                                _qe = _g.get("q_scale_explore")
                                 print(f"[CriticE{total_eps:4d}] "
                                       f"q_e={_g.get('q_e', float('nan')):10.2f} "
                                       f"critic_loss_e="
@@ -2054,7 +2071,9 @@ def main():
                                       f"ent_explore="
                                       f"{_g.get('entropy_explore', float('nan')):7.3f} "
                                       f"frac_goal="
-                                      f"{_g.get('frac_goal', float('nan')):.2f}",
+                                      f"{_g.get('frac_goal', float('nan')):.2f}"
+                                      + ("" if _qe is None
+                                         else f" q_scale_e={_qe:.3f}"),
                                       flush=True)
                     print(f"[Ep {total_eps:5d}] step={step:7d} town={venv.names[i]:8s} "
                           f"success={np.mean(recent['success']):.3f} "

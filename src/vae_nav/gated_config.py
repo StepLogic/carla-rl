@@ -14,6 +14,30 @@ stale goal reward leaked into a goal-free run.
 import os
 
 
+def _positive_return_bound(env, discount):
+    """The largest return the sorb goal reward can pay, with the bonuses on.
+
+    GOAL_ARRIVAL_BONUS + max(0, GOAL_SPEED_BONUS - STEP_COST) / (1 - discount).
+    The arrival term is exact; the velocity term is a per-step MAXIMUM
+    (every remaining step earns at most speed_bonus - step_cost and the
+    episode is capped), so the bound is an upper envelope, not a typical
+    value. It is what the goal critic's target CEILING must be at least as
+    large as -- the trainer's derived ceiling of 0 clips real targets away
+    when the bonuses are on (the TQC_VALUE_CEILING warning below).
+
+    At discount >= 1.0 the velocity term has no geometric tail; it collapses
+    to the arrival bonus when the velocity bonus does not beat the step
+    cost, and is unbounded when it does -- which the warning reports as inf.
+    """
+    arrival = _num(env, "GOAL_ARRIVAL_BONUS", 0.0)
+    speed_bonus = _num(env, "GOAL_SPEED_BONUS", 0.0)
+    step_cost = _num(env, "STEP_COST", 1.0)
+    per_step = max(0.0, speed_bonus - step_cost)
+    if discount >= 1.0:
+        return arrival if per_step == 0.0 else float("inf")
+    return arrival + per_step / (1.0 - discount)
+
+
 def _flag(env, name, default="0"):
     return str(env.get(name, default)) == "1"
 
@@ -199,9 +223,45 @@ def check_gated_run(env=None):
     if goal_reward == "sorb":
         step_cost = _num(env, "STEP_COST", 1.0)
         cap = _num(env, "GATED_GOAL_MAX_STEPS", 1000)
-        print(f"[GatedConfig] goal reward = SORB minimum time, "
-              f"-{step_cost:g}/step, return in [{-step_cost * cap:g}, 0]; "
-              f"goal critic Q reads as -(steps to goal)")
+        # THE COUNTING REGIME'S POSITIVE RETURNS (2026-09-24). With an arrival
+        # bonus and/or a velocity bonus above the step cost, the goal return
+        # is no longer confined to [-step_cost * cap, 0]: arrival pays
+        # +GOAL_ARRIVAL_BONUS and clean steps at speed can pay up to
+        # GOAL_SPEED_BONUS - STEP_COST each. The banner below says so, and the
+        # warning after it points at the ceiling that must grow with them.
+        arrival = _num(env, "GOAL_ARRIVAL_BONUS", 0.0)
+        speed_bonus = _num(env, "GOAL_SPEED_BONUS", 0.0)
+        if arrival > 0.0 or speed_bonus > 0.0 or discount < 1.0:
+            bound = _positive_return_bound(env, discount)
+            print(f"[GatedConfig] goal reward = SORB minimum time, "
+                  f"-{step_cost:g}/step, return in [{-step_cost * cap:g}, "
+                  f"{bound:g}]; POSITIVE RETURNS exist (arrival bonus "
+                  f"{arrival:g}, velocity bonus {speed_bonus:g}), so the "
+                  f"derived target ceiling of 0 CLIPS real targets -- the "
+                  f"goal critic's Q no longer reads as -(steps to goal) "
+                  f"alone; set TQC_VALUE_CEILING >= {bound:g}")
+        else:
+            print(f"[GatedConfig] goal reward = SORB minimum time, "
+                  f"-{step_cost:g}/step, return in [{-step_cost * cap:g}, 0]; "
+                  f"goal critic Q reads as -(steps to goal)")
+        # THE START-UP WARNING: the trainer derives the goal-critic target
+        # ceiling as 0 under SORB (train_carla_tqc.agent_kwargs), which was
+        # exact when every return was negative and now CLIPS the bonuses'
+        # positive targets to 0 -- the critic cannot fit them, silently. The
+        # fix is the existing export TQC_VALUE_CEILING.
+        bound = _positive_return_bound(env, discount)
+        ceiling = _num(env, "TQC_VALUE_CEILING", 0.0)
+        if bound > ceiling + 1e-9:
+            print("=" * 72)
+            print(f"[GatedConfig] WARNING: goal-critic target ceiling "
+                  f"{ceiling:g} is BELOW the realisable return bound "
+                  f"{bound:g}.")
+            print("  The arrival bonus and velocity bonus put POSITIVE "
+                  "returns in reach; a ceiling of 0 clips every such target")
+            print("  to 0, so the critic cannot fit them. Fix: export "
+                  f"TQC_VALUE_CEILING={bound:g}  (bound = GOAL_ARRIVAL_BONUS "
+                  "+ max(0, GOAL_SPEED_BONUS - STEP_COST) / (1 - DISCOUNT)).")
+            print("=" * 72, flush=True)
     else:
         print("[GatedConfig] goal reward = SHAPED (delta + projected), "
               "returns ~order 100")

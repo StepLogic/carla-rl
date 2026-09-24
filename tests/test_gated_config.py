@@ -200,3 +200,72 @@ def test_discounted_sorb_is_allowed_with_the_explicit_opt_in(capsys):
     check_gated_run(_env(DISCOUNT="0.99", GATED_ALLOW_DISCOUNTED_SORB="1"))
     out = capsys.readouterr().out
     assert "NO LONGER READS AS" in out and "ORDERING" in out
+
+
+# --------------------- the counting regime's POSITIVE returns (2026-09-24) ----
+
+def test_the_banner_stays_byte_identical_without_bonuses(capsys):
+    # The default text must be exactly today's: no arrival bonus, no velocity
+    # bonus, discount 1.0 -> every return is still negative.
+    check_gated_run(_env())
+    out = capsys.readouterr().out
+    assert "[-1000, 0]" in out
+    assert "POSITIVE RETURNS" not in out
+    assert "TQC_VALUE_CEILING" not in out
+
+
+def test_the_arrival_bonus_warns_at_the_default_ceiling(capsys):
+    # GOAL_ARRIVAL_BONUS=10 puts +10 in reach; the trainer's derived ceiling
+    # is 0 under SORB, so start-up must say so and name the fix.
+    check_gated_run(_env(GOAL_ARRIVAL_BONUS="10.0"))
+    out = capsys.readouterr().out
+    assert "WARNING: goal-critic target ceiling" in out
+    assert "TQC_VALUE_CEILING=10" in out
+    assert "POSITIVE RETURNS" in out
+
+
+def test_the_ceiling_flag_silences_the_warning_and_corrects_the_banner(capsys):
+    # THE FIX ITSELF (export TQC_VALUE_CEILING=10.0): bound 10 <= ceiling 10,
+    # no warning; the banner still says the positive side and prints the
+    # widened range.
+    check_gated_run(_env(GOAL_ARRIVAL_BONUS="10.0", TQC_VALUE_CEILING="10.0"))
+    out = capsys.readouterr().out
+    assert "WARNING: goal-critic target ceiling" not in out
+    assert "[-1000, 10]" in out
+
+
+def test_the_velocity_bonus_warns_only_when_it_beats_the_step_cost(capsys):
+    # GOAL_SPEED_BONUS=0.5 against STEP_COST=1: the per-step term is 0, the
+    # bound is the arrival bonus (0), so no warning fires even though the
+    # bonus is on -- the ceiling of 0 clips nothing realisable. At 2.0 it
+    # does beat the meter and the bound grows.
+    check_gated_run(_env(GOAL_SPEED_BONUS="0.5"))
+    out = capsys.readouterr().out
+    assert "WARNING: goal-critic target ceiling" not in out
+    check_gated_run(_env(GOAL_SPEED_BONUS="2.0", DISCOUNT="0.99",
+                         GATED_ALLOW_DISCOUNTED_SORB="1"))
+    out = capsys.readouterr().out
+    assert "WARNING: goal-critic target ceiling" in out
+
+
+def test_the_agent_kwargs_carry_the_ceiling_flag():
+    # THE FIX IS AN EXPORT: TQC_VALUE_CEILING=10.0 must arrive in the agent
+    # kwargs as value_ceiling=10.0. The flag path predates this change; the
+    # test pins it so the warning's advice stays load-bearing.
+    pytest.importorskip("jax")
+    pytest.importorskip("jaxrl2")
+    import train_carla_tqc  # noqa: E402
+    env = {"GATED": "1", "GATED_GOAL_REWARD": "sorb", "STEP_COST": "1.0",
+           "DISCOUNT": "1.0", "GATED_GOAL_MAX_STEPS": "1000",
+           "TQC_VALUE_CEILING": "10.0"}
+    saved = {k: os.environ.get(k) for k in env}
+    os.environ.update(env)
+    try:
+        kw = train_carla_tqc.agent_kwargs()
+    finally:
+        for k, v in saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+    assert kw["value_ceiling"] == 10.0

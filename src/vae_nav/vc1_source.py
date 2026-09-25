@@ -46,34 +46,55 @@ import os
 
 import numpy as np
 
-VC1_MODEL_NAME = "vc1_vitb"
-VC1_EMBED_DIM = 768
+# VC1_MODEL selects the VC-1 backbone (user 2026-09-25: "run v13 with vit-l").
+# Both are patch16 at 224, so both emit a 14x14 = 196 patch grid; they differ
+# ONLY in width, so every readout below is written against VC1_EMBED_DIM
+# rather than a literal. Default vc1_vitb keeps every existing run identical.
+#
+# THE WIDTH IS NOT COSMETIC. It sets the observation: pyramid goes 3840 ->
+# 5120 and grid2 37632 -> 50176, so a checkpoint trained under one backbone
+# CANNOT load under the other -- policy_io refuses it, which is the intended
+# behaviour. A ViT-L run starts from scratch and is its own baseline.
+#
+# Per Meta's CortexBench table, ViT-L leads ViT-B on ImageNav (70.3 +- 0.7 vs
+# 68.9 +- 0.7) and on mean rank (2.4 vs 6.9) -- but the two rows also differ
+# in pre-training data (Ego4D+MNI vs Ego4D+MN), so it is not a size-only
+# comparison.
+VC1_EMBED_DIMS = {"vc1_vitb": 768, "vc1_vitl": 1024}
+VC1_MODEL_NAME = os.environ.get("VC1_MODEL", "vc1_vitb").lower()
+if VC1_MODEL_NAME not in VC1_EMBED_DIMS:
+    raise SystemExit(
+        f"VC1_MODEL={VC1_MODEL_NAME!r} is not one of {sorted(VC1_EMBED_DIMS)}")
+VC1_EMBED_DIM = VC1_EMBED_DIMS[VC1_MODEL_NAME]
+VC1_TOKENS = 14  # 224 / patch 16, the same for both backbones
 
 READOUT = os.environ.get("VC1_READOUT", "cls").lower()
 if READOUT not in ("cls", "grid2", "pyramid"):
     raise SystemExit(f"VC1_READOUT={READOUT!r} is not cls|grid2|pyramid")
-VC1_GRID_DIM = 37632  # 14x14x768 tokens, 2x2 average-pooled -> 7x7x768
-VC1_PYRAMID_DIM = 5 * 768  # global mean + 4 quadrant means of the 14x14
+VC1_GRID_DIM = (VC1_TOKENS // 2) ** 2 * VC1_EMBED_DIM   # 7x7xD
+VC1_PYRAMID_DIM = 5 * VC1_EMBED_DIM  # global mean + 4 quadrant means
 
 
 def pool_grid(tokens, pool=2):
-    """(196, 768) patch tokens -> (37632,) spatial grid, 2x2 cell average."""
-    t = np.asarray(tokens, np.float32).reshape(14, 14, 768)
-    g = t.reshape(14 // pool, pool, 14 // pool, pool, 768).mean(axis=(1, 3))
+    """(196, D) patch tokens -> (7*7*D,) spatial grid, 2x2 cell average."""
+    n, d = VC1_TOKENS, VC1_EMBED_DIM
+    t = np.asarray(tokens, np.float32).reshape(n, n, d)
+    g = t.reshape(n // pool, pool, n // pool, pool, d).mean(axis=(1, 3))
     return g.reshape(-1).astype(np.float32)
 
 
 def pool_pyramid(tokens):
-    """(196, 768) patch tokens -> (3840,) spatial pyramid.
+    """(196, D) patch tokens -> (5*D,) spatial pyramid.
 
     Global mean over all 196 tokens, then the mean of each 7x7 quadrant of
     the 14x14 patch map (top-left, top-right, bottom-left, bottom-right).
     Order is [global, tl, tr, bl, br] -- the docstring's contract, and the
     order any consumer of the 3840-d vector must assume.
     """
-    t = np.asarray(tokens, np.float32).reshape(14, 14, 768)
-    quads = (t[:7, :7].mean(axis=(0, 1)), t[:7, 7:].mean(axis=(0, 1)),
-             t[7:, :7].mean(axis=(0, 1)), t[7:, 7:].mean(axis=(0, 1)))
+    n, d, h = VC1_TOKENS, VC1_EMBED_DIM, VC1_TOKENS // 2
+    t = np.asarray(tokens, np.float32).reshape(n, n, d)
+    quads = (t[:h, :h].mean(axis=(0, 1)), t[:h, h:].mean(axis=(0, 1)),
+             t[h:, :h].mean(axis=(0, 1)), t[h:, h:].mean(axis=(0, 1)))
     return np.concatenate((t.mean(axis=(0, 1)),) + quads).astype(np.float32)
 
 

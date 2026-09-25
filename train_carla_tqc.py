@@ -180,6 +180,44 @@ def _int_list(env_name, default):
     return tuple(int(part) for part in raw.split(",") if part.strip())
 
 
+def _target_entropy(action_space=None):
+    """TARGET_ENTROPY, optionally restated in the UNIT action space.
+
+    THE TARGET IS COMPARED AGAINST log_prob IN THE RESCALED SPACE. jaxrl2's
+    TanhMultivariateNormalDiag chains an affine rescale onto the tanh
+    (normal_tanh_policy.py), and its forward_log_det_jacobian contributes
+        J = sum_i log(0.5 * (high_i - low_i))
+    to every log_prob. So an entropy measured here is H_unit + J, and a target
+    of -2.0 is NOT SAC's -dim(A) heuristic unless J == 0 -- which holds only
+    for the [-1, 1]^d box.
+
+    For this stack's box, [-0.5, 0.5] x [0, 0.4], J = log(0.5) + log(0.2)
+    = -2.303, so the shipped -2.0 asks for H_unit = +0.30 where -dim(A) asks
+    for -2.0. MEASURED consequence: training-time steer std 0.14 of the +-0.5
+    range against 0.045 at the conventional target, i.e. ~3x the exploration
+    noise, on a task whose dominant failure is lane crossings.
+
+    TARGET_ENTROPY_UNIT=1 reads TARGET_ENTROPY as a UNIT-space target and adds
+    J, so -2.0 means -dim(A) as intended. Default 0 keeps every existing run
+    byte-identical. Needs the action space; without one it is a no-op, which
+    is the eval path that never tunes a temperature.
+    """
+    te = float(os.environ.get("TARGET_ENTROPY", -2.0))
+    if os.environ.get("TARGET_ENTROPY_UNIT", "0") != "1":
+        return te
+    if action_space is None:
+        print("[TargetEntropy] TARGET_ENTROPY_UNIT=1 but no action space here; "
+              f"leaving target_entropy={te:g} unchanged", flush=True)
+        return te
+    lo = np.asarray(action_space.low, np.float64)
+    hi = np.asarray(action_space.high, np.float64)
+    jac = float(np.sum(np.log(0.5 * (hi - lo))))
+    print(f"[TargetEntropy] TARGET_ENTROPY_UNIT=1: unit-space {te:g} + "
+          f"tanh-rescale Jacobian {jac:.3f} -> target_entropy={te + jac:.3f} "
+          f"(action box low={lo.tolist()} high={hi.tolist()})", flush=True)
+    return te + jac
+
+
 def agent_kwargs(action_space=None):
     """The TQC build kwargs, shared by every learner route.
 
@@ -227,7 +265,7 @@ def agent_kwargs(action_space=None):
         # Explicit, not auto. It happens to equal -dim(A) for a 2-D action
         # space, but it is pinned so a change to the action space cannot move
         # it silently.
-        target_entropy=float(os.environ.get("TARGET_ENTROPY", -2.0)),
+        target_entropy=_target_entropy(action_space),
         backup_entropy=True,
         num_qs=int(os.environ.get("NUM_QS", 5)),
         num_quantiles=int(os.environ.get("N_QUANTILES", 25)),

@@ -1462,6 +1462,11 @@ def main():
                  f"{hers[0]._trunc_crossing}/{hers[0]._trunc_collision} counts"
                  + (f", velocity bonus {hers[0]._speed_bonus}"
                     if getattr(hers[0], "_speed_bonus", 0.0) else "")
+                 # Stated outright (2026-09-26): without it the only evidence
+                 # that hindsight legs are cut at fatal crossings was inferring
+                 # it from the [Ep] cross= share.
+                 + (", LANE TERMINAL: legs cut at the first fatal crossing"
+                    if getattr(hers[0], "_lane_terminal", False) else "")
                  if getattr(hers[0], "recost", False) else ""))
 
     identity = dict(latent_source.identity())

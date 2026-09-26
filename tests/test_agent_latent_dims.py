@@ -92,3 +92,74 @@ def test_the_concatenated_width_is_what_we_think(clean_env):
     widths = dict(_fn()())
     keys = ("latent", "goal", "mode", "state")
     assert sum(widths.get(k, 50) for k in keys) == 918
+
+
+# ---- STACKS AND SHARED SPECS (user 2026-09-26: "768 from vc1 -> 512 -> 256",
+# then "make image latent goal latent same size") --------------------------
+
+
+def test_a_stack_becomes_a_tuple(clean_env):
+    """Two widths -> a tuple, which PixelMultiplexer reads as two layers."""
+    clean_env.setenv("AGENT_LATENT_DIMS", "latent:512:256")
+    assert _fn()() == (("latent", (512, 256)),)
+
+
+def test_single_width_stays_an_int(clean_env):
+    """The one-layer case must NOT become a 1-tuple: an int keeps the original
+    parameter names, which is what lets old checkpoints load."""
+    clean_env.setenv("AGENT_LATENT_DIMS", "latent:256")
+    (key, spec), = _fn()()
+    assert spec == 256 and isinstance(spec, int)
+
+
+def test_shared_spec_makes_two_keys_identical(clean_env):
+    """'same size' holds by construction, not by two numbers being typed alike."""
+    clean_env.setenv("AGENT_LATENT_DIMS", "latent+goal:512:256")
+    got = dict(_fn()())
+    assert got == {"latent": (512, 256), "goal": (512, 256)}
+    assert got["latent"] is got["goal"] or got["latent"] == got["goal"]
+
+
+def test_shared_spec_with_a_single_width(clean_env):
+    clean_env.setenv("AGENT_LATENT_DIMS", "latent+goal:256")
+    assert dict(_fn()()) == {"latent": 256, "goal": 256}
+
+
+def test_mixed_shared_and_individual(clean_env):
+    clean_env.setenv("AGENT_LATENT_DIMS", "latent+goal:512:256,state:32")
+    assert _fn()() == (("latent", (512, 256)), ("goal", (512, 256)),
+                       ("state", 32))
+
+
+def test_duplicate_key_raises(clean_env):
+    """Two specs for one key would make the effective width depend on dict
+    ordering, which is exactly the kind of silence this parser refuses."""
+    clean_env.setenv("AGENT_LATENT_DIMS", "latent:256,latent:512")
+    with pytest.raises(ValueError, match="set twice"):
+        _fn()()
+    clean_env.setenv("AGENT_LATENT_DIMS", "latent+goal:256,goal:512")
+    with pytest.raises(ValueError, match="set twice"):
+        _fn()()
+
+
+def test_empty_key_in_a_shared_spec_raises(clean_env):
+    clean_env.setenv("AGENT_LATENT_DIMS", "latent+:256")
+    with pytest.raises(ValueError, match="empty key"):
+        _fn()()
+
+
+def test_empty_width_in_a_stack_raises(clean_env):
+    clean_env.setenv("AGENT_LATENT_DIMS", "latent:512:")
+    with pytest.raises(ValueError, match="empty width"):
+        _fn()()
+
+
+def test_the_requested_recipe_widths(clean_env):
+    """VC-1 cls is 768; the image and goal latents both compress 768->512->256,
+    so each contributes 256 and they are equal. mode and state keep 50."""
+    clean_env.setenv("AGENT_LATENT_DIMS", "latent+goal:512:256")
+    w = dict(_fn()())
+    final = lambda s: s[-1] if isinstance(s, tuple) else s
+    assert final(w["latent"]) == final(w["goal"]) == 256
+    total = sum(final(w.get(k, 50)) for k in ("latent", "goal", "mode", "state"))
+    assert total == 256 + 256 + 50 + 50 == 612

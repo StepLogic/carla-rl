@@ -183,8 +183,18 @@ def _int_list(env_name, default):
 def _latent_dims(env_name="AGENT_LATENT_DIMS"):
     """Per-key projection widths for PixelMultiplexer, as a tuple of pairs.
 
-    "latent:768" -> (("latent", 768),)
-    "latent:768,state:32" -> (("latent", 768), ("state", 32))
+    "latent:768"           -> (("latent", 768),)            one Dense
+    "latent:512:256"       -> (("latent", (512, 256)),)      a stack
+    "latent:768,state:32"  -> (("latent", 768), ("state", 32))
+
+    SHARED SPECS (user 2026-09-26: "make image latent goal latent same size").
+    Keys joined with '+' get ONE spec, expanded to an identical entry each:
+
+    "latent+goal:512:256" -> (("latent", (512, 256)), ("goal", (512, 256)))
+
+    Writing the width once is the point: "the image latent and the goal latent
+    are the same size" is then true BY CONSTRUCTION, not because two numbers
+    were typed to match and stayed matched through later edits.
 
     Empty or unset returns (), which the caller reads as "pass nothing", so the
     learner keeps its own latent_dim for every key and existing runs are
@@ -196,7 +206,7 @@ def _latent_dims(env_name="AGENT_LATENT_DIMS"):
     raw = os.environ.get(env_name, "").strip()
     if not raw:
         return ()
-    out = []
+    out, seen = [], set()
     for part in raw.split(","):
         part = part.strip()
         if not part:
@@ -204,15 +214,28 @@ def _latent_dims(env_name="AGENT_LATENT_DIMS"):
         if ":" not in part:
             raise ValueError(f"{env_name}={raw!r}: expected 'key:width' pairs, "
                              f"got {part!r}")
-        key, _, width = part.partition(":")
-        key, width = key.strip(), width.strip()
-        if not key:
+        keyspec, _, widthspec = part.partition(":")
+        keys = [k.strip() for k in keyspec.split("+")]
+        if not all(keys):
             raise ValueError(f"{env_name}={raw!r}: empty key in {part!r}")
-        w = int(width)
-        if w <= 0:
-            raise ValueError(f"{env_name}={raw!r}: width must be positive, "
-                             f"got {w} for {key!r}")
-        out.append((key, w))
+        widths = []
+        for tok in widthspec.split(":"):
+            tok = tok.strip()
+            if not tok:
+                raise ValueError(f"{env_name}={raw!r}: empty width in {part!r}")
+            w = int(tok)
+            if w <= 0:
+                raise ValueError(f"{env_name}={raw!r}: width must be positive, "
+                                 f"got {w} in {part!r}")
+            widths.append(w)
+        # A single width stays an INT, so the one-layer case keeps the original
+        # parameter names and old checkpoints still load.
+        spec = widths[0] if len(widths) == 1 else tuple(widths)
+        for k in keys:
+            if k in seen:
+                raise ValueError(f"{env_name}={raw!r}: key {k!r} set twice")
+            seen.add(k)
+            out.append((k, spec))
     return tuple(out)
 
 

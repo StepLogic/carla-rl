@@ -17,6 +17,55 @@ from rlib_integration.base_experiment import BaseExperiment
 from rlib_integration.helper import post_process_image, carla_location_to_np_array
 
 
+# CHANNEL ORDER (user 2026-09-26: "also fix confirmed issues"). obs_img was BGR,
+# not RGB, because the channels are flipped TWICE and the flips cancel:
+#
+#   1. rlib_integration/sensors/sensor.py BaseCamera.parse() takes the BGRA
+#      buffer, drops alpha and applies [:, :, ::-1]  ->  RGB. CORRECT.
+#   2. rlib_integration/helper.py post_process_image() then runs
+#      cv2.cvtColor(image, cv2.COLOR_BGR2RGB) on that already-RGB array,
+#      swapping R and B back  ->  BGR. WRONG.
+#
+# VERIFIED, not inferred: a pure-blue BGRA buffer (B=255) comes out of parse()
+# with the 255 in channel 2 and out of post_process_image() with it in channel 0.
+# Frame statistics could NOT settle it -- Town02's brick facades sit in the sky
+# rows and bright-pixel argmax split 53%/44%.
+#
+# WHY THE FIX IS HERE AND NOT UPSTREAM. Neither flip can simply be deleted:
+#   - parse()'s reversal is LOAD-BEARING for vae_nav/lane_mask.py, which reads
+#     CARLA's semantic tag out of channel 0 precisely because the reversal moved
+#     it there. Removing it empties every lane mask, silently.
+#   - post_process_image() is shared with baseline_env_config and
+#     goal_conditioned_env_config (the CORL 2026 experiments), whose recorded
+#     results are all on the swapped path. Changing it would move their numbers.
+# So the correction is applied in THIS config only, at the point of use.
+#
+# EVERY EXISTING CHECKPOINT WAS TRAINED ON THE SWAPPED FRAMES, so evaluating one
+# with the fix on feeds it out-of-distribution input. ENV_RGB_CHANNEL_FIX=0
+# restores the old path exactly, and the eval/collect scripts for recorded
+# checkpoints set it. The name starts with ENV_, which the train_v10.sh snapshot
+# regex matches, so the setting lands in each run's .env record.
+RGB_CHANNEL_FIX = os.environ.get("ENV_RGB_CHANNEL_FIX", "1") == "1"
+_RGB_FIX_ANNOUNCED = False
+
+
+def _fix_channel_order(image):
+    """Undo post_process_image's spurious BGR->RGB swap, so the frame really is
+    RGB. Returns the array unchanged when ENV_RGB_CHANNEL_FIX=0."""
+    global _RGB_FIX_ANNOUNCED
+    if not _RGB_FIX_ANNOUNCED:
+        _RGB_FIX_ANNOUNCED = True
+        print(f"[RGB] ENV_RGB_CHANNEL_FIX={'1 -- frames are RGB' if RGB_CHANNEL_FIX else '0 -- frames stay BGR, as every recorded checkpoint was trained'}",
+              flush=True)
+    if not RGB_CHANNEL_FIX:
+        return image
+    if image is None or getattr(image, "ndim", 0) != 3 or image.shape[-1] != 3:
+        # Greyscale or an unexpected shape: nothing to swap, and guessing would
+        # be worse than leaving it.
+        return image
+    return np.ascontiguousarray(image[..., ::-1])
+
+
 def normalize_angle(angle):
     """Normalize angle to [-π, π]"""
     return ((angle + np.pi) % (2 * np.pi)) - np.pi
@@ -607,6 +656,7 @@ class STBL3Experiment(BaseExperiment):
             grayscale=False,
             image_size=self.image_size
         )
+        image = _fix_channel_order(image)
 
         # cv2.imwrite("obs.jpg",image)
 
@@ -644,6 +694,7 @@ class STBL3Experiment(BaseExperiment):
             grayscale=False,
             image_size=self.image_size
         )
+        goal_image = _fix_channel_order(goal_image)
         # cv2.imwrite("goal.jpg",goal_image)
         if self.mask_goal or getattr(self, "skip_image_features", False):
             return np.zeros((self._feature_dim()),dtype=np.float32)

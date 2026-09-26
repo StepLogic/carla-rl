@@ -180,6 +180,42 @@ def _int_list(env_name, default):
     return tuple(int(part) for part in raw.split(",") if part.strip())
 
 
+def _latent_dims(env_name="AGENT_LATENT_DIMS"):
+    """Per-key projection widths for PixelMultiplexer, as a tuple of pairs.
+
+    "latent:768" -> (("latent", 768),)
+    "latent:768,state:32" -> (("latent", 768), ("state", 32))
+
+    Empty or unset returns (), which the caller reads as "pass nothing", so the
+    learner keeps its own latent_dim for every key and existing runs are
+    unchanged. Order is preserved so the log line is deterministic.
+
+    Raises on a malformed entry rather than falling back: a silently ignored
+    width is how AGENT_LATENT_DIM=512 came to mean 50 for four whole runs.
+    """
+    raw = os.environ.get(env_name, "").strip()
+    if not raw:
+        return ()
+    out = []
+    for part in raw.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        if ":" not in part:
+            raise ValueError(f"{env_name}={raw!r}: expected 'key:width' pairs, "
+                             f"got {part!r}")
+        key, _, width = part.partition(":")
+        key, width = key.strip(), width.strip()
+        if not key:
+            raise ValueError(f"{env_name}={raw!r}: empty key in {part!r}")
+        w = int(width)
+        if w <= 0:
+            raise ValueError(f"{env_name}={raw!r}: width must be positive, "
+                             f"got {w} for {key!r}")
+        out.append((key, w))
+    return tuple(out)
+
+
 def _target_entropy(action_space=None):
     """TARGET_ENTROPY, optionally restated in the UNIT action space.
 
@@ -300,6 +336,36 @@ def agent_kwargs(action_space=None):
             cnn_strides=_int_list("CNN_STRIDES", (2, 1, 1, 1)),
             latent_dim=int(os.environ.get("AGENT_LATENT_DIM", 50)),
         )
+    # PER-KEY PROJECTION WIDTH (user 2026-09-26: "reduce latent to 768").
+    #
+    # WHAT WAS WRONG. PixelMultiplexer maps EVERY observation key through
+    # Dense(width) -> LayerNorm -> tanh, where width defaults to the learner's
+    # own latent_dim -- and jaxrl2's default is 50
+    # (jaxrl2/agents/tqc/tqc_learner.py:185). AGENT_LATENT_DIM is passed ONLY
+    # inside the branch above, which needs AGENT_ENCODER != "none". Every run
+    # here has AGENT_ENCODER=none, so AGENT_LATENT_DIM=512 in the snapshots was
+    # read by nothing. CONFIRMED from v13's own checkpoint parameters:
+    # encoder_latent/kernel is (3840, 50), beside encoder_goal (4,50),
+    # encoder_mode (1,50) and encoder_state (9,50) -- the 3840-d VC-1 pyramid
+    # went through a 50-wide bottleneck and the 1-d mode bit was given the same
+    # 50 dims as the pyramid.
+    #
+    # WHY PER-KEY AND NOT ONE GLOBAL WIDTH. Raising latent_dim alone would give
+    # the 1-d mode bit and the 4-d goal block 768 dims each, concatenating to
+    # 3072 before a (256,256) MLP. latent_dims overrides ONE key and leaves the
+    # rest at 50, so "reduce the 3840-d latent to 768" is exactly what happens:
+    # 768 + 50 + 50 + 50 = 918 into the MLP.
+    #
+    # OFF BY DEFAULT, so every existing arm stays byte-identical: unset means
+    # the kwarg is never passed and the learner keeps its own default. The name
+    # starts with AGENT_, which the train_v10.sh snapshot regex already matches,
+    # so unlike TARGET_ENTROPY_UNIT this one lands in the run's .env record.
+    _ldims = _latent_dims()
+    if _ldims:
+        kwargs["latent_dims"] = _ldims
+        print(f"[AgentLatent] per-key projection widths {dict(_ldims)}; "
+              f"every other key keeps the learner default "
+              f"{kwargs.get('latent_dim', 50)}", flush=True)
     if os.environ.get("GATED", "0") == "1" and not wants_one_critic():
         # TWO CRITICS, and NOT for the reason the Habitat agent has two. There
         # the split was a discount mismatch, 1.0 against 0.99. Both lane arms

@@ -1842,6 +1842,8 @@ def main():
                 # is passed ONLY there -- the base record() has no such kwarg
                 # and would raise TypeError on every step. Same class-attribute
                 # dispatch the flush site below uses.
+                from vae_nav.gated_reward import (
+                    goal_lane_departed as _goal_lane_departed)
                 _rec_kwargs = dict(
                     speed_kmh=float(inf.get("speed_kmh", 0.0) or 0.0),
                     target_speed_kmh=float(inf.get("target_speed_kmh", 0.0)
@@ -1858,6 +1860,12 @@ def main():
                     lane=bool(inf.get("lane_any",
                                       inf.get("lane_invasion_any", False))),
                     off_road=bool(inf.get("off_road", False)),
+                    # THE LANE-TERMINAL VERDICT (user 2026-09-26), from the SAME
+                    # function goal_reward_sorb uses, so a hindsight row is cut
+                    # at exactly the crossing that billed and ended the
+                    # on-policy episode. Staged always; read only when
+                    # GATED_GOAL_LANE_TERMINAL=1 under HER_RECOST.
+                    lane_fatal=_goal_lane_departed(inf),
                     # ROUTES THE ON-POLICY ROW. Without this the relabel buffer
                     # inserts with no mode and the split buffer defaults every
                     # row to GOAL, filing every explore transition as goal data.

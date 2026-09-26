@@ -220,6 +220,7 @@ class EpisodeRelabelBuffer:
         self._segment_tag = int(segment_tag) * (2 ** 32)
         self._seg_ctr = 0
         self._cur_seg = self._next_segment()
+        self._lane_terminal = False
         if self.recost:
             if not (self.time_to_goal and self.gated):
                 raise ValueError(
@@ -253,6 +254,13 @@ class EpisodeRelabelBuffer:
             # TARGET-VELOCITY BONUS (v10, user 2026-09-22): mirrored below on
             # the same clean-gate the reward uses. Default 0.0 is inert.
             self._speed_bonus = float(_gr.GOAL_SPEED_BONUS)
+            # LANE TERMINAL (user 2026-09-26): a fatal lane departure ENDS the
+            # on-policy goal episode with the remaining-clock bill. Mirrored
+            # here by cutting the relabelled leg at that step, so no hindsight
+            # goal is drawn from beyond a crossing the real episode never got
+            # past. The per-step flag is gated_reward.goal_lane_departed,
+            # staged by the trainer -- one rule, not two.
+            self._lane_terminal = bool(_gr.LANE_TERMINAL)
         self.buffer = buffer
         # The wrapper's OWN goal-block transform. See module docstring.
         self.state_fn = state_fn
@@ -333,6 +341,7 @@ class EpisodeRelabelBuffer:
     def _reset_episode(self):
         self._txns, self._fields, self._pos, self._hit = [], [], [], []
         self._lane = []
+        self._lane_fatal = []
         self._offroad = []
         self._speed, self._target = [], []
         # Index just past the end of each LEG. A leg is the stretch between two
@@ -380,7 +389,8 @@ class EpisodeRelabelBuffer:
 
     # -- per step ----------------------------------------------------------
     def record(self, transition, fields, pos, hit, lane=False, off_road=False,
-               speed_kmh=0.0, target_speed_kmh=0.0, mode=None):
+               speed_kmh=0.0, target_speed_kmh=0.0, mode=None,
+               lane_fatal=False):
         """Stage one step. `fields` is what state_fn needs, ~100 bytes.
 
         `mode` is the gated arm's commanded mode for this transition, 1 for goal
@@ -404,13 +414,18 @@ class EpisodeRelabelBuffer:
                 "bootstrapping through them.")
         if len(self._txns) >= self.max_steps:
             for lst in (self._txns, self._fields, self._pos, self._hit,
-                        self._lane, self._offroad, self._speed, self._target):
+                        self._lane, self._lane_fatal, self._offroad,
+                        self._speed, self._target):
                 lst.pop(0)
         self._txns.append(transition)
         self._fields.append(dict(fields))
         self._pos.append(np.asarray(pos, np.float64)[:2])
         self._hit.append(bool(hit))
         self._lane.append(bool(lane))
+        # FATAL lane departure (gated_reward.goal_lane_departed). Distinct from
+        # `lane`: that is the raw crossing the per-step FINE reads, this is
+        # the junction-forgiving verdict the TERMINAL reads.
+        self._lane_fatal.append(bool(lane_fatal))
         self._offroad.append(bool(off_road))
         self._speed.append(float(speed_kmh))
         self._target.append(float(target_speed_kmh))
@@ -460,6 +475,11 @@ class EpisodeRelabelBuffer:
             off += int(self._offroad[j])
             coll += int(self._hit[j])
             cross += int(self._lane[j])
+            # A fatal crossing TERMINATES the on-policy episode at step j, so
+            # the relabelled one ends there too; checked first, as the reward
+            # checks it before the caps.
+            if self._lane_terminal and self._lane_fatal[j]:
+                return j + 1
             if (off >= self._trunc_offroad
                     or coll >= self._trunc_collision
                     or cross >= self._trunc_crossing
@@ -491,6 +511,9 @@ class EpisodeRelabelBuffer:
                 coll += int(self._hit[j])
                 cross += int(self._lane[j])
                 off += int(self._offroad[j])
+                if self._lane_terminal and self._lane_fatal[j]:
+                    self.last_end_reason = "crossing"
+                    break
                 if off >= self._trunc_offroad:
                     self.last_end_reason = "off_road"
                     break

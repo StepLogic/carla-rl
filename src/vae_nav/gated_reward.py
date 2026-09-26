@@ -233,6 +233,32 @@ def goal_reward(info, delta_mode="positive"):
     return float(np.nan_to_num(r, nan=0.0))
 
 
+def goal_lane_departed(info):
+    """Is this step a FATAL lane departure for the goal arm? Pure; one source.
+
+    THE ONE DEFINITION both reward paths use: goal_reward_sorb below, and the
+    trainer's HER record call, which stages it per step so hindsight rows are
+    recosted by the same rule (episode_her). Two copies of this test would be
+    two reward functions over the same states.
+
+    lane_departure_is_fatal with LANE_STRICT off -- the junction-forgiving rule
+    the explore arm and the env wedge already share:
+      Broken line on open road          -> fatal (the car left its lane)
+      Broken line inside a junction     -> forgiven (that is the turn)
+      every mark unpainted (NONE)       -> forgiven (the road edge; making it
+                                           fatal took the scripted oracle to
+                                           0.000 success at 100 m goals)
+      illegal mark, or no marking data  -> fatal (fails closed)
+    off_road is passed as False ON PURPOSE: this is the LANE rule, and off-road
+    keeps its own per-step fine and step cap.
+    """
+    return bool(lane_departure_is_fatal(
+        bool(info.get("lane_any", info.get("lane_invasion_any", False))),
+        info.get("lane_marking_types"),
+        bool(info.get("in_junction", False)),
+        False))
+
+
 def goal_reward_sorb(info, t, max_steps=GOAL_MAX_STEPS, step_cost=STEP_COST,
                      wedge_truncate=WEDGE_TRUNCATE,
                      collision_terminal=COLLISION_TERMINAL,
@@ -284,6 +310,28 @@ def goal_reward_sorb(info, t, max_steps=GOAL_MAX_STEPS, step_cost=STEP_COST,
         # other end is a truncation, so the critic bootstraps through it.
         return GOAL_ARRIVAL_BONUS, True, False, True
     if GOAL_TRUNCATE_COUNTS:
+        # LANE INVASION IS TERMINAL AND BILLED IN THE COUNTING REGIME TOO
+        # (user 2026-09-26: "make lane invasion terminal and bill remaining
+        # steps in goal mode"). GATED_GOAL_LANE_TERMINAL existed, but only the
+        # LEGACY branch below ever read `departed`; this branch returned first,
+        # so the flag was silently inert for every counting-regime run.
+        #
+        # THE BILL IS THE LEGACY ONE, EXACT: this step plus every step left on
+        # the clock at the step cost, so the episode's return is what it would
+        # be had the car sat there until time ran out. That makes a crossing
+        # precisely as bad as never arriving -- never an escape from a costly
+        # episode, never a punishment larger than the clock. The lane FINE is
+        # deliberately NOT multiplied in: 11 x 1000 would sit far below the
+        # goal critic's TQC_VALUE_FLOOR and be clipped, which breaks exactness.
+        #
+        # TERMINATED (mask 0): the bill carries the whole future, so the critic
+        # must not also bootstrap one. Checked AFTER arrival (arrival wins) and
+        # BEFORE the fault caps, so the first fatal crossing ends the episode.
+        # HER_RECOST mirrors this through goal_lane_departed and cuts the
+        # relabelled leg at the same step (episode_her._counting_end).
+        if LANE_TERMINAL and goal_lane_departed(info):
+            remaining = max(0, int(max_steps) - int(t))
+            return -step_cost * (1 + remaining), True, False, False
         # v9 counting regime (see the constants block): per-step fines, no
         # terminal bills, truncate when any cumulative count trips. The
         # truncating step pays its normal reward -- the wrapper's counters

@@ -72,7 +72,8 @@ class ImageGoalRelabelBuffer(EpisodeRelabelBuffer):
         self._ep_offroad = []
 
     def record(self, transition, fields, pos, hit, lane=False,
-               speed_kmh=0.0, target_speed_kmh=0.0, mode=None, off_road=False):
+               speed_kmh=0.0, target_speed_kmh=0.0, mode=None, off_road=False,
+               lane_fatal=False):
         """Stage one step, tracking the commanded mode and the off-road flag.
 
         The base's `mode` argument routes the ON-POLICY row only (and only when
@@ -87,9 +88,14 @@ class ImageGoalRelabelBuffer(EpisodeRelabelBuffer):
         """
         self._ep_modes.append(int(mode) if mode is not None else GOAL)
         self._ep_offroad.append(bool(off_road))
+        # lane_fatal (2026-09-26) is ACCEPTED so the trainer's shared record
+        # call cannot raise TypeError here, and forwarded so the base's
+        # per-step lists stay aligned. Inert on this arm: it refuses the
+        # counting-regime recost, the only reader of the flag.
         super().record(transition, fields, pos, hit, lane=lane,
                        speed_kmh=speed_kmh,
-                       target_speed_kmh=target_speed_kmh, mode=mode)
+                       target_speed_kmh=target_speed_kmh, mode=mode,
+                       lane_fatal=lane_fatal)
         # Mirror the base's max_steps trim so _ep_modes and _ep_offroad stay
         # aligned with _txns (the base pops its oldest row before appending).
         if len(self._ep_modes) > self.max_steps:

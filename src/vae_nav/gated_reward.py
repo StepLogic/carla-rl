@@ -587,6 +587,17 @@ class GatedReward(Wrapper):
                   flush=True)
         else:
             print(f"[Gated] goal=SHAPED (delta+projected), returns ~order 100")
+        if (self.goal_kind == "sorb" and GOAL_TRUNCATE_COUNTS
+                and LANE_TERMINAL):
+            # PRINTED SO A RUN'S OWN LOG PROVES THE LANE TERMINAL WAS ON.
+            # train_v10.sh hardcodes GATED_GOAL_LANE_TERMINAL=0 with an
+            # unconditional export, so a launch override is silently
+            # discarded unless the launcher is changed -- this line is the
+            # only way to see which one actually happened.
+            print("[Gated] goal lane invasion TERMINAL: first fatal crossing "
+                  "(junction-forgiving, off-road excluded) ends the episode "
+                  "with the exact bill -step_cost*(1+remaining), mask=0",
+                  flush=True)
         print(f"[Gated] explore lane rule: mode={EXPLORE_LANE_MODE} "
               f"off_road_fatal={EXPLORE_OFF_ROAD_FATAL} "
               f"exempt_marks={sorted(EXPLORE_EXEMPT_MARKS)} junction=forgiven "

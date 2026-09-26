@@ -65,7 +65,7 @@ grep -q "^GATED_GOAL_LANE_TERMINAL=1$" "$SNAP" 2>/dev/null || fail="$fail snapsh
 grep -aq "^\[AgentLatent\] per-key projection widths {'latent': (512, 256), 'goal': (512, 256)}" "$LOG" || fail="$fail no-latent-stack"
 grep -aq "^\[RGB\] ENV_RGB_CHANNEL_FIX=1" "$LOG" || fail="$fail no-rgb-fix"
 grep -aq "\[Env\] image_size=120" "$LOG" || fail="$fail image-size-not-120"
-grep -aq "^\[Ep +[0-9]" "$LOG" || fail="$fail no-episodes"
+grep -aqE "^\[Ep +[0-9]" "$LOG" || fail="$fail no-episodes"
 
 if [ -n "$fail" ]; then
   say "CONFIG CHECK FAILED:$fail -- killing v15's whole tree"

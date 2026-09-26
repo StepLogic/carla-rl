@@ -69,6 +69,11 @@ set +a
 # them only after train_v10.sh snapshots): the loader refuses the bare
 # snapshot's obs width, and the action box must match training's mapping.
 export GATED=1 OBS_WITH_MODE=1 OBS_WITH_GOAL=1
+# IMAGE SIZE PINNED TO TRAINING (found 2026-09-26). run_gated.sh exports
+# ENV_IMAGE_SIZE=120 AFTER train_v10.sh snapshots, so the .env this script
+# replays never carries it and the env fell back to its default of 84. Every
+# earlier eval from this script ran the policy on 84x84 frames it never saw.
+export ENV_IMAGE_SIZE=120 VAE_IMAGE_SIZE=120
 # CHANNEL ORDER PINNED TO TRAINING. This checkpoint was trained on the
 # BGR frames the double flip produced (verified 2026-09-26), so the fix
 # must stay OFF here or the policy is fed out-of-distribution input.

@@ -70,6 +70,11 @@ class CoreStateWrapper(Wrapper):
 
         info = dict(info or {})
         info["hero_pos"] = np.array([tf.location.x, tf.location.y], np.float64)
+        # HEIGHT, for the hindsight relabeller's route planner (2026-09-26):
+        # planning from a 2-D pose at z=0 snapped onto the wrong road for 17% of
+        # Town05 plans (detours >3x, up to 111x), against 1% from the true 3-D
+        # location. Additive: nothing else reads it.
+        info["hero_z"] = float(tf.location.z)
         # Radians. CARLA reports yaw in DEGREES; feeding those to sin/cos in the
         # goal block would silently scramble every bearing.
         info["hero_yaw"] = math.radians(float(tf.rotation.yaw))

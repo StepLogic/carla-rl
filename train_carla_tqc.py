@@ -415,6 +415,12 @@ def agent_kwargs(action_space=None):
             goal_cap = int(os.environ.get("GATED_GOAL_MAX_STEPS", 1000))
             floor = -step_cost * goal_cap
             ceiling = 0.0
+        elif os.environ.get("GATED_GOAL_REWARD", "sorb").lower() == "progress":
+            # Bono et al. 2023's progress reward: the SAME bounds validate()
+            # checks the launch against, so the clip and the check cannot
+            # disagree. TQC_VALUE_FLOOR/CEILING below still override.
+            from vae_nav.gated_config import progress_value_bounds
+            floor, ceiling = progress_value_bounds(os.environ)
         kwargs.update(
             discount_e=float(os.environ.get("EXPLORE_DISCOUNT",
                                             kwargs["discount"])),
@@ -1218,6 +1224,36 @@ def run_evaluation(agent, episodes, latent_source, identity, step=0,
     return rate, by_town
 
 
+def _route_provider_for(env):
+    """A zero-arg callable returning an XYRoute on `env`'s CURRENT map, or None
+    before the env has connected. Walks the wrapper chain by `.env` for the
+    object owning `core` (the gated wrappers return themselves from
+    .unwrapped). One planner per town, rebuilt if the env's map changes."""
+    cache = {}
+
+    def provider():
+        node, core = env, None
+        for _ in range(16):
+            if node is None:
+                break
+            if getattr(node, "core", None) is not None:
+                core = node.core
+                break
+            node = getattr(node, "env", None)
+        world_map = getattr(core, "map", None)
+        if world_map is None:
+            return None
+        name = getattr(world_map, "name", "?")
+        if name not in cache:
+            from vae_nav.route_potential import XYRoute
+            cache.clear()
+            cache[name] = XYRoute(world_map)
+            print(f"[EpisodeHER] route planner for hindsight progress on {name}",
+                  flush=True)
+        return cache[name]
+    return provider
+
+
 def main():
     from jaxrl2.data import ReplayBuffer
     from jaxrl2.wrappers.record_statistics import RecordEpisodeStatistics
@@ -1433,9 +1469,13 @@ def main():
                 # the goal side of the v9mb buffer, fines diluted ~2x), so
                 # HER_RECOST=1 switches the mirror to the counting branch
                 # below.
+                # progress (Bono et al. 2023) takes the same recost path: its
+                # rows are re-costed by gated_reward, never by the legacy sparse
+                # coefficients, so it needs time_to_goal=True exactly as sorb.
                 time_to_goal=(os.environ.get("TIME_TO_GOAL", "") == "1"
                               or (GATED and os.environ.get(
-                                  "GATED_GOAL_REWARD", "sorb").lower() == "sorb")),
+                                  "GATED_GOAL_REWARD", "sorb").lower()
+                                  in ("sorb", "progress"))),
                 step_cost=float(os.environ.get("STEP_COST", 0.1)),
                 # Routes on-policy rows by their own mode and forces every
                 # hindsight copy to GOAL.
@@ -1451,7 +1491,11 @@ def main():
                 # hindsight was ~50% of the goal side, so the fines were
                 # diluted ~2x. The buffer reads every coefficient from
                 # vae_nav.gated_reward itself, so the two cannot drift.
-                recost_counting=_recost))
+                recost_counting=_recost,
+                # ROAD DISTANCE TO HINDSIGHT GOALS (2026-09-26). Needed by any
+                # goal reward with an along-road progress term (progress, or
+                # sorb + POTENTIAL_K); resolved lazily from THIS env's map.
+                route_provider=_route_provider_for(e)))
         print(f"[EpisodeHER] on -- {len(hers)} per-env buffers, "
               f"n_relabel={hers[0].n_relabel} min_disp={hers[0].min_disp} "
               f"goal_radius={hers[0].goal_radius}"
@@ -1871,6 +1915,8 @@ def main():
                     # on-policy episode. Staged always; read only when
                     # GATED_GOAL_LANE_TERMINAL=1 under HER_RECOST.
                     lane_fatal=_goal_lane_departed(inf),
+                    # Height, so hindsight route plans start on the right road.
+                    z=float(inf.get("hero_z", 0.0) or 0.0),
                     # ROUTES THE ON-POLICY ROW. Without this the relabel buffer
                     # inserts with no mode and the split buffer defaults every
                     # row to GOAL, filing every explore transition as goal data.

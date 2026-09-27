@@ -169,6 +169,26 @@ GOAL_SPEED_BONUS = float(os.environ.get("GOAL_SPEED_BONUS", 0.0))
 POTENTIAL_K = float(os.environ.get("POTENTIAL_K", 0.0))
 
 GOAL_REWARD_KIND = os.environ.get("GATED_GOAL_REWARD", "sorb").lower()
+# GATED_GOAL_REWARD=progress (user 2026-09-26: "use the reward from
+# https://arxiv.org/pdf/2309.16634 as the reward for the goal arm"). Bono et al.
+# 2023, "End-to-End (Instance)-Image Goal Navigation through Correspondence as an
+# Emergent Phenomenon", Sec. 3.2 "Training for navigation", verbatim:
+#     r_t = K * 1_success - Delta_t^Geo - lambda,  K=10,  lambda=0.01,
+#     "Delta_t^Geo is the increase in geodesic distance to the goal".
+# In CARLA the geodesic is the ALONG-ROAD route distance the env already
+# publishes as route_remaining_m (ROUTE_POTENTIAL=1). The paper has NO collision,
+# lane or off-road term, so none is paid here; GOAL_PROGRESS_FINES=1 adds the
+# GOAL_*_PENALTY fines back as an explicit, off-by-default deviation.
+PROGRESS_K = float(os.environ.get("GOAL_PROGRESS_SUCCESS", 10.0))
+PROGRESS_SLACK = float(os.environ.get("GOAL_PROGRESS_SLACK", 0.01))
+PROGRESS_FINES = os.environ.get("GOAL_PROGRESS_FINES", "0") == "1"
+# A route distance that moves more than this in ONE step is not driving: the car
+# covers ~0.3 m per 0.05 s step (72 km/h would be 1 m). A larger jump is a
+# replan, a goal switch or a planner snapping to another carriageway, and paying
+# it would inject a fake reward of tens of metres in a single step.
+PROGRESS_MAX_STEP_M = float(os.environ.get("GOAL_PROGRESS_MAX_STEP_M", 5.0))
+# Read here only to warn: the env publishes route_remaining_m only when this is 1.
+ROUTE_POTENTIAL_ON = os.environ.get("ROUTE_POTENTIAL", "0") == "1"
 if GOAL_REWARD_KIND not in ("sorb", "shaped"):
     raise ValueError(f"GATED_GOAL_REWARD={GOAL_REWARD_KIND!r} is not sorb|shaped")
 STEP_COST = float(os.environ.get("STEP_COST", 1.0))
@@ -257,6 +277,63 @@ def goal_lane_departed(info):
         info.get("lane_marking_types"),
         bool(info.get("in_junction", False)),
         False))
+
+
+def progress_term(d_prev, d_now):
+    """-Delta geodesic: metres of along-road progress this step, THE one
+    definition the goal wrapper and the hindsight relabeller both use.
+
+    0.0 when either distance is missing (no route) or the step moved it by more
+    than PROGRESS_MAX_STEP_M, which no car does in one step (see above).
+    """
+    if d_prev is None or d_now is None:
+        return 0.0
+    dp = float(d_prev) - float(d_now)
+    if abs(dp) > PROGRESS_MAX_STEP_M:
+        return 0.0
+    return dp
+
+
+def goal_reward_progress(info, t, prev_remaining, remaining,
+                         max_steps=GOAL_MAX_STEPS,
+                         offroad_steps=0, collision_steps=0, crossing_steps=0):
+    """Bono et al. 2023's goal reward. Returns (reward, terminated, truncated,
+    arrived), the same contract as goal_reward_sorb. Pure.
+
+        arrival:  K - lambda                 terminated (mask 0)
+        else:     progress_term - lambda     (+ fines only if PROGRESS_FINES)
+
+    THE FINAL STEP'S PROGRESS IS NOT PAID ON ARRIVAL. The env resamples the goal
+    the moment it is reached, so route_remaining_m on that step may already
+    describe the NEXT goal; differencing it would pay a jump. Dropping it costs
+    at most the goal radius (2 m) once per goal. The relabeller does the same.
+
+    TERMINATIONS ARE THE COUNTING REGIME'S, UNCHANGED, AND CARRY NO BILL. A fatal
+    lane crossing (GATED_GOAL_LANE_TERMINAL) ends the episode paying only this
+    step; the fault caps and the clock truncate (the critic bootstraps). No bill
+    is needed: under a progress reward ending early forfeits the progress still
+    to be made and the arrival bonus, so it is never an escape.
+    """
+    reached = bool(info.get("arrived", False) or info.get("is_success", False))
+    if reached:
+        return PROGRESS_K - PROGRESS_SLACK, True, False, True
+    r = progress_term(prev_remaining, remaining) - PROGRESS_SLACK
+    if PROGRESS_FINES:
+        if GOAL_OFF_ROAD_PENALTY and info.get("off_road"):
+            r -= GOAL_OFF_ROAD_PENALTY
+        if GOAL_LANE_PENALTY and info.get("lane_any",
+                                          info.get("lane_invasion_any", False)):
+            r -= GOAL_LANE_PENALTY
+        if GOAL_COLLISION_PENALTY and info.get("collision", False):
+            r -= GOAL_COLLISION_PENALTY
+    if LANE_TERMINAL and goal_lane_departed(info):
+        return r, True, False, False
+    truncated = (int(t) >= int(max_steps)
+                 or (GOAL_TRUNCATE_COUNTS and (
+                     offroad_steps >= GOAL_OFFROAD_TRUNCATE_STEPS
+                     or collision_steps >= GOAL_COLLISION_TRUNCATE_STEPS
+                     or crossing_steps >= GOAL_CROSSING_TRUNCATE_STEPS)))
+    return r, False, truncated, False
 
 
 def goal_reward_sorb(info, t, max_steps=GOAL_MAX_STEPS, step_cost=STEP_COST,
@@ -585,7 +662,7 @@ class GatedReward(Wrapper):
                      f"(peak at target speed, clean steps only)"
                      if GOAL_SPEED_BONUS else ""),
                   flush=True)
-        else:
+        elif self.goal_kind == "shaped":
             print(f"[Gated] goal=SHAPED (delta+projected), returns ~order 100")
         if (self.goal_kind == "sorb" and GOAL_TRUNCATE_COUNTS
                 and LANE_TERMINAL):
@@ -598,6 +675,21 @@ class GatedReward(Wrapper):
                   "(junction-forgiving, off-road excluded) ends the episode "
                   "with the exact bill -step_cost*(1+remaining), mask=0",
                   flush=True)
+        if self.goal_kind == "progress":
+            print(f"[Gated] goal=PROGRESS (Bono et al. 2023, arXiv 2309.16634): "
+                  f"r = {PROGRESS_K:g}*1[arrived] - Delta(route m) - "
+                  f"{PROGRESS_SLACK:g}; fines "
+                  f"{'ON (deviation from the paper)' if PROGRESS_FINES else 'off'}; "
+                  f"per-step jump guard {PROGRESS_MAX_STEP_M:g} m; lane terminal "
+                  f"{'ON (no bill)' if LANE_TERMINAL else 'off'}; caps "
+                  f"{'truncate' if GOAL_TRUNCATE_COUNTS else 'off'}"
+                  + (f"; POTENTIAL_K={POTENTIAL_K:g} IGNORED (progress is the "
+                     f"reward itself)" if POTENTIAL_K else ""), flush=True)
+            if not ROUTE_POTENTIAL_ON:
+                print("[Gated] WARNING: GATED_GOAL_REWARD=progress but "
+                      "ROUTE_POTENTIAL is not 1 -- route_remaining_m will be None "
+                      "and the reward degenerates to -lambda per step",
+                      flush=True)
         print(f"[Gated] explore lane rule: mode={EXPLORE_LANE_MODE} "
               f"off_road_fatal={EXPLORE_OFF_ROAD_FATAL} "
               f"exempt_marks={sorted(EXPLORE_EXEMPT_MARKS)} junction=forgiven "
@@ -640,6 +732,12 @@ class GatedReward(Wrapper):
         # whole route length as a one-off reward on the first step of every
         # episode.
         self._prev_remaining = None
+        if self.goal_kind == "progress":
+            # The progress reward is a difference too, but its FIRST step is a
+            # real step of driving, so seed it from the reset frame instead of
+            # dropping a step of progress per episode. None if no route.
+            _r0 = info.get("route_remaining_m", None)
+            self._prev_remaining = None if _r0 is None else float(_r0)
         info["mode"] = self.mode
         return obs, info
 
@@ -656,7 +754,28 @@ class GatedReward(Wrapper):
         self._path_m = getattr(self, "_path_m", 0.0) + float(np.linalg.norm(disp))
         info["explore_dist_m"] = float(self._path_m)
 
-        if self.mode == GOAL and self.goal_kind == "sorb":
+        if self.mode == GOAL and self.goal_kind == "progress":
+            # BONO ET AL. 2023 (see PROGRESS_K). The same fault counters as the
+            # counting regime drive the caps; the reward itself is progress.
+            self._offroad_steps += int(bool(info.get("off_road", False)))
+            self._collision_steps += int(bool(info.get("collision", False)))
+            self._crossing_steps += int(bool(
+                info.get("lane_any", info.get("lane_invasion_any", False))))
+            _rem = info.get("route_remaining_m", None)
+            reward, terminated, truncated, arrived = goal_reward_progress(
+                info, self._t, self._prev_remaining, _rem, self.goal_max_steps,
+                offroad_steps=self._offroad_steps,
+                collision_steps=self._collision_steps,
+                crossing_steps=self._crossing_steps)
+            info["is_success"] = arrived
+            # After an arrival the next distance belongs to a new goal, so there
+            # is nothing to difference against for one step.
+            self._prev_remaining = (None if (arrived or _rem is None)
+                                    else float(_rem))
+            # The progress term IS the reward here; POTENTIAL_K is not added on
+            # top (it would pay the same metres twice). Logged as shaping=0.
+            info["gated_shaping"] = 0.0
+        elif self.mode == GOAL and self.goal_kind == "sorb":
             # MINIMUM TIME. The env's own `done` is discarded on purpose: with a
             # per-step cost, any terminal failure stops the meter and crashing
             # immediately becomes optimal. Only arrival ends the episode, so a

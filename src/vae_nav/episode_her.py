@@ -140,7 +140,7 @@ class EpisodeRelabelBuffer:
                  k_speed=0.0, speed_limit_kmh=0.0,
                  k_dist_delta_mode="positive", k_living=0.0,
                  time_to_goal=False, step_cost=0.1, gated=False,
-                 recost_counting=False, segment_tag=0):
+                 recost_counting=False, segment_tag=0, route_provider=None):
         # GATED=True MAKES EVERY HINDSIGHT ROW A GOAL ROW, which is the whole
         # point of running HER on the gated arm: explore episodes wander much
         # further than the goal curriculum allows (measured ~370 steps against
@@ -221,6 +221,23 @@ class EpisodeRelabelBuffer:
         self._seg_ctr = 0
         self._cur_seg = self._next_segment()
         self._lane_terminal = False
+        # ALONG-ROAD PROGRESS TOWARD THE HINDSIGHT GOAL (2026-09-26). Any goal
+        # reward with a progress term -- the Bono et al. reward
+        # (GATED_GOAL_REWARD=progress) or the sorb reward's POTENTIAL_K shaping --
+        # needs the road distance from each relabelled state to ITS hindsight
+        # goal, which only a route planner on the map can give. Until this
+        # existed, hindsight rows under POTENTIAL_K=1 (v13-v15) were costed
+        # WITHOUT the +progress term every on-policy row carries: two reward
+        # functions over the same states.
+        self._route_provider = route_provider
+        self._route = None
+        self._goal_kind = "sorb"
+        self._potential_k = 0.0
+        self._needs_route = False
+        self._route_key = None       # (goal xy, last row i) of the live plan
+        self._route_d_next = None    # remaining at pos[last_i + 1] under it
+        self.n_route_plans = 0
+        self.n_route_fail = 0
         if self.recost:
             if not (self.time_to_goal and self.gated):
                 raise ValueError(
@@ -261,6 +278,18 @@ class EpisodeRelabelBuffer:
             # past. The per-step flag is gated_reward.goal_lane_departed,
             # staged by the trainer -- one rule, not two.
             self._lane_terminal = bool(_gr.LANE_TERMINAL)
+            self._goal_kind = str(_gr.GOAL_REWARD_KIND)
+            self._potential_k = float(_gr.POTENTIAL_K)
+            self._progress_term = _gr.progress_term
+            if self._goal_kind == "progress":
+                self._prog_k = float(_gr.PROGRESS_K)
+                self._prog_slack = float(_gr.PROGRESS_SLACK)
+                self._prog_fines = bool(_gr.PROGRESS_FINES)
+                # The progress reward replaces the sorb one outright; its own
+                # progress term is the shaping, never added twice.
+                self._potential_k = 0.0
+            self._needs_route = (self._goal_kind == "progress"
+                                 or self._potential_k != 0.0)
         self.buffer = buffer
         # The wrapper's OWN goal-block transform. See module docstring.
         self.state_fn = state_fn
@@ -342,6 +371,7 @@ class EpisodeRelabelBuffer:
         self._txns, self._fields, self._pos, self._hit = [], [], [], []
         self._lane = []
         self._lane_fatal = []
+        self._z = []
         self._offroad = []
         self._speed, self._target = [], []
         # Index just past the end of each LEG. A leg is the stretch between two
@@ -390,7 +420,7 @@ class EpisodeRelabelBuffer:
     # -- per step ----------------------------------------------------------
     def record(self, transition, fields, pos, hit, lane=False, off_road=False,
                speed_kmh=0.0, target_speed_kmh=0.0, mode=None,
-               lane_fatal=False):
+               lane_fatal=False, z=None):
         """Stage one step. `fields` is what state_fn needs, ~100 bytes.
 
         `mode` is the gated arm's commanded mode for this transition, 1 for goal
@@ -415,7 +445,7 @@ class EpisodeRelabelBuffer:
         if len(self._txns) >= self.max_steps:
             for lst in (self._txns, self._fields, self._pos, self._hit,
                         self._lane, self._lane_fatal, self._offroad,
-                        self._speed, self._target):
+                        self._speed, self._target, self._z):
                 lst.pop(0)
         self._txns.append(transition)
         self._fields.append(dict(fields))
@@ -426,6 +456,8 @@ class EpisodeRelabelBuffer:
         # `lane`: that is the raw crossing the per-step FINE reads, this is
         # the junction-forgiving verdict the TERMINAL reads.
         self._lane_fatal.append(bool(lane_fatal))
+        # Height of this pose, for planning to/from it (see route_potential.XYRoute).
+        self._z.append(0.0 if z is None else float(z))
         self._offroad.append(bool(off_road))
         self._speed.append(float(speed_kmh))
         self._target.append(float(target_speed_kmh))
@@ -583,9 +615,13 @@ class EpisodeRelabelBuffer:
             prev_pair = pair
 
         inserted = 0
+        self._route_key = None
+        if self._needs_route and pairs:
+            self._resolve_route()
         for (i, tp), seg in zip(pairs, seg_ids):
             goal = self._pos[tp]
-            row = self._relabelled(i, goal, n)
+            row = self._relabelled(
+                i, goal, n, goal_z=self._z[tp] if tp < len(self._z) else 0.0)
             # EVERY HINDSIGHT ROW IS A GOAL ROW, whatever mode the episode was
             # flown in. That is the point of running this on the gated arm:
             # explore episodes wander far further than the goal curriculum
@@ -600,7 +636,50 @@ class EpisodeRelabelBuffer:
         self._reset_episode()
         return inserted
 
-    def _relabelled(self, i, goal, n):
+    def _resolve_route(self):
+        """The route planner, fetched lazily from the provider (the env's map
+        exists only once it has connected). Raises rather than degrading: a
+        progress term costed as 0 on hindsight rows is exactly the silent
+        two-reward-functions bug this replaced."""
+        if self._route is None and self._route_provider is not None:
+            self._route = self._route_provider()
+        if self._route is None:
+            raise RuntimeError(
+                "HER recost: the goal reward has an along-road progress term "
+                f"(GATED_GOAL_REWARD={self._goal_kind}, POTENTIAL_K="
+                f"{self._potential_k}) but no route planner was supplied "
+                "(route_provider=None or it returned None). Hindsight rows "
+                "would be costed without it.")
+        return self._route
+
+    def _hindsight_progress(self, i, goal, n, goal_z=0.0):
+        """Metres of along-road progress from pos[i] to pos[i+1] toward `goal`,
+        by the SAME algorithm the goal wrapper uses toward the real goal:
+        plan once, then a forward-only pointer (RoutePotential). Consecutive rows
+        that share a goal REUSE the plan and advance its pointer, exactly as the
+        on-policy measure advances across a goal's steps; anything else re-plans.
+        Differenced through gated_reward.progress_term, the one definition both
+        sides use (missing distance or a non-physical jump -> 0)."""
+        route = self._resolve_route()
+        j = min(i + 1, n - 1)
+        gkey = (round(float(goal[0]), 3), round(float(goal[1]), 3))
+        if self._route_key == (gkey, i - 1):
+            d0 = self._route_d_next
+        else:
+            route.reset(self._pos[i], goal,
+                        origin_z=self._z[i] if i < len(self._z) else 0.0,
+                        goal_z=goal_z)
+            self.n_route_plans += 1
+            d0 = route.remaining(self._pos[i])
+        if d0 is None:
+            self.n_route_fail += 1
+            self._route_key = None           # re-plan on the next row
+            return self._progress_term(None, None)
+        d1 = route.remaining(self._pos[j])
+        self._route_key, self._route_d_next = (gkey, i), d1
+        return self._progress_term(d0, d1)
+
+    def _relabelled(self, i, goal, n, goal_z=0.0):
         """One hindsight transition: rewrite ONLY the goal key and the reward."""
         row = self._clean(self._txns[i])
 
@@ -655,6 +734,31 @@ class EpisodeRelabelBuffer:
         lane = self._lane[i]
 
         if self.time_to_goal:
+            if self.recost and self._goal_kind == "progress":
+                # BONO ET AL. 2023, mirrored from gated_reward.goal_reward_progress
+                # term for term: arrival pays K - lambda and terminates; every
+                # other row pays the along-road progress toward THIS row's
+                # hindsight goal minus lambda (plus fines only when the reward
+                # has them), and bootstraps. Truncation and the lane terminal are
+                # handled by the leg cut in flush_episode, as for sorb.
+                if reached:
+                    row["rewards"] = np.float32(self._prog_k - self._prog_slack)
+                    row["masks"] = np.float32(0.0)
+                    row["dones"] = np.float32(1.0)
+                    self.n_paying += 1
+                    if float(np.linalg.norm(self._pos[i] - goal)) < self.goal_radius:
+                        self.n_free_positives += 1
+                else:
+                    _r = (self._hindsight_progress(i, goal, n, goal_z)
+                          - self._prog_slack)
+                    if self._prog_fines:
+                        _r -= ((self._fine_offroad if self._offroad[i] else 0.0)
+                               + (self._fine_lane if self._lane[i] else 0.0)
+                               + (self._fine_collision if self._hit[i] else 0.0))
+                    row["rewards"] = np.float32(_r)
+                    row["masks"] = np.float32(1.0)
+                    row["dones"] = np.float32(0.0)
+                return row
             if self.recost:
                 # THE COUNTING REGIME, mirrored from goal_reward_sorb's
                 # GOAL_TRUNCATE_COUNTS branch, with the constants read from
@@ -690,6 +794,14 @@ class EpisodeRelabelBuffer:
                             _v = self._speed[i] if i < len(self._speed) else 0.0
                             _r += self._speed_bonus * max(
                                 0.0, 1.0 - abs(_v - _vt) / _vt)
+                    # THE POTENTIAL SHAPING THE WRAPPER ADDS ON TOP OF
+                    # goal_reward_sorb (POTENTIAL_K * metres of along-road
+                    # progress, on every non-terminal non-truncated goal step).
+                    # Missing here until 2026-09-26, so v13-v15's hindsight rows
+                    # lacked it. Arrival rows get none, as on-policy.
+                    if self._potential_k:
+                        _r += self._potential_k * self._hindsight_progress(
+                            i, goal, n, goal_z)
                     row["rewards"] = np.float32(_r)
                     row["masks"] = np.float32(1.0)
                     row["dones"] = np.float32(0.0)

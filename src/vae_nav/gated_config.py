@@ -14,6 +14,33 @@ stale goal reward leaked into a goal-free run.
 import os
 
 
+def progress_value_bounds(env):
+    """(floor, ceiling) for the goal critic under GATED_GOAL_REWARD=progress.
+
+    ONE definition, read by validate() above and by the trainer's target clip,
+    so the two cannot disagree. Undiscounted bounds are valid for any discount
+    here because every term is bounded per step.
+
+    ceiling = K + 2 * GOAL_DIST_MAX. Arrival terminates, so a state's value
+    covers one goal: at most the route still to drive plus K. Routes run up to
+    ~1.2x the straight-line goal distance on this map (the [Route] ratio lines),
+    so 2x is a safe cover.
+    floor   = -(1 m + lambda) * cap, minus the fines when they are on. No car
+    here moves 1 m in a 0.05 s step (that is 72 km/h), so driving AWAY from the
+    goal for the whole clock cannot lose more.
+    """
+    k = _num(env, "GOAL_PROGRESS_SUCCESS", 10.0)
+    slack = _num(env, "GOAL_PROGRESS_SLACK", 0.01)
+    cap = _num(env, "GATED_GOAL_MAX_STEPS", 1000)
+    dmax = _num(env, "GOAL_DIST_MAX", 200.0)
+    floor = -(1.0 + slack) * cap
+    if _flag(env, "GOAL_PROGRESS_FINES"):
+        floor -= cap * (_num(env, "GOAL_OFF_ROAD_PENALTY", 0.0)
+                        + _num(env, "GOAL_LANE_PENALTY", 0.0)
+                        + _num(env, "GOAL_COLLISION_PENALTY", 0.0))
+    return floor, k + 2.0 * dmax
+
+
 def _positive_return_bound(env, discount):
     """The largest return the sorb goal reward can pay, with the bonuses on.
 
@@ -159,9 +186,9 @@ def check_gated_run(env=None):
             "critic received 10-37% of each batch.")
 
     goal_reward = str(env.get("GATED_GOAL_REWARD", "sorb")).lower()
-    if goal_reward not in ("sorb", "shaped"):
+    if goal_reward not in ("sorb", "shaped", "progress"):
         raise ValueError(
-            f"GATED_GOAL_REWARD={goal_reward!r} is not sorb|shaped")
+            f"GATED_GOAL_REWARD={goal_reward!r} is not sorb|shaped|progress")
 
     discount = _num(env, "DISCOUNT", 0.99)
     discount_e = _num(env, "EXPLORE_DISCOUNT", discount)
@@ -262,6 +289,36 @@ def check_gated_run(env=None):
                   f"TQC_VALUE_CEILING={bound:g}  (bound = GOAL_ARRIVAL_BONUS "
                   "+ max(0, GOAL_SPEED_BONUS - STEP_COST) / (1 - DISCOUNT)).")
             print("=" * 72, flush=True)
+    elif goal_reward == "progress":
+        # BONO ET AL. 2023 (gated_reward.goal_reward_progress). Two
+        # misconfigurations would not crash -- they would train a different
+        # task in silence -- so both are refused here.
+        if not _flag(env, "ROUTE_POTENTIAL"):
+            raise ValueError(
+                "GATED_GOAL_REWARD=progress needs ROUTE_POTENTIAL=1: the env "
+                "publishes route_remaining_m only then, and without it the "
+                "reward is -lambda on every step with no progress signal at all.")
+        if str(env.get("ROUTE_REMAINING_MODE", "hop")).lower() != "project":
+            raise ValueError(
+                "GATED_GOAL_REWARD=progress needs ROUTE_REMAINING_MODE=project. The "
+                "default 'hop' measure is a sawtooth: on real Town05 routes, driving "
+                "perfectly forward, 43.1% of steps read as NEGATIVE progress and "
+                "13.6% as +2 m spikes. Harmless-ish as potential shaping; wrong when "
+                "progress IS the reward.")
+        floor, ceiling = progress_value_bounds(env)
+        set_ceiling = env.get("TQC_VALUE_CEILING")
+        if set_ceiling not in (None, "") and float(set_ceiling) < ceiling - 1e-9:
+            raise ValueError(
+                f"TQC_VALUE_CEILING={set_ceiling} clips the progress reward: a "
+                f"goal state can be worth up to {ceiling:g} (arrival "
+                f"{_num(env, 'GOAL_PROGRESS_SUCCESS', 10.0):g} + the whole route, "
+                f"bounded by 2 x GOAL_DIST_MAX). Unset it or set >= {ceiling:g}. "
+                "v13-v15 launched with 10.0, which was right for the minimum-time "
+                "reward and is wrong here.")
+        print(f"[GatedConfig] goal reward = PROGRESS (Bono et al. 2023): "
+              f"K*1[arrived] - Delta(route m) - lambda; value bounds "
+              f"[{floor:g}, {ceiling:g}]; discount {discount:g} is fine "
+              f"(the paper trains a discounted PPO return)")
     else:
         print("[GatedConfig] goal reward = SHAPED (delta + projected), "
               "returns ~order 100")

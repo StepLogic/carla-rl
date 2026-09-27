@@ -112,6 +112,24 @@ COLLISION_TERMINAL = os.environ.get("COLLISION_TERMINAL", "0") == "1"
 # Explore mode is untouched: its lane handling stays in explore_reward, and
 # LANE_INVASION_NOOP still governs it.
 LANE_TERMINAL = os.environ.get("GATED_GOAL_LANE_TERMINAL", "0") == "1"
+# GRADED LANE FINES (v18, user 2026-09-27: "any suggestions to make agent transfer
+# to other towns and respect driving rules?" -> "proceed"). Until now the goal arm
+# fined RAW lane_any at GOAL_LANE_PENALTY per step: a legal turn through a junction,
+# a legal lane change over a broken line and crossing a solid line all cost the
+# same -- while JUNCTION_GOAL_FRAC=0.5 means half the goals REQUIRE a junction. The
+# explore arm already distinguished them; the goal arm did not. v15 showed that
+# making the undifferentiated rule harsher pushed the agent toward idling (0.09).
+# With GOAL_LANE_GRADED=1 the fine follows the marking crossed:
+#   broken line inside a junction     0                        (the turn)
+#   unpainted edge only (NONE)        0                        (off_road fines it)
+#   broken line on open road          GOAL_LANE_PENALTY_BROKEN (a lane change)
+#   solid / double / kerb / grass     GOAL_LANE_PENALTY        (illegal)
+#   no marking data                   GOAL_LANE_PENALTY        (fails closed)
+# The SAME verdict drives the 20-step crossing counter and the velocity bonus's
+# clean gate, so a legal turn neither accrues toward truncation nor forfeits the
+# bonus. Off by default: every earlier recipe is byte-identical.
+LANE_GRADED = os.environ.get("GOAL_LANE_GRADED", "0") == "1"
+GOAL_LANE_PENALTY_BROKEN = float(os.environ.get("GOAL_LANE_PENALTY_BROKEN", 2.0))
 # GOAL MODE ("sorb" arm) ARRIVAL BONUS (v9, user 2026-09-21: "add +10 for
 # goal"). Paid on the arrival step INSTEAD of the old 0.0; default 0.0 keeps
 # every earlier arm identical. The explore arm's EXPLORE_ARRIVAL_BONUS is a
@@ -326,9 +344,7 @@ def goal_reward_progress(info, t, prev_remaining, remaining,
     if PROGRESS_FINES:
         if GOAL_OFF_ROAD_PENALTY and info.get("off_road"):
             r -= GOAL_OFF_ROAD_PENALTY
-        if GOAL_LANE_PENALTY and info.get("lane_any",
-                                          info.get("lane_invasion_any", False)):
-            r -= GOAL_LANE_PENALTY
+        r -= goal_lane_fine(info) if GOAL_LANE_PENALTY else 0.0
         if GOAL_COLLISION_PENALTY and info.get("collision", False):
             r -= GOAL_COLLISION_PENALTY
     if LANE_TERMINAL and goal_lane_departed(info):
@@ -339,6 +355,40 @@ def goal_reward_progress(info, t, prev_remaining, remaining,
                      or collision_steps >= GOAL_COLLISION_TRUNCATE_STEPS
                      or crossing_steps >= GOAL_CROSSING_TRUNCATE_STEPS)))
     return r, False, truncated, False
+
+
+def _lane_any(info):
+    return bool(info.get("lane_any", info.get("lane_invasion_any", False)))
+
+
+def goal_lane_fine(info):
+    """This step's goal-arm lane fine. THE one definition, read by the reward, by
+    goal_lane_fault (counter + clean gate) and, through the trainer's staging, by
+    the hindsight relabeller. Ungraded it is exactly the old rule."""
+    if not _lane_any(info):
+        return 0.0
+    if not LANE_GRADED:
+        return float(GOAL_LANE_PENALTY)
+    if not GOAL_LANE_PENALTY:
+        return 0.0           # fines off: graded or not, nothing is paid
+    from vae_nav.lane_explore_reward import ILLEGAL_MARKS, UNPAINTED_MARKS
+    marks = [str(m).split(".")[-1] for m in (info.get("lane_marking_types") or [])]
+    if not marks or any(m in ILLEGAL_MARKS for m in marks):
+        return float(GOAL_LANE_PENALTY)
+    if all(m in UNPAINTED_MARKS for m in marks):
+        return 0.0
+    if bool(info.get("in_junction", False)):
+        return 0.0
+    return float(GOAL_LANE_PENALTY_BROKEN)
+
+
+def goal_lane_fault(info):
+    """Does this step count as a lane FAULT -- toward the 20-step crossing cap and
+    against the velocity bonus's clean gate? Ungraded: any crossing (old rule).
+    Graded: only a crossing that is fined, so legal turns are not faults."""
+    if not LANE_GRADED:
+        return _lane_any(info)
+    return goal_lane_fine(info) > 0.0
 
 
 def goal_reward_sorb(info, t, max_steps=GOAL_MAX_STEPS, step_cost=STEP_COST,
@@ -421,9 +471,7 @@ def goal_reward_sorb(info, t, max_steps=GOAL_MAX_STEPS, step_cost=STEP_COST,
         _r = -step_cost
         if GOAL_OFF_ROAD_PENALTY and info.get("off_road"):
             _r -= GOAL_OFF_ROAD_PENALTY
-        if GOAL_LANE_PENALTY and info.get("lane_any",
-                                          info.get("lane_invasion_any", False)):
-            _r -= GOAL_LANE_PENALTY
+        _r -= goal_lane_fine(info) if GOAL_LANE_PENALTY else 0.0
         if GOAL_COLLISION_PENALTY and info.get("collision", False):
             _r -= GOAL_COLLISION_PENALTY
         # TARGET-VELOCITY BONUS (see GOAL_SPEED_BONUS above): only on a CLEAN
@@ -433,8 +481,7 @@ def goal_reward_sorb(info, t, max_steps=GOAL_MAX_STEPS, step_cost=STEP_COST,
         # disables it.
         if GOAL_SPEED_BONUS:
             _clean = (not info.get("off_road")
-                      and not info.get("lane_any",
-                                       info.get("lane_invasion_any", False))
+                      and not goal_lane_fault(info)
                       and not info.get("collision", False))
             if _clean:
                 _v = float(info.get("speed_kmh", 0.0) or 0.0)
@@ -695,6 +742,11 @@ class GatedReward(Wrapper):
                       "ROUTE_POTENTIAL is not 1 -- route_remaining_m will be None "
                       "and the reward degenerates to -lambda per step",
                       flush=True)
+        if LANE_GRADED and self.goal_kind in ("sorb", "progress"):
+            print(f"[Gated] goal lane fines GRADED: junction turn 0, unpainted "
+                  f"edge 0, broken on open road {GOAL_LANE_PENALTY_BROKEN:g}, "
+                  f"solid/illegal/unknown {GOAL_LANE_PENALTY:g}; counter and "
+                  f"clean gate count only fined crossings", flush=True)
         print(f"[Gated] explore lane rule: mode={EXPLORE_LANE_MODE} "
               f"off_road_fatal={EXPLORE_OFF_ROAD_FATAL} "
               f"exempt_marks={sorted(EXPLORE_EXEMPT_MARKS)} junction=forgiven "
@@ -764,8 +816,7 @@ class GatedReward(Wrapper):
             # counting regime drive the caps; the reward itself is progress.
             self._offroad_steps += int(bool(info.get("off_road", False)))
             self._collision_steps += int(bool(info.get("collision", False)))
-            self._crossing_steps += int(bool(
-                info.get("lane_any", info.get("lane_invasion_any", False))))
+            self._crossing_steps += int(goal_lane_fault(info))
             _rem = info.get("route_remaining_m", None)
             reward, terminated, truncated, arrived = goal_reward_progress(
                 info, self._t, self._prev_remaining, _rem, self.goal_max_steps,
@@ -790,8 +841,7 @@ class GatedReward(Wrapper):
             # they are updated here, from this step's info, before the call.
             self._offroad_steps += int(bool(info.get("off_road", False)))
             self._collision_steps += int(bool(info.get("collision", False)))
-            self._crossing_steps += int(bool(
-                info.get("lane_any", info.get("lane_invasion_any", False))))
+            self._crossing_steps += int(goal_lane_fault(info))
             reward, terminated, truncated, arrived = goal_reward_sorb(
                 info, self._t, self.goal_max_steps, self.step_cost,
                 self.wedge_truncate,

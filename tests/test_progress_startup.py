@@ -35,7 +35,11 @@ FALLBACK = dict(GATED_GOAL_REWARD="progress", ROUTE_REMAINING_MODE="project",
                 GOAL_SPEED_BONUS="0.0", GOAL_ARRIVAL_BONUS="10.0",
                 AGENT_LATENT_DIMS="latent+goal:512:256", PERCEPTION="vc1",
                 VC1_READOUT="pyramid", AGENT_ENCODER="none", DISCOUNT="0.99",
-                GATED_ALLOW_DISCOUNTED_SORB="1", GOAL_DIST_MAX="200")
+                GATED_ALLOW_DISCOUNTED_SORB="1", GOAL_DIST_MAX="200",
+                # the v8 9-d state block every gated run since v13 uses; without
+                # it check_gated_run refuses (the gate would be unobservable)
+                OBS_WITH_STATE="1", OBS_STATE_COLLISION="0", OBS_WITH_VECTOR="0",
+                TARGET_ENTROPY_UNIT="1", ENV_RGB_CHANNEL_FIX="1")
 
 
 def _launch_env():

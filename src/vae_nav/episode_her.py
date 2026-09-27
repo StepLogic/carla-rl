@@ -372,6 +372,8 @@ class EpisodeRelabelBuffer:
         self._lane = []
         self._lane_fatal = []
         self._z = []
+        self._lane_fine = []
+        self._lane_fault = []
         self._offroad = []
         self._speed, self._target = [], []
         # Index just past the end of each LEG. A leg is the stretch between two
@@ -420,7 +422,7 @@ class EpisodeRelabelBuffer:
     # -- per step ----------------------------------------------------------
     def record(self, transition, fields, pos, hit, lane=False, off_road=False,
                speed_kmh=0.0, target_speed_kmh=0.0, mode=None,
-               lane_fatal=False, z=None):
+               lane_fatal=False, z=None, lane_fine=None, lane_fault=None):
         """Stage one step. `fields` is what state_fn needs, ~100 bytes.
 
         `mode` is the gated arm's commanded mode for this transition, 1 for goal
@@ -445,7 +447,8 @@ class EpisodeRelabelBuffer:
         if len(self._txns) >= self.max_steps:
             for lst in (self._txns, self._fields, self._pos, self._hit,
                         self._lane, self._lane_fatal, self._offroad,
-                        self._speed, self._target, self._z):
+                        self._speed, self._target, self._z,
+                        self._lane_fine, self._lane_fault):
                 lst.pop(0)
         self._txns.append(transition)
         self._fields.append(dict(fields))
@@ -458,6 +461,12 @@ class EpisodeRelabelBuffer:
         self._lane_fatal.append(bool(lane_fatal))
         # Height of this pose, for planning to/from it (see route_potential.XYRoute).
         self._z.append(0.0 if z is None else float(z))
+        # GRADED LANE FINES (v18): the reward's per-step lane fine and fault
+        # verdict, staged from gated_reward.goal_lane_fine / goal_lane_fault so
+        # the mirror cannot re-derive them differently. None = caller did not
+        # stage them -> the old raw-crossing rule, byte-identical.
+        self._lane_fine.append(None if lane_fine is None else float(lane_fine))
+        self._lane_fault.append(None if lane_fault is None else bool(lane_fault))
         self._offroad.append(bool(off_road))
         self._speed.append(float(speed_kmh))
         self._target.append(float(target_speed_kmh))
@@ -506,7 +515,7 @@ class EpisodeRelabelBuffer:
         for j in range(start, end):
             off += int(self._offroad[j])
             coll += int(self._hit[j])
-            cross += int(self._lane[j])
+            cross += int(self._lane_fault_at(j))
             # A fatal crossing TERMINATES the on-policy episode at step j, so
             # the relabelled one ends there too; checked first, as the reward
             # checks it before the caps.
@@ -541,7 +550,7 @@ class EpisodeRelabelBuffer:
             off = coll = cross = 0
             for j in range(n):
                 coll += int(self._hit[j])
-                cross += int(self._lane[j])
+                cross += int(self._lane_fault_at(j))
                 off += int(self._offroad[j])
                 if self._lane_terminal and self._lane_fatal[j]:
                     self.last_end_reason = "crossing"
@@ -616,6 +625,7 @@ class EpisodeRelabelBuffer:
 
         inserted = 0
         self._route_key = None
+        self._route = None                  # re-query: the town may have changed
         if self._needs_route and pairs:
             self._resolve_route()
         for (i, tp), seg in zip(pairs, seg_ids):
@@ -636,12 +646,25 @@ class EpisodeRelabelBuffer:
         self._reset_episode()
         return inserted
 
+    def _lane_fine_at(self, i):
+        v = self._lane_fine[i] if i < len(self._lane_fine) else None
+        return (self._fine_lane if self._lane[i] else 0.0) if v is None else v
+
+    def _lane_fault_at(self, i):
+        v = self._lane_fault[i] if i < len(self._lane_fault) else None
+        return bool(self._lane[i]) if v is None else v
+
     def _resolve_route(self):
         """The route planner, fetched lazily from the provider (the env's map
         exists only once it has connected). Raises rather than degrading: a
         progress term costed as 0 on hindsight rows is exactly the silent
         two-reward-functions bug this replaced."""
-        if self._route is None and self._route_provider is not None:
+        # RE-QUERIED ONCE PER FLUSH (v18, multi-town): a town rotation replaces
+        # the env and its map between episodes, and a planner kept across flushes
+        # would go on measuring hindsight progress on the PREVIOUS town's roads.
+        # Within a flush the one planner is held, because consecutive rows that
+        # share a goal reuse its plan and pointer (_hindsight_progress).
+        if self._route_provider is not None:
             self._route = self._route_provider()
         if self._route is None:
             raise RuntimeError(
@@ -660,7 +683,7 @@ class EpisodeRelabelBuffer:
         on-policy measure advances across a goal's steps; anything else re-plans.
         Differenced through gated_reward.progress_term, the one definition both
         sides use (missing distance or a non-physical jump -> 0)."""
-        route = self._resolve_route()
+        route = self._route if self._route is not None else self._resolve_route()
         j = min(i + 1, n - 1)
         gkey = (round(float(goal[0]), 3), round(float(goal[1]), 3))
         if self._route_key == (gkey, i - 1):
@@ -753,7 +776,7 @@ class EpisodeRelabelBuffer:
                           - self._prog_slack)
                     if self._prog_fines:
                         _r -= ((self._fine_offroad if self._offroad[i] else 0.0)
-                               + (self._fine_lane if self._lane[i] else 0.0)
+                               + self._lane_fine_at(i)
                                + (self._fine_collision if self._hit[i] else 0.0))
                     row["rewards"] = np.float32(_r)
                     row["masks"] = np.float32(1.0)
@@ -776,7 +799,7 @@ class EpisodeRelabelBuffer:
                     row["dones"] = np.float32(1.0)
                 else:
                     fine = ((self._fine_offroad if self._offroad[i] else 0.0)
-                            + (self._fine_lane if self._lane[i] else 0.0)
+                            + self._lane_fine_at(i)
                             + (self._fine_collision if self._hit[i] else 0.0))
                     _r = -self.step_cost - fine
                     # The velocity bonus, mirrored on the SAME clean gate as
@@ -787,7 +810,8 @@ class EpisodeRelabelBuffer:
                     # non-positive target disables the term, exactly as the
                     # reward does.
                     if self._speed_bonus and not (self._offroad[i]
-                                                  or lane or hit):
+                                                  or self._lane_fault_at(i)
+                                                  or hit):
                         _vt = (self._target[i] if i < len(self._target)
                                else 0.0)
                         if _vt > 0.0:

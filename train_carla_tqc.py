@@ -1224,15 +1224,17 @@ def run_evaluation(agent, episodes, latent_source, identity, step=0,
     return rate, by_town
 
 
-def _route_provider_for(env):
-    """A zero-arg callable returning an XYRoute on `env`'s CURRENT map, or None
-    before the env has connected. Walks the wrapper chain by `.env` for the
-    object owning `core` (the gated wrappers return themselves from
-    .unwrapped). One planner per town, rebuilt if the env's map changes."""
+def _route_provider_for(get_env):
+    """A zero-arg callable returning an XYRoute on the env's CURRENT map, or None
+    before the env has connected. `get_env` is called EACH TIME (v18): a town
+    rotation replaces venv.envs[i] outright, so a provider holding the original
+    env object would keep planning on the previous town's roads. Walks the
+    wrapper chain by `.env` for the object owning `core` (the gated wrappers
+    return themselves from .unwrapped). One planner per town name."""
     cache = {}
 
     def provider():
-        node, core = env, None
+        node, core = get_env(), None
         for _ in range(16):
             if node is None:
                 break
@@ -1495,7 +1497,8 @@ def main():
                 # ROAD DISTANCE TO HINDSIGHT GOALS (2026-09-26). Needed by any
                 # goal reward with an along-road progress term (progress, or
                 # sorb + POTENTIAL_K); resolved lazily from THIS env's map.
-                route_provider=_route_provider_for(e)))
+                route_provider=_route_provider_for(
+                    lambda ix=len(hers): venv.envs[ix])))
         print(f"[EpisodeHER] on -- {len(hers)} per-env buffers, "
               f"n_relabel={hers[0].n_relabel} min_disp={hers[0].min_disp} "
               f"goal_radius={hers[0].goal_radius}"
@@ -1892,7 +1895,9 @@ def main():
                 # and would raise TypeError on every step. Same class-attribute
                 # dispatch the flush site below uses.
                 from vae_nav.gated_reward import (
-                    goal_lane_departed as _goal_lane_departed)
+                    goal_lane_departed as _goal_lane_departed,
+                    goal_lane_fine as _goal_lane_fine,
+                    goal_lane_fault as _goal_lane_fault)
                 _rec_kwargs = dict(
                     speed_kmh=float(inf.get("speed_kmh", 0.0) or 0.0),
                     target_speed_kmh=float(inf.get("target_speed_kmh", 0.0)
@@ -1917,6 +1922,10 @@ def main():
                     lane_fatal=_goal_lane_departed(inf),
                     # Height, so hindsight route plans start on the right road.
                     z=float(inf.get("hero_z", 0.0) or 0.0),
+                    # GRADED LANE FINES (v18): the reward's own verdicts, so the
+                    # relabeller fines and counts exactly what the reward did.
+                    lane_fine=_goal_lane_fine(inf),
+                    lane_fault=_goal_lane_fault(inf),
                     # ROUTES THE ON-POLICY ROW. Without this the relabel buffer
                     # inserts with no mode and the split buffer defaults every
                     # row to GOAL, filing every explore transition as goal data.

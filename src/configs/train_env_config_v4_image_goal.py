@@ -48,6 +48,37 @@ from rlib_integration.helper import post_process_image, carla_location_to_np_arr
 RGB_CHANNEL_FIX = os.environ.get("ENV_RGB_CHANNEL_FIX", "1") == "1"
 _RGB_FIX_ANNOUNCED = False
 
+# WEATHER RANDOMISATION (v18, user 2026-09-27: suggestions for transfer ->
+# "proceed"). The weather was the fixed "CloudySunset" below, set ONCE when the
+# env was built: every frame of every run had the same sun angle, shadows and
+# sky. With ENV_WEATHER_RANDOM=1 a preset is drawn per episode at reset, from a
+# seeded RNG so a run is reproducible. Daytime and sunset only by default: the
+# camera has no headlights, and a night frame is mostly black -- a harder task,
+# not a more varied one. DustStorm is left out for the same reason.
+# ENV_WEATHER_PRESETS overrides the list; unset keeps the fixed weather, so every
+# earlier recipe and every eval is unchanged.
+WEATHER_RANDOM = os.environ.get("ENV_WEATHER_RANDOM", "0") == "1"
+WEATHER_PRESETS = [w.strip() for w in os.environ.get(
+    "ENV_WEATHER_PRESETS",
+    "ClearNoon,CloudyNoon,WetNoon,WetCloudyNoon,SoftRainNoon,MidRainyNoon,"
+    "HardRainNoon,ClearSunset,CloudySunset,WetSunset,WetCloudySunset,"
+    "SoftRainSunset,MidRainSunset,HardRainSunset").split(",") if w.strip()]
+_bad_weather = [w for w in WEATHER_PRESETS
+                if not hasattr(carla.WeatherParameters, w)]
+if WEATHER_RANDOM and (_bad_weather or not WEATHER_PRESETS):
+    raise ValueError(f"ENV_WEATHER_PRESETS names unknown presets {_bad_weather} "
+                     f"(or is empty); this CARLA build knows "
+                     f"{sorted(n for n in dir(carla.WeatherParameters) if n[:1].isupper())}")
+
+
+def _world_of(env_or_core):
+    """rlib's carla_env passes the CORE to experiment.reset, carla_goal_env the
+    ENV; accept either."""
+    w = getattr(env_or_core, "world", None)
+    if w is None:
+        w = getattr(getattr(env_or_core, "core", None), "world", None)
+    return w
+
 
 def _fix_channel_order(image):
     """Undo post_process_image's spurious BGR->RGB swap, so the frame really is
@@ -335,6 +366,34 @@ class STBL3Experiment(BaseExperiment):
         self.done_wrong_direction = False
         self.done_speed = False
         self.checkpoint_count=0
+
+        # Per-episode weather (see WEATHER_RANDOM). Seeded once per experiment
+        # object from ENV_WEATHER_SEED (default: the run SEED), so a given run
+        # replays the same weather sequence.
+        if WEATHER_RANDOM:
+            if getattr(self, "_weather_rng", None) is None:
+                _seed = int(os.environ.get("ENV_WEATHER_SEED",
+                                           os.environ.get("SEED", 0)) or 0)
+                self._weather_rng = np.random.default_rng(_seed)
+                print(f"[Weather] randomised per episode over "
+                      f"{len(WEATHER_PRESETS)} presets: {WEATHER_PRESETS}",
+                      flush=True)
+            _name = WEATHER_PRESETS[int(self._weather_rng.integers(
+                len(WEATHER_PRESETS)))]
+            _world = _world_of(env)
+            if _world is not None:
+                _world.set_weather(getattr(carla.WeatherParameters, _name))
+                self.weather_name = _name
+                # The first draws are logged so a run's own log PROVES the
+                # weather varies; a banner alone would not.
+                self._weather_n = getattr(self, "_weather_n", 0) + 1
+                if self._weather_n <= 10:
+                    print(f"[Weather] episode {self._weather_n}: {_name}",
+                          flush=True)
+            elif getattr(self, "_weather_warned", False) is False:
+                self._weather_warned = True
+                print("[Weather] WARNING: no world reachable from reset(); "
+                      "weather NOT randomised", flush=True)
 
         # Hero variables
         self.last_location = None
@@ -1023,6 +1082,8 @@ class STBL3Experiment(BaseExperiment):
             # turns on this, so it has to be visible in the [Why] breakdown --
             # otherwise "crossings are forgiven correctly" is unfalsifiable.
             in_junction=bool(getattr(self, "in_junction", False)),
+            # Which preset this episode is rendered under (logging/provenance).
+            weather=getattr(self, "weather_name", "fixed"),
             distance_travelled=self.distance_completed,
             goal_directed_distances=self.distance_completed,
             checkpoints_passed=self.checkpoint_count,

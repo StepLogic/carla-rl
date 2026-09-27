@@ -125,6 +125,9 @@ def main():
     # trainer imports it the same way at train_carla_tqc.py:52.
     from vae_nav.latent_source import from_env as latent_from_env
     from vae_nav.policy_io import load_agent_state
+    # Per-episode rule accounting (2026-09-27): off-road, collision and every
+    # crossing classified legal/illegal, plus path driven. See eval_faults.
+    from vae_nav.eval_faults import EpisodeFaults, aggregate
 
     towns = [t for t in args.towns.split(",") if t]
     episodes = T.build_eval_episodes(towns, args.episodes, seed=args.seed)
@@ -182,6 +185,8 @@ def main():
     successes, steps_to_goal, timeouts, lengths = [], [], 0, []
     q0, q0_steps = [], []
     end_reasons = {}
+    ep_detail = []
+    explore_ends = {}
     for ep in episodes:
         # REBUILD ON A TOWN CHANGE, as run_evaluation does. A single-town sweep
         # never triggers this; it exists so a multi-town one is not silently
@@ -197,8 +202,9 @@ def main():
         # property the whole comparison rests on -- silently does not hold.
         # It also produced a 0.000 success rate for an arm whose own training
         # evaluation reads 1.000, because the goal was never resampled.
-        obs, _ = env.reset(seed=ep["seed"])
+        obs, info0 = env.reset(seed=ep["seed"])
         q_start = q_at(obs)
+        faults = EpisodeFaults(start_pos=(info0 or {}).get("hero_pos"))
         done, n, ok = False, 0, False
         while not done and n < args.max_steps:
             action = agent.eval_actions(obs)
@@ -206,6 +212,7 @@ def main():
             n += 1
             ok = ok or bool(info.get("is_success", False))
             done = bool(term or trunc)
+            faults.step(info)
         # WHY THE EPISODE ENDED. Without this a zero success rate is just a
         # zero: it cannot distinguish "the policy drives badly" from "the
         # harness is configured so episodes end before it can arrive", which is
@@ -228,6 +235,16 @@ def main():
                     reason = key
                     break
         end_reasons[reason] = end_reasons.get(reason, 0) + 1
+        # EXPLORE MODE'S OWN VERDICT (reached / crossing / off_road / collision /
+        # cap), from the wrapper that ended it. 'reached' means it drove
+        # EXPLORE_GOAL_DIST_M of path without a terminal fault.
+        if args.mode == "explore":
+            _xe = str(info.get("explore_end", "step_cap" if n >= args.max_steps else "?"))
+            explore_ends[_xe] = explore_ends.get(_xe, 0) + 1
+        _arr = (bool(ok) if args.goal_conditioned
+                else str(info.get("explore_end", "")) == "reached")
+        ep_detail.append(dict(faults.summary(_arr), town=ep["town"],
+                              seed=int(ep["seed"]), end=reason))
         # Counted, but NEVER as a termination reason: for an arm that cannot
         # see the goal this is driving past one, not reaching it.
         if ok and not args.goal_conditioned:
@@ -305,6 +322,14 @@ def main():
         "q_corr": (float(np.corrcoef(np.array(q0), -np.array(q0_steps))[0, 1])
                    if _calib and len(q0) >= 2 and np.std(q0) > 0 else None),
         "q_n": (len(q0) if _calib else 0),
+        # Driving-rule accounting (vae_nav.eval_faults): how CLEANLY it drove,
+        # not only whether it arrived.
+        "faults": aggregate(ep_detail),
+        "explore_ends": explore_ends if args.mode == "explore" else None,
+        "explore_reached_rate": (round(explore_ends.get("reached", 0)
+                                      / max(1, len(episodes)), 3)
+                                if args.mode == "explore" else None),
+        "episodes_detail": ep_detail,
     }
     os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)
     with open(args.out, "w") as fh:
@@ -323,6 +348,16 @@ def main():
     why = "  ".join(f"{k}={v}" for k, v in
                     sorted(end_reasons.items(), key=lambda kv: -kv[1]))
     print(f"[Arm {args.arm}] why episodes ended: {why or '(none)'}", flush=True)
+    _f = out["faults"]
+    print(f"[Arm {args.arm}] rules: clean arrivals {_f['clean_arrival_rate']:.3f} "
+          f"(strict {_f['strict_clean_arrival_rate']:.3f}) | any off-road "
+          f"{_f['frac_any_off_road']:.3f} | any illegal crossing "
+          f"{_f['frac_any_illegal_crossing']:.3f} | any collision "
+          f"{_f['frac_any_collision']:.3f} | any lane change "
+          f"{_f['frac_any_lane_change']:.3f} | path {_f['mean_path_m']:.1f} m", flush=True)
+    if args.mode == "explore":
+        print(f"[Arm {args.arm}] explore: reached {out['explore_reached_rate']:.3f} "
+              f"ends {explore_ends}", flush=True)
     print(f"[Arm {args.arm}] critic-as-distance: bias={bias} corr={corr} "
           f"(n={out['q_n']}) -- bias is how far wrong the value is IN STEPS; "
           f"corr is whether it still ORDERS states correctly", flush=True)

@@ -189,8 +189,13 @@ PROGRESS_FINES = os.environ.get("GOAL_PROGRESS_FINES", "0") == "1"
 PROGRESS_MAX_STEP_M = float(os.environ.get("GOAL_PROGRESS_MAX_STEP_M", 5.0))
 # Read here only to warn: the env publishes route_remaining_m only when this is 1.
 ROUTE_POTENTIAL_ON = os.environ.get("ROUTE_POTENTIAL", "0") == "1"
-if GOAL_REWARD_KIND not in ("sorb", "shaped"):
-    raise ValueError(f"GATED_GOAL_REWARD={GOAL_REWARD_KIND!r} is not sorb|shaped")
+# "progress" added 2026-09-26. This import-time check was missed when the mode
+# was added -- the unit tests import with the default and then monkeypatch the
+# constant, so they never reach it -- and v16 died on it at startup.
+# tests/test_progress_startup.py now imports under the real v16 snapshot.
+if GOAL_REWARD_KIND not in ("sorb", "shaped", "progress"):
+    raise ValueError(f"GATED_GOAL_REWARD={GOAL_REWARD_KIND!r} is not "
+                     f"sorb|shaped|progress")
 STEP_COST = float(os.environ.get("STEP_COST", 1.0))
 GOAL_MAX_STEPS = int(os.environ.get("GATED_GOAL_MAX_STEPS", 1000))
 WEDGE_TRUNCATE = os.environ.get("WEDGE_TRUNCATE", "1") == "1"

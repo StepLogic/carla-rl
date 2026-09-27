@@ -45,6 +45,14 @@ FALLBACK = dict(GATED_GOAL_REWARD="progress", ROUTE_REMAINING_MODE="project",
 def _launch_env():
     env = {k: v for k, v in os.environ.items()
            if k in ("PATH", "HOME", "LD_LIBRARY_PATH", "PYTHONPATH")}
+    # THE CHILD MUST STAY OFF THE GPU TOO (2026-09-27). conftest.py pins JAX to
+    # the CPU for IN-PROCESS tests, but this child's environment is built from
+    # scratch, so it never saw that -- and its JAX preallocated most of the card
+    # while v17 was training: v17 died with RESOURCE_EXHAUSTED at step 152658.
+    # CUDA_VISIBLE_DEVICES="" hides the GPU from torch as well.
+    env.update(JAX_PLATFORMS=os.environ.get("JAX_PLATFORMS", "cpu"),
+               XLA_PYTHON_CLIENT_PREALLOCATE="false",
+               CUDA_VISIBLE_DEVICES=os.environ.get("TESTS_CUDA_VISIBLE_DEVICES", ""))
     if os.path.exists(SNAP):
         for line in open(SNAP):
             line = line.strip()

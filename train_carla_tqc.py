@@ -628,6 +628,19 @@ def carla_quality_for_port(port, env=None):
     return env.get("CARLA_QUALITY", "Epic")
 
 
+def carla_offscreen_for_port(port, env=None):
+    """CARLA_OFFSCREEN_PORTS="2000" runs the listed servers with
+    -RenderOffScreen and the rest per CARLA_OFFSCREEN (user 2026-09-28: two
+    windowed servers overflow the 12 GB card -- each grows to ~5.5 GB -- so the
+    Town01 server goes offscreen while Town05 keeps its window)."""
+    env = os.environ if env is None else env
+    listed = {int(p) for p in env.get("CARLA_OFFSCREEN_PORTS", "").split(",")
+              if p.strip()}
+    if int(port) in listed:
+        return True
+    return env.get("CARLA_OFFSCREEN", "0") == "1"
+
+
 def ensure_carla(port, timeout=180.0):
     """Start ONE CARLA on `port` for this process, and reuse it thereafter.
 
@@ -697,7 +710,7 @@ def ensure_carla(port, timeout=180.0):
     # It also drops the live-X-session dependency: windowed, CarlaUE4 EXITS rather than falling back to headless if
     # DISPLAY is wrong or the session is locked, which an unattended long run must not depend on.
     # Default stays windowed so no existing caller changes behaviour.
-    _offscreen = os.environ.get("CARLA_OFFSCREEN", "0") == "1"
+    _offscreen = carla_offscreen_for_port(port)
     cmd = [f"{root}/CarlaUE4.sh", f"-carla-port={port}",
            f"-quality-level={quality}",
            "-RenderOffScreen" if _offscreen else "-windowed",

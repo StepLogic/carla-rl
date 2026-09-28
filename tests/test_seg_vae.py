@@ -69,3 +69,13 @@ def test_loss_decreases_on_one_batch():
         p, st, l = step(p, st, jax.random.PRNGKey(i))
         losses.append(float(l))
     assert losses[-1] < 0.5 * losses[0]
+
+
+def test_dice_perfect_and_wrong():
+    lab = np.zeros((2, 240, 240), np.uint8); lab[:, :, 100:140] = 2
+    t = sv.soft_targets(jnp.asarray(lab))
+    present = jnp.zeros(sv.N_CLASSES).at[0].set(1).at[2].set(1)
+    good = jnp.log(t + 1e-6) * 50.0                  # confident, correct
+    bad = jnp.log(t[..., ::-1] + 1e-6) * 50.0        # confident, wrong classes
+    assert float(sv.soft_dice_loss(good, t, present)) < 0.01
+    assert float(sv.soft_dice_loss(bad, t, present)) > 0.9

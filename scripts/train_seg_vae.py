@@ -44,6 +44,13 @@ def main():
     ap.add_argument("--lr", type=float, default=3e-4)
     ap.add_argument("--beta", type=float, default=1e-3)
     ap.add_argument("--seed", type=int, default=0)
+    # user 2026-09-28 "keep all classes same weight": weight 1 for every class
+    # present (the weighted run painted thin lane lines as wide blobs)
+    ap.add_argument("--equal-weights", action="store_true")
+    # user 2026-09-28 "add dice loss": + dice_w * (1 - soft Dice over present classes)
+    ap.add_argument("--dice-w", type=float, default=0.0)
+    # warm start: parameters from an earlier checkpoint, fresh optimiser
+    ap.add_argument("--init", default=None)
     a = ap.parse_args()
     import jax
     import jax.numpy as jnp
@@ -58,13 +65,22 @@ def main():
     med = np.median(freq[present])
     w = np.where(present, np.clip((med / np.maximum(freq, 1e-9)) ** 0.5, 0.5, 10.0), 0.0)
     w[2] *= 2.0                                               # lane lines
+    if a.equal_weights:
+        w = np.where(present, 1.0, 0.0)
     print("[data] class freq " + " ".join(f"{f:.3f}" for f in freq), flush=True)
     print("[data] class w    " + " ".join(f"{x:.2f}" for x in w), flush=True)
     class_w = jnp.asarray(w, jnp.float32)
+    present_j = jnp.asarray(present, jnp.float32)
+    print(f"[loss] CE {'equal weights' if a.equal_weights else 'weighted'} "
+          f"+ {a.dice_w} x Dice + {a.beta} x KL", flush=True)
 
     model = sv.SegVAE()
     rng = jax.random.PRNGKey(a.seed)
     params = model.init(rng, jnp.zeros((1, 120, 120, 3)), rng)
+    if a.init:
+        c0 = pickle.load(open(a.init, "rb"))
+        params = jax.tree_util.tree_map(jnp.asarray, c0["params"])
+        print(f"[init] warm start from {a.init} (step {c0['step']})", flush=True)
     sched = optax.warmup_cosine_decay_schedule(0.0, a.lr, min(1000, a.steps // 10), a.steps, a.lr * 0.05)
     opt = optax.adamw(sched, weight_decay=1e-4)
     opt_state = opt.init(params)
@@ -79,7 +95,12 @@ def main():
 
         def lf(p):
             lg, mu, lv = model.apply(p, x, k3)
-            return sv.seg_vae_loss(lg, t, mu, lv, class_w, a.beta)
+            loss, parts = sv.seg_vae_loss(lg, t, mu, lv, class_w, a.beta)
+            if a.dice_w > 0:
+                d = sv.soft_dice_loss(lg, t, present_j)
+                loss = loss + a.dice_w * d
+                parts = {**parts, "dice": d}
+            return loss, parts
         (loss, parts), g = jax.value_and_grad(lf, has_aux=True)(params)
         upd, opt_state = opt.update(g, opt_state, params)
         return optax.apply_updates(params, upd), opt_state, loss, parts
@@ -107,10 +128,11 @@ def main():
                                                 jnp.asarray(vay[i:i + 256]))))
             iou = np.mean(ious, 0)
             rec = dict(step=step, loss=float(loss), ce=float(parts["ce"]),
+                       dice=float(parts.get("dice", 0.0)),
                        kl=float(parts["kl"]), val_iou=iou.round(3).tolist(),
                        val_miou=float(iou[present].mean()), sec=round(time.time() - t0))
             log.append(rec)
-            print(f"[{step}] loss {rec['loss']:.3f} ce {rec['ce']:.3f} kl {rec['kl']:.3f} "
+            print(f"[{step}] loss {rec['loss']:.3f} ce {rec['ce']:.3f} dice {rec['dice']:.3f} kl {rec['kl']:.3f} "
                   f"| val mIoU {rec['val_miou']:.3f} lane {iou[2]:.3f} road {iou[1]:.3f} "
                   f"| {rec['sec']} s", flush=True)
             with open(os.path.join(a.out, "seg_vae.pkl"), "wb") as f:

@@ -138,6 +138,18 @@ def seg_vae_loss(logits, target, mu, logvar, class_w, beta):
     return ce + beta * kl, {"ce": ce, "kl": kl}
 
 
+def soft_dice_loss(logits, target, present):
+    """1 - soft multi-class Dice, averaged over the classes in `present`
+    (user 2026-09-28 "add dice loss"). Dice is computed over the whole batch
+    per class, so every class counts equally however few pixels it has --
+    thin lane lines are scored on overlap, not on pixel count."""
+    p = jax.nn.softmax(logits, axis=-1)
+    inter = (p * target).sum(axis=(0, 1, 2))
+    denom = p.sum(axis=(0, 1, 2)) + target.sum(axis=(0, 1, 2))
+    dice = (2.0 * inter + 1.0) / (denom + 1.0)
+    return ((1.0 - dice) * present).sum() / jnp.maximum(present.sum(), 1.0)
+
+
 def class_iou(logits, target):
     """Per-class IoU of argmax prediction vs argmax target, over the batch."""
     p = jax.nn.one_hot(logits.argmax(-1), logits.shape[-1])

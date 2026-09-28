@@ -304,7 +304,15 @@ def main():
                     crossing=classify_crossing(info),
                     arrived=bool(info.get("is_success", False)),
                     remaining_m=None if _rem is None else float(_rem),
-                    speed_kmh=float(info.get("speed_kmh", 0.0))))
+                    speed_kmh=float(info.get("speed_kmh", 0.0)),
+                    target_speed_kmh=float(info.get("target_speed_kmh", 0.0) or 0.0),
+                    marks=[str(m).split(".")[-1]
+                           for m in (info.get("lane_marking_types") or [])],
+                    in_junction=bool(info.get("in_junction", False)),
+                    lane_any=bool(info.get("lane_any",
+                                           info.get("lane_invasion_any", False))),
+                    lane_event_lag=info.get("lane_event_lag"),
+                    collision_event_lag=info.get("collision_event_lag")))
             ok = ok or bool(info.get("is_success", False))
             done = bool(term or trunc)
             faults.step(info)

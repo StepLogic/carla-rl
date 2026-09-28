@@ -790,6 +790,19 @@ class STBL3Experiment(BaseExperiment):
         # 'lane_invasion' in sensor_data.keys() or
         # self.diff_lane =  wp is None
         self.diff_lane= 'lane_invasion' in sensor_data.keys()
+        # EVENT FRESHNESS (diagnostic, 2026-09-28 goal-reward debugging). Event
+        # sensors share ONE queue and get_data pops at most one item per event
+        # sensor per tick with no frame check, so an event can reach the reward
+        # on a LATER tick than it happened. lag = camera frame - event frame;
+        # 0 = this tick's event. Read by nothing but logging/eval traces.
+        def _lag(key):
+            try:
+                return int(sensor_data['rgb'][0]) - int(sensor_data[key][0])
+            except Exception:  # noqa: BLE001
+                return None
+        self.lane_event_lag = _lag('lane_invasion') if self.diff_lane else None
+        self.collision_event_lag = (_lag('collision')
+                                    if 'collision' in sensor_data.keys() else None)
 
         # WEDGE ON LANE CROSSING. Once the vehicle crosses a marking it stops
         # responding to actions for the rest of the episode -- compute_action
@@ -1082,6 +1095,8 @@ class STBL3Experiment(BaseExperiment):
             # turns on this, so it has to be visible in the [Why] breakdown --
             # otherwise "crossings are forgiven correctly" is unfalsifiable.
             in_junction=bool(getattr(self, "in_junction", False)),
+            lane_event_lag=getattr(self, "lane_event_lag", None),
+            collision_event_lag=getattr(self, "collision_event_lag", None),
             # Which preset this episode is rendered under (logging/provenance).
             weather=getattr(self, "weather_name", "fixed"),
             distance_travelled=self.distance_completed,

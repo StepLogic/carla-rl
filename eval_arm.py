@@ -182,6 +182,31 @@ def main():
 
     import jax  # noqa: E402  (only needed for the tree_map above)
 
+    # PER-STEP Q TRACE (EVAL_Q_TRACE=1, user 2026-09-27: "does q function predict
+    # fatal states correctly?"). q_at reads only the goal critic at the start
+    # state. This reads, at EVERY step, the critic the actor actually follows in
+    # this mode -- _critic in goal mode, _critic_e in explore mode -- at the
+    # action the policy then takes, as the actor loss reads it (mean over the
+    # ensemble and all quantiles, gated_tqc_learner._gated_actor_update). Rows
+    # carry the reward and the fault flags of the step that action produced, so
+    # an offline pass can ask whether Q falls BEFORE a fault and whether it
+    # matches the realised return-to-go. Written to <out>.qtrace.jsonl.
+    q_trace = os.environ.get("EVAL_Q_TRACE", "0") == "1"
+    trace_rows = []
+    from vae_nav.eval_faults import classify_crossing
+
+    def q_mode(observation, action):
+        critic = getattr(agent, "_critic" if args.mode == "goal" else "_critic_e",
+                         None)
+        if critic is None:
+            return None
+        import jax.numpy as jnp
+        batched = jax.tree_util.tree_map(lambda x: np.asarray(x)[None],
+                                         observation)
+        qs = critic.apply_fn({"params": critic.params}, batched,
+                             np.asarray(action)[None])
+        return float(jnp.mean(qs))
+
     successes, steps_to_goal, timeouts, lengths = [], [], 0, []
     q0, q0_steps = [], []
     end_reasons = {}
@@ -208,8 +233,20 @@ def main():
         done, n, ok = False, 0, False
         while not done and n < args.max_steps:
             action = agent.eval_actions(obs)
+            _q = q_mode(obs, action) if q_trace else None
             obs, _r, term, trunc, info = env.step(action)
             n += 1
+            if q_trace:
+                _rem = info.get("route_remaining_m", None)
+                trace_rows.append(dict(
+                    ep=len(ep_detail), t=n - 1, q=_q, r=float(_r),
+                    term=bool(term), trunc=bool(trunc),
+                    off_road=bool(info.get("off_road", False)),
+                    collision=bool(info.get("collision", False)),
+                    crossing=classify_crossing(info),
+                    arrived=bool(info.get("is_success", False)),
+                    remaining_m=None if _rem is None else float(_rem),
+                    speed_kmh=float(info.get("speed_kmh", 0.0))))
             ok = ok or bool(info.get("is_success", False))
             done = bool(term or trunc)
             faults.step(info)
@@ -334,6 +371,11 @@ def main():
     os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)
     with open(args.out, "w") as fh:
         json.dump(out, fh, indent=2)
+    if q_trace:
+        with open(args.out + ".qtrace.jsonl", "w") as fh:
+            for row in trace_rows:
+                fh.write(json.dumps(row) + "\n")
+        print(f"[QTrace] {len(trace_rows)} steps -> {args.out}.qtrace.jsonl")
 
     succ = (f"{out['success']:.3f}" if goal_conditioned
             else "n/a (not a goal-conditioned arm)")

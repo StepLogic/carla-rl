@@ -614,6 +614,20 @@ _EXPLORE_NOVELTY = None
 _PY_SERVER = {"proc": None, "port": None, "stop": None}
 
 
+def carla_quality_for_port(port, env=None):
+    """CARLA_QUALITY_PORTS="2000:Low,2010:Epic" gives a server its own quality
+    level (user 2026-09-28: Town01 at Low beside Town05 at Epic -- Town05
+    segfaults at Low, Town01 hangs at Epic). Ports not listed, or no mapping,
+    fall back to CARLA_QUALITY (default Epic), exactly as before."""
+    env = os.environ if env is None else env
+    for item in env.get("CARLA_QUALITY_PORTS", "").split(","):
+        if ":" in item:
+            p, q = item.split(":", 1)
+            if p.strip() and int(p) == int(port) and q.strip():
+                return q.strip()
+    return env.get("CARLA_QUALITY", "Epic")
+
+
 def ensure_carla(port, timeout=180.0):
     """Start ONE CARLA on `port` for this process, and reuse it thereafter.
 
@@ -672,7 +686,7 @@ def ensure_carla(port, timeout=180.0):
         return port
 
     root = os.environ["CARLA_ROOT"]
-    quality = os.environ.get("CARLA_QUALITY", "Epic")
+    quality = carla_quality_for_port(port)
     # -prefernvidia: CARLA picks the first active GPU (the Intel iGPU on this
     # box) unless told otherwise. The VK_ICD/PRIME env vars already force
     # NVIDIA; the flag is the documented belt to those braces.
@@ -879,7 +893,7 @@ def make_env(town, seed, latent_source, eval_mode=False, port=None):
     # carla_core only passes the flag for Town01/Town04/None, so other towns
     # take the simulator's own default (Epic); this makes the intent explicit
     # wherever the flag is actually used.
-    carla_cfg["quality_level"] = os.environ.get("CARLA_QUALITY", "Epic")
+    carla_cfg["quality_level"] = carla_quality_for_port(_port)
     carla_cfg["port"] = _port
     # CARLA_TIMEOUT: the client RPC timeout (config default 50 s). Town12's
     # load_world alone takes minutes, so the large-map stages pass 300.

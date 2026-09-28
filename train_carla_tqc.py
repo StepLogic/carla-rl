@@ -1303,6 +1303,30 @@ def main():
     # from_env() honours PERCEPTION (vae | mobilenet) and is the ONLY
     # place a backend is chosen, in training and eval alike.
     latent_source = latent_from_env()
+    # RESERVE THE TRAINER'S GPU MEMORY BEFORE ANY CARLA SERVER STARTS
+    # (GPU_RESERVE_BEFORE_CARLA=1, user 2026-09-28 two-server run). A CARLA
+    # server's texture streaming grows into whatever VRAM is free (measured:
+    # ~5.5 GB each, windowed or offscreen, Low or Epic), so two servers started
+    # first leave the trainer nothing and jax dies on a 7.5 MB request. With
+    # XLA_PYTHON_CLIENT_PREALLOCATE=true (+ a BFC allocator and MEM_FRACTION)
+    # the first jax op reserves the arena here, and one VC-1 forward pass makes
+    # torch's caching allocator hold its working set. Memory placement only.
+    if os.environ.get("GPU_RESERVE_BEFORE_CARLA", "0") == "1":
+        import jax.numpy as _jnp
+        _jnp.zeros(1).block_until_ready()
+        _sz = int(os.environ.get("ENV_IMAGE_SIZE", 120))
+        try:
+            latent_source.latent(np.zeros((_sz, _sz, 3), np.uint8))
+        except Exception as _e:  # noqa: BLE001
+            print(f"[GPUReserve] VC-1 warm-up failed ({_e}); continuing", flush=True)
+        try:
+            _st = jax.devices()[0].memory_stats() or {}
+            print(f"[GPUReserve] jax arena {(_st.get('bytes_limit', 0) / 2**30):.2f} GiB "
+                  f"reserved before CARLA (PREALLOCATE="
+                  f"{os.environ.get('XLA_PYTHON_CLIENT_PREALLOCATE')}, ALLOCATOR="
+                  f"{os.environ.get('XLA_PYTHON_CLIENT_ALLOCATOR')})", flush=True)
+        except Exception:  # noqa: BLE001
+            pass
     # The VAE must not have seen the held-out towns either: a perception module
     # trained on Town03 leaks it just as surely as a policy trained on it.
     leaked = set(latent_source.trained_on_towns) & set(heldout)

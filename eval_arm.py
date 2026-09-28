@@ -172,8 +172,9 @@ def main():
             return None
         try:
             import jax.numpy as jnp
+            from vae_nav.lane_priv import strip_priv
             batched = jax.tree_util.tree_map(lambda x: np.asarray(x)[None],
-                                             observation)
+                                             strip_priv(observation))
             action = np.asarray(agent.eval_actions(observation))[None]
             qs = critic.apply_fn({"params": critic.params}, batched, action)
             return float(jnp.mean(qs))
@@ -238,11 +239,16 @@ def main():
         herr = (herr + math.pi) % (2 * math.pi) - math.pi
         return [lateral, herr, float(wp.lane_width), float(wp.is_junction)]
 
-    def q_mode(observation, action):
-        critic = getattr(agent, "_critic" if args.mode == "goal" else "_critic_e",
-                         None)
+    def q_mode(observation, action, attr=None):
+        # attr="_critic_p": the PRIVILEGED goal critic (OBS_PRIV runs), which
+        # sees the full observation; the image-only critics never see 'priv'.
+        attr = attr or ("_critic" if args.mode == "goal" else "_critic_e")
+        critic = getattr(agent, attr, None)
         if critic is None:
             return None
+        if attr != "_critic_p":
+            from vae_nav.lane_priv import strip_priv
+            observation = strip_priv(observation)
         import jax.numpy as jnp
         batched = jax.tree_util.tree_map(lambda x: np.asarray(x)[None],
                                          observation)
@@ -278,6 +284,8 @@ def main():
         while not done and n < args.max_steps:
             action = agent.eval_actions(obs)
             _q = q_mode(obs, action) if q_trace else None
+            _qp = (q_mode(obs, action, "_critic_p")
+                   if q_trace and args.mode == "goal" else None)
             if probe_obs:
                 probe["latent"].append(np.asarray(obs["latent"], np.float16))
                 probe["goal"].append(np.asarray(obs["goal"], np.float32))
@@ -289,7 +297,7 @@ def main():
             if q_trace:
                 _rem = info.get("route_remaining_m", None)
                 trace_rows.append(dict(
-                    ep=len(ep_detail), t=n - 1, q=_q, r=float(_r),
+                    ep=len(ep_detail), t=n - 1, q=_q, q_p=_qp, r=float(_r),
                     term=bool(term), trunc=bool(trunc),
                     off_road=bool(info.get("off_road", False)),
                     collision=bool(info.get("collision", False)),

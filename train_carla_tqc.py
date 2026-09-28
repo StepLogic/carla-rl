@@ -1891,6 +1891,13 @@ def main():
             print("[Resume] no loadable checkpoint; starting from scratch",
                   flush=True)
 
+    # REPLAY RESTORE (REPLAY_LOAD=1, user 2026-09-28): a resume used to restart
+    # with an EMPTY buffer. If the finished run saved replay_<step>.pkl beside
+    # the checkpoint it resumed from, load it into the buffer built above.
+    if step > 0 and os.environ.get("REPLAY_LOAD", "0") == "1":
+        from vae_nav.replay_persist import load_replay_into
+        load_replay_into(buffer, out_dir, step)
+
     # WARM START (INIT_FROM=<checkpoint>): weights from another run's
     # checkpoint, but the STEP COUNTER, REPLAY BUFFER, OPTIMISER STATE and
     # CURRICULUM all start fresh -- this is initialisation, not a resume, and
@@ -2607,6 +2614,15 @@ def main():
                              "curriculum_max": float(curr_max),
                              "her": [h.stats() for h in hers] if hers else None}, f)
 
+    # REPLAY SAVE (REPLAY_SAVE=1, user 2026-09-28 "save [replay] when training
+    # ends"): so a later resume from this step can continue with the buffer
+    # (REPLAY_LOAD=1). Skipped, with the reason printed, if the disk is short.
+    if os.environ.get("REPLAY_SAVE", "0") == "1":
+        try:
+            from vae_nav.replay_persist import save_replay
+            save_replay(buffer, out_dir, step)
+        except Exception as _e:  # noqa: BLE001 - never lose the run over this
+            print(f"[Replay] save failed: {type(_e).__name__}: {_e}", flush=True)
     venv.close()
     print("[Done] episodes per env:", ep_done.tolist(),
           "| HER:", [h.stats() for h in hers] if hers else "off")

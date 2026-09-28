@@ -31,6 +31,15 @@ import sys
 import time
 from datetime import datetime
 
+# DIAGNOSTIC (2026-09-27): every v18 / v18ap Town01 block dies with
+#   terminate called after throwing an instance of 'carla::client::TimeoutException'
+# -- an ABORT raised from a C++ thread, which leaves no Python traceback, and
+# apport discards the core. faulthandler prints every thread's Python stack on
+# SIGABRT/SIGSEGV, so the next occurrence names the call that was waiting on the
+# simulator. Changes nothing else.
+import faulthandler
+faulthandler.enable(all_threads=True)
+
 import numpy as np
 from collections.abc import Mapping
 

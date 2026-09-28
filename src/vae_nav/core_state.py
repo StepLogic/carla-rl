@@ -20,6 +20,8 @@ reward that is wrong everywhere and looks merely difficult.
 """
 import math
 
+OBS_PRIV = os.environ.get("OBS_PRIV", "0") == "1"
+
 import numpy as np
 
 try:
@@ -78,6 +80,18 @@ class CoreStateWrapper(Wrapper):
         # Radians. CARLA reports yaw in DEGREES; feeding those to sin/cos in the
         # goal block would silently scramble every bearing.
         info["hero_yaw"] = math.radians(float(tf.rotation.yaw))
+        # PRIVILEGED LANE FEATURES (OBS_PRIV=1, asymmetric goal critic, user
+        # 2026-09-27). One map query per step; only the privileged critic ever
+        # reads the result -- see vae_nav.lane_priv. Off by default, so every
+        # other run's info is unchanged.
+        if OBS_PRIV:
+            from vae_nav.lane_priv import lane_priv_from_map
+            world_map = getattr(core, "map", None)
+            if world_map is None:
+                raise SystemExit("OBS_PRIV=1 but core.map is None: the "
+                                 "privileged lane block needs the CARLA map.")
+            info["lane_priv"] = lane_priv_from_map(world_map, tf.location,
+                                                   info["hero_yaw"])
         info["goal_pos"] = np.array([goal_loc.x, goal_loc.y], np.float64)
         info["goal_location"] = goal_loc          # the expert oracle wants the
                                                   # carla.Location itself

@@ -150,6 +150,10 @@ WITH_GOAL = os.environ.get("OBS_WITH_GOAL", "1") == "1"
 # fine-tune, and that is the main reason the three-way comparison costs a full
 # training budget.
 WITH_MODE = os.environ.get("OBS_WITH_MODE", "0") == "1"
+# PRIVILEGED LANE BLOCK (OBS_PRIV=1, user 2026-09-27): published under key
+# "priv" for the asymmetric goal critic ONLY. gated_tqc_learner strips it
+# before the actor and the image-only critics see anything. See lane_priv.
+WITH_PRIV = os.environ.get("OBS_PRIV", "0") == "1"
 MODE_DIM = 1
 
 # OBS_WITH_COLLISION=1 ADDS THE CRITIC'S COLLISION FLAG z = has_collided.
@@ -305,6 +309,10 @@ class VAEGoalWrapper(Wrapper):
             # controls, and a wrong bound here would silently clip real data.
             space["state"] = spaces.Box(-np.inf, np.inf, (STATE_DIM,),
                                         np.float32)
+        if WITH_PRIV:
+            from vae_nav.lane_priv import PRIV_DIM, PRIV_KEY
+            space[PRIV_KEY] = spaces.Box(-np.inf, np.inf, (PRIV_DIM,),
+                                         np.float32)
         self.observation_space = spaces.Dict(space)
         # THE BANNER MUST LIST EVERY KEY IN THE SPACE. It is the one place an
         # operator confirms the observation layout of a live run, and a gated
@@ -319,6 +327,7 @@ class VAEGoalWrapper(Wrapper):
               + (f", 'mode': ({MODE_DIM},)" if self.with_mode else "")
               + (f", 'coll': ({COLL_DIM},)" if self.with_collision else "")
               + (f", 'state': ({STATE_DIM},)" if self.with_state else "")
+              + (", 'priv': (13,) [CRITIC-ONLY]" if WITH_PRIV else "")
               + f"}} = {total}-d backend='{self.source.name}'"
               + ("  [GATED: goal block zeroed in explore mode]"
                  if self.with_mode else "")
@@ -425,6 +434,13 @@ class VAEGoalWrapper(Wrapper):
             # steps under both modes therefore produce byte-identical state
             # blocks.
             out["state"] = self._state_block(info)
+        if WITH_PRIV:
+            lp = info.get("lane_priv")
+            if lp is None:
+                raise KeyError("OBS_PRIV=1 but info has no 'lane_priv'; "
+                               "CoreStateWrapper must run below this wrapper "
+                               "with OBS_PRIV=1 in its environment.")
+            out["priv"] = np.asarray(lp, np.float32)
         return out
 
     def _state_block(self, info):

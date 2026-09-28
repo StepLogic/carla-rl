@@ -2270,6 +2270,18 @@ def main():
                                       + ("" if _qe is None
                                          else f" q_scale_e={_qe:.3f}"),
                                       flush=True)
+                                # ASYMMETRIC (OBS_PRIV): the privileged goal
+                                # critic the actor follows. The [Critic] line
+                                # above is the IMAGE-ONLY goal critic (the map
+                                # distance); the two should track each other.
+                                if "q_p" in _g:
+                                    print(f"[CriticP{total_eps:4d}] "
+                                          f"q_p={float(_g['q_p']):10.2f} "
+                                          f"critic_loss_p="
+                                          f"{float(_g['critic_loss_p']):10.2f} "
+                                          f"td_p={float(_g['td_errors_p']):8.3f} "
+                                          f"(privileged, drives the actor; "
+                                          f"[Critic] = image-only)", flush=True)
                     # success= IS AGENT-ONLY (user 2026-09-24, "report only
                     # agent success rate"). The old value averaged EVERY
                     # episode -- expert-driven goal episodes (~0.9 success),

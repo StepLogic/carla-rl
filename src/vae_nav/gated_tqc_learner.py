@@ -74,6 +74,7 @@ from jaxrl2.utils.augmentations import batched_random_crop
 from jaxrl2.utils.misc import augment_batch
 from jaxrl2.utils.target_update import soft_target_update
 
+from vae_nav.lane_priv import PRIV_KEY, strip_priv
 from vae_nav.quantile_per_sample import (masked_mean,
                                          quantile_huber_loss_per_sample)
 
@@ -117,7 +118,11 @@ def _masked_critic_update(key, actor, critic, target_critic_params, temp, batch,
     None here and is left unclipped.
     """
     target_critic = critic.replace(params=target_critic_params)
-    dist = actor.apply_fn({"params": actor.params}, batch["next_observations"])
+    # THE ACTOR NEVER SEES THE PRIVILEGED BLOCK (a no-op without OBS_PRIV).
+    # The critic below reads whatever batch it was handed: the privileged
+    # goal critic gets the full observation, every other critic a stripped one.
+    dist = actor.apply_fn({"params": actor.params},
+                          strip_priv(batch["next_observations"]))
     next_actions, next_log_probs = dist.sample_and_log_prob(seed=key)
     next_quantiles = target_critic.apply_fn(
         {"params": target_critic_params}, batch["next_observations"], next_actions)
@@ -202,7 +207,8 @@ def _masked_critic_update(key, actor, critic, target_critic_params, temp, batch,
 
 
 def _gated_actor_update(key, actor, critic, critic_e, temp, temp_e, batch,
-                        m_goal, explore_actor_w, q_scale_g=1.0, q_scale_e=1.0):
+                        m_goal, explore_actor_w, q_scale_g=1.0, q_scale_e=1.0,
+                        batch_full=None):
     """One actor, choosing its critic and its temperature PER ROW.
 
     q_scale_g / q_scale_e (PER-MODE Q NORMALISATION, default 1.0 = off): each
@@ -220,13 +226,19 @@ def _gated_actor_update(key, actor, critic, critic_e, temp, temp_e, batch,
     is_goal = m_goal > 0.5
     m_explore = 1.0 - m_goal
 
+    # ASYMMETRIC GOAL CRITIC (OBS_PRIV): `critic` is then the PRIVILEGED goal
+    # critic and reads `batch_full` (with the lane block); the actor and the
+    # explore critic read `batch`, which never carries it. Without OBS_PRIV
+    # batch_full is None and this is the original computation.
+    obs_goal_critic = (batch if batch_full is None else batch_full)["observations"]
+
     def actor_loss_fn(params):
         dist = actor.apply_fn({"params": params}, batch["observations"])
         actions, log_probs = dist.sample_and_log_prob(seed=key)
         # Both critics are evaluated on the whole batch and half of each result
         # is thrown away. Same trade as above: a fixed shape the JIT can handle.
         q_g = critic.apply_fn({"params": critic.params},
-                              batch["observations"], actions).mean(axis=(0, 2))
+                              obs_goal_critic, actions).mean(axis=(0, 2))
         q_e = critic_e.apply_fn({"params": critic_e.params},
                                 batch["observations"], actions).mean(axis=(0, 2))
         q = jnp.where(is_goal, q_g / q_scale_g, q_e / q_scale_e)
@@ -269,7 +281,8 @@ def _gated_update_jit(rng, actor, critic, target_critic_params, temp,
                       value_floor=None, value_ceiling=None,
                       enable_update_temperature=True, augument=True,
                       share_encoder=True, q_scale_g=1.0, q_scale_e=1.0,
-                      alpha_scale_g=1.0, alpha_scale_e=1.0):
+                      alpha_scale_g=1.0, alpha_scale_e=1.0,
+                      critic_p=None, target_critic_p_params=None):
     if share_encoder:
         # From the GOAL critic, matching the ungated path exactly. Sharing from
         # both would need a rule for combining them, and any such rule is a
@@ -284,6 +297,12 @@ def _gated_update_jit(rng, actor, critic, target_critic_params, temp,
         # kept so the gated path is byte-for-byte the specialists' pipeline.
         rng, batch = augment_batch(key, batch, batched_random_crop)
 
+    # THE TWO VIEWS (OBS_PRIV). `batch_full` keeps the privileged lane block
+    # for the privileged goal critic; `batch` drops it for the actor, the
+    # image-only goal critic and the explore critic. Without the block both
+    # are the same dict and every line below traces as before.
+    batch_full = batch
+    batch = strip_priv(batch)
     m_goal = _mode_mask(batch)
     m_explore = 1.0 - m_goal
 
@@ -325,6 +344,24 @@ def _gated_update_jit(rng, actor, critic, target_critic_params, temp,
         discount_e, backup_entropy, top_quantiles_to_drop, kappa, m_explore,
         n_steps=n_steps, alpha_scale=alpha_scale_e)
 
+    # PRIVILEGED GOAL CRITIC (OBS_PRIV, user 2026-09-27): the SAME reward,
+    # discount, clip, temperature and goal-row mask as the image-only goal
+    # critic above -- it differs only in seeing the lane block. It is the one
+    # the actor follows on goal rows; the image-only critic keeps training on
+    # the same batch, against the same actor, and is what the map builder
+    # reads as a distance (agent._critic).
+    new_critic_p, new_target_p_params, info_p = None, None, None
+    if critic_p is not None:
+        rng, key_p = jax.random.split(rng)
+        new_critic_p, info_p = _masked_critic_update(
+            key_p, actor, critic_p, target_critic_p_params, temp, batch_full,
+            discount, backup_entropy, top_quantiles_to_drop, kappa, m_goal,
+            n_steps=n_steps,
+            value_floor=value_floor, value_ceiling=value_ceiling,
+            alpha_scale=alpha_scale_g)
+        new_target_p_params = soft_target_update(
+            new_critic_p.params, target_critic_p_params, tau)
+
     new_target_params = soft_target_update(
         new_critic.params, target_critic_params, tau)
     new_target_e_params = soft_target_update(
@@ -332,8 +369,10 @@ def _gated_update_jit(rng, actor, critic, target_critic_params, temp,
 
     rng, key_a = jax.random.split(rng)
     new_actor, info_a = _gated_actor_update(
-        key_a, actor, new_critic, new_critic_e, temp, temp_e, batch,
-        m_goal, explore_actor_w, q_scale_g, q_scale_e)
+        key_a, actor, new_critic if critic_p is None else new_critic_p,
+        new_critic_e, temp, temp_e, batch,
+        m_goal, explore_actor_w, q_scale_g, q_scale_e,
+        batch_full=None if critic_p is None else batch_full)
 
     new_temp, new_temp_e = temp, temp_e
     alpha_info = {}
@@ -366,8 +405,12 @@ def _gated_update_jit(rng, actor, critic, target_critic_params, temp,
         "target_actor_entropy_e": info_e["target_actor_entropy"],
         "frac_goal": m_goal.mean(),
     }
+    if info_p is not None:
+        info.update({"critic_loss_p": info_p["critic_loss"], "q_p": info_p["q"],
+                     "td_errors_p": info_p["td_errors"]})
     return (rng, new_actor, new_critic, new_target_params, new_temp,
-            new_critic_e, new_target_e_params, new_temp_e, info)
+            new_critic_e, new_target_e_params, new_temp_e, info,
+            new_critic_p, new_target_p_params)
 
 
 class GatedTQCLearner(TQCLearner):
@@ -383,7 +426,11 @@ class GatedTQCLearner(TQCLearner):
                  qnorm_critic_alpha: bool = False,
                  value_floor: Optional[float] = None,
                  value_ceiling: Optional[float] = None, **kwargs):
-        super().__init__(seed, observations, actions, **kwargs)
+        # ASYMMETRIC GOAL CRITIC. With the privileged lane block present the
+        # actor, the image-only goal critic and the explore critic are built
+        # WITHOUT it, so none of them has an input layer that could read it.
+        self.asymmetric = hasattr(observations, "keys") and PRIV_KEY in observations
+        super().__init__(seed, strip_priv(observations), actions, **kwargs)
 
         # GOAL CRITIC ONLY. Under the SORB minimum-time reward the goal return
         # lies in [-step_cost * max_steps, 0] BY CONSTRUCTION, so a target
@@ -435,11 +482,27 @@ class GatedTQCLearner(TQCLearner):
         sib_kwargs = dict(kwargs)
         if init_temperature_e is not None:
             sib_kwargs["init_temperature"] = init_temperature_e
-        sibling = TQCLearner(seed + 10_000, observations, actions, **sib_kwargs)
+        sibling = TQCLearner(seed + 10_000, strip_priv(observations), actions,
+                             **sib_kwargs)
         self._critic_e = sibling._critic
         self._target_critic_e_params = copy.deepcopy(sibling._critic.params)
         self._temp_e = sibling._temp
         del sibling
+
+        # THE PRIVILEGED GOAL CRITIC, built the same way from a sibling that
+        # DOES see the lane block. Its temperature is the goal one (self._temp).
+        self._critic_p = None
+        self._target_critic_p_params = None
+        if self.asymmetric:
+            sib_p = TQCLearner(seed + 20_000, observations, actions, **dict(kwargs))
+            self._critic_p = sib_p._critic
+            self._target_critic_p_params = copy.deepcopy(sib_p._critic.params)
+            del sib_p
+            print("[Gated] ASYMMETRIC goal critic: a PRIVILEGED goal critic "
+                  f"(sees '{PRIV_KEY}') drives the actor on goal rows; the "
+                  "image-only goal critic trains on the same batches and is "
+                  "the distance the map builder reads (agent._critic). The "
+                  f"actor and the explore critic never see '{PRIV_KEY}'.")
 
         bounds = ("unbounded" if self.value_floor is None
                   and self.value_ceiling is None
@@ -470,7 +533,8 @@ class GatedTQCLearner(TQCLearner):
         explore_actor_w = (0.0 if self._updates < self.explore_actor_warmup
                            else 1.0)
         (rng, actor, critic, target_params, temp,
-         critic_e, target_e_params, temp_e, info) = _gated_update_jit(
+         critic_e, target_e_params, temp_e, info,
+         critic_p, target_p_params) = _gated_update_jit(
             self._rng, self._actor, self._critic, self._target_critic_params,
             self._temp, self._critic_e, self._target_critic_e_params,
             self._temp_e, batch,
@@ -491,7 +555,9 @@ class GatedTQCLearner(TQCLearner):
                                and self._q_scale_g) else 1.0),
             alpha_scale_e=(float(self._q_scale_e)
                            if (self.actor_q_norm and self.qnorm_critic_alpha
-                               and self._q_scale_e) else 1.0))
+                               and self._q_scale_e) else 1.0),
+            critic_p=self._critic_p,
+            target_critic_p_params=self._target_critic_p_params)
 
         self._rng = rng
         frozen = self._updates < self.actor_freeze_updates
@@ -505,6 +571,9 @@ class GatedTQCLearner(TQCLearner):
         self._target_critic_params = target_params
         self._critic_e = critic_e
         self._target_critic_e_params = target_e_params
+        if critic_p is not None:
+            self._critic_p = critic_p
+            self._target_critic_p_params = target_p_params
         self._updates += 1
         info = dict(info)
         info["actor_frozen"] = float(frozen)
@@ -520,3 +589,29 @@ class GatedTQCLearner(TQCLearner):
             info["q_scale_goal"] = float(self._q_scale_g or 1.0)
             info["q_scale_explore"] = float(self._q_scale_e or 1.0)
         return info
+
+    # -- the actor's entry points: never the privileged block --------------
+    # jaxrl2's Agent passes whatever it is given straight to the actor, whose
+    # network has no input layer for the lane block. Every method that reaches
+    # the actor (or the image-only critic) strips it first, so a caller may
+    # hand over the env's full observation.
+    def eval_actions(self, observations):
+        return super().eval_actions(strip_priv(observations))
+
+    def sample_actions(self, observations):
+        return super().sample_actions(strip_priv(observations))
+
+    def act(self, observations):
+        return super().act(strip_priv(observations))
+
+    def action_dist(self, batch):
+        return super().action_dist(strip_priv(batch))
+
+    def eval_log_probs(self, batch):
+        return super().eval_log_probs(strip_priv(batch))
+
+    def extract_features(self, batch):
+        return super().extract_features(strip_priv(batch))
+
+    def ensemble_uncertainty(self, batch, action):
+        return super().ensemble_uncertainty(strip_priv(batch), action)

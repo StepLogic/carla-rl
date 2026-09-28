@@ -79,6 +79,15 @@ def _num(env, name, default):
 def check_gated_run(env=None):
     """Raise ValueError on an incoherent gated configuration. Inert otherwise."""
     env = os.environ if env is None else env
+    # OBS_PRIV (asymmetric goal critic) exists only on the two-critic gated
+    # learner: anywhere else the lane block would reach an actor that was
+    # built to read it, which is exactly what the design forbids.
+    if _flag(env, "OBS_PRIV") and (not _flag(env, "GATED")
+                                   or _flag(env, "GATED_ONE_CRITIC")):
+        raise ValueError(
+            "OBS_PRIV=1 needs GATED=1 with the two-critic learner (not "
+            "GATED_ONE_CRITIC): only GatedTQCLearner strips the privileged "
+            "lane block from the actor's input.")
     if not _flag(env, "GATED"):
         return
 

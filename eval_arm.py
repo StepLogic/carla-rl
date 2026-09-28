@@ -205,6 +205,12 @@ def main():
     # steps ahead. Written to <out>.probe.npz.
     probe_obs = q_trace and os.environ.get("EVAL_Q_TRACE_OBS", "0") == "1"
     probe = {"latent": [], "goal": [], "state": [], "lane": []}
+    # EVAL_PROBE_RGB=1 (2026-09-28 perception probe): also keep the exact
+    # frame VC-1 encoded, so readouts other than the run's own (pyramid vs the
+    # 7x7 patch grid) can be computed offline from the same pixels.
+    probe_rgb = probe_obs and os.environ.get("EVAL_PROBE_RGB", "0") == "1"
+    if probe_rgb:
+        probe["rgb"] = []
 
     def world_map_of(e):
         node = e
@@ -291,6 +297,8 @@ def main():
                 probe["goal"].append(np.asarray(obs["goal"], np.float32))
                 probe["state"].append(np.asarray(obs["state"], np.float32))
                 probe["lane"].append(lane_geometry(_prev_info))
+                if probe_rgb:
+                    probe["rgb"].append(np.asarray(_prev_info.get("rgb")))
             obs, _r, term, trunc, info = env.step(action)
             _prev_info = info
             n += 1

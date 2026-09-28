@@ -87,3 +87,26 @@ def test_non_expert_rows_carry_no_bc():
 def test_bc_off_without_the_key():
     info = _agent().update(_batch(0, False, expert=None))
     assert "bc_loss" not in info
+
+
+def test_buffer_with_expert_key_feeds_the_learner():
+    """The trainer's path: buffer space = env space + 'expert'; learner built
+    from the env space alone; sampled batches go straight into update()."""
+    from vae_nav.mode_split_buffer import ModeSplitBuffer
+    env_space = _space(False)
+    buf_space = spaces.Dict({**env_space.spaces,
+                             "expert": spaces.Box(0.0, 1.0, (1,), np.float32)})
+    buf = ModeSplitBuffer(buf_space, ACT, 400)
+    rng = np.random.default_rng(0)
+    for i in range(120):
+        m = i % 2
+        o = {k: rng.normal(size=v.shape).astype(np.float32)
+             for k, v in env_space.spaces.items()}
+        o["mode"] = np.array([float(m)], np.float32)
+        o["expert"] = np.array([float(i % 4 == 0)], np.float32)
+        buf.insert(dict(observations=o, next_observations=o, actions=TARGET.copy(),
+                        rewards=np.float32(-1), masks=np.float32(1),
+                        dones=np.float32(0)), mode=m)
+    a = _agent(w=1.0)
+    info = a.update(buf.sample(32))
+    assert 0.0 < float(info["bc_frac"]) < 1.0 and np.isfinite(float(info["bc_loss"]))

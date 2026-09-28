@@ -1411,6 +1411,10 @@ def main():
     # shared record path (both HER subclasses and the non-HER path) and
     # restores float32 on every sample.
     _buf_obs_space = fp16_pixel_obs_space(venv.observation_space)
+    # Recorded BEFORE the BC key below can rebuild the space: the Fp16PixelsBuffer
+    # wrap keyed on object identity, which the BC key would trip (v27's first
+    # launch died on KeyError 'pixels').
+    _fp16_on = _buf_obs_space is not venv.observation_space
     # BEHAVIOUR CLONING (BC_WEIGHT > 0, user 2026-09-28): the buffer also stores
     # an 'expert' flag per row -- 1.0 when the oracle drove the episode -- as an
     # extra observation key, because the jaxrl2 buffer stores nothing else. No
@@ -1487,7 +1491,7 @@ def main():
         # reads it. No GOAL_BATCH_FRAC split.
         buffer = ReplayBuffer(_buf_obs_space, venv.action_space,
                               _capacity)
-    if _buf_obs_space is not venv.observation_space:
+    if _fp16_on:
         from vae_nav.episode_her import Fp16PixelsBuffer
         buffer = Fp16PixelsBuffer(buffer)
         # CAPACITY-DERIVED ESTIMATE, NOT A HARDCODED NUMBER: fp16 pixels are

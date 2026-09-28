@@ -55,6 +55,13 @@ for serious in (False, True):
     a = per_step_arrays(rows, gamma=0.99, serious=serious)
     groups = a["ep"]
     ok = ~np.isnan(lane_feats).any(axis=1)          # t=0 rows may lack a pose
+    if os.environ.get("PROBE_LEADUP_ONLY", "0") == "1":
+        # ANTICIPATION, NOT DETECTION: drop rows whose own step faults and rows
+        # right after a fault step (an ongoing off-road reads as "fault within
+        # k" but is already visible), so only clean lead-up states remain.
+        fault_now = a["ttf"] == 0
+        prev_fault = np.r_[False, fault_now[:-1]] & (np.r_[-1, groups[:-1]] == groups)
+        ok &= ~fault_now & ~prev_fault
     kind = "serious_fault" if serious else "any_fault"
     out[kind] = {}
     print(f"\n[{kind}]  rows={int(ok.sum())}")
@@ -76,5 +83,6 @@ for serious in (False, True):
         out[kind][f"within_{k}"] = res
         print(f"  fault within {k:2d} (pos {res['pos_rate']:.3f}): " +
               "  ".join(f"{n}={v}" for n, v in res.items() if n != "pos_rate"))
-with open(trace.replace(".qtrace.jsonl", ".probe.json"), "w") as fh:
+_suffix = "_leadup" if os.environ.get("PROBE_LEADUP_ONLY", "0") == "1" else ""
+with open(trace.replace(".qtrace.jsonl", f".probe{_suffix}.json"), "w") as fh:
     json.dump(out, fh, indent=2)

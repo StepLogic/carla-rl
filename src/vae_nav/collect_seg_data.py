@@ -47,6 +47,12 @@ IMAGE_SIZE = int(os.environ.get("ENV_IMAGE_SIZE", 120))
 PERTURB_PROB = float(os.environ.get("PERTURB_PROB", 0.02))
 PERTURB_TICKS = int(os.environ.get("PERTURB_TICKS", 12))
 CARLA_ROOT = os.environ.get("CARLA_ROOT", "/home/robotlab/Apps/CARLA_0.9.15")
+# CAMERA FOV VARIATION (user 2026-09-28: "use different fovs for cameras as
+# well"): the encoder must transfer, not memorise one lens. A new RGB+seg pair
+# at a freshly drawn FOV every FOV_SWITCH_FRAMES kept frames; the policy's own
+# camera is 110.
+SEG_FOVS = tuple(float(f) for f in os.environ.get("SEG_FOVS", "90,100,110,120").split(","))
+FOV_SWITCH_FRAMES = int(os.environ.get("FOV_SWITCH_FRAMES", 500))
 
 # CLASS GROUPS. Names are CARLA 0.9.15 semantic labels (lane_mask.TAGS is
 # resolved from the installed CARLA, so the numbers are never hardcoded).
@@ -159,20 +165,36 @@ def collect_block(carla, port, town, quality, n_frames, seed, sink):
         carla.Rotation(pitch=CAM_TRANSFORM["pitch"], yaw=CAM_TRANSFORM["yaw"],
                        roll=CAM_TRANSFORM["roll"]))
     import queue
-    cams, qs = [], []
-    for bp_name in ("sensor.camera.rgb", "sensor.camera.instance_segmentation"):
-        bp = bl.find(bp_name)
-        bp.set_attribute("image_size_x", str(CAM_W))
-        bp.set_attribute("image_size_y", str(CAM_H))
-        bp.set_attribute("fov", str(CAM_FOV))
-        cam = world.spawn_actor(bp, cam_tf, attach_to=hero)
-        q = queue.Queue()
-        cam.listen(q.put)
-        cams.append(cam)
-        qs.append(q)
+    cams, qs, retired = [], [], []
+
+    def spawn_pair(fov):
+        """Retire the current pair (stop only -- destroying sensors in sync
+        mode aborted the process) and attach a new RGB+seg pair at `fov`."""
+        for c in cams:
+            try:
+                c.stop()
+            except Exception:  # noqa: BLE001
+                pass
+        retired.extend(cams)          # keep references: no out-of-scope warnings
+        cams.clear()
+        qs.clear()
+        for bp_name in ("sensor.camera.rgb", "sensor.camera.instance_segmentation"):
+            bp = bl.find(bp_name)
+            bp.set_attribute("image_size_x", str(CAM_W))
+            bp.set_attribute("image_size_y", str(CAM_H))
+            bp.set_attribute("fov", str(fov))
+            cam = world.spawn_actor(bp, cam_tf, attach_to=hero)
+            q = queue.Queue()
+            cam.listen(q.put)
+            cams.append(cam)
+            qs.append(q)
+
+    cur_fov = float(rng.choice(SEG_FOVS))
+    spawn_pair(cur_fov)
     lut = tag_to_class_lut()
     rgbs, labels, perturbed, weathers = (sink["rgb"], sink["label"],
                                          sink["perturbed"], sink["weather"])
+    fovs = sink.setdefault("fov", [])
     kept, tick, last, stuck, pert_left, widx = 0, 0, None, 0, 0, 0
     cur_weather = _weather_cycle(carla, world, widx, rng)
 
@@ -211,6 +233,11 @@ def collect_block(carla, port, town, quality, n_frames, seed, sink):
                     last, stuck = None, 0
                 continue
             stuck, last = 0, loc
+            if kept and kept % FOV_SWITCH_FRAMES == 0:
+                cur_fov = float(rng.choice(SEG_FOVS))
+                spawn_pair(cur_fov)
+                for _ in range(5):
+                    tick_once()
             if kept and kept % 250 == 0:
                 widx += 1
                 cur_weather = _weather_cycle(carla, world, widx, rng)
@@ -219,10 +246,12 @@ def collect_block(carla, port, town, quality, n_frames, seed, sink):
             rgbs.append(env_frame(_to_array(rgb_img), IMAGE_SIZE))
             labels.append(labels_from_instance(_to_array(inst_img), lut))
             perturbed.append(pert_left > 0)
+            fovs.append(cur_fov)
             weathers.append(cur_weather)
             kept += 1
             if kept % 500 == 0 or kept in (1, 50):
-                print(f"  [{town}/{quality}] {kept}/{n_frames} weather={cur_weather}",
+                print(f"  [{town}/{quality}] {kept}/{n_frames} weather={cur_weather} "
+                      f"fov={cur_fov:g}",
                       flush=True)
     finally:
         # NO ACTOR CLEANUP. Stopping/destroying the sensors in synchronous
@@ -263,7 +292,7 @@ def main():
                 continue
             print(f"=== {town} {quality} ===", flush=True)
             n = {"Low": a.frames_low, "Epic": a.frames_epic}.get(quality) or a.frames
-            sink = {"rgb": [], "label": [], "perturbed": [], "weather": []}
+            sink = {"rgb": [], "label": [], "perturbed": [], "weather": [], "fov": []}
             proc = start_server(a.port, quality)
             try:
                 collect_block(carla, a.port, town, quality, n,
@@ -280,7 +309,7 @@ def main():
                 continue
             d = dict(rgb=np.stack(sink["rgb"]), label=np.stack(sink["label"]),
                      perturbed=np.array(sink["perturbed"]),
-                     weather=np.array(sink["weather"]))
+                     weather=np.array(sink["weather"]), fov=np.array(sink["fov"]))
             np.savez_compressed(path + ".tmp.npz", **d)
             os.replace(path + ".tmp.npz", path)
             counts = np.bincount(d["label"].ravel(), minlength=N_CLASSES) / d["label"].size

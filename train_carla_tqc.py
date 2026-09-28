@@ -1378,8 +1378,25 @@ def main():
     print(f"[Vec] {n_envs} envs: " +
           ", ".join(f"{t}@{p}" for t, p in zip(env_towns, CARLA_PORTS)))
 
+    # STAGGERED SERVER START (user 2026-09-28: "run second env after trainer
+    # has started"). ThreadedVecEnv builds every env at once, so every CARLA
+    # server starts at the same moment and each streams toward ~5 GB of free
+    # VRAM -- together they overflow the 12 GB card (v22-v24). A town listed
+    # in ENV_STAGGER_TOWNS waits ENV_STAGGER_S seconds before its env (and so
+    # its server) is built, by which time the trainer's reservation and the
+    # other server have settled. Start-up order only; off by default.
+    _stagger_s = float(os.environ.get("ENV_STAGGER_S", 0) or 0)
+    _stagger_towns = {x for x in os.environ.get("ENV_STAGGER_TOWNS", "").split(",") if x}
+
+    def _env_fn(t, p, i):
+        if _stagger_s > 0 and t in _stagger_towns:
+            print(f"[Vec] {t}@{p}: staggered start, waiting {_stagger_s:.0f} s "
+                  f"for the other server(s) to settle", flush=True)
+            time.sleep(_stagger_s)
+        return make_env(t, SEED + i, latent_source, port=p)
+
     venv = ThreadedVecEnv(
-        [(lambda t=t, p=p, i=i: make_env(t, SEED + i, latent_source, port=p))
+        [(lambda t=t, p=p, i=i: _env_fn(t, p, i))
          for i, (t, p) in enumerate(zip(env_towns, CARLA_PORTS))],
         names=env_towns)
 

@@ -74,7 +74,7 @@ from jaxrl2.utils.augmentations import batched_random_crop
 from jaxrl2.utils.misc import augment_batch
 from jaxrl2.utils.target_update import soft_target_update
 
-from vae_nav.lane_priv import PRIV_KEY, strip_priv
+from vae_nav.lane_priv import EXPERT_KEY, PRIV_KEY, strip_expert, strip_priv
 from vae_nav.quantile_per_sample import (masked_mean,
                                          quantile_huber_loss_per_sample)
 
@@ -208,7 +208,8 @@ def _masked_critic_update(key, actor, critic, target_critic_params, temp, batch,
 
 def _gated_actor_update(key, actor, critic, critic_e, temp, temp_e, batch,
                         m_goal, explore_actor_w, q_scale_g=1.0, q_scale_e=1.0,
-                        batch_full=None):
+                        batch_full=None, bc_mask=None, bc_weight=0.0,
+                        bc_scale=1.0):
     """One actor, choosing its critic and its temperature PER ROW.
 
     q_scale_g / q_scale_e (PER-MODE Q NORMALISATION, default 1.0 = off): each
@@ -244,6 +245,17 @@ def _gated_actor_update(key, actor, critic, critic_e, temp, temp_e, batch,
         q = jnp.where(is_goal, q_g / q_scale_g, q_e / q_scale_e)
         alpha = jnp.where(is_goal, alpha_g, alpha_e)
         per_row = alpha * log_probs - q
+        # BEHAVIOUR CLONING ON EXPERT ROWS (BC_WEIGHT, user 2026-09-28 "i
+        # prefer 2"; TD3+BC-style). The deterministic action is pulled toward
+        # the action the expert took, per dimension in units of the action
+        # box's half-range so steer and throttle weigh alike. Q is already
+        # divided by its running spread (ACTOR_Q_NORM), so BC_WEIGHT sets the
+        # balance directly. Absent mask (BC off) -> the original loss.
+        bc_err = None
+        if bc_mask is not None:
+            a_det = dist.mode()
+            bc_err = (((a_det - batch["actions"]) / bc_scale) ** 2).mean(-1)
+            per_row = per_row + bc_weight * bc_mask * bc_err
         # the raw per-mode value spread, for the caller's running normaliser
         def _masked_std(x, m):
             n = jnp.maximum(m.sum(), 1.0)
@@ -261,6 +273,9 @@ def _gated_actor_update(key, actor, critic, critic_e, temp, temp_e, batch,
             "entropy_goal": masked_mean(-log_probs, m_goal),
             "entropy_explore": masked_mean(-log_probs, m_explore),
             "q_std_goal": q_std_g, "q_std_explore": q_std_e,
+            **({} if bc_err is None else {
+                "bc_loss": masked_mean(bc_err, bc_mask),
+                "bc_frac": bc_mask.mean()}),
         }
 
     grads, info = jax.grad(actor_loss_fn, has_aux=True)(actor.params)
@@ -282,7 +297,8 @@ def _gated_update_jit(rng, actor, critic, target_critic_params, temp,
                       enable_update_temperature=True, augument=True,
                       share_encoder=True, q_scale_g=1.0, q_scale_e=1.0,
                       alpha_scale_g=1.0, alpha_scale_e=1.0,
-                      critic_p=None, target_critic_p_params=None):
+                      critic_p=None, target_critic_p_params=None,
+                      bc_weight=0.0, bc_scale=1.0):
     if share_encoder:
         # From the GOAL critic, matching the ungated path exactly. Sharing from
         # both would need a rule for combining them, and any such rule is a
@@ -301,7 +317,9 @@ def _gated_update_jit(rng, actor, critic, target_critic_params, temp,
     # for the privileged goal critic; `batch` drops it for the actor, the
     # image-only goal critic and the explore critic. Without the block both
     # are the same dict and every line below traces as before.
-    batch_full = batch
+    bc_mask = (batch["observations"][EXPERT_KEY][:, 0].astype(jnp.float32)
+               if EXPERT_KEY in batch["observations"] else None)
+    batch_full = strip_expert(batch)
     batch = strip_priv(batch)
     m_goal = _mode_mask(batch)
     m_explore = 1.0 - m_goal
@@ -372,7 +390,8 @@ def _gated_update_jit(rng, actor, critic, target_critic_params, temp,
         key_a, actor, new_critic if critic_p is None else new_critic_p,
         new_critic_e, temp, temp_e, batch,
         m_goal, explore_actor_w, q_scale_g, q_scale_e,
-        batch_full=None if critic_p is None else batch_full)
+        batch_full=None if critic_p is None else batch_full,
+        bc_mask=bc_mask, bc_weight=bc_weight, bc_scale=bc_scale)
 
     new_temp, new_temp_e = temp, temp_e
     alpha_info = {}
@@ -425,11 +444,17 @@ class GatedTQCLearner(TQCLearner):
                  actor_q_norm_tau: float = 0.01,
                  qnorm_critic_alpha: bool = False,
                  value_floor: Optional[float] = None,
-                 value_ceiling: Optional[float] = None, **kwargs):
+                 value_ceiling: Optional[float] = None,
+                 bc_weight: float = 0.0, **kwargs):
         # ASYMMETRIC GOAL CRITIC. With the privileged lane block present the
         # actor, the image-only goal critic and the explore critic are built
         # WITHOUT it, so none of them has an input layer that could read it.
         self.asymmetric = hasattr(observations, "keys") and PRIV_KEY in observations
+        # BC weight and the action half-range its error is measured in.
+        self.bc_weight = float(bc_weight)
+        _asp = kwargs.get("action_space")
+        self._bc_scale = (jnp.asarray(0.5 * (_asp.high - _asp.low), jnp.float32)
+                          if _asp is not None else jnp.ones((), jnp.float32))
         super().__init__(seed, strip_priv(observations), actions, **kwargs)
 
         # GOAL CRITIC ONLY. Under the SORB minimum-time reward the goal return
@@ -557,7 +582,8 @@ class GatedTQCLearner(TQCLearner):
                            if (self.actor_q_norm and self.qnorm_critic_alpha
                                and self._q_scale_e) else 1.0),
             critic_p=self._critic_p,
-            target_critic_p_params=self._target_critic_p_params)
+            target_critic_p_params=self._target_critic_p_params,
+            bc_weight=self.bc_weight, bc_scale=self._bc_scale)
 
         self._rng = rng
         frozen = self._updates < self.actor_freeze_updates

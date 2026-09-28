@@ -599,7 +599,9 @@ def build_agent(observation_space, action_space, seed):
         from vae_nav.gated_tqc_learner import GatedTQCLearner
         return apply_augment_override(
             GatedTQCLearner(seed, obs_sample,
-                            action_space.sample(), **kwargs))
+                            action_space.sample(),
+                            bc_weight=float(os.environ.get("BC_WEIGHT", 0.0) or 0.0),
+                            **kwargs))
     return apply_augment_override(
         TQCLearner(seed, obs_sample, action_space.sample(),
                    **kwargs))
@@ -1409,6 +1411,25 @@ def main():
     # shared record path (both HER subclasses and the non-HER path) and
     # restores float32 on every sample.
     _buf_obs_space = fp16_pixel_obs_space(venv.observation_space)
+    # BEHAVIOUR CLONING (BC_WEIGHT > 0, user 2026-09-28): the buffer also stores
+    # an 'expert' flag per row -- 1.0 when the oracle drove the episode -- as an
+    # extra observation key, because the jaxrl2 buffer stores nothing else. No
+    # network sees it (vae_nav.lane_priv.strip_*); the learner uses it as the
+    # BC mask. Refused with HER: a relabelled expert row would clone an action
+    # taken toward a DIFFERENT goal.
+    BC_ON = float(os.environ.get("BC_WEIGHT", 0.0) or 0.0) > 0.0
+    if BC_ON:
+        if os.environ.get("EPISODE_HER", "0") == "1":
+            raise SystemExit("BC_WEIGHT > 0 is refused with EPISODE_HER=1: "
+                             "hindsight copies of expert rows carry a goal the "
+                             "expert was not driving to.")
+        from gymnasium import spaces as _gsp
+        from vae_nav.lane_priv import EXPERT_KEY
+        _buf_obs_space = _gsp.Dict({**_buf_obs_space.spaces,
+                                    EXPERT_KEY: _gsp.Box(0.0, 1.0, (1,), np.float32)})
+        print(f"[BC] behaviour cloning ON: weight {os.environ.get('BC_WEIGHT')} "
+              f"on expert-driven rows (flag '{EXPERT_KEY}' in the buffer only)",
+              flush=True)
     # N-STEP RETURNS (v11, user picked n-step over a gamma change for the
     # far-field saturation). 1 = every earlier run, byte-identical. n > 1
     # merges each sampled row with up to n-1 same-segment successors at sample
@@ -1967,6 +1988,11 @@ def main():
             # A time-limit truncation must still bootstrap; only a real
             # termination cuts the value backup.
             mask = 0.0 if inf.get("terminated", False) else 1.0
+            if BC_ON:
+                from vae_nav.lane_priv import EXPERT_KEY
+                _flag = np.array([float(bool(is_expert_ep[i]))], np.float32)
+                o_i = {**o_i, EXPERT_KEY: _flag}
+                n_i = {**n_i, EXPERT_KEY: _flag}
             tr = dict(observations=o_i, actions=actions[i],
                       rewards=np.float32(rewards[i]), masks=np.float32(mask),
                       dones=np.float32(float(dones[i])), next_observations=n_i)
@@ -2358,6 +2384,12 @@ def main():
                                 # critic the actor follows. The [Critic] line
                                 # above is the IMAGE-ONLY goal critic (the map
                                 # distance); the two should track each other.
+                                if "bc_loss" in _g:
+                                    print(f"[BC    {total_eps:4d}] bc_loss="
+                                          f"{float(_g['bc_loss']):.4f} (expert rows, "
+                                          f"half-range units) expert share of "
+                                          f"batch={float(_g['bc_frac']):.2f}",
+                                          flush=True)
                                 if "q_p" in _g:
                                     print(f"[CriticP{total_eps:4d}] "
                                           f"q_p={float(_g['q_p']):10.2f} "

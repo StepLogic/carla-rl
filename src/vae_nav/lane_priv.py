@@ -33,6 +33,12 @@ import numpy as np
 from vae_nav.lane_explore_reward import ILLEGAL_MARKS, UNPAINTED_MARKS
 
 PRIV_KEY = "priv"
+# BEHAVIOUR-CLONING MASK (BC_WEIGHT > 0, user 2026-09-28 "i prefer 2"): 1.0 on
+# rows the expert drove. It rides in the observation dict only because the
+# jaxrl2 buffer stores nothing else; no network ever sees it -- strip_priv
+# removes it for the actor and image-only critics, strip_expert for the
+# privileged critic, and the learner reads it as the BC mask.
+EXPERT_KEY = "expert"
 PRIV_DIM = 13
 
 
@@ -88,19 +94,28 @@ def lane_priv_from_map(world_map, location, hero_yaw_rad):
     return lane_priv((location.x, location.y), hero_yaw_rad, wp)
 
 
-def strip_priv(x):
-    """Drop the privileged block from an observation dict, or from the
-    observations / next_observations of a batch dict. Anything else is
-    returned unchanged. The actor and the image-only critics are only ever
-    called through this."""
+def _strip(x, keys):
     if not hasattr(x, "keys"):
         return x
-    if PRIV_KEY in x:
-        return {k: v for k, v in x.items() if k != PRIV_KEY}
+    if any(k in x for k in keys):
+        return {k: v for k, v in x.items() if k not in keys}
     if "observations" in x and hasattr(x["observations"], "keys"):
         y = dict(x)
         for k in ("observations", "next_observations"):
-            if k in y and hasattr(y[k], "keys") and PRIV_KEY in y[k]:
-                y[k] = {kk: v for kk, v in y[k].items() if kk != PRIV_KEY}
+            if k in y and hasattr(y[k], "keys") and any(kk in y[k] for kk in keys):
+                y[k] = {kk: v for kk, v in y[k].items() if kk not in keys}
         return y
     return x
+
+
+def strip_priv(x):
+    """Drop the privileged block (and the BC mask) from an observation dict, or
+    from the observations / next_observations of a batch dict. Anything else is
+    returned unchanged. The actor and the image-only critics are only ever
+    called through this."""
+    return _strip(x, (PRIV_KEY, EXPERT_KEY))
+
+
+def strip_expert(x):
+    """Drop only the BC mask: what the PRIVILEGED critic reads."""
+    return _strip(x, (EXPERT_KEY,))

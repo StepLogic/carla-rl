@@ -195,6 +195,49 @@ def main():
     trace_rows = []
     from vae_nav.eval_faults import classify_crossing
 
+    # PROBE CAPTURE (EVAL_Q_TRACE_OBS=1, user 2026-09-27 "can the critic learn
+    # from the image latent?" -> "do it"). Alongside each trace row, saves the
+    # observation the critic was fed (latent as float16, goal, state) and the
+    # TRUE lane geometry of that same state from the CARLA map: signed lateral
+    # offset from the lane centre, heading error to the lane, lane width and
+    # the junction flag. A probe then asks whether each predicts a fault a few
+    # steps ahead. Written to <out>.probe.npz.
+    probe_obs = q_trace and os.environ.get("EVAL_Q_TRACE_OBS", "0") == "1"
+    probe = {"latent": [], "goal": [], "state": [], "lane": []}
+
+    def world_map_of(e):
+        node = e
+        for _ in range(16):
+            if node is None:
+                return None
+            if getattr(node, "core", None) is not None:
+                return getattr(node.core, "map", None)
+            node = getattr(node, "env", None)
+        return None
+
+    def lane_geometry(info):
+        """[lateral_m, heading_err_rad, lane_width_m, in_junction] at the hero,
+        NaN when there is no pose or no map."""
+        wmap = world_map_of(env)
+        pos = info.get("hero_pos") if info else None
+        if wmap is None or pos is None:
+            return [np.nan] * 4
+        import carla
+        import math
+        loc = carla.Location(x=float(pos[0]), y=float(pos[1]),
+                             z=float(info.get("hero_z", 0.0)))
+        wp = wmap.get_waypoint(loc, project_to_road=True,
+                               lane_type=carla.LaneType.Driving)
+        if wp is None:
+            return [np.nan] * 4
+        tf = wp.transform
+        fwd = tf.get_forward_vector()
+        dx, dy = loc.x - tf.location.x, loc.y - tf.location.y
+        lateral = fwd.x * dy - fwd.y * dx
+        herr = float(info.get("hero_yaw", 0.0)) - math.radians(tf.rotation.yaw)
+        herr = (herr + math.pi) % (2 * math.pi) - math.pi
+        return [lateral, herr, float(wp.lane_width), float(wp.is_junction)]
+
     def q_mode(observation, action):
         critic = getattr(agent, "_critic" if args.mode == "goal" else "_critic_e",
                          None)
@@ -230,11 +273,18 @@ def main():
         obs, info0 = env.reset(seed=ep["seed"])
         q_start = q_at(obs)
         faults = EpisodeFaults(start_pos=(info0 or {}).get("hero_pos"))
+        _prev_info = info0 or {}
         done, n, ok = False, 0, False
         while not done and n < args.max_steps:
             action = agent.eval_actions(obs)
             _q = q_mode(obs, action) if q_trace else None
+            if probe_obs:
+                probe["latent"].append(np.asarray(obs["latent"], np.float16))
+                probe["goal"].append(np.asarray(obs["goal"], np.float32))
+                probe["state"].append(np.asarray(obs["state"], np.float32))
+                probe["lane"].append(lane_geometry(_prev_info))
             obs, _r, term, trunc, info = env.step(action)
+            _prev_info = info
             n += 1
             if q_trace:
                 _rem = info.get("route_remaining_m", None)
@@ -376,6 +426,10 @@ def main():
             for row in trace_rows:
                 fh.write(json.dumps(row) + "\n")
         print(f"[QTrace] {len(trace_rows)} steps -> {args.out}.qtrace.jsonl")
+    if probe_obs:
+        np.savez_compressed(args.out + ".probe.npz",
+                            **{k: np.asarray(v) for k, v in probe.items()})
+        print(f"[Probe] {len(probe['lane'])} rows -> {args.out}.probe.npz")
 
     succ = (f"{out['success']:.3f}" if goal_conditioned
             else "n/a (not a goal-conditioned arm)")

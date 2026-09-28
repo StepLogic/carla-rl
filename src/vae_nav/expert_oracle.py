@@ -260,6 +260,47 @@ def should_use_expert(rng, expert_prob):
     return bool(rng.random() < float(expert_prob))
 
 
+def route_has_lane_change(route):
+    """True when a [(waypoint, RoadOption)] route contains a lane change."""
+    return any(str(opt).split(".")[-1] in ("CHANGELANELEFT", "CHANGELANERIGHT")
+               for _, opt in route)
+
+
+def lane_following_route(start_wp, goal_location, step_m=2.0, reach_m=3.0,
+                         slack_m=40.0, stretch=3.0):
+    """[(waypoint, RoadOption.LANEFOLLOW)] from start_wp to the goal using only
+    waypoint.next() -- lane following, no lane changes -- or None.
+
+    Depth-first over the branches next() offers at junctions, bounded by the
+    straight-line distance times `stretch` plus `slack_m` of path (a route
+    through a turn is much longer than the straight line), so it stays small:
+    branches exist only at junctions and a 200 m goal crosses a handful."""
+    import sys
+    _p = "/home/robotlab/Apps/CARLA_0.9.15/PythonAPI/carla"
+    if _p not in sys.path:
+        sys.path.append(_p)
+    from agents.navigation.local_planner import RoadOption
+    gx, gy = goal_location.x, goal_location.y
+
+    def dist(wp):
+        loc = wp.transform.location
+        return float(np.hypot(loc.x - gx, loc.y - gy))
+
+    max_steps = int((stretch * dist(start_wp) + slack_m) / step_m) + 1
+    stack = [(start_wp, [start_wp])]
+    while stack:
+        wp, path = stack.pop()
+        if dist(wp) <= reach_m:
+            return [(w, RoadOption.LANEFOLLOW) for w in path]
+        if len(path) >= max_steps:
+            continue
+        # nearest-first: push the branch closest to the goal LAST so it pops first
+        nxt = sorted(wp.next(step_m), key=dist, reverse=True)
+        for n in nxt:
+            stack.append((n, path + [n]))
+    return None
+
+
 class BasicAgentExpert(ExpertOracle):
     """CARLA's own BasicAgent, wearing ExpertOracle's interface.
 
@@ -326,6 +367,19 @@ class BasicAgentExpert(ExpertOracle):
             start_wp = self._map.get_waypoint(self._vehicle.get_location())
             end_wp = self._map.get_waypoint(goal_location)
             route = self._agent.trace_route(start_wp, end_wp)
+            # NO LANE CHANGES (user 2026-09-28: "i want no lane change"). Every
+            # goal lies on the start lane's own continuation (origin.next(d)),
+            # yet CARLA's planner took a lane change on 6/600 Town05 routes
+            # (scripts/goal_lane_audit.py) -- and the actor learns from what
+            # the expert drives. Such a route is replaced by the lane-following
+            # one, which always exists for these goals.
+            if route_has_lane_change(route):
+                lf = lane_following_route(start_wp, goal_location)
+                if lf:
+                    route = lf
+                    print(f"[ExpertPlan] lane change in CARLA's route replaced "
+                          f"by a lane-following one ({len(lf)} waypoints)",
+                          flush=True)
             self._agent.set_global_plan(route, clean_queue=True)
             # PID memories are per-episode too: the derivative/integral
             # buffers otherwise carry the last episode's final error into the

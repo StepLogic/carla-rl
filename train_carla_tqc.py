@@ -1391,6 +1391,19 @@ def main():
     _stagger_towns = {x for x in os.environ.get("ENV_STAGGER_TOWNS", "").split(",") if x}
 
     def _env_fn(t, p, i):
+        # PER-THREAD VC-1 WARM-UP (v28 smoke, 2026-09-28): torch creates a
+        # cuBLAS handle PER THREAD on first use, and the envs encode frames in
+        # these worker threads -- so the main-thread warm-up above did not
+        # cover them, and both first resets died with CUBLAS_STATUS_ALLOC_FAILED
+        # at the servers' startup peak. Encoding one blank frame here, BEFORE
+        # this env's server starts, creates the handle while memory is free.
+        # Both pool threads run a build concurrently, so both get one.
+        if os.environ.get("GPU_RESERVE_BEFORE_CARLA", "0") == "1":
+            try:
+                _sz = int(os.environ.get("ENV_IMAGE_SIZE", 120))
+                latent_source.latent(np.zeros((_sz, _sz, 3), np.uint8))
+            except Exception as _e:  # noqa: BLE001
+                print(f"[GPUReserve] {t}: thread warm-up failed ({_e})", flush=True)
         if _stagger_s > 0 and t in _stagger_towns:
             print(f"[Vec] {t}@{p}: staggered start, waiting {_stagger_s:.0f} s "
                   f"for the other server(s) to settle", flush=True)

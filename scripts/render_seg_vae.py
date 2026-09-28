@@ -22,7 +22,7 @@ def main():
     import jax.numpy as jnp
     from vae_nav import seg_vae as sv
     c = pickle.load(open(ck, "rb"))
-    m = sv.SegVAE(latent_dim=c["latent_dim"])
+    m = sv.SegVAE(latent_dim=c["latent_dim"], dec_start=c.get("dec_start", 15))
     shards = sorted(glob.glob(os.path.join(data, "shard_*.npz")))
     rng = np.random.default_rng(1)
     picks = []

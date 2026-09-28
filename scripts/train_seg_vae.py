@@ -79,8 +79,20 @@ def main():
     params = model.init(rng, jnp.zeros((1, 120, 120, 3)), rng)
     if a.init:
         c0 = pickle.load(open(a.init, "rb"))
-        params = jax.tree_util.tree_map(jnp.asarray, c0["params"])
-        print(f"[init] warm start from {a.init} (step {c0['step']})", flush=True)
+        same = (jax.tree_util.tree_structure(c0["params"]) == jax.tree_util.tree_structure(params)
+                and all(x.shape == y.shape for x, y in zip(jax.tree_util.tree_leaves(c0["params"]),
+                                                          jax.tree_util.tree_leaves(params))))
+        if same:
+            params = jax.tree_util.tree_map(jnp.asarray, c0["params"])
+            print(f"[init] warm start (all) from {a.init} (step {c0['step']})", flush=True)
+        else:
+            # DECODER CHANGED SHAPE: keep the new decoder, load the encoder only
+            from flax.core import unfreeze
+            params = unfreeze(params)
+            params["params"]["encoder"] = jax.tree_util.tree_map(
+                jnp.asarray, c0["params"]["params"]["encoder"])
+            print(f"[init] warm start (ENCODER only; decoder is new) from {a.init} "
+                  f"(step {c0['step']})", flush=True)
     sched = optax.warmup_cosine_decay_schedule(0.0, a.lr, min(1000, a.steps // 10), a.steps, a.lr * 0.05)
     opt = optax.adamw(sched, weight_decay=1e-4)
     opt_state = opt.init(params)
@@ -138,6 +150,7 @@ def main():
             with open(os.path.join(a.out, "seg_vae.pkl"), "wb") as f:
                 pickle.dump({"params": jax.device_get(params), "step": step,
                              "latent_dim": sv.LATENT_DIM, "classes": sv.N_CLASSES,
+                             "dec_start": sv.DEC_START,
                              "class_w": w.tolist(), "mask_ratio": sv.MASK_RATIO}, f)
             json.dump(log, open(os.path.join(a.out, "train_log.json"), "w"), indent=1)
 

@@ -32,6 +32,11 @@ N_CLASSES = 9
 IMAGE_SIZE = 120
 PATCH = 8
 MASK_RATIO = float(os.environ.get("SEG_MASK_RATIO", 0.75))
+# DECODER START GRID (user 2026-09-28: "Start the decoder at 30x30 instead of
+# 15x15"). 15: z -> 15x15x256 -> three 2x upsamplings (the first model).
+# 30: z -> 30x30x64 (the same 57,600 values, so the same Dense size) -> two
+# upsamplings: finer room to place thin lane lines; the latent is unchanged.
+DEC_START = int(os.environ.get("SEG_DEC_START", 30))
 
 
 def _gn(c):
@@ -78,13 +83,15 @@ class Encoder(nn.Module):
 
 class Decoder(nn.Module):
     n_classes: int = N_CLASSES
+    start: int = DEC_START
 
     @nn.compact
     def __call__(self, z):
         b = z.shape[0]
-        x = nn.Dense(15 * 15 * 256)(z).reshape(b, 15, 15, 256)
-        x = nn.relu(_gn(256)(x))
-        for f in (128, 64, 32):                    # 30, 60, 120
+        c0, ups = {15: (256, (128, 64, 32)), 30: (64, (64, 32))}[self.start]
+        x = nn.Dense(self.start * self.start * c0)(z).reshape(b, self.start, self.start, c0)
+        x = nn.relu(_gn(c0)(x))
+        for f in ups:                              # up to 120
             x = nn.ConvTranspose(f, (4, 4), strides=(2, 2), padding="SAME")(x)
             x = nn.relu(_gn(f)(x))
             x = ConvBlock(f)(x)
@@ -94,10 +101,11 @@ class Decoder(nn.Module):
 class SegVAE(nn.Module):
     latent_dim: int = LATENT_DIM
     n_classes: int = N_CLASSES
+    dec_start: int = DEC_START
 
     def setup(self):
         self.encoder = Encoder(self.latent_dim)
-        self.decoder = Decoder(self.n_classes)
+        self.decoder = Decoder(self.n_classes, self.dec_start)
 
     def __call__(self, x, rng):
         mu, logvar = self.encoder(x)

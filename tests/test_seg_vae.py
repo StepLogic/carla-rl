@@ -79,3 +79,12 @@ def test_dice_perfect_and_wrong():
     bad = jnp.log(t[..., ::-1] + 1e-6) * 50.0        # confident, wrong classes
     assert float(sv.soft_dice_loss(good, t, present)) < 0.01
     assert float(sv.soft_dice_loss(bad, t, present)) > 0.9
+
+
+@pytest.mark.parametrize("start", [15, 30])
+def test_decoder_start_grids(start):
+    m = sv.SegVAE(latent_dim=16, dec_start=start)
+    x = jnp.zeros((1, 120, 120, 3))
+    p = m.init(jax.random.PRNGKey(0), x, jax.random.PRNGKey(1))
+    lg, _, _ = m.apply(p, x, jax.random.PRNGKey(2))
+    assert lg.shape == (1, 120, 120, sv.N_CLASSES)

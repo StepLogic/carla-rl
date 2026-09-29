@@ -91,6 +91,16 @@ def check_gated_run(env=None):
     if not _flag(env, "GATED"):
         return
 
+    # GOAL_FREEZE_STEPS lumps the freeze into one transition whose discount
+    # rides in the replay mask; the episode relabeller and n-step merger know
+    # nothing about it.
+    if int(env.get("GOAL_FREEZE_STEPS", "0") or 0) > 0 and (
+            _flag(env, "EPISODE_HER") or int(env.get("N_STEP", "1") or 1) > 1):
+        raise ValueError(
+            "GOAL_FREEZE_STEPS>0 needs EPISODE_HER=0 and N_STEP=1: the freeze "
+            "transition's gamma^(K+1) bootstrap is carried only by the plain "
+            "buffer's mask.")
+
     if not _flag(env, "OBS_WITH_MODE"):
         raise ValueError(
             "GATED=1 requires OBS_WITH_MODE=1. Without the mode key the actor "

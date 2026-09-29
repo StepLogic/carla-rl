@@ -414,6 +414,7 @@ class STBL3Experiment(BaseExperiment):
 
         # Control variables
         self.wedged = False
+        self.goal_frozen = False
         self.prev_steer = 0.0
         self.prev_throttle = 0.0
         self.steer = 0.0
@@ -542,7 +543,10 @@ class STBL3Experiment(BaseExperiment):
         # Full brake rather than merely zero throttle, so it does not coast on
         # for another twenty metres after crossing the line -- "wedged" should
         # mean stationary, not drifting.
-        if getattr(self, "wedged", False):
+        # GOAL_FROZEN: the same hold, set and cleared by GatedReward for the
+        # GOAL_FREEZE_STEPS penalty after a fined crossing (never published as
+        # `wedged`, so no wedge rule reads it).
+        if getattr(self, "wedged", False) or getattr(self, "goal_frozen", False):
             vehicle_control.steer = 0.0
             vehicle_control.throttle = 0.0
             vehicle_control.brake = 1.0

@@ -174,6 +174,25 @@ GOAL_ARRIVAL_BONUS = float(os.environ.get("GOAL_ARRIVAL_BONUS", 0.0))
 # with the 10.0 lane/off-road fines; under the old bill regime collision was
 # billed terminally, so no per-step constant existed for it before.
 GOAL_TRUNCATE_COUNTS = os.environ.get("GOAL_TRUNCATE_COUNTS", "0") == "1"
+# GOAL FREEZE (user 2026-09-29: "a freeze penalty -- like lane crossings --
+# stops the car for 50 steps with 0.995 with current reward setup"; frozen
+# steps cost the normal -step_cost, not a larger fine, because at 0.995 a
+# -10/step freeze (~-452) would cost more than parking out the episode (~-200)).
+# GOAL MODE ONLY, COUNTING REGIME ONLY. On a FINED crossing (goal_lane_fault:
+# graded, so junction turns and the unpainted edge never freeze) the step pays
+# its usual reward, then the wrapper holds the car under full brake for
+# GOAL_FREEZE_STEPS sim steps, ignoring the policy, and returns ONE lumped
+# transition (a semi-MDP option):
+#   reward  r_cross + sum_{k=1..K} g^k * (-step_cost)   (fines/counters off)
+#   s'      the state after the freeze
+#   info["freeze_mask"] = g^K, which the trainer multiplies into the replay
+#   mask, so the critic bootstraps gamma * g^K * Q(s') = g^(K+1) * Q(s').
+# The frozen steps never reach the buffer: the policy's actions do nothing
+# there, and a stationary car that is frozen and one that is not would look
+# identical to the critic. The clock (and so the goal cap) advances by K.
+# 0 = off, byte-identical to every earlier run. g is DISCOUNT, the goal
+# critic's own discount (same read as the lane-terminal bill above).
+GOAL_FREEZE_STEPS = int(os.environ.get("GOAL_FREEZE_STEPS", 0))
 GOAL_OFFROAD_TRUNCATE_STEPS = int(os.environ.get("GOAL_OFFROAD_TRUNCATE_STEPS", 20))
 GOAL_COLLISION_TRUNCATE_STEPS = int(os.environ.get("GOAL_COLLISION_TRUNCATE_STEPS", 20))
 GOAL_CROSSING_TRUNCATE_STEPS = int(os.environ.get("GOAL_CROSSING_TRUNCATE_STEPS", 20))
@@ -697,8 +716,13 @@ class GatedReward(Wrapper):
     def __init__(self, env, explore_prob=EXPLORE_PROB, force_mode=None,
                  max_steps=1000, delta_mode="positive", seed=0,
                  goal_kind=GOAL_REWARD_KIND, goal_max_steps=GOAL_MAX_STEPS,
-                 step_cost=STEP_COST, wedge_truncate=WEDGE_TRUNCATE):
+                 step_cost=STEP_COST, wedge_truncate=WEDGE_TRUNCATE,
+                 freeze_steps=None):
         super().__init__(env)
+        # None = GOAL_FREEZE_STEPS; the trainer passes 0 for eval envs, whose
+        # episodes end at the first fault (EVAL_FAULT_ENDS) anyway.
+        self.freeze_steps = int(GOAL_FREEZE_STEPS if freeze_steps is None
+                                else freeze_steps)
         self.explore_prob = float(explore_prob)
         self.force_mode = force_mode
         self.max_steps = int(max_steps)
@@ -738,6 +762,15 @@ class GatedReward(Wrapper):
                   flush=True)
         elif self.goal_kind == "shaped":
             print(f"[Gated] goal=SHAPED (delta+projected), returns ~order 100")
+        if self.freeze_steps and self.goal_kind == "sorb":
+            print(f"[Gated] GOAL FREEZE: a fined crossing holds the car under "
+                  f"full brake for {self.freeze_steps} steps at "
+                  f"-{self.step_cost:g}/step (discounted at {_BILL_GAMMA:g}), "
+                  f"one lumped transition, bootstrap mask "
+                  f"{_BILL_GAMMA:g}^{self.freeze_steps}="
+                  f"{_BILL_GAMMA ** self.freeze_steps:.4f}; goal mode only"
+                  + ("" if GOAL_TRUNCATE_COUNTS else
+                     " -- INERT: needs GOAL_TRUNCATE_COUNTS=1"), flush=True)
         if (self.goal_kind == "sorb" and GOAL_TRUNCATE_COUNTS
                 and LANE_TERMINAL):
             # PRINTED SO A RUN'S OWN LOG PROVES THE LANE TERMINAL WAS ON.
@@ -822,6 +855,67 @@ class GatedReward(Wrapper):
         info["mode"] = self.mode
         return obs, info
 
+    def _experiment(self):
+        base = getattr(self.env, "unwrapped", self.env)
+        return getattr(base, "experiment", None)
+
+    # The crossing step's fault flags survive into the returned info, so the
+    # training logs and the eval fault rule still see the crossing; the rest
+    # (pose, frame, route) is the post-freeze step's.
+    _FREEZE_KEEP = ("lane_any", "lane_invasion_any", "lane_marking_types",
+                    "in_junction", "off_road", "collision")
+
+    def _goal_freeze(self, action, reward, info):
+        """Hold the car for self.freeze_steps sim steps; return the lumped
+        (obs, reward, terminated, truncated, arrived, info). See
+        GOAL_FREEZE_STEPS."""
+        exp = self._experiment()
+        if exp is not None:
+            exp.goal_frozen = True
+        acc, g, k = float(reward), 1.0, 0
+        terminated = truncated = arrived = False
+        obs, last = None, info
+        _p0 = self._path_m
+        try:
+            while k < self.freeze_steps:
+                obs, _r, _te, _tr, last = self.env.step(action)
+                k += 1
+                self._t += 1
+                g *= _BILL_GAMMA
+                pos = np.asarray(last.get("hero_pos", (0.0, 0.0)), np.float64)
+                self._path_m += float(np.linalg.norm(pos - self._prev))
+                self._prev = pos
+                if bool(last.get("arrived", False)
+                        or last.get("is_success", False)):
+                    # A braking car can still roll onto the goal.
+                    acc += g * GOAL_ARRIVAL_BONUS
+                    terminated = arrived = True
+                    break
+                acc += g * (-self.step_cost)
+                if self._t >= self.goal_max_steps:
+                    truncated = True
+                    break
+        finally:
+            if exp is not None:
+                exp.goal_frozen = False
+        # One line per freeze: proves on a live run that the car stops.
+        print(f"[Freeze] t={self._t} held {k} steps: "
+              f"{float(info.get('speed_kmh', 0) or 0):.1f} -> "
+              f"{float(last.get('speed_kmh', 0) or 0):.1f} km/h, rolled "
+              f"{self._path_m - _p0:.2f} m, r={acc:.1f} mask={g:.3f}"
+              + (" ARRIVED" if arrived else " CAP" if truncated else ""),
+              flush=True)
+        out = dict(last)
+        for key in self._FREEZE_KEEP:
+            if key in info:
+                out[key] = info[key]
+        out["explore_dist_m"] = float(self._path_m)
+        out["goal_freeze_steps"] = int(k)
+        out["freeze_mask"] = float(g)
+        _rem = out.get("route_remaining_m", None)
+        self._prev_remaining = None if _rem is None else float(_rem)
+        return obs, acc, terminated, truncated, arrived, out
+
     def step(self, action):
         obs, _r, term, trunc, info = self.env.step(action)
         self._t += 1
@@ -890,6 +984,12 @@ class GatedReward(Wrapper):
                     reward += _shaped
             self._prev_remaining = None if _rem is None else float(_rem)
             info["gated_shaping"] = float(_shaped)
+            if (self.freeze_steps and GOAL_TRUNCATE_COUNTS
+                    and not (terminated or truncated)
+                    and goal_lane_fault(info)):
+                obs, reward, terminated, truncated, arrived, info = \
+                    self._goal_freeze(action, reward, info)
+                info["is_success"] = arrived
         elif self.mode == GOAL:
             reward = goal_reward(info, self.delta_mode)
             terminated = bool(term)          # the env's own goal-arm rules

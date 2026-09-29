@@ -1044,6 +1044,9 @@ def make_env(town, seed, latent_source, eval_mode=False, port=None):
             # the 100 m arrival or the env's idle guard, never on a step cap.
             max_steps=(10 ** 9 if os.environ.get("NO_TIMELIMIT", "0") == "1"
                        else int(os.environ.get("GATED_EXPLORE_MAX_STEPS", 1000))),
+            # GOAL_FREEZE_STEPS is a training penalty; eval episodes end at the
+            # first fault (EVAL_FAULT_ENDS) and would only lose 5 s to it.
+            freeze_steps=0 if eval_mode else None,
             seed=seed)
         env = VAEGoalWrapper(env, source=latent_source)
         # The GOAL arm's cap. GatedReward truncates explore episodes itself at
@@ -2015,6 +2018,9 @@ def main():
             # A time-limit truncation must still bootstrap; only a real
             # termination cuts the value backup.
             mask = 0.0 if inf.get("terminated", False) else 1.0
+            # GOAL_FREEZE_STEPS: a lumped freeze transition spans K+1 sim
+            # steps, so its bootstrap is discounted gamma^(K+1) = gamma * mask.
+            mask *= float(inf.get("freeze_mask", 1.0))
             if BC_ON:
                 from vae_nav.lane_priv import EXPERT_KEY
                 _flag = np.array([float(bool(is_expert_ep[i]))], np.float32)

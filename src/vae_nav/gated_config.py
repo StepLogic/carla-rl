@@ -140,10 +140,12 @@ def check_gated_run(env=None):
     # observation, no checkpoint shared with any vae or mobilenet run in
     # either direction -- and is refused at load time the same way, by
     # LatentSource.assert_matches / policy_io naming both sides.
-    if perception not in ("vae", "", "mobilenet", "vc1", "vc1_vitb"):
+    # segvae (2026-09-28): the frozen ResNet-9 segmentation VAE, 512-d mu;
+    # identity-checked at load like the others (SegVaeSource.name).
+    if perception not in ("vae", "", "mobilenet", "vc1", "vc1_vitb", "segvae"):
         raise ValueError(
-            f"GATED=1 accepts PERCEPTION=vae, mobilenet, vc1 or vc1_vitb, "
-            f"not {perception!r}.")
+            f"GATED=1 accepts PERCEPTION=vae, mobilenet, vc1, vc1_vitb or "
+            f"segvae, not {perception!r}.")
     if perception == "mobilenet":
         # RELAXED 2026-09-11 on the user's instruction. This used to be a hard
         # refusal, on the grounds that MobileNet's 384-d latent changes the

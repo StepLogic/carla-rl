@@ -165,6 +165,10 @@ def from_env(latent_dim=LATENT_DIM):
         # in 12.3 GB (CARLA alone ~11.2 GB, measured). Identical computation
         # on a different device -- the encoder is frozen either way.
         return VcSource(device=os.environ.get("VC1_DEVICE") or None)
+    if backend == "segvae":
+        # the frozen ResNet-9 segmentation VAE (user 2026-09-28: "VC1 is overkill")
+        from vae_nav.segvae_source import SegVaeSource
+        return SegVaeSource(os.environ.get("SEGVAE_CKPT", ""))
     if backend not in ("vae", ""):
         raise SystemExit(
             f"PERCEPTION='{backend}' is not a known backend. Use 'vae', "

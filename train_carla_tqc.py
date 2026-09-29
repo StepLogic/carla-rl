@@ -85,6 +85,13 @@ START_TRAINING = int(os.environ.get("START_TRAINING", 5000))
 EVAL_INTERVAL = int(os.environ.get("EVAL_INTERVAL", 25_000))
 N_EVAL_EPISODES = int(os.environ.get("N_EVAL_EPISODES", 60))
 UTD_RATIO = int(os.environ.get("UTD_RATIO", 4))
+# TRUE UTD (user 2026-09-29: "restart with high UTD like 4 or 8"). The gated
+# learner ignores utd_ratio (it does ONE update on the whole MINIBATCH*UTD_RATIO
+# batch, so a mode never gets a zero-row slice), which left the effective ratio
+# at 1 update per vec step = 0.5 per transition with two envs. This runs K
+# independent updates per vec step, each on a FRESH batch. Default 1 = the old
+# loop, byte-identical.
+UPDATES_PER_STEP = int(os.environ.get("GATED_UPDATES_PER_STEP", 1))
 MINIBATCH = int(os.environ.get("MINIBATCH_SIZE", 256))
 POLICY_FOLDER = os.environ.get("POLICY_FOLDER", "carla_tqc_vae")
 
@@ -1960,6 +1967,9 @@ def main():
               f"(that run's step {_ck0.get('step')}, eval_success "
               f"{_ck0.get('eval_success')}); step counter, replay buffer, "
               "optimiser and curriculum start fresh", flush=True)
+    print(f"[UTD] {UPDATES_PER_STEP} update(s) per vec step x batch "
+          f"{MINIBATCH * UTD_RATIO} with {n_envs} env(s) = "
+          f"{UPDATES_PER_STEP / max(n_envs, 1):g} updates per transition", flush=True)
     while step < MAX_STEPS:
         if step < START_TRAINING:
             actions = np.stack([venv.action_space.sample() for _ in range(n_envs)])
@@ -2593,7 +2603,7 @@ def main():
         obs = next_obs
         step += n_envs
 
-        if step >= START_TRAINING and len(buffer) > MINIBATCH * UTD_RATIO:
+        for _upd in range(UPDATES_PER_STEP if (step >= START_TRAINING and len(buffer) > MINIBATCH * UTD_RATIO) else 0):
             # jaxrl2 implements UTD by SPLITTING one sampled batch into
             # utd_ratio minibatches -- NOT by drawing utd_ratio fresh batches.
             batch = buffer.sample(MINIBATCH * UTD_RATIO)

@@ -8,6 +8,8 @@ cd /home/robotlab/scratch/carla-rl/.claude/worktrees/gated-impl/clean_fix1 || ex
 OUT=results/v29_eval
 CKD=checkpoints/carla_gated_v29_segvae_bc_vc1free
 export SNAP=results/run_env/carla_gated_v29_segvae_bc_vc1free.env
+# user 2026-09-29: the first fined crossing, off-road or collision ends an eval episode
+export EVAL_FAULT_ENDS="${EVAL_FAULT_ENDS:-fault}"
 PAT="carla-port=${PORT}"
 say(){ echo "=== [v29sweep:$PORT $(date '+%m-%d %H:%M:%S')] $* ==="; }
 kill_my(){ for _ in 1 2 3 4 5; do pkill -9 -f -- "-${PAT}" 2>/dev/null; sleep 2; pgrep -f -- "-${PAT}" >/dev/null || return 0; done; return 1; }

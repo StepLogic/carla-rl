@@ -746,9 +746,11 @@ class GatedReward(Wrapper):
             # discarded unless the launcher is changed -- this line is the
             # only way to see which one actually happened.
             print("[Gated] goal lane invasion TERMINAL: first fatal crossing "
-                  "(junction-forgiving, off-road excluded) ends the episode "
-                  "with the exact bill -step_cost*(1+remaining), mask=0",
-                  flush=True)
+                  "(junction-forgiving, off-road excluded) ends the episode with "
+                  + ("the DISCOUNTED bill -step_cost*(1-g^(1+remaining))/(1-g)"
+                     if LANE_TERMINAL_BILL == "discounted"
+                     else "the clock bill -step_cost*(1+remaining)")
+                  + ", mask=0", flush=True)
         if self.goal_kind == "progress":
             print(f"[Gated] goal=PROGRESS (Bono et al. 2023, arXiv 2309.16634): "
                   f"r = {PROGRESS_K:g}*1[arrived] - Delta(route m) - "

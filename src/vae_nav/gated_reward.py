@@ -112,6 +112,28 @@ COLLISION_TERMINAL = os.environ.get("COLLISION_TERMINAL", "0") == "1"
 # Explore mode is untouched: its lane handling stays in explore_reward, and
 # LANE_INVASION_NOOP still governs it.
 LANE_TERMINAL = os.environ.get("GATED_GOAL_LANE_TERMINAL", "0") == "1"
+# LANE-TERMINAL BILL (user 2026-09-29, option 2 "stronger crossing penalty").
+#   clock       -step_cost * (1 + remaining)   -- v15's bill, UNDISCOUNTED: at
+#               DISCOUNT 0.99 a crossing at step 100 cost ~-900 while parking to
+#               the cap is worth only ~-100, so stopping looked 10x safer.
+#   discounted  -step_cost * (1 - g^(1+remaining)) / (1 - g): exactly the value
+#               of idling out the rest of the clock -- a crossing costs what a
+#               failed episode costs, no more (at most ~100 at g=0.99).
+LANE_TERMINAL_BILL = os.environ.get("GOAL_LANE_TERMINAL_BILL", "clock").lower()
+if LANE_TERMINAL_BILL not in ("clock", "discounted"):
+    raise ValueError(f"GOAL_LANE_TERMINAL_BILL={LANE_TERMINAL_BILL!r} is not clock|discounted")
+if LANE_TERMINAL_BILL == "discounted" and os.environ.get("EPISODE_HER", "0") == "1":
+    raise ValueError("GOAL_LANE_TERMINAL_BILL=discounted is not mirrored in the HER "
+                     "recost; run it with EPISODE_HER=0")
+_BILL_GAMMA = float(os.environ.get("DISCOUNT", 0.99))
+
+
+def lane_terminal_bill(remaining, step_cost=1.0):
+    """The terminal lane-departure cost for `remaining` steps left on the clock."""
+    if LANE_TERMINAL_BILL == "discounted" and _BILL_GAMMA < 1.0:
+        g = _BILL_GAMMA
+        return step_cost * (1.0 - g ** (1 + remaining)) / (1.0 - g)
+    return step_cost * (1 + remaining)
 # GRADED LANE FINES (v18, user 2026-09-27: "any suggestions to make agent transfer
 # to other towns and respect driving rules?" -> "proceed"). Until now the goal arm
 # fined RAW lane_any at GOAL_LANE_PENALTY per step: a legal turn through a junction,
@@ -463,7 +485,7 @@ def goal_reward_sorb(info, t, max_steps=GOAL_MAX_STEPS, step_cost=STEP_COST,
         # relabelled leg at the same step (episode_her._counting_end).
         if LANE_TERMINAL and goal_lane_departed(info):
             remaining = max(0, int(max_steps) - int(t))
-            return -step_cost * (1 + remaining), True, False, False
+            return -lane_terminal_bill(remaining, step_cost), True, False, False
         # v9 counting regime (see the constants block): per-step fines, no
         # terminal bills, truncate when any cumulative count trips. The
         # truncating step pays its normal reward -- the wrapper's counters

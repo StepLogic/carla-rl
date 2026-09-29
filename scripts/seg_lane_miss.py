@@ -8,9 +8,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."
 import jax, jax.numpy as jnp
 from vae_nav import seg_vae as sv
 c = pickle.load(open(sys.argv[1], "rb"))
-m = sv.SegVAE(latent_dim=c["latent_dim"], dec_start=c.get("dec_start", 15))
-pred = jax.jit(lambda x: m.apply(c["params"], m.apply(c["params"], x, method=lambda mm, a: mm.encoder(a))[0],
-                                 method=lambda mm, z: mm.decoder(z)).argmax(-1))
+m = sv.SegVAE(latent_dim=c["latent_dim"], dec_start=c.get("dec_start", 15), skips=c.get("skips", False))
+pred = jax.jit(lambda x: m.apply(c["params"], x, method=sv.SegVAE.predict).argmax(-1))
 rows = []
 for f in sorted(glob.glob(os.path.join(sys.argv[2], "shard_*.npz"))):
     z = np.load(f); n = len(z["rgb"]); s = int(n * 0.95)

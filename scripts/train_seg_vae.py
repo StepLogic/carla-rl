@@ -121,8 +121,7 @@ def main():
     def val_step(params, x_u8, y):
         x = x_u8.astype(jnp.float32) / 255.0
         t = sv.soft_targets(y)
-        mu, _ = model.apply(params, x, method=lambda m, x: m.encoder(x))
-        lg = model.apply(params, mu, method=lambda m, z: m.decoder(z))
+        lg = model.apply(params, x, method=sv.SegVAE.predict)
         return sv.class_iou(lg, t)
 
     os.makedirs(a.out, exist_ok=True)
@@ -150,7 +149,8 @@ def main():
             with open(os.path.join(a.out, "seg_vae.pkl"), "wb") as f:
                 pickle.dump({"params": jax.device_get(params), "step": step,
                              "latent_dim": sv.LATENT_DIM, "classes": sv.N_CLASSES,
-                             "dec_start": sv.DEC_START,
+                             "dec_start": sv.DEC_START, "skips": sv.SKIPS,
+                             "skip_drop": sv.SKIP_DROP,
                              "class_w": w.tolist(), "mask_ratio": sv.MASK_RATIO}, f)
             json.dump(log, open(os.path.join(a.out, "train_log.json"), "w"), indent=1)
 

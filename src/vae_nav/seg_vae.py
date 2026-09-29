@@ -37,6 +37,12 @@ MASK_RATIO = float(os.environ.get("SEG_MASK_RATIO", 0.75))
 # 30: z -> 30x30x64 (the same 57,600 values, so the same Dense size) -> two
 # upsamplings: finer room to place thin lane lines; the latent is unchanged.
 DEC_START = int(os.environ.get("SEG_DEC_START", 30))
+# U-NET SKIPS (user 2026-09-28 "use skip connections"): the decoder also reads
+# the encoder's 15/30/60 px feature maps. RL reads ONLY the latent mu, and a
+# skip lets the decoder bypass it, so SKIP_DROP zeroes each sample's skips with
+# this probability during training: the latent must still carry the scene.
+SKIPS = os.environ.get("SEG_SKIPS", "0") == "1"
+SKIP_DROP = float(os.environ.get("SEG_SKIP_DROP", 0.5))
 
 
 def _gn(c):
@@ -66,19 +72,49 @@ class Residual(nn.Module):
 
 class Encoder(nn.Module):
     latent_dim: int = LATENT_DIM
+    return_feats: bool = False
 
     @nn.compact
     def __call__(self, x):
         x = ConvBlock(64)(x)                       # 120
         x = ConvBlock(128, pool=True)(x)           # 60
-        x = Residual(128)(x)
-        x = ConvBlock(256, pool=True)(x)           # 30
+        f60 = x = Residual(128)(x)
+        f30 = x = ConvBlock(256, pool=True)(x)     # 30
         x = ConvBlock(512, pool=True)(x)           # 15
-        x = Residual(512)(x)
+        f15 = x = Residual(512)(x)
         h = x.mean(axis=(1, 2))
         mu = nn.Dense(self.latent_dim, name="mu")(h)
-        logvar = nn.Dense(self.latent_dim, name="logvar")(h)
-        return mu, jnp.clip(logvar, -10.0, 10.0)
+        logvar = jnp.clip(nn.Dense(self.latent_dim, name="logvar")(h), -10.0, 10.0)
+        if self.return_feats:
+            return mu, logvar, (f15, f30, f60)
+        return mu, logvar
+
+
+class SkipDecoder(nn.Module):
+    """z -> 15x15x256, then at 15/30/60 px concatenate the (1x1-projected)
+    encoder map before a conv block, upsampling to 120. `drop_rng` given ->
+    each sample's skips are zeroed with probability SKIP_DROP (training)."""
+    n_classes: int = N_CLASSES
+    skip_drop: float = SKIP_DROP
+
+    @nn.compact
+    def __call__(self, z, feats, drop_rng=None):
+        b = z.shape[0]
+        x = nn.Dense(15 * 15 * 256)(z).reshape(b, 15, 15, 256)
+        x = nn.relu(_gn(256)(x))
+        keys = (jax.random.split(drop_rng, 3) if drop_rng is not None else (None,) * 3)
+        for i, (f, skip, pc) in enumerate(zip((256, 128, 64), feats, (128, 64, 32))):
+            if i > 0:
+                x = nn.ConvTranspose(f, (4, 4), strides=(2, 2), padding="SAME")(x)
+                x = nn.relu(_gn(f)(x))
+            s = nn.Conv(pc, (1, 1), name=f"skip_proj_{i}")(skip)
+            if keys[i] is not None:
+                keep = jax.random.bernoulli(keys[i], 1.0 - self.skip_drop, (b, 1, 1, 1))
+                s = s * keep.astype(s.dtype)
+            x = ConvBlock(f)(jnp.concatenate([x, s], axis=-1))
+        x = nn.ConvTranspose(32, (4, 4), strides=(2, 2), padding="SAME")(x)   # 120
+        x = ConvBlock(32)(nn.relu(_gn(32)(x)))
+        return nn.Conv(self.n_classes, (1, 1))(x)
 
 
 class Decoder(nn.Module):
@@ -102,17 +138,33 @@ class SegVAE(nn.Module):
     latent_dim: int = LATENT_DIM
     n_classes: int = N_CLASSES
     dec_start: int = DEC_START
+    skips: bool = SKIPS
 
     def setup(self):
-        self.encoder = Encoder(self.latent_dim)
-        self.decoder = Decoder(self.n_classes, self.dec_start)
+        self.encoder = Encoder(self.latent_dim, return_feats=self.skips)
+        self.decoder = (SkipDecoder(self.n_classes) if self.skips
+                        else Decoder(self.n_classes, self.dec_start))
 
     def __call__(self, x, rng):
+        """Training forward: sampled z; skips dropped per sample."""
+        k1, k2 = jax.random.split(rng)
+        if self.skips:
+            mu, logvar, feats = self.encoder(x)
+            z = mu + jnp.exp(0.5 * logvar) * jax.random.normal(k1, mu.shape)
+            return self.decoder(z, feats, k2), mu, logvar
         mu, logvar = self.encoder(x)
-        z = mu + jnp.exp(0.5 * logvar) * jax.random.normal(rng, mu.shape)
+        z = mu + jnp.exp(0.5 * logvar) * jax.random.normal(k1, mu.shape)
         return self.decoder(z), mu, logvar
 
+    def predict(self, x):
+        """Deterministic logits: z = mu, every skip kept (validation, renders)."""
+        if self.skips:
+            mu, _, feats = self.encoder(x)
+            return self.decoder(mu, feats)
+        return self.decoder(self.encoder(x)[0])
+
     def encode(self, x):
+        """The latent RL consumes: mu only."""
         return self.encoder(x)[0]
 
 

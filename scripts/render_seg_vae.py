@@ -22,7 +22,7 @@ def main():
     import jax.numpy as jnp
     from vae_nav import seg_vae as sv
     c = pickle.load(open(ck, "rb"))
-    m = sv.SegVAE(latent_dim=c["latent_dim"], dec_start=c.get("dec_start", 15))
+    m = sv.SegVAE(latent_dim=c["latent_dim"], dec_start=c.get("dec_start", 15), skips=c.get("skips", False))
     shards = sorted(glob.glob(os.path.join(data, "shard_*.npz")))
     rng = np.random.default_rng(1)
     picks = []
@@ -34,8 +34,7 @@ def main():
     xm = sv.patch_mask(jax.random.PRNGKey(0), x)
 
     def pred(inp):
-        mu = m.apply(c["params"], inp, method=lambda mm, a: mm.encoder(a))[0]
-        return np.asarray(m.apply(c["params"], mu, method=lambda mm, zz: mm.decoder(zz)).argmax(-1))
+        return np.asarray(m.apply(c["params"], inp, method=sv.SegVAE.predict).argmax(-1))
     p_full, p_mask = pred(x), pred(xm)
     S = 200
     W = Image.new("RGB", (S * 5, S * rows + 24), (30, 30, 30))

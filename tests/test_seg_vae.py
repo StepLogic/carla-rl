@@ -88,3 +88,21 @@ def test_decoder_start_grids(start):
     p = m.init(jax.random.PRNGKey(0), x, jax.random.PRNGKey(1))
     lg, _, _ = m.apply(p, x, jax.random.PRNGKey(2))
     assert lg.shape == (1, 120, 120, sv.N_CLASSES)
+
+
+def test_skip_model_shapes_and_encoder_compat():
+    x = jnp.asarray(np.random.default_rng(0).uniform(0, 1, (2, 120, 120, 3)).astype(np.float32))
+    ms, mn = sv.SegVAE(latent_dim=16, skips=True), sv.SegVAE(latent_dim=16, skips=False)
+    ps = ms.init(jax.random.PRNGKey(0), x, jax.random.PRNGKey(1))
+    pn = mn.init(jax.random.PRNGKey(0), x, jax.random.PRNGKey(1))
+    # the encoder subtree is identical, so a no-skip checkpoint warm-starts it
+    es, en = ps["params"]["encoder"], pn["params"]["encoder"]
+    assert jax.tree_util.tree_structure(es) == jax.tree_util.tree_structure(en)
+    assert all(a.shape == b.shape for a, b in zip(jax.tree_util.tree_leaves(es),
+                                                   jax.tree_util.tree_leaves(en)))
+    lg, mu, _ = ms.apply(ps, x, jax.random.PRNGKey(2))
+    assert lg.shape == (2, 120, 120, sv.N_CLASSES) and mu.shape == (2, 16)
+    p1 = ms.apply(ps, x, method=sv.SegVAE.predict)
+    p2 = ms.apply(ps, x, method=sv.SegVAE.predict)
+    assert np.array_equal(np.asarray(p1), np.asarray(p2))
+    assert ms.apply(ps, x, method=sv.SegVAE.encode).shape == (2, 16)

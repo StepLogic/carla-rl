@@ -187,13 +187,28 @@ def lane_departure_is_fatal(diff_lane, marking_types, in_junction, off_road,
     if (LANE_ANY_FATAL if strict is None else strict):
         return True
     marks = [str(t).split(".")[-1] for t in (marking_types or [])]
-    crossed_illegal = (not marks) or any(m in ILLEGAL_MARKS for m in marks)
+    # LANE_UNKNOWN_MARKS_FATAL=0 (user 2026-09-30: "no marking data at all and
+    # offroad false - non terminal") stops a crossing whose marking the sensor
+    # did not report from ending the episode. off_road is decided ABOVE and is
+    # unaffected, so the freed case is exactly "on the road, crossed something,
+    # no marking data". Default 1 keeps every earlier run's rule. Read per call,
+    # not at import, so it matches the env config's wedge copy of this rule.
+    unknown_fatal = os.environ.get("LANE_UNKNOWN_MARKS_FATAL", "1") == "1"
+    crossed_illegal = ((not marks) and unknown_fatal) or any(
+        m in ILLEGAL_MARKS for m in marks)
     if crossed_illegal:
         return True
     # Only when EVERY reported marking is unpainted. A mixed Broken+NONE
     # crossing is judged as the Broken one -- the painted line is the real
     # boundary, and the junction rule below decides it.
-    if bool(marks) and all(m in UNPAINTED_MARKS for m in marks):
+    #
+    # NO MARKING DATA joins this branch under LANE_UNKNOWN_MARKS_FATAL=0. It
+    # must be decided HERE and not fall through: the final line treats anything
+    # unresolved as a painted crossing, so an early return is the only way an
+    # unreported marking is actually forgiven on open road.
+    if not marks:
+        return bool(unknown_fatal)
+    if all(m in UNPAINTED_MARKS for m in marks):
         return False
     return not bool(in_junction)
 

@@ -916,14 +916,28 @@ class STBL3Experiment(BaseExperiment):
         _unpainted_marks = {"NONE"}
         _marks = [t.split(".")[-1] for t in self.lane_marking_types]
         # Fail CLOSED on no marking information at all: absent data is not
-        # evidence of a legal crossing.
+        # evidence of a legal crossing. LANE_UNKNOWN_MARKS_FATAL=0 reverses
+        # that (user 2026-09-30: "no marking data at all and offroad false -
+        # non terminal"); off_road is judged separately and still ends the
+        # episode, so this only frees a crossing ON the road whose marking the
+        # sensor did not report. Read from the env on EVERY call, never cached
+        # at import, because lane_explore_reward.lane_departure_is_fatal reads
+        # the same variable and the two rules must not disagree.
+        _unknown_fatal = os.environ.get("LANE_UNKNOWN_MARKS_FATAL", "1") == "1"
         _crossed_illegal = bool(self.diff_lane and (
-            not _marks or any(m in _illegal_marks for m in _marks)))
+            (not _marks and _unknown_fatal)
+            or any(m in _illegal_marks for m in _marks)))
         # Only when EVERY reported marking is unpainted. A mixed Broken+NONE
         # crossing is judged as the Broken one -- the painted line is the real
         # boundary and the junction rule below decides it.
-        _only_unpainted = bool(_marks) and all(m in _unpainted_marks
-                                               for m in _marks)
+        #
+        # NO MARKING DATA joins this branch under LANE_UNKNOWN_MARKS_FATAL=0,
+        # mirroring lane_explore_reward.lane_departure_is_fatal: without it an
+        # unreported marking would fall through to the Broken branch below and
+        # still be fatal on open road, so the flag would be half-applied.
+        _only_unpainted = ((bool(_marks) and all(m in _unpainted_marks
+                                                 for m in _marks))
+                           or (not _marks and not _unknown_fatal))
 
         # THE EXEMPTION IS THE JUNCTION INTERIOR, NOT THE MARKING TYPE.
         #

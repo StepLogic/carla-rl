@@ -106,6 +106,12 @@ def main():
                                           "carla_gated_v43_segvae_nocaps.env")
     ap.add_argument("--placers", default="mad,temporal,uniform")
     ap.add_argument("--radius", type=float, default=3.0)
+    ap.add_argument("--percentile", type=float, default=50.0,
+                    help="certify pairs whose predicted steps fall below this "
+                         "percentile of the candidate distribution. Higher = "
+                         "more edges and more connectivity, at lower precision "
+                         "against the road graph; the printed table is the "
+                         "trade. The peer's default is p50.")
     ap.add_argument("--heading-deg", type=float, default=90.0)
     ap.add_argument("--step-cost", type=float, default=1.0)
     a = ap.parse_args()
@@ -183,13 +189,19 @@ def main():
                       "precision": prec, "recall": rec})
         print(f"   p{pct:<3d} steps<={thr:7.2f}  kept {sel.sum():5d}  "
               f"precision {prec:.3f}  recall {rec:.3f}")
-        if pct == 50:
+        if abs(pct - a.percentile) < 1e-9:
             chosen = thr
-    print(f"[Calib] threshold = p50 = {chosen:.2f} steps (the peer's rule: "
-          "percentile of our own quantity, not their 5.65)")
+    if chosen is None:
+        chosen = float(np.percentile(steps, a.percentile))
+    sel = steps <= chosen
+    print(f"[Calib] threshold = p{a.percentile:g} = {chosen:.2f} steps "
+          f"(precision {good[sel].mean():.3f}, recall "
+          f"{good[sel].sum() / max(1, good.sum()):.3f}). The peer's rule is a "
+          "percentile of OUR quantity, never their 5.65.")
 
     # ---- apply per placer ---------------------------------------------------
     out = {"town": town, "trace": res["trace"], "radius_m": a.radius,
+           "percentile": a.percentile,
            "heading_deg": a.heading_deg, "threshold_steps": chosen,
            "calibration": {"n_candidates": len(cand),
                            "base_precision": float(good.mean()),
@@ -222,7 +234,11 @@ def main():
               f"{len(pairs):5d} candidates -> {len(add):4d} certified  "
               f"components {before} -> {after}")
 
-    dest = a.maps.replace(".json", "_shortcuts.json")
+    # NAME BY EVERY KNOB THAT CHANGES THE OUTPUT. The first version special-
+    # cased p50 to a bare name, so p50/r3 and p50/r5 wrote to the SAME file and
+    # the sweep silently kept only the last one.
+    suffix = f"_shortcuts_p{a.percentile:g}_r{a.radius:g}.json"
+    dest = a.maps.replace(".json", suffix)
     with open(dest, "w") as fh:
         json.dump(out, fh, indent=1)
     print(f"-> {dest}")

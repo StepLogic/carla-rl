@@ -174,6 +174,10 @@ def main():
                     help="the repo's radius. The peer uses 1 m; both are "
                          "reported so the two protocols can be compared.")
     ap.add_argument("--arrival-radius", type=float, default=4.0)
+    ap.add_argument("--skip-reached", action="store_true",
+                    help="advance past EVERY node already inside the arrival "
+                         "radius instead of holding each carrot. The old "
+                         "behaviour; kept only so the two can be compared.")
     ap.add_argument("--port", type=int, default=2000)
     ap.add_argument("--m-per-step", type=float, default=0.24)
     ap.add_argument("--cap-slack", type=int, default=300)
@@ -261,16 +265,24 @@ def main():
                     end = "success"
                     break
                 if arm != "mapless" and path and leg < len(path):
-                    # CARROT, not "next node". The arrival radius (4 m) is wider
-                    # than the gap between MAD's nodes (~1.2 m), so advancing one
-                    # leg per arrival let the whole plan be "reached" in a few
-                    # steps and the car drove at the final goal with the graph
-                    # doing nothing. Advance past every node already inside the
-                    # radius, so the target is always genuinely ahead.
-                    while (leg < len(path)
-                           and np.linalg.norm(cur - graphs[arm][0][path[leg]])
-                           <= a.arrival_radius):
+                    # HOLD THE CARROT UNTIL IT IS REACHED (Habitat peer,
+                    # 2026-10-03: this was their single biggest step from "maps
+                    # tie mapless" to "maps beat mapless"). Advance by ONE leg
+                    # when the current target is reached, and never skip a node
+                    # merely because it happens to be inside the radius -- a
+                    # skipped node is a corner the route was relying on.
+                    #
+                    # The earlier version advanced past everything within the
+                    # radius, which with a 4 m radius and 1.2 m nodes consumed
+                    # most of the plan in a few steps. Skipping is now opt-in
+                    # via --skip-reached, kept so the two can be compared.
+                    if np.linalg.norm(cur - graphs[arm][0][path[leg]]) <= a.arrival_radius:
                         leg += 1
+                        if a.skip_reached:
+                            while (leg < len(path)
+                                   and np.linalg.norm(cur - graphs[arm][0][path[leg]])
+                                   <= a.arrival_radius):
+                                leg += 1
                 if term or trunc:
                     end = str(info.get("goal_end", info.get("explore_end",
                                                             "terminated")))

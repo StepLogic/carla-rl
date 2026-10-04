@@ -135,7 +135,7 @@ echo "=== [v43-srspl $(date +%H:%M:%S)] $TOWN ckpt=$(basename "$CK") -> $OUT ===
 python eval_sr_spl_v43.py --town "$TOWN" --maps "$MAPS" --shortcuts "$SC" \
   --trace "$TRACE" --ckpt "$CK" --out "$OUT" --episodes "$EPS" \
   --n-episodes "${N_EPISODES:-30}" --min-geodesic "${MIN_GEODESIC:-50}" \
-  --port 2000 2>&1 | tee -a "logs/v43_srspl_${TOWN}.log"
+  --port 2000 ${EXTRA_ARGS:-} 2>&1 | tee -a "logs/v43_srspl_${TOWN}.log"
 rc=${PIPESTATUS[0]}
 echo "=== [v43-srspl $(date +%H:%M:%S)] $TOWN done rc=$rc -> $OUT ==="
 exit $rc

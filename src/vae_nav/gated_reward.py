@@ -126,6 +126,18 @@ if LANE_TERMINAL_BILL == "discounted" and os.environ.get("EPISODE_HER", "0") == 
     raise ValueError("GOAL_LANE_TERMINAL_BILL=discounted is not mirrored in the HER "
                      "recost; run it with EPISODE_HER=0")
 _BILL_GAMMA = float(os.environ.get("DISCOUNT", 0.99))
+# GAMMA-AWARE POTENTIAL SHAPING (v40, 2026-10-01). The wrapper pays
+# K*(d_prev - d) = Phi(s') - Phi(s) for Phi = -K*d, which is Ng et al.'s
+# policy-invariant gamma*Phi(s') - Phi(s) ONLY at gamma = 1. At gamma < 1 the
+# gap (1-gamma)*K*d is an extra per-step penalty proportional to distance to
+# the goal -- -4/step at 200 m with K=2, g=0.99, against a 1.5 step cost. v40
+# moves DISCOUNT 1.0 -> 0.99 to test whether the undiscounted goal critic is
+# what diverged in v37-v39; this keeps the shaping's meaning fixed across that
+# change. Off by default (every recipe byte-identical); equal at gamma = 1.
+SHAPING_DISCOUNTED = os.environ.get("GOAL_SHAPING_DISCOUNTED", "0") == "1"
+if SHAPING_DISCOUNTED and os.environ.get("EPISODE_HER", "0") == "1":
+    raise ValueError("GOAL_SHAPING_DISCOUNTED=1 is not mirrored in the HER "
+                     "recost; run it with EPISODE_HER=0")
 
 
 def lane_terminal_bill(remaining, step_cost=1.0):
@@ -143,7 +155,7 @@ def lane_terminal_bill(remaining, step_cost=1.0):
 # making the undifferentiated rule harsher pushed the agent toward idling (0.09).
 # With GOAL_LANE_GRADED=1 the fine follows the marking crossed:
 #   broken line inside a junction     0                        (the turn)
-#   unpainted edge only (NONE)        0                        (off_road fines it)
+#   unpainted edge only (NONE)        GOAL_LANE_PENALTY_NONE   (see below)
 #   broken line on open road          GOAL_LANE_PENALTY_BROKEN (a lane change)
 #   solid / double / kerb / grass     GOAL_LANE_PENALTY        (illegal)
 #   no marking data                   GOAL_LANE_PENALTY        (fails closed)
@@ -152,24 +164,55 @@ def lane_terminal_bill(remaining, step_cost=1.0):
 # bonus. Off by default: every earlier recipe is byte-identical.
 LANE_GRADED = os.environ.get("GOAL_LANE_GRADED", "0") == "1"
 GOAL_LANE_PENALTY_BROKEN = float(os.environ.get("GOAL_LANE_PENALTY_BROKEN", 2.0))
+# NONE IS NO LONGER FREE (user 2026-09-30: "fine NONE 5").
+#
+# The comment above said off_road fines the unpainted edge. MEASURED, and it does
+# not: over 120 goal-mode eval episodes (38,855 steps) lane_any fired 79 times and
+# off_road 18, and they NEVER coincided -- 0 steps carried both. They are different
+# events. off_road is get_waypoint(project_to_road=False) is None, which needs the
+# vehicle REFERENCE POINT off every lane; the lane sensor traces the four BOUNDING
+# BOX CORNERS (CARLA LaneInvasionSensor.cpp: CalculateCrossedLanes over each
+# corner's previous->current segment). A wheel or overhang on a kerb is seen by the
+# sensor as NONE and is invisible to off_road, so under the old rule mounting a
+# kerb cost nothing at all. lane_explore_reward records the same: Solid/Curb/Grass
+# have never once fired in this repo, so "mounting a kerb reports as NONE".
+#
+# WHY A FINE AND NOT A FATAL. The same corner geometry means a competent driver
+# clips an unpainted boundary on bends -- the bounding box is ~2 m in a ~3.5 m lane,
+# so the outer corner sweeps wider than the centre. Making NONE fatal at 100 m goals
+# took the scripted PID oracle to 0.000 success; a fine charges the kerb mount
+# without declaring correct cornering a failure. Set BELOW the painted fines (5.0 vs
+# 10.0) for the same reason: it is a weaker claim about a weaker boundary.
+# Default 0.0 keeps every earlier run byte-identical.
+GOAL_LANE_PENALTY_NONE = float(os.environ.get("GOAL_LANE_PENALTY_NONE", 0.0))
 # GOAL MODE ("sorb" arm) ARRIVAL BONUS (v9, user 2026-09-21: "add +10 for
 # goal"). Paid on the arrival step INSTEAD of the old 0.0; default 0.0 keeps
 # every earlier arm identical. The explore arm's EXPLORE_ARRIVAL_BONUS is a
 # separate constant and is untouched.
 GOAL_ARRIVAL_BONUS = float(os.environ.get("GOAL_ARRIVAL_BONUS", 0.0))
 # v9 COUNTING REGIME (user 2026-09-21: "only truncate after N steps offroad,
-# 2 collisions or 2 lane crossings", later "make it 20" -- ALL THREE
-# thresholds are 20 STEPS, counted per step, cumulative within one goal
-# episode; event-dedup was offered and declined). When GOAL_TRUNCATE_COUNTS=1
-# the goal arm's terminal bills are REPLACED by counters the wrapper keeps:
-#   nothing terminates except arrival (+GOAL_ARRIVAL_BONUS, terminated=True);
-#   the episode truncates (truncated=True, mask=1.0, the critic bootstraps
-#   through the cut) when ANY of
+# 2 collisions or 2 lane crossings", later "make it 20" -- thresholds are
+# CUMULATIVE STEPS within one goal episode; event-dedup was offered and
+# declined). When GOAL_TRUNCATE_COUNTS=1 the wrapper keeps per-episode fault
+# counters and goal_reward_sorb applies, IN THIS ORDER:
+#   arrival (+GOAL_ARRIVAL_BONUS, terminated=True) is checked FIRST and wins;
+#   a tripping fault cap TERMINATES the episode with the EXACT remaining-clock
+#   bill, mask=0 (user 2026-09-24: "terminate collision, lane invasion and
+#   offroad and bill 101 per step", "bill remaining steps but set mask=0"):
 #     off-road steps  >= GOAL_OFFROAD_TRUNCATE_STEPS   (20)
 #     collision steps >= GOAL_COLLISION_TRUNCATE_STEPS (20)
-#     crossing steps  >= GOAL_CROSSING_TRUNCATE_STEPS  (20)
-#   and the truncating step pays its NORMAL per-step reward -- no
-#   remaining-clock bill, the bootstrap carries the cost (user's pick).
+#     crossing steps  >= GOAL_CROSSING_TRUNCATE_STEPS  (20; the counter is
+#       every lane_any step, so a lane invasion IS the counted crossing)
+#   and the bill is -(step_cost + fine) * (1 + remaining) under the
+#   stay-in-terminal assumption (user: "assume the agent stays in a terminal
+#   state till the episode elapsed") -- every remaining step would keep
+#   faulting, each paying its step cost plus its fine. TERMINATED, not
+#   truncated: the bill carries the cost, so the critic must not bootstrap an
+#   unbounded gamma=1 chain on top of it (the legacy wedge/crash bill's rule).
+#   fault STEPS BEFORE the cap pay their per-step fines (the truncating step
+#   does NOT -- the bill replaces its normal reward);
+#   the CLOCK cap alone (max_steps with no fault) still truncates
+#   (truncated=True, mask=1.0, the critic bootstraps through the cut).
 # GOAL_COLLISION_PENALTY (default 10.0) fines each collision step, consistent
 # with the 10.0 lane/off-road fines; under the old bill regime collision was
 # billed terminally, so no per-step constant existed for it before.
@@ -417,7 +460,7 @@ def goal_lane_fine(info):
     if not marks or any(m in ILLEGAL_MARKS for m in marks):
         return float(GOAL_LANE_PENALTY)
     if all(m in UNPAINTED_MARKS for m in marks):
-        return 0.0
+        return float(GOAL_LANE_PENALTY_NONE)
     if bool(info.get("in_junction", False)):
         return 0.0
     return float(GOAL_LANE_PENALTY_BROKEN)
@@ -430,6 +473,30 @@ def goal_lane_fault(info):
     if not LANE_GRADED:
         return _lane_any(info)
     return goal_lane_fine(info) > 0.0
+
+
+def classify_goal_end(arrived, offroad_steps, collision_steps, crossing_steps,
+                      t, max_steps):
+    """Why a goal episode ended, in episode_her's vocabulary and precedence.
+
+    Logging only (v38, 2026-09-30). The trainer's goal end-reason tally was
+    filled solely from the HER buffer's classifier, so with EPISODE_HER=0 it
+    stayed EMPTY: all 235 of v37's [Ep] lines read cross=nan(n=0). The wrapper
+    holds the same counters, so it labels the terminating step itself, the way
+    explore mode writes info["explore_end"]. Arrival is checked first, as
+    goal_reward_sorb does; an ending none of the rules explain is "other",
+    reported rather than guessed."""
+    if arrived:
+        return "reached"
+    if offroad_steps >= GOAL_OFFROAD_TRUNCATE_STEPS:
+        return "off_road"
+    if collision_steps >= GOAL_COLLISION_TRUNCATE_STEPS:
+        return "collision"
+    if crossing_steps >= GOAL_CROSSING_TRUNCATE_STEPS:
+        return "crossing"
+    if int(t) >= int(max_steps):
+        return "clock"
+    return "other"
 
 
 def goal_reward_sorb(info, t, max_steps=GOAL_MAX_STEPS, step_cost=STEP_COST,
@@ -503,12 +570,56 @@ def goal_reward_sorb(info, t, max_steps=GOAL_MAX_STEPS, step_cost=STEP_COST,
         # HER_RECOST mirrors this through goal_lane_departed and cuts the
         # relabelled leg at the same step (episode_her._counting_end).
         if LANE_TERMINAL and goal_lane_departed(info):
+            # Same rule as the fault caps below: this step's fine once, plus
+            # the wasted clock.
             remaining = max(0, int(max_steps) - int(t))
-            return -lane_terminal_bill(remaining, step_cost), True, False, False
-        # v9 counting regime (see the constants block): per-step fines, no
-        # terminal bills, truncate when any cumulative count trips. The
-        # truncating step pays its normal reward -- the wrapper's counters
-        # (offroad/collision/crossing steps) arrive as kwargs.
+            return (-goal_lane_fine(info) - lane_terminal_bill(remaining, step_cost),
+                    True, False, False)
+        # v9 counting regime (see the constants block): per-step fines while
+        # the episode runs; the fault caps END THE EPISODE WITH A BILL.
+        # User 2026-09-24 ("terminate collision, lane invasion and offroad and
+        # bill 101 per step", then "bill remaining steps but set mask=0"):
+        # when a cumulative count trips on this step the episode TERMINATES
+        # (terminated=True -> mask=0, the critic does NOT bootstrap through)
+        # and the step pays the exact remaining-clock bill.
+        # ARRIVAL IS CHECKED BEFORE THIS BRANCH and still wins on a step that
+        # both arrives and faults. The CLOCK cap (below) stays a truncation:
+        # a time limit is not a fault and still bootstraps (mask=1.0).
+        #
+        # ONE RULE FOR EVERY NON-ARRIVAL ENDING (user 2026-09-30: "terminal
+        # unification", then "first fine + wasted time"):
+        #
+        #     terminal = -(this step's fine) - (the clock left on the episode)
+        #
+        # The fine is paid ONCE, for the fault that ended the episode, and the
+        # wasted time is the same bill every other ending pays. This branch
+        # used to charge -(step_cost + fine) for EVERY remaining step, on the
+        # assumption that a capped episode would keep faulting to the horizon.
+        # That made the exits disagree by an order of magnitude -- at step 100
+        # of a 1000 cap the wedge/crash bill is -901 and this one was -9911, a
+        # flat 11x -- and TQC_VALUE_FLOOR=-3500 CLIPPED it for any fault before
+        # step ~682, so the reward asserted a return the critic could not
+        # represent. Charging the fine once keeps every ending inside the floor
+        # while still pricing collision, off-road and crossing differently.
+        # lane_terminal_bill rather than a bare (1 + remaining) so the clock
+        # stays correct under a discount -- v30's lesson, where the
+        # undiscounted bill over-penalised 10x at gamma=0.99 and the car parked.
+        if (offroad_steps >= GOAL_OFFROAD_TRUNCATE_STEPS
+                or collision_steps >= GOAL_COLLISION_TRUNCATE_STEPS
+                or crossing_steps >= GOAL_CROSSING_TRUNCATE_STEPS):
+            _fine = 0.0
+            if (GOAL_OFF_ROAD_PENALTY and offroad_steps
+                    >= GOAL_OFFROAD_TRUNCATE_STEPS):
+                _fine = max(_fine, GOAL_OFF_ROAD_PENALTY)
+            if (GOAL_COLLISION_PENALTY and collision_steps
+                    >= GOAL_COLLISION_TRUNCATE_STEPS):
+                _fine = max(_fine, GOAL_COLLISION_PENALTY)
+            if (GOAL_LANE_PENALTY and crossing_steps
+                    >= GOAL_CROSSING_TRUNCATE_STEPS):
+                _fine = max(_fine, GOAL_LANE_PENALTY)
+            remaining = max(0, int(max_steps) - int(t))
+            return (-_fine - lane_terminal_bill(remaining, step_cost),
+                    True, False, False)
         _r = -step_cost
         if GOAL_OFF_ROAD_PENALTY and info.get("off_road"):
             _r -= GOAL_OFF_ROAD_PENALTY
@@ -530,10 +641,7 @@ def goal_reward_sorb(info, t, max_steps=GOAL_MAX_STEPS, step_cost=STEP_COST,
                 if _vt > 0.0:
                     _r += GOAL_SPEED_BONUS * max(
                         0.0, 1.0 - abs(_v - _vt) / _vt)
-        truncated = (int(t) >= int(max_steps)
-                     or offroad_steps >= GOAL_OFFROAD_TRUNCATE_STEPS
-                     or collision_steps >= GOAL_COLLISION_TRUNCATE_STEPS
-                     or crossing_steps >= GOAL_CROSSING_TRUNCATE_STEPS)
+        truncated = int(t) >= int(max_steps)
         return _r, False, truncated, False
     if wedged or crashed or departed:
         # THE BILL IS EXACT, NOT A PENALTY: this step plus every step left on
@@ -544,7 +652,15 @@ def goal_reward_sorb(info, t, max_steps=GOAL_MAX_STEPS, step_cost=STEP_COST,
         # agent never leaves. LEGACY REGIME (GOAL_TRUNCATE_COUNTS=0): kept
         # byte-identical to v4-v8 so old run_env snapshots replay exactly;
         # v9's truncate-everything rule lives in the counting branch above.
+        #
+        # Under the counting regime this is lane_terminal_bill, the SAME bill
+        # the fault caps and the lane-departure terminal pay, so every
+        # non-arrival ending costs exactly the clock (user 2026-09-30,
+        # "terminal unification"). The legacy arm keeps the bare undiscounted
+        # form so pre-v9 snapshots replay byte-identically.
         remaining = max(0, int(max_steps) - int(t))
+        if GOAL_TRUNCATE_COUNTS:
+            return -lane_terminal_bill(remaining, step_cost), True, False, False
         return -step_cost * (1 + remaining), True, False, False
     # PER-STEP DRIVING PENALTIES (default 0.0). NOT applied to the terminal
     # bills above: those are exact by construction -- the wedge and crash bills
@@ -628,6 +744,25 @@ EXPLORE_OFF_ROAD_FATAL = os.environ.get("EXPLORE_OFF_ROAD_FATAL", "1") == "1"
 GOAL_OFF_ROAD_PENALTY = float(os.environ.get("GOAL_OFF_ROAD_PENALTY", 0.0))
 GOAL_LANE_PENALTY = float(os.environ.get("GOAL_LANE_PENALTY", 0.0))
 EXPLORE_OFF_ROAD_PENALTY = float(os.environ.get("EXPLORE_OFF_ROAD_PENALTY", 0.0))
+# NONE IS FINED IN EXPLORE TOO (user 2026-09-30: "fine NONE in both modes").
+#
+# The explore arm exempts NONE via EXPLORE_EXEMPT_MARKS so that clipping an
+# unpainted boundary is not a fatal departure -- the bounding-box corners sweep
+# wider than the wheels on a bend (CARLA traces all four corners), so a competent
+# driver touches unpainted edges while cornering correctly. That exemption is
+# still right about FATALITY and was wrong about COST: a wheel on a kerb reports
+# as NONE and was free. This charges it without ending the episode, mirroring
+# GOAL_LANE_PENALTY_NONE so the same event costs the same in both modes.
+# Default 0.0 keeps every earlier run byte-identical.
+EXPLORE_LANE_PENALTY_NONE = float(
+    os.environ.get("EXPLORE_LANE_PENALTY_NONE", 0.0))
+# COLLISION ENDS AN EXPLORE EPISODE (user 2026-09-30: "collision should be fatal
+# and fined"). It was fined COLLISION_PENALTY (3.0) and NOT terminal, so with
+# PROGRESS_SCALE=10 a single step of progress (~+2.4) very nearly paid for a
+# crash and the explorer could grind along a wall at a small net cost. The fine
+# is unchanged; this only makes the episode end. Default off: earlier runs are
+# byte-identical.
+EXPLORE_COLLISION_FATAL = os.environ.get("EXPLORE_COLLISION_FATAL", "0") == "1"
 EXPLORE_GOAL_DIST_M = float(os.environ.get("EXPLORE_GOAL_DIST_M", 100.0))
 EXPLORE_ARRIVAL_BONUS = float(os.environ.get("EXPLORE_ARRIVAL_BONUS", 10.0))
 EXPLORE_LANE_MODE = os.environ.get("EXPLORE_LANE_MODE", "terminal")
@@ -696,13 +831,26 @@ def explore_reward(info, disp):
             info.get("lane_marking_types"), False,
             in_junction=bool(info.get("in_junction", False)))
         off = EXPLORE_OFF_ROAD_FATAL and bool(info.get("off_road", False))
+        # An exempt (NONE) crossing is not fatal but is no longer free: see
+        # EXPLORE_LANE_PENALTY_NONE. Charged only when EVERY mark is exempt, so
+        # a painted crossing is priced by LANE_DEPARTURE_PENALTY below and never
+        # pays both.
+        _marks = [str(m).split(".")[-1]
+                  for m in (info.get("lane_marking_types") or [])]
+        if (EXPLORE_LANE_PENALTY_NONE
+                and bool(info.get("lane_any", info.get("lane_invasion_any", False)))
+                and _marks and all(m in EXPLORE_EXEMPT_MARKS for m in _marks)):
+            r -= EXPLORE_LANE_PENALTY_NONE
+        # A crash ends the episode (EXPLORE_COLLISION_FATAL); COLLISION_PENALTY
+        # was already charged above, so this adds termination, not a second fine.
+        _crash = EXPLORE_COLLISION_FATAL and bool(info.get("collision", False))
         if EXPLORE_LANE_MODE == "penalise":
             if crossing:
                 r -= LANE_DEPARTURE_PENALTY      # charged, not ended
-            fatal = off
+            fatal = off or _crash
         else:                                    # terminal
-            fatal = crossing or off
-            if fatal:
+            fatal = crossing or off or _crash
+            if crossing or off:
                 r -= LANE_DEPARTURE_PENALTY
         return float(np.nan_to_num(r, nan=0.0)), fatal
     if fatal:
@@ -747,15 +895,30 @@ class GatedReward(Wrapper):
                   f"goal_max_steps={self.goal_max_steps} "
                   f"-> goal return in [{lo:.1f}, 0.0]; only arrival terminates. "
                   f"REQUIRES DISCOUNT=1.0 for the goal critic.")
+        if self.goal_kind == "sorb":
+            # PRINTED SO A RUN'S OWN LOG PROVES WHICH SHAPING FORM AND WHICH
+            # FAULT BILL WERE LIVE (v40). Neither is visible anywhere else: the
+            # bill's own banner prints only when the lane terminal is on.
+            print(f"[Gated] goal shaping K={POTENTIAL_K:g} form="
+                  + (f"K*(d_prev - {_BILL_GAMMA:g}*d) [gamma-aware]"
+                     if SHAPING_DISCOUNTED
+                     else "K*(d_prev - d) [undiscounted difference]")
+                  + "; fault/terminal bill="
+                  + (f"DISCOUNTED -step_cost*(1-g^(1+remaining))/(1-g) g={_BILL_GAMMA:g}"
+                     if (LANE_TERMINAL_BILL == "discounted" and _BILL_GAMMA < 1.0)
+                     else "CLOCK -step_cost*(1+remaining)"), flush=True)
         if self.goal_kind == "sorb" and GOAL_TRUNCATE_COUNTS:
-            print(f"[Gated] v9 COUNTING regime: no terminal bills; truncate "
-                  f"at offroad>={GOAL_OFFROAD_TRUNCATE_STEPS} "
+            print(f"[Gated] v9 COUNTING regime: fault caps TERMINATE with the "
+                  f"exact remaining-clock bill, mask=0 (stays-faulting bill "
+                  f"-(step_cost+fine)*(1+remaining)); caps offroad>="
+                  f"{GOAL_OFFROAD_TRUNCATE_STEPS} "
                   f"collision>={GOAL_COLLISION_TRUNCATE_STEPS} "
                   f"crossing>={GOAL_CROSSING_TRUNCATE_STEPS} steps; "
                   f"fines lane/off/coll="
                   f"{GOAL_LANE_PENALTY}/{GOAL_OFF_ROAD_PENALTY}/"
                   f"{GOAL_COLLISION_PENALTY}; "
-                  f"arrival bonus={GOAL_ARRIVAL_BONUS} is the only terminus"
+                  f"arrival bonus={GOAL_ARRIVAL_BONUS} is the only other "
+                  f"terminus; the clock cap alone truncates (mask=1)"
                   + (f"; velocity bonus {GOAL_SPEED_BONUS} "
                      f"(peak at target speed, clean steps only)"
                      if GOAL_SPEED_BONUS else ""),
@@ -980,7 +1143,8 @@ class GatedReward(Wrapper):
             _shaped = 0.0
             if POTENTIAL_K and not (terminated or truncated):
                 if _rem is not None and self._prev_remaining is not None:
-                    _shaped = POTENTIAL_K * (self._prev_remaining - float(_rem))
+                    _g = _BILL_GAMMA if SHAPING_DISCOUNTED else 1.0
+                    _shaped = POTENTIAL_K * (self._prev_remaining - _g * float(_rem))
                     reward += _shaped
             self._prev_remaining = None if _rem is None else float(_rem)
             info["gated_shaping"] = float(_shaped)
@@ -990,6 +1154,10 @@ class GatedReward(Wrapper):
                 obs, reward, terminated, truncated, arrived, info = \
                     self._goal_freeze(action, reward, info)
                 info["is_success"] = arrived
+            if terminated or truncated:
+                info["goal_end"] = classify_goal_end(
+                    arrived, self._offroad_steps, self._collision_steps,
+                    self._crossing_steps, self._t, self.goal_max_steps)
         elif self.mode == GOAL:
             reward = goal_reward(info, self.delta_mode)
             terminated = bool(term)          # the env's own goal-arm rules

@@ -77,6 +77,14 @@ def main():
     ap.add_argument("--limit", type=int, default=0, help="drive only the first N episodes per map (smoke test)")
     # VIDEOS (user 2026-09-13 "record some videos for entropy"): passive -- frames are drawn from info["rgb"]
     # and the poses already computed; nothing the car does depends on them. Off unless --video-dir is set.
+    # user 2026-09-19 "replace localization with dinov2": which features node matching uses. The default
+    # is the shipped behaviour, so every existing row is reproducible.
+    ap.add_argument("--localiser", default="mobilenet_trace", choices=["mobilenet_trace", "mobilenet_bank", "dinov2_bank"])
+    ap.add_argument("--feats", default="results/episodes/town02_speed10_s7_dinov2.npz")
+    ap.add_argument("--pooling", default="patchmean", choices=["patchmean", "cls"])
+    # user 2026-09-20 "plot dinov2 driven path": dump the driven trajectory for EVERY episode, not just the
+    # video ones -- the trail already exists, it was simply tied to the video writer.
+    ap.add_argument("--trail-dir", default="")
     ap.add_argument("--video-dir", default="")
     ap.add_argument("--video-maps", nargs="*", default=["entropy_smooth9_high", "entropy_smooth9_low",
                                                         "entropy_nosmooth_high", "entropy_nosmooth_low"])
@@ -102,7 +110,8 @@ def main():
     V = pickle.load(open(a.views, "rb"))
     views = {(v["set"], v["index"], v["role"]): v for v in V["views"]}
     tr = pickle.load(open(a.trace, "rb"))
-    Z = np.stack([np.asarray(o["latent"], np.float64) for o in tr["observations"]])
+    from localiser import Localiser
+    loc = Localiser(a.localiser, tr, views, feats=a.feats, pooling=a.pooling)
     episodes = [(s, e) for s in ("short", "long") for e in bundle[s]["episodes"]]
     if a.limit:
         episodes = episodes[:a.limit]
@@ -137,7 +146,7 @@ def main():
     t_all = time.time()
     for k, (mn, set_name, e) in enumerate(todo):
         xy, tidx, edges, legs = maps[mn]
-        n, Zn = len(xy), Z[tidx]
+        n, Zn = len(xy), loc.nodes(tidx)
         driven_dirs = set(edges)
         idx = int(e["index"])
         start_xy = np.asarray(e["start_xy"], np.float64); goal_xy = np.asarray(e["goal_xy"], np.float64)
@@ -154,8 +163,8 @@ def main():
         here = np.asarray(info["hero_pos"], np.float64)[:2]
         spawn_err = float(np.linalg.norm(here - start_xy))
 
-        start_node = nearest_latent(obs["latent"], Zn, range(n))
-        goal_node = nearest_latent(views[(set_name, idx, "goal")]["obs"]["latent"], Zn, range(n))
+        start_node = nearest_latent(loc.query(obs, info), Zn, range(n))
+        goal_node = nearest_latent(loc.goal(set_name, idx), Zn, range(n))
         path = bfs_path(n, edges, start_node, goal_node, undirected=True)
         plan0 = list(path) if path is not None else None
         plan_m = path_metres(path, xy, legs) if path is not None else 0.0
@@ -174,6 +183,7 @@ def main():
             return xy[path[i]] if i < len(path) else goal_xy
 
         writer, video_path, trail = None, None, [here.copy()]
+        keep_trail = bool(a.trail_dir)
         if mn in topdown and f"{set_name}{idx}" in a.video_episodes:
             video_path = os.path.join(a.video_dir, f"{mn}_{set_name}{idx:02d}.mp4")
             writer = open_writer(video_path)
@@ -190,6 +200,8 @@ def main():
             obs, _r, _term, _trunc, info = env.step(agent.eval_actions(drive_obs))
             here = np.asarray(info.get("hero_pos", prev), np.float64)[:2]
             driven_m += float(np.linalg.norm(here - prev)); prev = here.copy()
+            if keep_trail and writer is None:
+                trail.append(here.copy())
             if writer is not None:
                 trail.append(here.copy())
                 writer.write(render_frame(
@@ -218,7 +230,7 @@ def main():
                 continue
             # RE-LOCALISE at the node (or on a leg timeout), only within the plan window
             window = candidate_window(path, i, a.window_hops)
-            matched = nearest_latent(obs["latent"], Zn, window)
+            matched = nearest_latent(loc.query(obs, info), Zn, window)
             expected = path[i]
             log["relocalisations"] += 1
             prev_node = path[i - 1] if i >= 1 else None
@@ -242,6 +254,7 @@ def main():
         final_d = float(np.linalg.norm(here - goal_xy))
         route = e.get("route_m")
         rec = {"map": mn, "set": set_name, "index": idx, "goal_kind": e.get("goal_kind", "on_graph"),
+               "localiser": a.localiser if a.localiser == "mobilenet_trace" else f"{a.localiser}:{a.pooling}",
                "route_m": route, "spawn_error_m": spawn_err, "start_node": int(start_node), "goal_node": int(goal_node),
                "start_node_err_m": float(np.linalg.norm(xy[start_node] - start_xy)),
                "goal_node_err_m": float(np.linalg.norm(xy[goal_node] - goal_xy)),
@@ -250,6 +263,15 @@ def main():
                "final_dist_m": final_d, "driven_m": driven_m,
                "spl": (float(route) / max(driven_m, float(route))) if (end == "success" and route) else 0.0,
                "reached_plan_end": log["final_goal_leg_started"] is not None, "video": video_path, **log}
+        if a.trail_dir:
+            os.makedirs(a.trail_dir, exist_ok=True)
+            tag = f"{a.localiser}" + ("" if a.localiser == "mobilenet_trace" else f"_{a.pooling}")
+            json.dump({"map": mn, "set": set_name, "index": idx, "localiser": tag,
+                       "start_xy": start_xy.tolist(), "goal_xy": goal_xy.tolist(),
+                       "start_node": int(start_node), "goal_node": int(goal_node),
+                       "plan_nodes": plan0, "end": end, "success": end == "success",
+                       "trail": [[float(p[0]), float(p[1])] for p in trail]},
+                      open(os.path.join(a.trail_dir, f"{mn}_{set_name}{idx:02d}_{tag}.json"), "w"))
         with open(a.out, "a") as fh:
             fh.write(json.dumps(rec) + "\n")
         el = time.time() - t_all

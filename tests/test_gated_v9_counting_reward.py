@@ -1,12 +1,17 @@
-"""The v9 goal-mode COUNTING REGIME (user 2026-09-21).
+"""The v9 goal-mode COUNTING REGIME (user 2026-09-21, as amended 2026-09-24).
 
-GOAL_TRUNCATE_COUNTS=1 replaces goal_reward_sorb's terminal bills: arrival
-(+GOAL_ARRIVAL_BONUS) is the ONLY terminus; every other end is a truncation
-(mask=1.0, the critic bootstraps through the cut) paying its normal per-step
-reward; thresholds are cumulative STEPS -- 20 off-road, 20 collision,
-20 crossing. The legacy bill regime must stay byte-identical when the flag is
-off, so these tests reload the module with the env set and restore it after --
-the module reads its constants at import time, and the sibling file
+GOAL_TRUNCATE_COUNTS=1 replaces goal_reward_sorb's terminal bills with the
+wrapper's fault counters: while the episode runs, fault steps pay their
+per-step fines; when a cumulative count trips, the episode TERMINATES with the
+EXACT remaining-clock bill (user: "terminate collision, lane invasion and
+offroad and bill 101 per step", "bill remaining steps but set mask=0",
+"assume the agent stays in a terminal state till the episode elapsed") -- the
+bill is -(step_cost + fine) * (1 + remaining), terminated=True so the critic
+does not bootstrap on top of it. Arrival (+GOAL_ARRIVAL_BONUS) is checked
+first and still wins; the CLOCK cap alone still truncates (mask=1.0). The
+legacy bill regime must stay byte-identical when the flag is off, so these
+tests reload the module with the env set and restore it after -- the module
+reads its constants at import time, and the sibling file
 (test_gated_sorb_reward.py) imports it under the defaults.
 """
 import importlib
@@ -133,32 +138,67 @@ def test_off_road_steps_fine_at_ten(v9):
     assert [w.step(ACT)[1] for _ in range(3)] == [-11.0] * 3
 
 
-# ---- the thresholds: 20 steps, cumulative, truncated (never terminated) -----
+# ---- the thresholds: cumulative; a tripping cap bills and TERMINATES --------
 
-def _run_to_truncation(gr, info):
+def _run_to_cap(gr, info):
     w = _wrap(gr, info)
     for _ in range(19):
-        assert w.step(ACT)[3] is False       # not truncated yet
+        assert w.step(ACT)[3] is False       # neither terminated nor truncated yet
     obs, reward, terminated, truncated, _ = w.step(ACT)
     return w, reward, terminated, truncated
 
 
-def test_twenty_collision_steps_truncate(v9):
-    w, reward, terminated, truncated = _run_to_truncation(v9, {"collision": True})
-    assert (terminated, truncated) == (False, True)
-    assert reward == -11.0                   # normal step reward, NO bill
+def test_twenty_collision_steps_bill_and_terminate(v9):
+    # The 20th fault step terminates (mask=0) with the exact bill: every step
+    # from here to the cap would keep faulting, each paying -(1 + fine).
+    # t=20, remaining=980 -> -(1+10) * 981.
+    w, reward, terminated, truncated = _run_to_cap(v9, {"collision": True})
+    assert (terminated, truncated) == (True, False)
+    assert reward == pytest.approx(-11.0 * 981)
 
 
-def test_twenty_crossing_steps_truncate(v9):
-    w, reward, terminated, truncated = _run_to_truncation(v9, {"lane_any": True})
-    assert (terminated, truncated) == (False, True)
-    assert reward == -11.0
+def test_twenty_crossing_steps_bill_and_terminate(v9):
+    w, reward, terminated, truncated = _run_to_cap(v9, {"lane_any": True})
+    assert (terminated, truncated) == (True, False)
+    assert reward == pytest.approx(-11.0 * 981)
 
 
-def test_twenty_off_road_steps_truncate(v9):
-    w, reward, terminated, truncated = _run_to_truncation(v9, {"off_road": True})
-    assert (terminated, truncated) == (False, True)
-    assert reward == -11.0
+def test_twenty_off_road_steps_bill_and_terminate(v9):
+    w, reward, terminated, truncated = _run_to_cap(v9, {"off_road": True})
+    assert (terminated, truncated) == (True, False)
+    assert reward == pytest.approx(-11.0 * 981)
+
+
+def test_threshold_one_is_the_live_run_config(v9):
+    # The term101 launch (user 2026-09-24) runs every threshold at 1: the
+    # FIRST faulting step terminates with the bill. t=1, remaining=999 ->
+    # -(1+101) * 1000.
+    import os as _os
+    _os.environ.update({"GOAL_OFFROAD_TRUNCATE_STEPS": "1",
+                        "GOAL_COLLISION_TRUNCATE_STEPS": "1",
+                        "GOAL_CROSSING_TRUNCATE_STEPS": "1",
+                        "GOAL_LANE_PENALTY": "101.0",
+                        "GOAL_OFF_ROAD_PENALTY": "101.0",
+                        "GOAL_COLLISION_PENALTY": "101.0"})
+    try:
+        importlib.reload(v9)
+        w = _wrap(v9, {"collision": True})
+        _, reward, terminated, truncated, _ = w.step(ACT)
+        assert (terminated, truncated) == (True, False)
+        assert reward == pytest.approx(-102.0 * 1000)
+    finally:
+        for k, val in V9_ENV.items():
+            os.environ[k] = val
+        importlib.reload(v9)
+
+
+def test_the_bill_is_the_return_of_simulated_faulting_steps(v9):
+    # EXACTNESS: the fault-step bill equals the return of driving faulting
+    # steps to the cap. t=20 with fine 10: 981 further faulting steps at
+    # -11 each (discount 1.0) sum to the same -11 * 981.
+    w, reward, terminated, _ = _run_to_cap(v9, {"collision": True})
+    simulated = -(1.0 + 10.0) * 981
+    assert reward == pytest.approx(simulated)
 
 
 def test_nineteen_fault_steps_plus_a_clean_step_do_not_truncate(v9):

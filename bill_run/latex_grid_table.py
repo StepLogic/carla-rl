@@ -1,0 +1,1 @@
+/home/robotlab/scratch/carla-rl/.claude/worktrees/gated-impl/latex_grid_table.py

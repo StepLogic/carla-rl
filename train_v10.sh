@@ -188,8 +188,14 @@ export N_EVAL_EPISODES=0 N_EVAL_EXPLORE=0
 # (the counting branch returns before they are consulted) and are exported 0
 # to say so honestly in the snapshot.
 export GOAL_TRUNCATE_COUNTS=1 GOAL_ARRIVAL_BONUS=10.0
-export GOAL_OFFROAD_TRUNCATE_STEPS=20 GOAL_COLLISION_TRUNCATE_STEPS=20
-export GOAL_CROSSING_TRUNCATE_STEPS=20
+# TRUNCATE THRESHOLDS caller-overridable (user 2026-09-24, "terminate
+# collision, lane invasion and offroad and bill 101 per step"): the launch
+# sets all three to 1, so the FIRST faulting step of each type ends the
+# episode (in goal mode the crossing counter is every lane_any step, so a
+# lane invasion IS the counted crossing). Default stays 20 for old recipes.
+export GOAL_OFFROAD_TRUNCATE_STEPS="${GOAL_OFFROAD_TRUNCATE_STEPS-20}"
+export GOAL_COLLISION_TRUNCATE_STEPS="${GOAL_COLLISION_TRUNCATE_STEPS-20}"
+export GOAL_CROSSING_TRUNCATE_STEPS="${GOAL_CROSSING_TRUNCATE_STEPS-20}"
 # FAULT FINES 10.0 (user 2026-09-22, "reduce fines to 10"; the run LAUNCHED
 # earlier this morning at 100.0 was killed and archived to
 # checkpoints/carla_gated_her_v9mbr_vc1_fines100_aborted/). Truncate
@@ -198,7 +204,9 @@ export GOAL_CROSSING_TRUNCATE_STEPS=20
 # fines -- a reward-scale change -- so per
 # [[warm-start-needs-an-actor-freeze]] the freeze (12500 updates, already
 # this wrapper's default) gives it time to re-fit before the actor moves.
-export GOAL_LANE_PENALTY=10.0 GOAL_OFF_ROAD_PENALTY=10.0 GOAL_COLLISION_PENALTY=10.0
+export GOAL_LANE_PENALTY="${GOAL_LANE_PENALTY-10.0}"
+export GOAL_OFF_ROAD_PENALTY="${GOAL_OFF_ROAD_PENALTY-10.0}"
+export GOAL_COLLISION_PENALTY="${GOAL_COLLISION_PENALTY-10.0}"
 # THE GOAL-CRITIC TARGET CLIP MUST CONTAIN THE RETURN RANGE. The trainer
 # derives its default floor as -step_cost*goal_cap = -1000 and IGNORES fines;
 # with 10.0 fines a fault-heavy episode reaches ~-1190 (1000 step costs +
@@ -208,7 +216,7 @@ export GOAL_LANE_PENALTY=10.0 GOAL_OFF_ROAD_PENALTY=10.0 GOAL_COLLISION_PENALTY=
 # train_carla_tqc.py:260-282). -3500 is KEPT from the 100.0-fine launch: it
 # still contains the smaller range with margin, and a floor below the
 # reachable range changes nothing (it only clamps what cannot occur).
-export TQC_VALUE_FLOOR=-3500
+export TQC_VALUE_FLOOR="${TQC_VALUE_FLOOR--3500}"
 # HER_RECOST=1 (user 2026-09-22, "ensure it matches the reward of the current
 # goal mode"): hindsight rows are recosted under THIS run's counting regime --
 # -1/step, the 10.0 fines on fault steps, +10 arrival, truncation cut at the
@@ -238,8 +246,8 @@ export COLLISION_TERMINAL=0 GATED_GOAL_LANE_TERMINAL=0 WEDGE_TRUNCATE=0
 # ---- EXPLORE mode: SAME FINE (user 2026-09-22, "use the same fine in ------
 # explore mode"): per-step fines 10.0 here too. Off-road stays FATAL
 # (EXPLORE_OFF_ROAD_FATAL=1) and the 100 m arrival + bonus 2.0 stay.
-export EXPLORE_OFF_ROAD_FATAL=1 EXPLORE_OFF_ROAD_PENALTY=10.0
-export LANE_COLLISION_PENALTY=10.0 LANE_DEPARTURE_PENALTY=10.0
+export EXPLORE_OFF_ROAD_FATAL=1 EXPLORE_OFF_ROAD_PENALTY="${EXPLORE_OFF_ROAD_PENALTY-10.0}"
+export LANE_COLLISION_PENALTY="${LANE_COLLISION_PENALTY-10.0}" LANE_DEPARTURE_PENALTY="${LANE_DEPARTURE_PENALTY-10.0}"
 
 # ---- GOAL SAMPLING ----------------------------------------------------------
 export JUNCTION_GOAL_FRAC=0.5 STRAIGHT_GOAL_FRAC=0.3
@@ -352,7 +360,7 @@ kill_all_carla
 # config) match NONE of the inherited alternations, so without them the
 # snapshot would silently drop every v8-defining flag. REPLAY (the 300k
 # capacity, user 2026-09-21) matches none of them either.
-env | grep -E "^(GATED|OBS_WITH|OBS_STATE|OBS_LATENT|PERCEPTION|STEP_COST|DISCOUNT|EXPLORE|GOAL|LANE|COLLISION|WEDGE|POTENTIAL|TARGET_SPEED|MAX_|MIN_THROTTLE|ENV_|EXPERT|N_EVAL|JUNCTION|STRAIGHT|EVAL|CARLA|TOWN|RUN_GATED|ACTOR|AGENT|CNN|BUFFER|VC1|REPLAY|INIT_|TQC_|HER_)[A-Z0-9_]*=" \
+env | grep -E "^(GATED|OBS_WITH|OBS_STATE|OBS_LATENT|PERCEPTION|STEP_COST|DISCOUNT|EXPLORE|GOAL|LANE|COLLISION|WEDGE|POTENTIAL|TARGET_|MAX_|MIN_THROTTLE|ENV_|EXPERT|N_EVAL|JUNCTION|STRAIGHT|EVAL|CARLA|TOWN|RUN_GATED|ACTOR|AGENT|CNN|BUFFER|VC1|REPLAY|INIT_|TQC_|HER_)[A-Z0-9_]*=" \
   | sort > "results/run_env/${RUN_NAME}.env"
 # ARTEFACT CHECK ON THE SNAPSHOT ITSELF: every flag this run is ABOUT must be in the record, or the record is a lie
 # and any later eval replaying it silently differs from training. Abort rather than train against a bad provenance.

@@ -335,6 +335,16 @@ class EpisodeRelabelBuffer:
         # functions over the same states.
         self.k_living = float(k_living)
         self.n_relabel = int(n_relabel)
+        # ARRIVAL ROWS (v42, 2026-10-01; HER_PAY_ARRIVAL=1). A hindsight goal
+        # for step i is drawn >= min_disp away and the row pays only if step
+        # i+1 lies within goal_radius of it -- with min_disp=5, radius=2 and
+        # ~0.28 m per step that is impossible, so NO relabelled row ever paid
+        # (v42: her=2014 paying=0). Without arrival rows HER feeds the min-time
+        # critic pure -1/step bootstrapping that never terminates. With the
+        # flag, every drawn goal tp also gets the row that reaches it,
+        # (tp-1, tp): its next position IS the goal, so it pays and terminates
+        # exactly like an on-policy arrival. Off by default (byte-identical).
+        self.pay_arrival = os.environ.get("HER_PAY_ARRIVAL", "0") == "1"
         self.max_disp = float(max_disp)
         self.max_steps = int(max_steps)
         self.rng = np.random.default_rng(seed)
@@ -606,6 +616,18 @@ class EpisodeRelabelBuffer:
                     if tp is not None:
                         pairs.append((i, tp))
                 start = end
+
+        # ARRIVAL ROWS (see __init__). Appended after the drawn pairs so the
+        # drawn rows, their order and their n-step segments are unchanged; each
+        # arrival row is its own segment. tp-1 stays inside the same (possibly
+        # fault-cut) leg: tp was drawn with that leg's effective end as bound
+        # and tp >= i+1 >= the leg start.
+        if self.pay_arrival and pairs:
+            _have = set(pairs)
+            for _tp in sorted({tp for _i, tp in pairs}):
+                if (_tp - 1, _tp) not in _have:
+                    pairs.append((_tp - 1, _tp))
+                    _have.add((_tp - 1, _tp))
 
         # N-STEP SEGMENTS FOR HINDSIGHT ROWS. One relabelled MDP is a RUN of
         # pairs sharing the same hindsight goal tp at CONSECUTIVE steps i --

@@ -193,6 +193,18 @@ def main():
     # an offline pass can ask whether Q falls BEFORE a fault and whether it
     # matches the realised return-to-go. Written to <out>.qtrace.jsonl.
     q_trace = os.environ.get("EVAL_Q_TRACE", "0") == "1"
+    # EVAL_FAULT_ENDS (user 2026-09-29: "in eval mode - regardless of policy
+    # mode make lane invasion, offroad and collision end episode"). Evaluation
+    # only; training rules are untouched.
+    #   0      old behaviour (the mode's own rules)
+    #   fault  first off-road, collision or FINED crossing ends it (the graded
+    #          rule: broken on open road, solid/double/kerb/grass/unknown);
+    #          junction turns and unpainted road edges do not
+    #   any    first crossing of any kind ends it
+    # Arrival (goal) / 100 m reached (explore) on the same step still counts.
+    fault_ends = os.environ.get("EVAL_FAULT_ENDS", "0")
+    if fault_ends not in ("0", "fault", "any"):
+        raise SystemExit(f"EVAL_FAULT_ENDS={fault_ends!r} is not 0|fault|any")
     trace_rows = []
     from vae_nav.eval_faults import classify_crossing
 
@@ -287,6 +299,7 @@ def main():
         faults = EpisodeFaults(start_pos=(info0 or {}).get("hero_pos"))
         _prev_info = info0 or {}
         done, n, ok = False, 0, False
+        eval_fault_end = None
         while not done and n < args.max_steps:
             action = agent.eval_actions(obs)
             _q = q_mode(obs, action) if q_trace else None
@@ -317,6 +330,16 @@ def main():
                     marks=[str(m).split(".")[-1]
                            for m in (info.get("lane_marking_types") or [])],
                     in_junction=bool(info.get("in_junction", False)),
+                    # POSES (2026-10-01, off-road diagnosis): where the car is,
+                    # which way it faces and where its goal is, so a fault can
+                    # be located on the map and against the goal bearing.
+                    # Trace-only: nothing here is read back by the eval.
+                    hero_pos=(None if info.get("hero_pos") is None
+                              else [float(v) for v in list(info["hero_pos"])[:2]]),
+                    hero_yaw=(None if info.get("hero_yaw") is None
+                              else float(info["hero_yaw"])),
+                    goal_pos=(None if info.get("goal_pos") is None
+                              else [float(v) for v in list(info["goal_pos"])[:2]]),
                     lane_any=bool(info.get("lane_any",
                                            info.get("lane_invasion_any", False))),
                     lane_event_lag=info.get("lane_event_lag"),
@@ -324,6 +347,18 @@ def main():
             ok = ok or bool(info.get("is_success", False))
             done = bool(term or trunc)
             faults.step(info)
+            if fault_ends != "0" and not done:
+                _kind = classify_crossing(info)
+                _reached = (ok if args.goal_conditioned
+                            else str(info.get("explore_end", "")) == "reached")
+                _fault = ("collision" if info.get("collision")
+                          else "off_road" if info.get("off_road")
+                          else (f"crossing_{_kind}" if _kind is not None and (
+                              fault_ends == "any" or _kind in ("illegal", "lane_change"))
+                                else None))
+                if _fault and not _reached:
+                    done = True
+                    eval_fault_end = _fault
         # WHY THE EPISODE ENDED. Without this a zero success rate is just a
         # zero: it cannot distinguish "the policy drives badly" from "the
         # harness is configured so episodes end before it can arrive", which is
@@ -334,7 +369,9 @@ def main():
         # label off it reported "arrived=4" for episodes that in fact ran the
         # full 500-step cap. The reason must come from what actually ended the
         # episode.
-        if n >= args.max_steps:
+        if eval_fault_end is not None:
+            reason = f"eval_fault_{eval_fault_end}"
+        elif n >= args.max_steps:
             reason = "step_cap"
         elif ok and args.goal_conditioned:
             reason = "arrived"
@@ -350,7 +387,8 @@ def main():
         # cap), from the wrapper that ended it. 'reached' means it drove
         # EXPLORE_GOAL_DIST_M of path without a terminal fault.
         if args.mode == "explore":
-            _xe = str(info.get("explore_end", "step_cap" if n >= args.max_steps else "?"))
+            _xe = (eval_fault_end if eval_fault_end is not None else
+                   str(info.get("explore_end", "step_cap" if n >= args.max_steps else "?")))
             explore_ends[_xe] = explore_ends.get(_xe, 0) + 1
         _arr = (bool(ok) if args.goal_conditioned
                 else str(info.get("explore_end", "")) == "reached")
@@ -387,6 +425,7 @@ def main():
     out = {
         "arm": args.arm,
         "mode": args.mode,
+        "eval_fault_ends": fault_ends,
         # Explore mode has no goal, so distance bands do not apply to it.
         "band": band if args.mode == "goal" else "n/a",
         # Training is pinned to 5-20 m, so anything beyond it is extrapolation

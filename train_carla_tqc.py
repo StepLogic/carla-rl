@@ -1626,7 +1626,8 @@ def main():
                     lambda ix=len(hers): venv.envs[ix])))
         print(f"[EpisodeHER] on -- {len(hers)} per-env buffers, "
               f"n_relabel={hers[0].n_relabel} min_disp={hers[0].min_disp} "
-              f"goal_radius={hers[0].goal_radius}"
+              f"goal_radius={hers[0].goal_radius} "
+              f"pay_arrival={getattr(hers[0], 'pay_arrival', False)}"
               + (f" | RECOST on: fines {hers[0]._fine_offroad}/"
                  f"{hers[0]._fine_lane}/{hers[0]._fine_collision} "
                  f"(offroad/lane/collision), arrival {hers[0]._arrival_bonus}, "
@@ -2490,6 +2491,13 @@ def main():
                         _ge = _Cg(recent["end_goal"])
                         _gt = max(1, sum(_ge.values()))
                         _cross = _ge.get("crossing", 0) / _gt
+                        # FULL GOAL END REASONS (v38, 2026-09-30): `cross` alone
+                        # hid v37's collapse -- off_road trips first in the
+                        # classifier, so crossing could almost never register
+                        # while ~85% of goal episodes ended off-road unseen.
+                        _gends = " ".join(
+                            f"{k}={v / _gt:.2f}" for k, v in
+                            sorted(_ge.items(), key=lambda kv: -kv[1]))
                         # On the ONE-CRITIC route the batch mix is NOT fixed:
                         # the single plain buffer samples uniformly, so the
                         # GOAL_BATCH_FRAC parenthetical would be a lie there.
@@ -2501,7 +2509,8 @@ def main():
                               f"cross={_cross:.2f} "
                               f"ret={_m('ret_goal'):8.1f} (~ -steps) "
                               f"len={_m('len_goal'):6.1f} "
-                              f"coll={_m('coll_goal'):.3f}", flush=True)
+                              f"coll={_m('coll_goal'):.3f} "
+                              f"ends[{_gends}]", flush=True)
                         from collections import Counter as _C
                         _ends = _C(recent["end_explore"])
                         _tot = max(1, sum(_ends.values()))
@@ -2537,6 +2546,12 @@ def main():
                     if (int(fi.get("mode", 1)) == 1 and not is_expert_ep[i]):
                         recent["end_goal"].append(
                             str(getattr(hers[i], "last_end_reason", "?")))
+                elif int(fi.get("mode", 1)) == 1 and not is_expert_ep[i]:
+                    # NO HER BUFFER (EPISODE_HER=0) means no classifier above,
+                    # and the tally stayed EMPTY for all of v37 (235 lines of
+                    # cross=nan(n=0)). GatedReward labels goal endings itself
+                    # (gated_reward.classify_goal_end, v38).
+                    recent["end_goal"].append(str(fi.get("goal_end", "?")))
 
                 # New episode -> re-roll the oracle coin and replan.
                 # Uses the POST-RESET info, not `fi`: `fi` is the finished

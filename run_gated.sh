@@ -122,7 +122,7 @@ export POTENTIAL_K=1.0
 
 export GATED_GOAL_REWARD=sorb
 export STEP_COST=1.0
-export GATED_GOAL_MAX_STEPS=750  # goal return therefore lies in [-750, 0],
+export GATED_GOAL_MAX_STEPS="${GATED_GOAL_MAX_STEPS:-750}"  # goal return therefore lies in [-max_steps, 0],
                                  # ported to match TTG_MAX_STEPS
 export WEDGE_TRUNCATE="${WEDGE_TRUNCATE:-1}"  # a wedge ends the episode BILLED EXACTLY for
                                   # the time it would have burned, so ending
@@ -271,7 +271,7 @@ export OBS_WITH_VECTOR="${OBS_WITH_VECTOR:-1}"   # REQUIRED: BOTH gated rewards 
 # the difference between two scripts rather than the effect of relabelling.
 export EPISODE_HER="${EPISODE_HER:-0}"
 export CHAIN_MAX_GOALS=1
-export EXPERT_PROB=0.4           # ported: scripted PID on 40% of episodes
+export EXPERT_PROB="${EXPERT_PROB:-0.4}"   # ported: scripted PID on 40% of episodes; overridable (v36, user 2026-09-30 "expert prob = 0")
 # GOAL-MODE EPISODES ONLY (decided 2026-09-11). In explore mode the oracle
 # drives to a goal explore does not have and then parks for the rest of the
 # cap -- rows the explore critic should not see. Until 2026-09-11 the oracle
@@ -358,10 +358,10 @@ export PERCEPTION="${PERCEPTION:-vae}"             # 128-d, shared with BOTH lan
                                   # is 384-d and would change the obs width.
 export VAE_CKPT=checkpoints/lane_vae_120/best.pkl
 export MAX_EPISODE_STEPS=2000     # the GOAL arm's cap; explore truncates at 500
-export MAX_DISTANCE_M=200
+export MAX_DISTANCE_M="${MAX_DISTANCE_M:-200}"
 export TARGET_SPEED=20.0
 export SHORT_HORIZON=1
-export GOAL_DIST_MIN=20.0 GOAL_DIST_START=50.0 GOAL_DIST_TARGET=50.0
+export GOAL_DIST_MIN="${GOAL_DIST_MIN:-20.0}" GOAL_DIST_START="${GOAL_DIST_START:-50.0}" GOAL_DIST_TARGET="${GOAL_DIST_TARGET:-50.0}"
 export JUNCTION_GOAL_FRAC="${JUNCTION_GOAL_FRAC:-0.7}"    # 70% of episodes ROUTED THROUGH a junction
 # ...BUT THE GOAL ITSELF IS NEVER INSIDE ONE. These two are not in tension:
 # JUNCTION_GOAL_FRAC places the ORIGIN one goal-distance BEFORE a junction so

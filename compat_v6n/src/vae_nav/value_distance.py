@@ -1,0 +1,166 @@
+"""The critic's value, read as a distance the graph can use.
+
+UNITS. Two are in play and they differ by 1/STEP_COST, so they are named
+apart everywhere:
+
+    V-units   what the critic predicts, range [-30, 0]
+    steps     -V / STEP_COST, non-negative, what Dijkstra receives
+
+Mixing them silently is easy and would put every edge weight out by 10x.
+"""
+import numpy as np
+
+STEP_COST_DEFAULT = 0.1
+# The 10th percentile of the pooled quantiles. Conservative on DISTANCE.
+PESSIMISM_PERCENTILE = 10.0
+
+
+def pooled_quantiles(q):
+    """(num_qs, B, n_q) -> (B, num_qs * n_q). All critics' quantiles together."""
+    q = np.asarray(q, np.float64)
+    if q.ndim != 3:
+        raise ValueError(f"expected (num_qs, B, n_q), got shape {q.shape}")
+    num_qs, batch, n_q = q.shape
+    return q.transpose(1, 0, 2).reshape(batch, num_qs * n_q)
+
+
+def pessimistic_value(q, percentile=PESSIMISM_PERCENTILE):
+    """A LOW percentile of V, i.e. a LONG distance. (num_qs, B, n_q) -> (B,).
+
+    Low rather than mean because distance is -V: an optimistically high V
+    understates distance, and graph search actively selects for exactly that
+    error. TQC already drops the top (most optimistic) quantiles from its
+    target, so this extends the existing bias rather than fighting it.
+    """
+    return np.percentile(pooled_quantiles(q), percentile, axis=1)
+
+
+def ensemble_spread(q):
+    """Std across critics of their per-critic mean. (num_qs, B, n_q) -> (B,).
+
+    Disagreement between independently-initialised critics is the cheapest
+    available signal that a (state, goal) pair is off-distribution.
+    """
+    q = np.asarray(q, np.float64)
+    return q.mean(axis=2).std(axis=0)
+
+
+def value_to_steps(v, step_cost=STEP_COST_DEFAULT):
+    """V-units -> non-negative steps.
+
+    Clipped at zero: the critic may predict a small positive V for a state
+    already at the goal, and a negative distance is meaningless downstream.
+    """
+    if step_cost <= 0:
+        raise ValueError(f"step_cost must be positive, got {step_cost}")
+    return np.maximum(0.0, -np.asarray(v, np.float64) / step_cost)
+
+
+# MEASURED over 75 recorded eval episodes: 0.283 m per step (median, max 0.327)
+# at ~11 km/h on a 0.1 s timestep.
+METRES_PER_STEP = 0.283
+H_METRES = 30.0
+H_STEPS = H_METRES / METRES_PER_STEP        # 106.0
+
+
+def goal_relabelled_obs(base_obs, fields, goal_pos, goal_block_fn):
+    """Copy `base_obs` with its goal block recomputed for `goal_pos`.
+
+    NO SIMULATOR NEEDED. The VAE latent is what the camera saw at this state
+    and is independent of which goal the step is credited to, so only the 12-d
+    goal block is rebuilt -- through the wrapper's OWN transform, so relabelled
+    observations cannot drift from on-policy ones. Same contract as
+    EpisodeRelabelBuffer._relabelled.
+    """
+    out = dict(base_obs)
+    out["goal"] = goal_block_fn({**fields, "goal_pos": goal_pos})
+    return out
+
+
+def edge_reject_mask(cost_steps, spread, max_steps=H_STEPS, tau=None):
+    """True where an edge must NOT enter the graph.
+
+    Two independent reasons:
+      * beyond H -- V was trained only on goals within the horizon, so a longer
+        query is extrapolation and unclipped extrapolation is how the critic
+        left its provable range entirely;
+      * critics disagree -- the cheapest available off-distribution signal.
+
+    `tau` of None disables the disagreement test, and DEFAULTING IT ON WOULD
+    CURRENTLY BE A MISTAKE.
+
+    DO NOT SET `tau` FROM A RAW SPREAD DISTRIBUTION. Two independent peer
+    sessions on the Habitat/Gibson side of this project measured critic-ensemble
+    disagreement against outcome and found it is a proxy for MAGNITUDE, not for
+    local uncertainty:
+
+        corr(epistemic, leg length)                        -0.656
+        AUC(epistemic vs arrival)                           0.830
+        AUC(epistemic | leg length + Qmean regressed out)   0.533   <- chance
+        AUC(leg length, negated) -- the bare baseline       0.856
+        (n = 561 legs, 3 scenes, one checkpoint)
+
+    Disagreement FALLS as the goal nears, so raw spread has the wrong sign for
+    a rejection criterion: it flags the edges the policy handles BEST. Rejecting
+    on it here would preferentially discard short, reliable edges while keeping
+    long ones -- the opposite of what the horizon test above is for, and the
+    optimistic direction that graph search actively selects for.
+
+    A second session independently reported the same inversion
+    (corr(leg length, epistemic) between -0.6 and -0.9) and the same remedy:
+    normalise by |Q| before thresholding, or score within distance bands. Until
+    that normalisation exists and is validated on THIS agent, leave `tau` unset;
+    the horizon test carries the rejection on its own.
+    """
+    cost_steps = np.asarray(cost_steps, np.float64)
+    reject = cost_steps > max_steps
+    if tau is not None:
+        reject = reject | (np.asarray(spread, np.float64) > tau)
+    return reject
+
+
+def critic_quantiles(agent, observations, actions):
+    """Raw ensemble quantiles for a batch. -> (num_qs, B, n_q).
+
+    Reaches into `agent._critic` because jaxrl2's Agent base exposes only
+    eval_actions; the critic has no public accessor. Kept in one place so the
+    coupling is visible rather than scattered through the harness.
+    """
+    critic = agent._critic
+    qs = critic.apply_fn({"params": critic.params}, observations, actions)
+    return np.asarray(qs, np.float64)
+
+
+def edge_cost_and_value(agent, observations, step_cost=STEP_COST_DEFAULT,
+                        percentile=PESSIMISM_PERCENTILE):
+    """Edge weight in STEPS, ensemble disagreement, and the raw V, for a batch.
+
+    V(s) = Q(s, pi(s)): the value of the state under the policy that will
+    actually be asked to traverse the edge, not under an arbitrary action.
+
+    UNITS: returns (cost_steps, spread, v_pess). `cost_steps` is in steps;
+    `spread` and `v_pess` are both in V-units, not steps -- see the module
+    docstring. `v_pess` is the raw, UNCLAMPED pessimistic V (it may be
+    positive), unlike `cost_steps` which is clamped at zero by
+    `value_to_steps`. Callers that need the true V rather than its lossy
+    steps round-trip must read `v_pess`, not reconstruct it from `cost_steps`.
+    """
+    actions = agent.eval_actions(observations)
+    q = critic_quantiles(agent, observations, actions)
+    v_pess = pessimistic_value(q, percentile)
+    return value_to_steps(v_pess, step_cost), ensemble_spread(q), v_pess
+
+
+def edge_cost_steps(agent, observations, step_cost=STEP_COST_DEFAULT,
+                    percentile=PESSIMISM_PERCENTILE):
+    """Edge weight in STEPS, plus ensemble disagreement, for a batch.
+
+    V(s) = Q(s, pi(s)): the value of the state under the policy that will
+    actually be asked to traverse the edge, not under an arbitrary action.
+
+    UNITS: returns (cost_steps, spread). `cost_steps` is in steps; `spread`
+    is in V-units, not steps -- see the module docstring.
+    """
+    cost_steps, spread, _v_pess = edge_cost_and_value(agent, observations,
+                                                       step_cost, percentile)
+    return cost_steps, spread

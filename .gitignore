@@ -38,3 +38,9 @@ logs_car_racing/*
 .idea/*
 best_models/*
 *.bag
+# Virtualenvs live beside the code but are not the code (ig-venv alone is 5.1 GB).
+dependencies/ig-venv/
+dependencies/vc1-venv/
+dependencies/eai-vc/
+# Merge leftovers
+*.orig

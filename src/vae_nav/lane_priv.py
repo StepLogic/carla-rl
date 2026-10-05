@@ -39,6 +39,14 @@ PRIV_KEY = "priv"
 # removes it for the actor and image-only critics, strip_expert for the
 # privileged critic, and the learner reads it as the BC mask.
 EXPERT_KEY = "expert"
+# LANE-CROSSING COST (LAGRANGE_LANE, user 2026-10-04): 1.0 on a step with a fined
+# goal-arm lane crossing, else 0. Rides in the observation for the same reason as
+# the BC mask, and for a reason of its own: the Lagrange multiplier must be applied
+# when a batch is SAMPLED, so every row -- live or hindsight -- is priced at the
+# CURRENT multiplier rather than whatever it was when the row was written. Storing
+# the cost rather than a priced reward is what makes that possible. No network may
+# see it; both strip helpers remove it.
+COST_KEY = "lane_cost"
 PRIV_DIM = 13
 
 
@@ -113,9 +121,11 @@ def strip_priv(x):
     from the observations / next_observations of a batch dict. Anything else is
     returned unchanged. The actor and the image-only critics are only ever
     called through this."""
-    return _strip(x, (PRIV_KEY, EXPERT_KEY))
+    return _strip(x, (PRIV_KEY, EXPERT_KEY, COST_KEY))
 
 
 def strip_expert(x):
-    """Drop only the BC mask: what the PRIVILEGED critic reads."""
-    return _strip(x, (EXPERT_KEY,))
+    """Drop the BC mask and the lane cost: what the PRIVILEGED critic reads. The
+    lane block stays; the cost must not, or that critic would be handed the
+    answer to the question the multiplier is asking."""
+    return _strip(x, (EXPERT_KEY, COST_KEY))

@@ -289,6 +289,18 @@ PROGRESS_FINES = os.environ.get("GOAL_PROGRESS_FINES", "0") == "1"
 # replan, a goal switch or a planner snapping to another carriageway, and paying
 # it would inject a fake reward of tens of metres in a single step.
 PROGRESS_MAX_STEP_M = float(os.environ.get("GOAL_PROGRESS_MAX_STEP_M", 5.0))
+# GOAL_PROGRESS_POSITIVE (user 2026-10-04: "max((d_prev - d),0)"). Pay progress
+# toward the goal and charge nothing for moving away.
+#
+# READ THIS BEFORE SETTING IT. The signed delta is a POTENTIAL and telescopes to
+# d_start - d_end, which is what makes shaping unable to change the optimal
+# policy. Clipping at zero gives that up on purpose: an approach-retreat cycle
+# returns to the same state having been paid for the approach half, every time
+# round, so the reward now contains a loop the agent can farm. Bono et al. pay
+# the signed term; this is a deliberate deviation from the paper, not the paper.
+# The step cost (-0.01) is the only thing pricing the wasted time, and at ~0.2 m
+# per step a 2 m approach pays 2.0 against a cycle cost of about 0.2.
+PROGRESS_POSITIVE = os.environ.get("GOAL_PROGRESS_POSITIVE", "0") == "1"
 # Read here only to warn: the env publishes route_remaining_m only when this is 1.
 ROUTE_POTENTIAL_ON = os.environ.get("ROUTE_POTENTIAL", "0") == "1"
 # "progress" added 2026-09-26. This import-time check was missed when the mode
@@ -392,13 +404,18 @@ def progress_term(d_prev, d_now):
 
     0.0 when either distance is missing (no route) or the step moved it by more
     than PROGRESS_MAX_STEP_M, which no car does in one step (see above).
+
+    Signed by default, so it telescopes and cannot change the optimum. Under
+    GOAL_PROGRESS_POSITIVE it is clipped at zero and no longer telescopes -- see
+    that constant for what is being traded away.
     """
     if d_prev is None or d_now is None:
         return 0.0
     dp = float(d_prev) - float(d_now)
     if abs(dp) > PROGRESS_MAX_STEP_M:
         return 0.0
-    return dp
+    # The jump guard runs FIRST so a planner artefact cannot become a payout.
+    return max(dp, 0.0) if PROGRESS_POSITIVE else dp
 
 
 def goal_reward_progress(info, t, prev_remaining, remaining,
@@ -948,8 +965,13 @@ class GatedReward(Wrapper):
                      else "the clock bill -step_cost*(1+remaining)")
                   + ", mask=0", flush=True)
         if self.goal_kind == "progress":
+            # Precomputed: a nested same-quote expression inside an
+            # f-string is a syntax error before Python 3.12.
+            _delta = ("max(Delta(route m), 0) [CLIPPED: not a potential, "
+                      "retreat is free]" if PROGRESS_POSITIVE
+                      else "Delta(route m)")
             print(f"[Gated] goal=PROGRESS (Bono et al. 2023, arXiv 2309.16634): "
-                  f"r = {PROGRESS_K:g}*1[arrived] - Delta(route m) - "
+                  f"r = {PROGRESS_K:g}*1[arrived] - {_delta} - "
                   f"{PROGRESS_SLACK:g}; fines "
                   f"{'ON (deviation from the paper)' if PROGRESS_FINES else 'off'}; "
                   f"per-step jump guard {PROGRESS_MAX_STEP_M:g} m; lane terminal "

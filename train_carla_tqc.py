@@ -1457,6 +1457,48 @@ def main():
         print(f"[BC] behaviour cloning ON: weight {os.environ.get('BC_WEIGHT')} "
               f"on expert-driven rows (flag '{EXPERT_KEY}' in the buffer only)",
               flush=True)
+    # LANE-CROSSING LAGRANGE MULTIPLIER (LAGRANGE_LANE, user 2026-10-04). Lane
+    # crossings become a CONSTRAINT -- fined crossings per goal episode held at or
+    # below LAGRANGE_TARGET -- instead of a terminal or a fixed fine. The fine mu
+    # is raised by dual ascent while the rate is above target and lowered below
+    # it, so it settles at whatever price actually enforces the constraint.
+    #
+    # Why not the alternatives, measured: the goal lane terminal with the paper's
+    # lambda=0.01 made waiting cheaper than driving and v49 idled (clock share
+    # 0 -> 0.62); a fixed fine says nothing about whether the agent will in fact
+    # keep its lane.
+    #
+    # The cost rides in the buffer and mu is applied at SAMPLE time (see
+    # lane_priv.COST_KEY), so no stored row is ever priced at a stale mu.
+    LAGRANGE_LANE = os.environ.get("LAGRANGE_LANE", "0") == "1"
+    LAGRANGE_TARGET = float(os.environ.get("LAGRANGE_TARGET", 0.05))
+    LAGRANGE_LR = float(os.environ.get("LAGRANGE_LR", 5.0))
+    LAGRANGE_MU_MAX = float(os.environ.get("LAGRANGE_MU_MAX", 200.0))
+    lagrange_mu = float(os.environ.get("LAGRANGE_MU0", 10.0)) if LAGRANGE_LANE else 0.0
+    if LAGRANGE_LANE:
+        # REFUSE THE COMBINATIONS THAT WOULD MAKE IT MEANINGLESS OR DOUBLE-COUNT.
+        if os.environ.get("GATED_GOAL_LANE_TERMINAL", "0") == "1":
+            raise SystemExit("LAGRANGE_LANE=1 with GATED_GOAL_LANE_TERMINAL=1: a "
+                             "crossing that ends the episode cannot also be a "
+                             "priced constraint, and the terminal is what made "
+                             "v49 idle. Set GATED_GOAL_LANE_TERMINAL=0.")
+        if os.environ.get("GOAL_PROGRESS_FINES", "0") == "1":
+            raise SystemExit("LAGRANGE_LANE=1 with GOAL_PROGRESS_FINES=1 would "
+                             "charge every crossing twice: once as a fixed fine "
+                             "in the reward, once as mu. Set GOAL_PROGRESS_FINES=0.")
+        if int(os.environ.get("N_STEP", "1") or 1) > 1:
+            raise SystemExit("LAGRANGE_LANE=1 is not defined for N_STEP > 1: the "
+                             "stored cost is per transition, the reward is not.")
+        from gymnasium import spaces as _gsp
+        from vae_nav.lane_priv import COST_KEY
+        _buf_obs_space = _gsp.Dict({**_buf_obs_space.spaces,
+                                    COST_KEY: _gsp.Box(0.0, np.inf, (1,), np.float32)})
+        print(f"[Lagrange] lane crossings as a constraint: target "
+              f"{LAGRANGE_TARGET:g} fined crossings per goal episode, mu0 "
+              f"{lagrange_mu:g}, lr {LAGRANGE_LR:g}, cap {LAGRANGE_MU_MAX:g}; cost "
+              f"'{COST_KEY}' in the buffer only, priced at sample time", flush=True)
+    agent.lagrange_mu = lagrange_mu
+
     # N-STEP RETURNS (v11, user picked n-step over a gamma change for the
     # far-field saturation). 1 = every earlier run, byte-identical. n > 1
     # merges each sampled row with up to n-1 same-segment successors at sample
@@ -1723,6 +1765,10 @@ def main():
     # around and the critic saw no positive return anywhere.
     experts = [make_expert(e, venv.action_space) for e in venv.envs]
     is_expert_ep = [False] * n_envs
+    # Fined lane crossings so far in each env's current episode. Summed from the
+    # SAME per-step cost the critic is charged, so the constraint the multiplier
+    # enforces and the penalty it applies are one quantity by construction.
+    lane_cost_ep = [0.0] * n_envs
     # Why the oracle declined an episode. It has been arming at ~0.65 of its
     # configured probability, and "coin came up tails" is indistinguishable
     # from "route planning failed" without this.
@@ -1845,6 +1891,12 @@ def main():
               "ret_goal": deque(maxlen=100), "ret_explore": deque(maxlen=100),
               "len_goal": deque(maxlen=100), "len_explore": deque(maxlen=100),
               "succ_goal": deque(maxlen=100),
+              # Fined lane crossings per AGENT-DRIVEN goal episode: the
+              # multiplier's signal. NOT the `cross=` end-reason share, which
+              # counts episodes that ENDED on a crossing -- with the terminal
+              # off that reads ~0 however often the car leaves its lane, and a
+              # multiplier driven by it would never rise.
+              "lane_cost_goal": deque(maxlen=100),
               "coll_goal": deque(maxlen=100), "coll_explore": deque(maxlen=100),
               # HOW FAR explore actually drives, and WHY it stops. Added
               # 2026-09-11: the explore arm was being judged on return and
@@ -1913,6 +1965,11 @@ def main():
                     continue
                 load_agent_state(agent, ck["agent"])
                 step = best_step
+                if LAGRANGE_LANE and ck.get("lagrange_mu") is not None:
+                    lagrange_mu = float(ck["lagrange_mu"])
+                    agent.lagrange_mu = lagrange_mu
+                    print(f"[Resume] lagrange mu restored to {lagrange_mu:.2f}",
+                          flush=True)
                 if ck.get("curriculum_max"):
                     curr_max = float(ck["curriculum_max"])
                     os.environ["GOAL_DIST_MAX"] = str(curr_max)
@@ -2027,6 +2084,16 @@ def main():
                 _flag = np.array([float(bool(is_expert_ep[i]))], np.float32)
                 o_i = {**o_i, EXPERT_KEY: _flag}
                 n_i = {**n_i, EXPERT_KEY: _flag}
+            if LAGRANGE_LANE:
+                from vae_nav.gated_reward import goal_lane_fine as _glf
+                from vae_nav.lane_priv import COST_KEY
+                # goal_lane_fine is a pure function of the lane markings, so the
+                # verdict is the same in either mode -- and a hindsight copy of
+                # this row, relabelled to GOAL, is costed exactly as a live one.
+                _c = np.array([float(_glf(inf) > 0.0)], np.float32)
+                o_i = {**o_i, COST_KEY: _c}
+                n_i = {**n_i, COST_KEY: _c}
+                lane_cost_ep[i] += float(_c[0])
             tr = dict(observations=o_i, actions=actions[i],
                       rewards=np.float32(rewards[i]), masks=np.float32(mask),
                       dones=np.float32(float(dones[i])), next_observations=n_i)
@@ -2107,6 +2174,10 @@ def main():
                 ep_done[i] += 1
                 total_eps += 1
                 fi = final_infos[i]
+                # Read by the goal branch below BEFORE this reset takes effect for
+                # the next episode: snapshot, then zero.
+                _lane_cost_this_ep = lane_cost_ep[i]
+                lane_cost_ep[i] = 0.0
                 # SUCCESS SPLIT BY DRIVER. A single success rate conflates the
                 # scripted oracle with the learned policy, and the oracle drives
                 # a third of episodes -- so "success 0.16" was consistent with
@@ -2141,6 +2212,10 @@ def main():
                         # [Ep] line still reports the oracle split).
                         if not is_expert_ep[i]:
                             recent["succ_goal"].append(_succ)
+                            if LAGRANGE_LANE:
+                                # The SNAPSHOT: lane_cost_ep[i] was already zeroed
+                                # for the next episode at the top of this block.
+                                recent["lane_cost_goal"].append(_lane_cost_this_ep)
                         recent["coll_goal"].append(_coll)
                     else:
                         recent["ret_explore"].append(_ep_ret)
@@ -2511,6 +2586,24 @@ def main():
                               f"len={_m('len_goal'):6.1f} "
                               f"coll={_m('coll_goal'):.3f} "
                               f"ends[{_gends}]", flush=True)
+                        if LAGRANGE_LANE and recent["lane_cost_goal"]:
+                            # DUAL ASCENT on the crossing constraint. Above target
+                            # the price rises, below it falls, clipped to
+                            # [0, cap]. The window is the last 100 agent-driven
+                            # goal episodes, so mu responds to a trend rather than
+                            # to one bad episode.
+                            _rate = float(np.mean(recent["lane_cost_goal"]))
+                            _prev_mu = lagrange_mu
+                            lagrange_mu = float(np.clip(
+                                lagrange_mu + LAGRANGE_LR * (_rate - LAGRANGE_TARGET),
+                                0.0, LAGRANGE_MU_MAX))
+                            agent.lagrange_mu = lagrange_mu
+                            print(f"[Lagrange{total_eps:5d}] fined crossings/goal-ep "
+                                  f"{_rate:.3f} (target {LAGRANGE_TARGET:g}, "
+                                  f"n={len(recent['lane_cost_goal'])}) -> mu "
+                                  f"{_prev_mu:.2f} -> {lagrange_mu:.2f}"
+                                  + (" [AT CAP]" if lagrange_mu >= LAGRANGE_MU_MAX
+                                     else ""), flush=True)
                         from collections import Counter as _C
                         _ends = _C(recent["end_explore"])
                         _tot = max(1, sum(_ends.values()))
@@ -2692,6 +2785,10 @@ def main():
                              # to re-clear ~17 stages at 50 episodes each
                              # before seeing the target again.
                              "curriculum_max": float(curr_max),
+                             # THE MULTIPLIER. A resume that restarted it at mu0
+                             # would throw away the price the run had learned it
+                             # needed and re-climb from scratch.
+                             "lagrange_mu": float(lagrange_mu),
                              "her": [h.stats() for h in hers] if hers else None}, f)
 
     # REPLAY SAVE (REPLAY_SAVE=1, user 2026-09-28 "save [replay] when training

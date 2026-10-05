@@ -74,13 +74,28 @@ from jaxrl2.utils.augmentations import batched_random_crop
 from jaxrl2.utils.misc import augment_batch
 from jaxrl2.utils.target_update import soft_target_update
 
-from vae_nav.lane_priv import EXPERT_KEY, PRIV_KEY, strip_expert, strip_priv
+from vae_nav.lane_priv import (COST_KEY, EXPERT_KEY, PRIV_KEY, strip_expert,
+                               strip_priv)
 from vae_nav.quantile_per_sample import (masked_mean,
                                          quantile_huber_loss_per_sample)
 
 # Must match vae_nav.gated_reward and vae_nav.vae_goal_wrapper.
 GOAL, EXPLORE = 1, 0
 MODE_KEY = "mode"
+
+
+def apply_lane_cost(batch, lane_cost, mu):
+    """-> `batch` with rewards - mu * lane_cost, or `batch` itself if there is no cost.
+
+    Pure, and never mutates its input: the explore critic is updated from the same
+    batch afterwards and must see the unpenalised reward. Called inside the jitted
+    update with mu as a TRACED argument, so a new multiplier every update costs no
+    recompile. See lane_priv.COST_KEY for why the cost is priced here and not when
+    the row is stored.
+    """
+    if lane_cost is None:
+        return batch
+    return {**batch, "rewards": batch["rewards"] - mu * lane_cost}
 
 
 def _mode_mask(batch):
@@ -298,7 +313,7 @@ def _gated_update_jit(rng, actor, critic, target_critic_params, temp,
                       share_encoder=True, q_scale_g=1.0, q_scale_e=1.0,
                       alpha_scale_g=1.0, alpha_scale_e=1.0,
                       critic_p=None, target_critic_p_params=None,
-                      bc_weight=0.0, bc_scale=1.0):
+                      bc_weight=0.0, bc_scale=1.0, lagrange_mu=0.0):
     if share_encoder:
         # From the GOAL critic, matching the ungated path exactly. Sharing from
         # both would need a rule for combining them, and any such rule is a
@@ -319,6 +334,10 @@ def _gated_update_jit(rng, actor, critic, target_critic_params, temp,
     # are the same dict and every line below traces as before.
     bc_mask = (batch["observations"][EXPERT_KEY][:, 0].astype(jnp.float32)
                if EXPERT_KEY in batch["observations"] else None)
+    # LANE COST (LAGRANGE_LANE). Read before the strips below remove it. Key
+    # presence is a static property of the batch, so this resolves at trace time.
+    lane_cost = (batch["observations"][COST_KEY][:, 0].astype(jnp.float32)
+                 if COST_KEY in batch["observations"] else None)
     batch_full = strip_expert(batch)
     batch = strip_priv(batch)
     m_goal = _mode_mask(batch)
@@ -332,10 +351,22 @@ def _gated_update_jit(rng, actor, critic, target_critic_params, temp,
     # it, so no per-critic split is needed.
     n_steps = batch["n_steps"] if "n_steps" in batch else None
 
+    # THE MULTIPLIER IS CHARGED TO THE GOAL SIDE ONLY. The explore critic keeps
+    # `batch` -- its reward has its own lane terms and is not under this
+    # constraint. Goal rows carrying a cost are charged mu per fined crossing.
+    if lane_cost is not None and n_steps is not None:
+        # An n-step row's reward is a SUM over up to n transitions, but the cost
+        # here is one transition's. Charging mu once would under-price every
+        # merged row by however many crossings its tail held.
+        raise ValueError("LAGRANGE_LANE is not defined for n-step returns: the "
+                         "stored cost is per transition, the reward is not")
+    batch_g = apply_lane_cost(batch, lane_cost, lagrange_mu)
+    batch_full_g = apply_lane_cost(batch_full, lane_cost, lagrange_mu)
+
     rng, key_g = jax.random.split(rng)
     # GOAL CRITIC: bounded, because under the SORB reward it runs at gamma=1.0.
     new_critic, info_g = _masked_critic_update(
-        key_g, actor, critic, target_critic_params, temp, batch, discount,
+        key_g, actor, critic, target_critic_params, temp, batch_g, discount,
         backup_entropy, top_quantiles_to_drop, kappa, m_goal,
         n_steps=n_steps,
         value_floor=value_floor, value_ceiling=value_ceiling,
@@ -372,7 +403,7 @@ def _gated_update_jit(rng, actor, critic, target_critic_params, temp,
     if critic_p is not None:
         rng, key_p = jax.random.split(rng)
         new_critic_p, info_p = _masked_critic_update(
-            key_p, actor, critic_p, target_critic_p_params, temp, batch_full,
+            key_p, actor, critic_p, target_critic_p_params, temp, batch_full_g,
             discount, backup_entropy, top_quantiles_to_drop, kappa, m_goal,
             n_steps=n_steps,
             value_floor=value_floor, value_ceiling=value_ceiling,
@@ -583,7 +614,10 @@ class GatedTQCLearner(TQCLearner):
                                and self._q_scale_e) else 1.0),
             critic_p=self._critic_p,
             target_critic_p_params=self._target_critic_p_params,
-            bc_weight=self.bc_weight, bc_scale=self._bc_scale)
+            bc_weight=self.bc_weight, bc_scale=self._bc_scale,
+            # Set by the trainer after every [GatedEp] block. A plain float, so
+            # it is traced, not static: a new value each update recompiles nothing.
+            lagrange_mu=float(getattr(self, "lagrange_mu", 0.0)))
 
         self._rng = rng
         frozen = self._updates < self.actor_freeze_updates

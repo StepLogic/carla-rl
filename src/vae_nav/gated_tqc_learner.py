@@ -301,7 +301,8 @@ def _gated_actor_update(key, actor, critic, critic_e, temp, temp_e, batch,
     jax.jit,
     static_argnames=("backup_entropy", "top_quantiles_to_drop", "kappa",
                      "target_entropy", "target_entropy_e", "value_floor",
-                     "value_ceiling", "enable_update_temperature", "augument",
+                     "value_ceiling", "value_floor_e", "value_ceiling_e",
+                     "enable_update_temperature", "augument",
                      "share_encoder"))
 def _gated_update_jit(rng, actor, critic, target_critic_params, temp,
                       critic_e, target_critic_e_params, temp_e,
@@ -309,6 +310,7 @@ def _gated_update_jit(rng, actor, critic, target_critic_params, temp,
                       target_entropy, target_entropy_e, backup_entropy,
                       top_quantiles_to_drop, kappa,
                       value_floor=None, value_ceiling=None,
+                      value_floor_e=None, value_ceiling_e=None,
                       enable_update_temperature=True, augument=True,
                       share_encoder=True, q_scale_g=1.0, q_scale_e=1.0,
                       alpha_scale_g=1.0, alpha_scale_e=1.0,
@@ -391,7 +393,8 @@ def _gated_update_jit(rng, actor, critic, target_critic_params, temp,
     new_critic_e, info_e = _masked_critic_update(
         key_e, actor, critic_e, target_critic_e_params, temp_e, batch,
         discount_e, backup_entropy, top_quantiles_to_drop, kappa, m_explore,
-        n_steps=n_steps, alpha_scale=alpha_scale_e)
+        n_steps=n_steps, alpha_scale=alpha_scale_e,
+        value_floor=value_floor_e, value_ceiling=value_ceiling_e)
 
     # PRIVILEGED GOAL CRITIC (OBS_PRIV, user 2026-09-27): the SAME reward,
     # discount, clip, temperature and goal-row mask as the image-only goal
@@ -476,6 +479,8 @@ class GatedTQCLearner(TQCLearner):
                  qnorm_critic_alpha: bool = False,
                  value_floor: Optional[float] = None,
                  value_ceiling: Optional[float] = None,
+                 value_floor_e: Optional[float] = None,
+                 value_ceiling_e: Optional[float] = None,
                  bc_weight: float = 0.0, **kwargs):
         # ASYMMETRIC GOAL CRITIC. With the privileged lane block present the
         # actor, the image-only goal critic and the explore critic are built
@@ -495,6 +500,17 @@ class GatedTQCLearner(TQCLearner):
         self.value_floor = None if value_floor is None else float(value_floor)
         self.value_ceiling = (None if value_ceiling is None
                               else float(value_ceiling))
+        # EXPLORE CRITIC BOUND (EXPLORE_VALUE_FLOOR/CEILING, 2026-10-05). Off by
+        # default. The original reason for leaving it unbounded stands -- the
+        # GOAL arm's window says nothing about the explore arm's range -- but the
+        # conclusion did not: v49's explore Q went 20 -> 11,801 against a
+        # realisable maximum near 110 while the clipped goal critic stayed at
+        # 38-65 on the same episodes, and the explore arm's driving collapsed
+        # with it. The fix is a window derived from the EXPLORE reward, which is
+        # what these are.
+        self.value_floor_e = None if value_floor_e is None else float(value_floor_e)
+        self.value_ceiling_e = (None if value_ceiling_e is None
+                                else float(value_ceiling_e))
         self.discount_e = float(discount_e)
         self.target_entropy_e = (float(self.target_entropy)
                                  if target_entropy_e is None
@@ -571,8 +587,14 @@ class GatedTQCLearner(TQCLearner):
               f"actor_freeze_updates={self.actor_freeze_updates} "
               f"actor_q_norm={self.actor_q_norm} "
               f"qnorm_critic_alpha={self.qnorm_critic_alpha}")
-        print(f"[Gated] goal critic target clip {bounds}; "
-              f"explore critic UNCLIPPED (its range is its own, not the goal arm's)")
+        # Report what is in effect. This line was hard-coded "UNCLIPPED" and kept
+        # saying so after the explore bound existed -- v51's first launch logged
+        # UNCLIPPED with EXPLORE_VALUE_FLOOR/CEILING set.
+        bounds_e = ("UNCLIPPED (its range is its own, not the goal arm's)"
+                    if self.value_floor_e is None and self.value_ceiling_e is None
+                    else f"clip [{self.value_floor_e}, {self.value_ceiling_e}] "
+                         "(from the EXPLORE reward, not the goal arm's window)")
+        print(f"[Gated] goal critic target clip {bounds}; explore critic {bounds_e}")
         if self.discount >= 1.0 and self.value_floor is None:
             print("[Gated] WARNING: discount=1.0 with NO value floor. V(s) = "
                   "-c + V(s') has no bounded fixed point on a state the agent "
@@ -598,6 +620,7 @@ class GatedTQCLearner(TQCLearner):
             self.target_entropy, self.target_entropy_e, self.backup_entropy,
             self.top_quantiles_to_drop, self.kappa,
             value_floor=self.value_floor, value_ceiling=self.value_ceiling,
+            value_floor_e=self.value_floor_e, value_ceiling_e=self.value_ceiling_e,
             enable_update_temperature=enable_update_temperature,
             augument=self.augument, share_encoder=self.share_encoder,
             q_scale_g=(float(self._q_scale_g) if (self.actor_q_norm and self._q_scale_g) else 1.0),

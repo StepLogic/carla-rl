@@ -462,6 +462,13 @@ def agent_kwargs(action_space=None):
             value_ceiling=float(os.environ.get("TQC_VALUE_CEILING", ceiling))
             if (ceiling is not None or "TQC_VALUE_CEILING" in os.environ)
             else None,
+            # EXPLORE CRITIC BOUND, off unless set. Derived from the EXPLORE
+            # reward, never from the goal arm's window. v49's explore Q diverged
+            # to 11,801 against a realisable ~110 with this unset.
+            value_floor_e=(float(os.environ["EXPLORE_VALUE_FLOOR"])
+                           if "EXPLORE_VALUE_FLOOR" in os.environ else None),
+            value_ceiling_e=(float(os.environ["EXPLORE_VALUE_CEILING"])
+                             if "EXPLORE_VALUE_CEILING" in os.environ else None),
         )
     return kwargs
 

@@ -307,9 +307,14 @@ ROUTE_POTENTIAL_ON = os.environ.get("ROUTE_POTENTIAL", "0") == "1"
 # was added -- the unit tests import with the default and then monkeypatch the
 # constant, so they never reach it -- and v16 died on it at startup.
 # tests/test_progress_startup.py now imports under the real v16 snapshot.
-if GOAL_REWARD_KIND not in ("sorb", "shaped", "progress"):
+if GOAL_REWARD_KIND not in ("sorb", "shaped", "progress", "explore"):
     raise ValueError(f"GATED_GOAL_REWARD={GOAL_REWARD_KIND!r} is not "
-                     f"sorb|shaped|progress")
+                     f"sorb|shaped|progress|explore")
+# GATED_GOAL_REWARD=explore (user 2026-10-05): goal mode is paid EXPLORE mode's
+# per-step reward, plus this on arrival. Must exceed what driving on is worth,
+# progress_per_step / (1 - DISCOUNT) -- about 30 at 0.99 -- or arriving would
+# cost the agent the progress it gives up. See goal_reward_explore.
+GOAL_EXPLORE_ARRIVAL_BONUS = float(os.environ.get("GOAL_EXPLORE_ARRIVAL_BONUS", 50.0))
 STEP_COST = float(os.environ.get("STEP_COST", 1.0))
 GOAL_MAX_STEPS = int(os.environ.get("GATED_GOAL_MAX_STEPS", 1000))
 WEDGE_TRUNCATE = os.environ.get("WEDGE_TRUNCATE", "1") == "1"
@@ -812,6 +817,47 @@ def explore_lane_fatal(lane_any, marking_types, off_road, in_junction=False,
                                         False, strict=False))
 
 
+def goal_reward_explore(info, disp, t, max_steps=GOAL_MAX_STEPS):
+    """Goal mode paid EXPLORE mode's reward, plus a bonus on arrival. Pure.
+    Returns (reward, terminated, truncated, arrived), goal_reward_sorb's contract.
+
+    THE DENSE TERM CARRIES NO GOAL. Same v43 policy, same town: explore drives a
+    median 189 m before an episode ends, goal mode with a far goal 9 m, ending
+    off-road -- and 3 m with 0 successes when the goal is behind the car. Goal
+    mode's old dense reward paid closing the STRAIGHT-LINE gap, so it steered at
+    the goal through whatever was in the way. explore_reward pays forward progress
+    along the road only; the goal enters through the arrival bonus alone.
+
+    ARRIVAL ENDS THE EPISODE; a fatal step does not count as arriving, matching
+    explore's own "arrival beats the cap but not a failure". The clock TRUNCATES
+    so the critic bootstraps rather than treating time-out as absorbing.
+    """
+    reward, fatal = explore_reward(info, disp)
+    collided = bool(info.get("collision", False))
+    failed = bool(collided and EXPLORE_COLLISION_FATAL) or bool(fatal)
+    reached = bool(info.get("arrived", False) or info.get("is_success", False))
+    if failed:
+        return float(reward), True, False, False
+    if reached:
+        return float(reward) + GOAL_EXPLORE_ARRIVAL_BONUS, True, False, True
+    return float(reward), False, bool(t >= max_steps), False
+
+
+def goal_explore_end(info, arrived, truncated):
+    """Why a GATED_GOAL_REWARD=explore episode ended, from this step's info.
+    Same order as explore mode's explore_end: arrival, then the clock, then the
+    fatal cause. Pure."""
+    if arrived:
+        return "reached"
+    if truncated:
+        return "clock"
+    if EXPLORE_COLLISION_FATAL and bool(info.get("collision", False)):
+        return "collision"
+    if EXPLORE_OFF_ROAD_FATAL and bool(info.get("off_road", False)):
+        return "off_road"
+    return "crossing"
+
+
 def explore_reward(info, disp):
     """The goal-free half. Same terms as LaneExploreReward, novelty disabled."""
     if PROGRESS_MODE == "projected":
@@ -964,6 +1010,17 @@ class GatedReward(Wrapper):
                      if LANE_TERMINAL_BILL == "discounted"
                      else "the clock bill -step_cost*(1+remaining)")
                   + ", mask=0", flush=True)
+        if self.goal_kind == "explore":
+            # Say which reward ran: without this line the log never states that
+            # the goal arm was paid explore's reward rather than a goal reward.
+            _mode = PROGRESS_MODE
+            print(f"[Gated] goal=EXPLORE reward + arrival: r = explore_reward "
+                  f"(progress={_mode} x{PROGRESS_SCALE:g}, lane rule "
+                  f"{EXPLORE_LANE_MODE}, off_road_fatal={EXPLORE_OFF_ROAD_FATAL}, "
+                  f"collision_fatal={EXPLORE_COLLISION_FATAL}) + "
+                  f"{GOAL_EXPLORE_ARRIVAL_BONUS:g}*1[arrived]; NO term pulls "
+                  f"towards the goal; arrival ends the episode; clock truncates",
+                  flush=True)
         if self.goal_kind == "progress":
             # Precomputed: a nested same-quote expression inside an
             # f-string is a syntax error before Python 3.12.
@@ -1134,6 +1191,25 @@ class GatedReward(Wrapper):
             # The progress term IS the reward here; POTENTIAL_K is not added on
             # top (it would pay the same metres twice). Logged as shaping=0.
             info["gated_shaping"] = 0.0
+        elif self.mode == GOAL and self.goal_kind == "explore":
+            # EXPLORE'S REWARD + A GOAL BONUS (goal_reward_explore). The fault
+            # counters are kept so goal_end and the [GatedEp] ends read the same
+            # way as the other kinds.
+            self._offroad_steps += int(bool(info.get("off_road", False)))
+            self._collision_steps += int(bool(info.get("collision", False)))
+            self._crossing_steps += int(goal_lane_fault(info))
+            reward, terminated, truncated, arrived = goal_reward_explore(
+                info, disp, self._t, self.goal_max_steps)
+            info["is_success"] = arrived
+            info["gated_shaping"] = 0.0
+            if terminated or truncated:
+                # NAME THE ACTUAL CAUSE, in explore mode's own order. NOT
+                # classify_goal_end: that reads the goal arm's fault COUNTERS
+                # and caps, and has no notion of explore's fatal-crossing rule,
+                # so every episode this reward ended on a painted line came out
+                # "other" -- v51's first launch logged other=0.83, cross=0.00,
+                # hiding exactly the lane invasions this run is about.
+                info["goal_end"] = goal_explore_end(info, arrived, truncated)
         elif self.mode == GOAL and self.goal_kind == "sorb":
             # MINIMUM TIME. The env's own `done` is discarded on purpose: with a
             # per-step cost, any terminal failure stops the meter and crashing

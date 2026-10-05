@@ -14,6 +14,11 @@ stale goal reward leaked into a goal-free run.
 import os
 
 
+# Every goal reward the wrapper implements. `explore` (2026-10-05) pays explore
+# mode's road-following reward plus a bonus on arrival.
+GOAL_REWARD_KINDS = ("sorb", "shaped", "progress", "explore")
+
+
 def progress_value_bounds(env):
     """(floor, ceiling) for the goal critic under GATED_GOAL_REWARD=progress.
 
@@ -207,9 +212,20 @@ def check_gated_run(env=None):
             "critic received 10-37% of each batch.")
 
     goal_reward = str(env.get("GATED_GOAL_REWARD", "sorb")).lower()
-    if goal_reward not in ("sorb", "shaped", "progress"):
+    if goal_reward not in GOAL_REWARD_KINDS:
         raise ValueError(
-            f"GATED_GOAL_REWARD={goal_reward!r} is not sorb|shaped|progress")
+            f"GATED_GOAL_REWARD={goal_reward!r} is not {'|'.join(GOAL_REWARD_KINDS)}")
+    if goal_reward == "explore" and _flag(env, "EPISODE_HER"):
+        # HER RECOMPUTES hindsight rewards per kind, and has no path for this
+        # one. Run with it on and every hindsight row would be priced by a
+        # different reward from the live row beside it -- the mis-costing that
+        # hit 83% of hindsight rows in v13-v15. Refused until a recost path
+        # exists; the explore reward is goal-independent, so that path is just
+        # "stored base + bonus at the relabelled goal".
+        raise ValueError(
+            "GATED_GOAL_REWARD=explore with EPISODE_HER=1: HER has no recost path "
+            "for this reward and would price hindsight rows differently from live "
+            "ones. Set EPISODE_HER=0.")
 
     discount = _num(env, "DISCOUNT", 0.99)
     discount_e = _num(env, "EXPLORE_DISCOUNT", discount)

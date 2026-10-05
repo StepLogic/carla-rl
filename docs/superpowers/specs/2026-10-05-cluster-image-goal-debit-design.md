@@ -46,18 +46,38 @@ is not a fair comparison.
 | Goal | An RGB frame captured at the goal pose, 5–25 m ahead along the start lane |
 | Mode bit | One commanded bit per episode: 1 = image-goal, 0 = explore (coverage) |
 | Success | Within the arrival radius of the goal pose (the image is the *cue*, the pose is the *judge*) |
-| Lane crossing | **Terminal** in training (kojo's instruction) |
+| Faults | **Off-road, lane invasion and collision are ALL terminal** in training (kojo, 2026-10-05) |
 | Episode cap | 1000 steps at 0.1 s |
 | Towns | Train Town01 + Town05; hold out Town03 |
 
-**On the terminal crossing rule.** Terminal safety rules have failed three times
-here — v15 (0.16), v30, v37 (collapse to 0.01) — each by removing long
-trajectories from the buffer so the critic never saw a completed route. All three
-ran **without** hindsight relabelling. v42–v45 only worked once HER was fixed.
-So "terminal + HER" is genuinely untested rather than a fourth repeat, and §5's
-hindsight design is what makes it defensible. **If the goal arm's success is
-falling at 150k while episode length shrinks, that is the same failure and we
-stop and reconsider rather than running to 1M.**
+**On making all three faults terminal.** This is the strongest version of a rule
+that has failed here three times — v15 (0.16), v30, and v37, which made off-road
+and collision terminal on the first step and collapsed from 0.19 to 0.01 while
+episode length fell 475 → 192. Each failed the same way: terminals remove long
+trajectories from the buffer, so the critic never sees a completed route.
+
+Three things differ now, which is why it is worth running rather than refusing:
+all three of those ran **without** hindsight relabelling (v42–v45 only worked
+once HER was fixed); they ran at γ=1.0, where the goal critic also diverged;
+and they used 5–200 m goals, where a terminal costs a thousand steps of
+experience. At 5–25 m an episode is short, so a terminal forfeits far less.
+
+**A SINGLE OFF-ROAD TICK IS MEASUREMENT NOISE, NOT A DRIVING ERROR, AND THIS IS
+THE REAL RISK.** `off_road` is `get_waypoint(project_to_road=False) is None`, a
+purely geometric probe that the env config records as *least* reliable inside
+junctions, where lane polygons meet with gaps and a correctly-driving car can
+fall between them for one tick. Measured in this repo: the scripted PID oracle —
+competent by construction — failed **43%** of its episodes on off-road, split
+evenly between junctions and open road. Making a one-tick probe terminal would
+therefore kill roughly two in five *expert-quality* episodes, and the policy
+would be learning from a label that is wrong a large fraction of the time.
+Mitigation, proposed in §9: keep off-road terminal but **debounce it** (require
+N consecutive off-road steps, or keep the existing junction exemption), so a
+single-tick probe artefact cannot end an episode. Lane invasion and collision
+are event-based and need no debounce.
+
+**Stop rule.** If goal success is falling at 150k while episode length shrinks,
+that is the v37 signature and we stop and reconsider rather than running to 1M.
 
 ## 3. Reward
 
@@ -66,19 +86,23 @@ additions:
 
 ```
 r = -0.01                      slack
-  + (d_prev - d_now)           progress, metres of route closed, ON-ROAD ONLY
-  - 1.0 * 1[off_road]          shortcut tax (non-terminal)
+  + (d_prev - d_now)           progress, metres of route closed
   + K   on arrival             terminal
-crossing of a fined lane marking -> terminal, no bonus
+off-road / lane invasion / collision -> TERMINAL, no bill, no extra penalty
 ```
 
-* **Progress is counted only while on the road, and off-road costs ≥1.0/step.**
-  DEBiT needs no safety term because Habitat's navmesh makes off-mesh
-  *physically impossible* and the geodesic is the shortest path on it — no
-  shortcut exists to be rewarded. CARLA gives no such guarantee, which is why
-  our v16 progress run cut across grass on 31% of steps. The car gains ~0.22 m
-  of progress per step at 8 km/h, so any per-step off-road cost above that makes
-  a shortcut strictly unprofitable; 1.0 is ~4.5×.
+* **No fines, no bills, no shortcut tax — the terminals do that work.** An
+  earlier draft taxed off-road per step, because DEBiT needs no safety term only
+  thanks to Habitat's navmesh making off-mesh *physically impossible* (the
+  geodesic is the shortest path on that mesh, so no shortcut exists to be
+  rewarded), whereas CARLA gives no such guarantee — which is how our v16
+  progress run cut across grass on 31% of steps. With off-road **terminal** that
+  problem disappears outright: a shortcut ends the episode and forfeits all
+  remaining progress and the arrival bonus. The tax and the on-road gating of
+  progress are therefore dropped as redundant.
+* **The cost of a fault is what it forfeits, not a number we choose.** No
+  remaining-clock bill. Bills are what made v15 and v37 pathological, and the
+  arithmetic is easy to get wrong (I got it wrong once in this project already).
 * **K scales with the episode's start distance** (`K = d0`, so arrival is worth
   about as much as the whole route's progress). At their 1.5–5 m scale a fixed
   K=10 is 2× the available progress and dominates; at our 25 m a fixed 10 would
@@ -145,9 +169,10 @@ g105 (256 cores / 7 A100) fits far more envs per GPU than g102 (32 / 3 L40).
 
 | Risk | Mitigation |
 |---|---|
-| Terminal crossing collapses the goal arm again | Hindsight (§5); stop rule at 150k if success falls while episode length shrinks |
+| Terminal faults collapse the goal arm again (v15/v30/v37) | Hindsight (§5); short 5–25 m episodes so a terminal forfeits little; γ=0.99; stop rule at 150k |
+| Off-road probe fires spuriously in junctions and kills good episodes (43% of expert episodes, measured) | Debounce off-road over N consecutive steps and/or keep the junction exemption (§9 q3) |
 | DEBiT transfers worse than the probe suggests | The probe measured pose readability, not driving; Arm A is cheap and tells us early |
-| Shortcut across non-road | Progress gated on-road + off-road tax above the per-step gain (§3) |
+| Shortcut across non-road | Removed by construction: off-road is terminal, so a shortcut forfeits the episode (§3) |
 | 0.9.16 vs 0.9.15 | Stated in the paper; cluster arm is a fresh lineage, not a continuation |
 | Frozen encoder is the ceiling | If both arms plateau together, the next lever is CroCo-style pretraining on CARLA frames, not more RL |
 
@@ -165,8 +190,13 @@ g105 (256 cores / 7 A100) fits far more envs per GPU than g102 (32 / 3 L40).
    pose-goal arm.
 2. **K = d0, or fixed K?** §3 argues for scaling; fixed is simpler and closer to
    the paper.
-3. **Off-road tax of 1.0/step** — calibrated at ~4.5× the per-step gain. Higher
-   is safer against shortcuts, but our fines history says bigger numbers have not
-   helped before.
+3. **Debounce off-road? (the one I most want answered.)** A single off-road tick
+   is a geometric-probe artefact, and the scripted oracle — a competent driver —
+   failed 43% of episodes on it. Terminal-on-first-tick would end roughly two in
+   five expert-quality episodes for a label that is frequently wrong. Options:
+   (a) terminal after **N consecutive** off-road steps, N≈3, which rejects
+   single-tick noise while still ending a genuine excursion within 0.3 s;
+   (b) terminal on the first tick but keep the junction exemption; (c) terminal
+   on the first tick, no exemption, as stated. I recommend (a).
 4. **Arm order** — Arm A first is my recommendation; say if you want the full
    stack first.

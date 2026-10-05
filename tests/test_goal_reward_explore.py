@@ -35,6 +35,7 @@ def gr(monkeypatch):
     monkeypatch.setattr(g, "PROGRESS_MODE", "heading")
     monkeypatch.setattr(g, "PROGRESS_SCALE", 1.0)
     monkeypatch.setattr(g, "GOAL_EXPLORE_ARRIVAL_BONUS", 50.0)
+    monkeypatch.setattr(g, "EXPLORE_ARRIVAL_BONUS", 10.0)
     monkeypatch.setattr(g, "EXPLORE_COLLISION_FATAL", True)
     monkeypatch.setattr(g, "EXPLORE_OFF_ROAD_FATAL", True)
     monkeypatch.setattr(g, "EXPLORE_LANE_MODE", "terminal")
@@ -182,3 +183,37 @@ def test_a_painted_crossing_is_labelled_crossing_not_other(gr):
 ])
 def test_end_labels_follow_explore_modes_order(gr, info_kw, arrived, trunc, want):
     assert gr.goal_explore_end(_info(**info_kw), arrived, trunc) == want
+
+
+
+# -------------------------------------------- one setup, two arrivals --
+# User 2026-10-05: "keep same setup for goal mode and explore mode; the only
+# difference is goal mode arrival is when the agent arrives at the goal".
+
+def test_both_modes_pay_the_same_reward_on_the_same_step(gr):
+    """Identical per-step reward whenever neither mode is arriving."""
+    for kw in (dict(), dict(off_road=True), dict(collision=True),
+               dict(lane_any=True, lane_marking_types=["Solid"])):
+        g_r, *_ = gr.goal_reward_explore(_info(**kw), FWD, t=5, max_steps=100)
+        e_r, _ = gr.explore_reward(_info(**kw), FWD)
+        assert g_r == pytest.approx(e_r), kw
+
+
+def test_the_bonus_is_the_ONE_thing_besides_arrival_that_differs(gr):
+    """User: "keep the bonus different". Goal mode pays its own bonus on reaching
+    the goal; explore pays EXPLORE_ARRIVAL_BONUS at 100 m. Two knobs, each read by
+    one mode only."""
+    r, *_ = gr.goal_reward_explore(_info(arrived=True), FWD, t=5, max_steps=100)
+    base, _ = gr.explore_reward(_info(), FWD)
+    assert r - base == pytest.approx(gr.GOAL_EXPLORE_ARRIVAL_BONUS)
+    assert gr.GOAL_EXPLORE_ARRIVAL_BONUS != gr.EXPLORE_ARRIVAL_BONUS
+
+
+def test_goal_mode_uses_the_explore_episode_cap():
+    src = open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                            "src", "vae_nav", "gated_reward.py")).read()
+    # The STEP branch, not the startup banner (which also tests goal_kind).
+    start = src.index('elif self.mode == GOAL and self.goal_kind == "explore":')
+    call = src.index("goal_reward_explore(", start)
+    args = src[call:src.index(")", call)]
+    assert "self.max_steps" in args and "goal_max_steps" not in args, args

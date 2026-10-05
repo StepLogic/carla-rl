@@ -310,10 +310,14 @@ ROUTE_POTENTIAL_ON = os.environ.get("ROUTE_POTENTIAL", "0") == "1"
 if GOAL_REWARD_KIND not in ("sorb", "shaped", "progress", "explore"):
     raise ValueError(f"GATED_GOAL_REWARD={GOAL_REWARD_KIND!r} is not "
                      f"sorb|shaped|progress|explore")
-# GATED_GOAL_REWARD=explore (user 2026-10-05): goal mode is paid EXPLORE mode's
-# per-step reward, plus this on arrival. Must exceed what driving on is worth,
-# progress_per_step / (1 - DISCOUNT) -- about 30 at 0.99 -- or arriving would
-# cost the agent the progress it gives up. See goal_reward_explore.
+# GATED_GOAL_REWARD=explore (user 2026-10-05): goal mode and explore mode share
+# one setup -- the same per-step reward, the same fault rules and the same episode
+# cap -- and differ in two things only (user: "keep the bonus different"):
+#   * what counts as arriving: the goal, versus EXPLORE_GOAL_DIST_M of path;
+#   * the arrival bonus: this one for goal mode, EXPLORE_ARRIVAL_BONUS for explore.
+# It must exceed what driving on is worth, progress_per_step / (1 - DISCOUNT) --
+# about 30 at 0.99 -- or a goal on one branch of a junction would be worth less
+# than taking the other branch and continuing.
 GOAL_EXPLORE_ARRIVAL_BONUS = float(os.environ.get("GOAL_EXPLORE_ARRIVAL_BONUS", 50.0))
 STEP_COST = float(os.environ.get("STEP_COST", 1.0))
 GOAL_MAX_STEPS = int(os.environ.get("GATED_GOAL_MAX_STEPS", 1000))
@@ -1018,7 +1022,9 @@ class GatedReward(Wrapper):
                   f"(progress={_mode} x{PROGRESS_SCALE:g}, lane rule "
                   f"{EXPLORE_LANE_MODE}, off_road_fatal={EXPLORE_OFF_ROAD_FATAL}, "
                   f"collision_fatal={EXPLORE_COLLISION_FATAL}) + "
-                  f"{GOAL_EXPLORE_ARRIVAL_BONUS:g}*1[arrived]; NO term pulls "
+                  f"{GOAL_EXPLORE_ARRIVAL_BONUS:g}*1[arrived] (explore pays "
+                  f"{EXPLORE_ARRIVAL_BONUS:g} at {EXPLORE_GOAL_DIST_M:g} m); cap "
+                  f"{self.max_steps} (shared with explore); NO term pulls "
                   f"towards the goal; arrival ends the episode; clock truncates",
                   flush=True)
         if self.goal_kind == "progress":
@@ -1198,8 +1204,10 @@ class GatedReward(Wrapper):
             self._offroad_steps += int(bool(info.get("off_road", False)))
             self._collision_steps += int(bool(info.get("collision", False)))
             self._crossing_steps += int(goal_lane_fault(info))
+            # THE EXPLORE CAP, not goal_max_steps: the two modes share one
+            # setup and differ only in what counts as arriving.
             reward, terminated, truncated, arrived = goal_reward_explore(
-                info, disp, self._t, self.goal_max_steps)
+                info, disp, self._t, self.max_steps)
             info["is_success"] = arrived
             info["gated_shaping"] = 0.0
             if terminated or truncated:

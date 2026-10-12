@@ -44,3 +44,8 @@ dependencies/vc1-venv/
 dependencies/eai-vc/
 # Merge leftovers
 *.orig
+
+# Symlinks to the main checkout for the image-goal arm (untracked assets there)
+/debit
+/dependencies/croco
+/dependencies/debit_weights

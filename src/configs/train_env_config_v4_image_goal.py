@@ -759,6 +759,13 @@ class STBL3Experiment(BaseExperiment):
         )
         goal_image = _fix_channel_order(goal_image)
         # cv2.imwrite("goal.jpg",goal_image)
+        # RETAINED, as obs_img is for the current view (core_state publishes that
+        # as info["rgb"]). The DEBiT arm needs the goal PIXELS, not this
+        # MobileNet latent: its binocular encoder reads the pair jointly, and
+        # once the encoder's adapters train the replay must hold pixels rather
+        # than a precomputed vector. Kept BEFORE the mask check so a masked-goal
+        # ablation still records what it masked.
+        self.goal_img = goal_image
         if self.mask_goal or getattr(self, "skip_image_features", False):
             return np.zeros((self._feature_dim()),dtype=np.float32)
         img_tensor = self.image_transform(goal_image.copy()).unsqueeze(0).to(self.device)

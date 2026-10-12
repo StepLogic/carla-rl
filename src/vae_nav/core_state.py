@@ -221,6 +221,15 @@ class CoreStateWrapper(Wrapper):
                 "experiment.obs_img is None -- the VAE has no frame to encode. "
                 "Check that the env config's get_img_obs ran this step.")
         info["rgb"] = obs_img
+        # THE GOAL VIEW, for the image-goal arm (2026-10-12). The env config's
+        # goal camera renders at the goal pose every step and get_goal_img_obs
+        # now retains the frame; it is absent on every arm that does not run
+        # that sensor, so this is a soft read and the key is simply missing
+        # rather than zeroed -- a zero frame is a VALID image and would train
+        # the policy on a black goal without anyone noticing.
+        goal_img = getattr(experiment, "goal_img", None)
+        if goal_img is not None:
+            info["goal_rgb"] = goal_img
         info["action_history"] = self._last_action
         return info
 

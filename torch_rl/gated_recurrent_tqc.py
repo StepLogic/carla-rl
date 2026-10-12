@@ -209,6 +209,13 @@ class GatedRecurrentTQCConfig:
     mono_encoder: str = "vc1"
     mono_baseplanes: int = 32
     mono_ngroups: int = 16
+    # carla-rl 2026-10-12 (appended last, so an older config.json reloads as
+    # None = the peer's unclipped explore critic, which did not diverge in
+    # Habitat). On CARLA it DID: our explore critic ran 20 -> 11,801 against a
+    # realisable ~110 while the clipped goal critic held its range, so v52
+    # clipped both heads and the SAC arm sets these.
+    value_floor_e: Optional[float] = None
+    value_ceiling_e: Optional[float] = None
 
     def __post_init__(self) -> None:
         self.goal_cols = tuple(int(c) for c in np.asarray(self.goal_cols).ravel())
@@ -277,6 +284,21 @@ class GatedRecurrentTQCConfig:
     @property
     def obs_dim(self) -> int:
         return self.token_dim + self.vec_dim
+
+
+def _bound_frac(target: torch.Tensor, bound: float, upper: bool) -> torch.Tensor:
+    """Per row, how much of the target sits at a value bound -> (batch,).
+
+    Rank-agnostic on purpose: TQC's target is (batch, n_quantiles) and the
+    fraction is a mean over that axis; the SAC arm's target is (batch,) and the
+    fraction is the indicator itself. A hardcoded mean(dim=1) made this telemetry
+    the only thing standing between the two algorithms.
+
+    A target pinned at a bound gives the actor no value gradient, and without
+    this number a saturated critic and a flat loss look identical.
+    """
+    hit = ((target >= bound) if upper else (target <= bound)).float()
+    return hit.mean(dim=1) if hit.dim() > 1 else hit
 
 
 def _masked_mean(x: torch.Tensor, m: torch.Tensor) -> torch.Tensor:
@@ -527,6 +549,30 @@ class GatedRecurrentTQC:
         s_all, _ = core(self._embed(compress, act_embed, obs[:, K:], goal), h)
         return s_all
 
+    # ------------------------------------------------------------------ seams --
+    # THE ONLY TWO PLACES THE CRITIC ALGORITHM LIVES, extracted as methods so a
+    # subclass can be a different algorithm without a second copy of this file.
+    # torch_rl/gated_recurrent_sac.py overrides exactly these two to get the
+    # user's expectation-SAC with a REDQ target (2026-10-12: "move away from
+    # TQC", "USE 10 critics for SAC"). Pure delegation here -- the TQC arm must
+    # behave as it did before the extraction, and a test pins that.
+
+    def _critic_target(self, next_q, rewards, masks, discount, alpha,
+                       next_log_probs, value_floor, value_ceiling, head):
+        """Backed-up target from the target critics' output. `head` is "goal" or
+        "explore", for subclasses that treat the two ensembles separately."""
+        return tqc_loss.tqc_target(next_q, rewards, masks, discount=discount,
+                                   top_drop=self.top_drop, alpha=alpha,
+                                   next_log_probs=next_log_probs,
+                                   value_floor=value_floor,
+                                   value_ceiling=value_ceiling)
+
+    def _critic_loss_per_sample(self, qs, target, head):
+        """Per-row critic loss, reduced over critics but NOT over the batch: the
+        caller weights each row by its mode mask."""
+        return tqc_loss.quantile_huber_loss_per_sample(qs, target,
+                                                       kappa=self.cfg.kappa)
+
     def _q(self, critics: QuantileCritics, h: torch.Tensor, state: torch.Tensor,
            cols: torch.Tensor, actions: torch.Tensor) -> torch.Tensor:
         """Online or target critic forward (both call this): autocasts under
@@ -727,32 +773,33 @@ class GatedRecurrentTQC:
         if has_g:
             with torch.no_grad():
                 next_q = self._q(self.critics_g_targ, s_next_t, st_next, self.goal_cols, next_a)
-                target_g = tqc_loss.tqc_target(next_q, r, m, discount=cfg.discount,
-                                               top_drop=self.top_drop, alpha=alpha_g,
-                                               next_log_probs=next_logp,
-                                               value_floor=cfg.value_floor,
-                                               value_ceiling=cfg.value_ceiling)
+                target_g = self._critic_target(
+                    next_q, r, m, discount=cfg.discount, alpha=alpha_g,
+                    next_log_probs=next_logp, value_floor=cfg.value_floor,
+                    value_ceiling=cfg.value_ceiling, head="goal")
                 # A target pinned at a bound gives the actor no value gradient;
                 # without these a saturated critic and a flat loss look alike.
                 if cfg.value_floor is not None:
-                    at_floor = _masked_mean((target_g <= cfg.value_floor).float().mean(dim=1), m_g)
+                    at_floor = _masked_mean(
+                        _bound_frac(target_g, cfg.value_floor, upper=False), m_g)
                 if cfg.value_ceiling is not None:
-                    at_ceiling = _masked_mean((target_g >= cfg.value_ceiling).float().mean(dim=1), m_g)
+                    at_ceiling = _masked_mean(
+                        _bound_frac(target_g, cfg.value_ceiling, upper=True), m_g)
             qs_g = self._q(self.critics_g, s, st, self.goal_cols, a)
             loss_g = _masked_mean(
-                tqc_loss.quantile_huber_loss_per_sample(qs_g, target_g, kappa=cfg.kappa), m_g)
+                self._critic_loss_per_sample(qs_g, target_g, head="goal"), m_g)
             q_g_data = _masked_mean(qs_g.detach().mean(dim=(0, 2)), m_g)
             critic_loss = critic_loss + loss_g
         if has_e:
             with torch.no_grad():
                 next_q = self._q(self.critics_e_targ, s_next_t, st_next, self.explore_cols, next_a)
-                target_e = tqc_loss.tqc_target(next_q, r, m, discount=cfg.discount_e,
-                                               top_drop=self.top_drop, alpha=alpha_e,
-                                               next_log_probs=next_logp,
-                                               value_floor=None, value_ceiling=None)
+                target_e = self._critic_target(
+                    next_q, r, m, discount=cfg.discount_e, alpha=alpha_e,
+                    next_log_probs=next_logp, value_floor=cfg.value_floor_e,
+                    value_ceiling=cfg.value_ceiling_e, head="explore")
             qs_e = self._q(self.critics_e, s, st, self.explore_cols, a)
             loss_e = _masked_mean(
-                tqc_loss.quantile_huber_loss_per_sample(qs_e, target_e, kappa=cfg.kappa), m_e)
+                self._critic_loss_per_sample(qs_e, target_e, head="explore"), m_e)
             q_e_data = _masked_mean(qs_e.detach().mean(dim=(0, 2)), m_e)
             critic_loss = critic_loss + loss_e
         self.opt_critic.zero_grad(set_to_none=True)

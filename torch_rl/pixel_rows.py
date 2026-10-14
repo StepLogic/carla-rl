@@ -93,7 +93,7 @@ def frame_from_block(block: np.ndarray) -> np.ndarray:
 # monocular setup - keep debit frozen and monocular as Resnet trained from
 # scratch", and "get rid of all state vectors except mode bit".
 #
-#   row = [ mono frame 3x128x128 | previous action 2 | mode 1 | binoc 3136 ]
+#   row = [ mono frame 3x128x128 | mode 1 | binoc 3136 ]
 #
 # THE MONO FRAME IS STORED /255 (see mono_row): the ported ResNet's contract.
 #
@@ -132,28 +132,31 @@ def to_frame(frame: np.ndarray, size: int) -> np.ndarray:
     return a.astype(np.float32)
 
 
-def mono_row(frame: np.ndarray, prev_action, mode, binoc) -> np.ndarray:
-    """One replay row for the binocular+monocular arm.
+def mono_row(frame: np.ndarray, mode, binoc) -> np.ndarray:
+    """One replay row for the binocular+monocular arm: [frame | mode | binoc].
+
+    NO PREVIOUS ACTION (user 2026-10-14: "remove prev action from obs space").
+    That closes the last feedback path from the policy's own output back into
+    its input -- the other was the proprioceptive steer/throttle, removed the
+    same day -- and the run that collapsed held full left lock for 800k steps.
+    The learner's prev_action=False drops the action embedding with it, so the
+    GRU reads [visual | binoc] alone.
 
     THE FRAME IS STORED /255, in [0, 1] -- the opposite of pixel_row above, and
-    not a free choice: MonoResNetEncoder applies the ImageNet mean/std to what
-    it is handed and REFUSES anything outside [0, 1] ("pixels must be /255 in
-    [0, 1] (the row stores them scaled)"), which is how the first pilot of this
-    stack failed at step 283. The DEBiT path stores raw 0-255 because its own
-    preprocessing does the division; this path's does not. fp16 holds [0, 1]
-    with far more precision than 8-bit pixels carry, so nothing is lost.
+    not a free choice: MonoResNetEncoder applies its mean/std to what it is
+    handed and REFUSES anything outside [0, 1] ("pixels must be /255 in [0, 1]
+    (the row stores them scaled)"), which is how the first pilot of this stack
+    failed at step 283. fp16 holds [0, 1] with far more precision than 8-bit
+    pixels carry, so nothing is lost.
     """
     pix = (to_frame(frame, MONO_IMG) / 255.0).reshape(-1)
-    pa = np.asarray(prev_action, np.float32).reshape(-1)
-    if pa.size != PREV_ACTION_DIM:
-        raise ValueError(f"previous action must be {PREV_ACTION_DIM}-d, got {pa.size}")
     b = np.asarray(binoc, np.float32).reshape(-1)
     if b.size != BINOC_DIM:
         raise ValueError(
             f"binoc must be {BINOC_DIM}-d (DEBiT's output), got {b.size}. An "
             "unencoded zero vector here would train the policy goal-blind.")
     m = np.asarray([float(mode)], np.float32)
-    return np.concatenate([pix, pa, m, b]).astype(np.float32)
+    return np.concatenate([pix, m, b]).astype(np.float32)
 
 
 def mono_state_dim(binoc_dim: int = BINOC_DIM) -> int:
@@ -163,7 +166,8 @@ def mono_state_dim(binoc_dim: int = BINOC_DIM) -> int:
 
 
 def mono_row_dim(binoc_dim: int = BINOC_DIM) -> int:
-    return MONO_PIX + PREV_ACTION_DIM + mono_state_dim(binoc_dim)
+    """No previous-action slot: the learner runs with prev_action=False."""
+    return MONO_PIX + mono_state_dim(binoc_dim)
 
 
 def mono_core_state_cols(binoc_dim: int = BINOC_DIM):

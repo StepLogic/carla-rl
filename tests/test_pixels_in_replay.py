@@ -364,20 +364,23 @@ def test_the_MONO_frame_is_stored_scaled_to_zero_one():
     MonoResNetEncoder applies the ImageNet mean/std to what it is handed and
     REFUSES anything outside [0, 1]. The first pilot of this stack died at step
     283 on exactly that guard, with a range of [39, 246]."""
-    row = pr.mono_row(np.full((120, 120, 3), 255, np.uint8), [0, 0], 1,
+    row = pr.mono_row(np.full((120, 120, 3), 255, np.uint8), 1,
                       np.zeros(pr.BINOC_DIM))
     pix = row[:pr.MONO_PIX]
     assert pix.max() == pytest.approx(1.0) and pix.min() == pytest.approx(1.0)
 
 
-def test_the_mono_row_is_frame_then_action_then_mode_then_binoc():
+def test_the_mono_row_is_frame_then_mode_then_binoc_with_NO_prev_action():
+    """User 2026-10-14: "remove prev action from obs space". That closes the
+    last feedback path from the policy's own output back into its input; the
+    other was the proprioceptive steer/throttle, removed the same day."""
     binoc = np.arange(pr.BINOC_DIM, dtype=np.float32)
-    row = pr.mono_row(np.zeros((128, 128, 3), np.uint8), [0.25, -0.5], 1, binoc)
+    row = pr.mono_row(np.zeros((128, 128, 3), np.uint8), 1, binoc)
     assert row.shape == (pr.mono_row_dim(),)
+    assert pr.mono_row_dim() == pr.MONO_PIX + 1 + pr.BINOC_DIM
     i = pr.MONO_PIX
-    np.testing.assert_allclose(row[i:i + 2], [0.25, -0.5])
-    assert row[i + 2] == 1.0                       # the mode bit
-    np.testing.assert_allclose(row[i + 3:], binoc)
+    assert row[i] == 1.0                           # the mode bit, immediately
+    np.testing.assert_allclose(row[i + 1:], binoc)
 
 
 def test_the_mode_bit_is_the_FIRST_state_column():
@@ -391,11 +394,11 @@ def test_the_mode_bit_is_the_FIRST_state_column():
 def test_a_wrong_width_binoc_is_refused():
     """A zero or short binoc would train the policy goal-blind."""
     with pytest.raises(ValueError, match="binoc"):
-        pr.mono_row(np.zeros((128, 128, 3), np.uint8), [0, 0], 1, np.zeros(10))
+        pr.mono_row(np.zeros((128, 128, 3), np.uint8), 1, np.zeros(10))
 
 
 def test_the_mono_frame_is_resized_to_128():
     """MonoResNetEncoder requires a multiple of 32, and DEBiT's 112 is not one."""
-    row = pr.mono_row(np.zeros((120, 120, 3), np.uint8), [0, 0], 0,
+    row = pr.mono_row(np.zeros((120, 120, 3), np.uint8), 0,
                       np.zeros(pr.BINOC_DIM))
     assert row[:pr.MONO_PIX].size == 128 * 128 * 3

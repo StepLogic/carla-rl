@@ -20,7 +20,9 @@ inside DEBiT, which forced the learner to re-encode a whole chunk twice per
 update at 209 ms; frozen, that cost disappears and only the small ResNet needs
 pixels and gradient.
 
-WHAT THE ROW HOLDS: [frame 128x128x3 | previous action | mode | binoc 3136]. The
+WHAT THE ROW HOLDS: [frame 128x128x3 | mode | binoc 3136] -- no previous
+action (user 2026-10-14), which closes the last path from the policy's own
+output back into its input. The
 state block is the MODE BIT AND THE BINOC, nothing else (user: "get rid of all
 state vectors except mode bit"): no steer, no throttle, no speed. The actor used
 to receive its own last steer and throttle, which is a feedback path a policy can
@@ -98,6 +100,7 @@ def main():
     from torch_rl import pixel_rows as pxr
     from torch_rl.carla_env_build import build_env
     from torch_rl.debit_encoder import DebitTinyEncoder
+    from torch_rl.debit_mono import describe_load, load_debit_mono
     from torch_rl.debit_visual import IMG
     from torch_rl.episode_buffer import DeviceEpisodeBuffer
     from torch_rl.episode_video import EpisodeVideo
@@ -138,6 +141,10 @@ def main():
         # frame, and here the goal arrives already encoded.
         mono_encoder="resnet", embed_dim=3, grid=pxr.MONO_IMG,
         goal_tokens=False,
+        # NO PREVIOUS ACTION IN THE OBSERVATION (user 2026-10-14). The
+        # learner then builds no action embedding and the GRU reads
+        # [visual | binoc] alone.
+        prev_action=False,
         mono_baseplanes=env_int("MONO_BASEPLANES", 32),
         mono_ngroups=env_int("MONO_NGROUPS", 16),
         core_state_cols=pxr.mono_core_state_cols(binoc_dim),
@@ -146,7 +153,13 @@ def main():
         # the two modes differ only in what the env pays, so without that column
         # the critic would learn the average of two different returns.
         one_critic=os.environ.get("ONE_CRITIC", "1") == "1",
-        goal_cols=(0,), explore_cols=(),
+        # THE CRITIC SEES EVERYTHING THE ACTOR SEES (user 2026-10-14):
+        # the whole state block, mode bit and binoc alike. The actor is
+        # handed the state block in full, so anything less here makes the
+        # critic judge actions on strictly less information than the
+        # actor chose them with -- and the mode bit, which one_critic
+        # requires, is column 0 of it.
+        goal_cols=tuple(range(state_dim)), explore_cols=(),
         hidden=env_int("HIDDEN", 512),
         visual_dim=env_int("VISUAL_DIM", 512), mlp=(256, 256), burn_in=BURN_IN,
         device=DEVICE, compile=os.environ.get("TORCH_COMPILE", "0") == "1",
@@ -160,6 +173,13 @@ def main():
         value_floor_e=env_float("EXPLORE_VALUE_FLOOR", -200.0),
         value_ceiling_e=env_float("EXPLORE_VALUE_CEILING", 150.0))
     agent = GatedRecurrentSAC(cfg)
+    # DEBiT'''S PRETRAINED MONOCULAR TRUNK (user 2026-10-14, "I want debit Mono +
+    # binocular setup"). Loaded AFTER the learner builds the module and copied
+    # into the target as well: the learner makes its frozen target copy at
+    # construction, so loading only into the online branch would leave the
+    # target encoding with random weights.
+    mono_report = load_debit_mono(agent.compress, TINY)
+    agent.compress_targ.load_state_dict(agent.compress.state_dict())
     buf = DeviceEpisodeBuffer(row_dim, 2, CAPACITY, DEVICE, seed=SEED,
                               goal_dim=pxr.PIX,
                               goal_batch_frac=env_float("GOAL_BATCH_FRAC", 0.5))
@@ -172,15 +192,17 @@ def main():
           f"Town02/Town03 HELD OUT) port={PORT} seed={SEED} device={DEVICE}",
           flush=True)
     print(f"  {agent.describe()}", flush=True)
-    print(f"  visual (TRAINED from scratch): {agent.compress.describe()}", flush=True)
+    print(f"  monocular (TRAINED): {agent.compress.describe()}", flush=True)
+    print(f"  {describe_load(mono_report)}", flush=True)
     print(f"  binocular (FROZEN, precomputed in the env): {binoc_dim}-d -> GRU "
           f"via core_state_cols[{cfg.core_state_cols[0]}..{cfg.core_state_cols[-1]}]",
           flush=True)
     print(f"  state block: mode bit ONLY at index {cfg.mode_index} "
-          f"(no steer/throttle/speed) | critic view {cfg.goal_cols}", flush=True)
+          f"(no steer/throttle/speed) | critic view = the FULL state block "
+          f"({len(cfg.goal_cols)} cols: mode + binoc), same as the actor", flush=True)
     print(f"  weights: {enc.describe()}", flush=True)
-    print(f"  row={row_dim} (frame {pxr.MONO_PIX} + prev action 2 + "
-          f"mode 1 + binoc {binoc_dim})"
+    print(f"  row={row_dim} (frame {pxr.MONO_PIX} + mode 1 + "
+          f"binoc {binoc_dim}; NO prev action)"
           f" | replay {CAPACITY} rows ~ {CAPACITY * row_dim * 2 / 2 ** 30:.1f} GiB fp16",
           flush=True)
     print(f"  update: every {UPDATE_EVERY} steps x{UPDATES_PER}, chunk "
@@ -200,8 +222,8 @@ def main():
           f"keep {VIDEO_KEEP} -> {vid.out_dir} "
           "(camera | goal, with step/mode/reward/action burnt in)", flush=True)
 
-    def row_of(o, i, prev_a):
-        """[mono frame | previous action | mode | binoc] for this step.
+    def row_of(o, i):
+        """[mono frame | mode | binoc] for this step.
 
         The binoc comes from the observation, where the wrapper put it after
         encoding (view, goal) through the FROZEN DEBiT -- so it is a stored
@@ -214,12 +236,11 @@ def main():
             raise RuntimeError(
                 "info['binoc_encoded'] is False: the env wrapper has no DEBiT "
                 "encoder, so the binoc column would be zeros.")
-        return pxr.mono_row(i["debit_cur"], prev_a, o["mode"], o["binoc"])
+        return pxr.mono_row(i["debit_cur"], o["mode"], o["binoc"])
 
     hidden = agent.reset_hidden(1)
     goal_blk = pxr.goal_block(info["debit_goal"])   # the buffer's episode goal
-    prev_a = np.zeros(2, np.float32)
-    row = row_of(obs, info, prev_a)
+    row = row_of(obs, info)
     mode = int(round(float(np.asarray(obs["mode"]).ravel()[0])))
 
     ep_ret, ep_len, episodes = 0.0, 0, 0
@@ -236,7 +257,7 @@ def main():
             action = np.asarray(action, np.float32)
 
         nobs, reward, terminated, truncated, ninfo = env.step(action)
-        nrow = row_of(nobs, ninfo, action)
+        nrow = row_of(nobs, ninfo)
         buf.add(row, action, float(reward), bool(terminated), bool(truncated),
                 nrow, mode, goal=goal_blk)
         # The frames the policy just acted on, beside the goal it was given.
@@ -244,7 +265,7 @@ def main():
                 float(reward), action, ep_ret)
         ep_ret += float(reward)
         ep_len += 1
-        obs, info, row, prev_a = nobs, ninfo, nrow, action
+        obs, info, row = nobs, ninfo, nrow
 
         if terminated or truncated:
             buf.end_episode()
@@ -296,8 +317,7 @@ def main():
             vid.start(episodes)
             hidden = agent.reset_hidden(1)
             goal_blk = pxr.goal_block(info["debit_goal"])   # the buffer's episode goal
-            prev_a = np.zeros(2, np.float32)
-            row = row_of(obs, info, prev_a)
+            row = row_of(obs, info)
             mode = int(round(float(np.asarray(obs["mode"]).ravel()[0])))
             ep_ret, ep_len = 0.0, 0
 

@@ -34,7 +34,7 @@ def test_the_state_block_is_the_MODE_BIT_AND_NOTHING_ELSE():
     feedback path a policy can latch onto -- and the run that collapsed sat at
     full left lock for 800k steps."""
     s = src()
-    assert 'pxr.mono_row(i["debit_cur"], prev_a, o["mode"], o["binoc"])' in s
+    assert 'pxr.mono_row(i["debit_cur"], o["mode"], o["binoc"])' in s
     assert 'o["vector"]' not in s and 'o["state"]' not in s
     assert "mode_index=0" in s
 
@@ -57,21 +57,27 @@ def test_the_single_critics_view_is_the_MODE_BIT():
     with goal_tokens the goal is an image the GRU has already folded in."""
     s = src()
     assert "one_critic=os.environ.get(\"ONE_CRITIC\", \"1\") == \"1\"" in s
-    assert "goal_cols=(0,), explore_cols=()" in s
+    assert "goal_cols=tuple(range(state_dim)), explore_cols=()" in s
     assert "mode_index=0" in s                      # the same column
 
 
-def test_the_row_carries_the_action_that_was_ACTUALLY_taken():
-    """prev_a must be updated from `action`, not from the policy's next output
-    or a zero: the row's previous-action slot is part of the observation."""
+def test_there_is_NO_previous_action_anywhere():
+    """User 2026-10-14: "remove prev action from obs space". Both feedback paths
+    from the policy's output back into its input are now gone -- this one and
+    the proprioceptive steer/throttle."""
     s = src()
-    assert "obs, info, row, prev_a = nobs, ninfo, nrow, action" in s
+    assert "prev_action=False" in s
+    # NB "prev_a" alone also matches "prev_action=False", which is the flag that
+    # turns the slot OFF -- so look for the variable's actual uses.
+    assert "prev_a," not in s and "prev_a)" not in s and "prev_a =" not in s
 
 
-def test_the_previous_action_is_zeroed_at_every_reset():
+def test_the_critic_sees_everything_the_actor_sees():
+    """User 2026-10-14. The actor is handed the state block in full, so anything
+    less for the critic makes it judge actions on strictly less information than
+    the actor chose them with."""
     s = src()
-    assert s.count("prev_a = np.zeros(2, np.float32)") >= 2, \
-        "zeroed at start AND after each reset"
+    assert "goal_cols=tuple(range(state_dim))" in s
 
 
 # ------------------------------------------------------------- the goal --
@@ -191,7 +197,7 @@ def test_recording_happens_before_the_observation_is_advanced():
     info = nobs, ninfo` and every frame is one step late -- the stale-frame bug
     that cost an earlier run its perception."""
     s = src()
-    assert s.index('vid.add(info["debit_cur"]') < s.index("obs, info, row, prev_a = nobs")
+    assert s.index('vid.add(info["debit_cur"]') < s.index("obs, info, row = nobs")
 
 
 # --------------------------------------- the binocular + monocular stack --

@@ -247,6 +247,13 @@ class GatedRecurrentTQCConfig:
     # which is why it carries a default and is never read by anything but
     # build_visual.
     debit_encoder: Optional[object] = None
+    # ONE CRITIC FOR BOTH REWARD MODES (user 2026-10-13: "I want a single critic
+    # with two different reward modes"). Appended last, defaulting False, so the
+    # two-critic arm is untouched. The two modes then differ only in what the
+    # ENV pays -- GatedReward already pays a different arrival bonus per mode --
+    # and the critic tells them apart from the mode bit in its own view, which
+    # one_critic REQUIRES (see __post_init__).
+    one_critic: bool = False
 
     def __post_init__(self) -> None:
         self.goal_cols = tuple(int(c) for c in np.asarray(self.goal_cols).ravel())
@@ -275,9 +282,26 @@ class GatedRecurrentTQCConfig:
             bad = [c for c in cols if not 0 <= c < self.state_dim]
             if bad:
                 raise ValueError(f"{name} {bad} outside the {self.state_dim}-d state")
-            # The mode bit is a constant on each critic's own rows: a bias, not
-            # a feature, and on Q_g it would break the distance reading.
-            if self.mode_index in cols:
+            # THE MODE BIT: FORBIDDEN WITH TWO CRITICS, REQUIRED WITH ONE.
+            #
+            # With two critics each sees only its own mode's rows, so the bit is
+            # a constant there -- a bias, not a feature -- and on Q_g it would
+            # break the distance reading. With ONE critic trained on both modes
+            # the same column becomes essential: the two rewards differ (the
+            # arrival bonus is 50 in goal mode and 10 at 100 m in explore), and
+            # without the bit the critic is asked to predict two different
+            # returns from otherwise identical inputs. It would not fail -- it
+            # would learn their average and the run would look merely mediocre.
+            # User 2026-10-13, asked and confirmed: "the mode bit should be
+            # observed by critic".
+            if self.one_critic:
+                if name == "goal_cols" and self.mode_index not in cols:
+                    raise ValueError(
+                        f"one_critic=True needs the mode bit (state index "
+                        f"{self.mode_index}) in goal_cols, which is the single "
+                        "critic's view: it is what tells the two reward modes "
+                        f"apart. Got goal_cols={cols}.")
+            elif self.mode_index in cols:
                 raise ValueError(f"{name} contains the mode bit (state index {self.mode_index})")
         bad = [c for c in self.core_state_cols if not 0 <= c < self.state_dim]
         if bad:
@@ -424,9 +448,19 @@ class GatedRecurrentTQC:
 
         self.log_alpha_g = nn.Parameter(torch.tensor(float(np.log(cfg.init_temperature)), device=dev))
         self.log_alpha_e = nn.Parameter(torch.tensor(float(np.log(cfg.init_temperature_e)), device=dev))
+        # WITH ONE CRITIC THE SECOND ENSEMBLE IS NOT IN THE OPTIMISER. It is
+        # still constructed, so the module list, the checkpoint format and the
+        # construction RNG order are identical either way, but it receives no
+        # gradient and no Adam state: left in, its momentum would move
+        # parameters that nothing reads, and a checkpoint would carry an
+        # ensemble that had drifted for no reason.
+        _critic_mods = ((self.compress, self.act_embed, self.core, self.critics_g)
+                        if cfg.one_critic else
+                        (self.compress, self.act_embed, self.core,
+                         self.critics_g, self.critics_e))
         self.opt_critic = torch.optim.Adam(
-            [p for mod in (self.compress, self.act_embed, self.core, self.critics_g, self.critics_e)
-             if mod is not None for p in mod.parameters()], lr=cfg.lr)
+            [p for mod in _critic_mods if mod is not None
+             for p in mod.parameters()], lr=cfg.lr)
         self.opt_actor = torch.optim.Adam(self.actor.parameters(), lr=cfg.lr)
         self.opt_temp_g = torch.optim.Adam([self.log_alpha_g], lr=cfg.lr)
         self.opt_temp_e = torch.optim.Adam([self.log_alpha_e], lr=cfg.lr)
@@ -764,8 +798,19 @@ class GatedRecurrentTQC:
         # all-zero obs whose mode bit would read "explore".
         B, T = valid.shape
         N = B * T
-        m_g = (mode[:, None] * valid).reshape(N)
-        m_e = ((1.0 - mode)[:, None] * valid).reshape(N)
+        if cfg.one_critic:
+            # ONE CRITIC, BOTH MODES. Every valid row is the single critic's
+            # row, whichever mode produced it, and the mode reaches it as a
+            # FEATURE (its view includes the mode column) rather than as a mask.
+            # Expressing it this way means the rest of this method is unchanged:
+            # the "goal" critic is simply the only one, m_e stays zero so the
+            # explore branch never runs, and the actor reads one Q, one alpha
+            # and one Q-scale.
+            m_g = valid.reshape(N)
+            m_e = torch.zeros_like(m_g)
+        else:
+            m_g = (mode[:, None] * valid).reshape(N)
+            m_e = ((1.0 - mode)[:, None] * valid).reshape(N)
         # One host sync, of BOOLS, never counts: a Python value live across a
         # graph break is guarded on its exact value by dynamo. MEASURED (round-0
         # review, torch 2.4.1): synced float counts recompiled the resume frame
@@ -892,9 +937,16 @@ class GatedRecurrentTQC:
 
         with torch.no_grad():
             self.n_updates.add_(1)
-        for targ, src in ((self.compress_targ, self.compress), (self.act_embed_targ, self.act_embed),
-                          (self.core_targ, self.core), (self.critics_g_targ, self.critics_g),
-                          (self.critics_e_targ, self.critics_e)):
+        _pairs = [(self.compress_targ, self.compress),
+                  (self.act_embed_targ, self.act_embed),
+                  (self.core_targ, self.core),
+                  (self.critics_g_targ, self.critics_g)]
+        if not cfg.one_critic:
+            # Nothing trains the second ensemble under one_critic, so following
+            # it with a soft update would only copy its initialisation onto its
+            # own target forever.
+            _pairs.append((self.critics_e_targ, self.critics_e))
+        for targ, src in _pairs:
             if src is not None:                        # no act_embed without prev_action
                 soft_update(targ, src, cfg.tau)
 

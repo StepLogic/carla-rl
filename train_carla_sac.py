@@ -107,12 +107,23 @@ def main():
     cfg = GatedRecurrentSACConfig(
         embed_dim=3, grid=IMG, goal_tokens=True, mono_encoder="debit",
         debit_encoder=enc, state_dim=state_dim, mode_index=state_dim - 1,
-        goal_cols=(), explore_cols=(), hidden=env_int("HIDDEN", 512),
+        # ONE CRITIC FOR BOTH REWARD MODES (user 2026-10-13), and its view is
+        # the MODE BIT: the two modes differ only in what the env pays, so
+        # without that column the critic would predict two different returns
+        # from otherwise identical inputs and learn their average. There is no
+        # goal column besides it -- with goal_tokens the goal is an image the
+        # GRU has already folded into the hidden state.
+        one_critic=os.environ.get("ONE_CRITIC", "1") == "1",
+        goal_cols=(state_dim - 1,), explore_cols=(),
+        hidden=env_int("HIDDEN", 512),
         visual_dim=env_int("VISUAL_DIM", 512), mlp=(256, 256), burn_in=BURN_IN,
         device=DEVICE, compile=os.environ.get("TORCH_COMPILE", "0") == "1",
         seed=SEED, n_critics=env_int("N_CRITICS", 10),
         subset_size=env_int("SUBSET_SIZE", 2),
         discount=env_float("DISCOUNT", 0.99),
+        # discount_e and the explore value bounds are inert under one_critic
+        # (nothing trains a second head); kept so a two-critic comparison run is
+        # one flag away and differs in nothing else.
         discount_e=env_float("EXPLORE_DISCOUNT", 0.99),
         explore_actor_warmup=env_int("EXPLORE_ACTOR_WARMUP", 5000),
         value_floor=env_float("TQC_VALUE_FLOOR", -200.0),

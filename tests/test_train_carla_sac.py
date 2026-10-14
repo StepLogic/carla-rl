@@ -68,12 +68,16 @@ def test_mode_index_points_at_the_LAST_state_column():
     assert 'state_dim = int(np.shape(obs["vector"])[0]) + 1' in s
 
 
-def test_the_critic_column_views_are_empty():
-    """With goal_tokens the goal is an image the GRU has already folded into the
-    hidden state, so no state column carries it; a stray column here would feed
-    the critics something the config's own checks forbid."""
+def test_the_single_critics_view_is_the_MODE_BIT():
+    """User 2026-10-13: one critic for both reward modes, and the mode bit
+    observed by it. Without that column the critic predicts two different
+    returns from otherwise identical inputs and learns their average -- which
+    does not fail, it just reads as mediocre. There is no other goal column:
+    with goal_tokens the goal is an image the GRU has already folded in."""
     s = src()
-    assert "goal_cols=(), explore_cols=()" in s
+    assert "one_critic=os.environ.get(\"ONE_CRITIC\", \"1\") == \"1\"" in s
+    assert "goal_cols=(state_dim - 1,), explore_cols=()" in s
+    assert "mode_index=state_dim - 1" in s          # the same column
 
 
 def test_the_row_carries_the_action_that_was_ACTUALLY_taken():

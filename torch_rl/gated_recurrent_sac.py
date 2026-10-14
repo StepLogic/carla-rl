@@ -103,6 +103,16 @@ class GatedRecurrentSAC(GatedRecurrentTQC):
     # ------------------------------------------------------------- telemetry --
     def describe(self) -> str:
         cfg = self.cfg
+        if cfg.one_critic:
+            # The banner must not claim two heads when there is one: this line
+            # is what a log is read back for months later.
+            return (f"RecurrentSAC, ONE CRITIC for both reward modes: "
+                    f"{cfg.n_critics} critics, target = min over a random subset "
+                    f"of {cfg.subset_size} (REDQ), MSE critic loss, NO quantiles "
+                    f"| gamma {cfg.discount} | one temperature | the mode bit is "
+                    f"a critic INPUT (state col {cfg.mode_index}) | target clip "
+                    f"[{cfg.value_floor}, {cfg.value_ceiling}] | the two modes "
+                    f"differ only in what the env pays")
         return (f"GatedRecurrentSAC: expectation SAC, {cfg.n_critics} critics per "
                 f"head, target = min over a random subset of {cfg.subset_size} "
                 f"(REDQ), MSE critic loss, NO quantiles | gamma {cfg.discount} "

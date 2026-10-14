@@ -99,6 +99,7 @@ def main():
 
     from torch_rl import pixel_rows as pxr
     from torch_rl.carla_env_build import build_env
+    from torch_rl.carla_server import CarlaServer
     from torch_rl.debit_encoder import DebitTinyEncoder
     from torch_rl.debit_mono import describe_load, load_debit_mono
     from torch_rl.debit_visual import IMG
@@ -119,7 +120,17 @@ def main():
     # still carries pixels.
     enc = DebitTinyEncoder(TINY, device=DEVICE, half=False)
 
+    # THE TRAINER OWNS THE SIMULATOR, so a town change can restart it. Closing
+    # the env and rebuilding against a live server leaves the old sensors'
+    # streams dangling and the next client cannot attach (job 453315: the first
+    # map change worked, the next rebuild hung while the server flooded "Invalid
+    # session: no stream available"). A restart cannot inherit that state.
     town_i = 0
+    server = CarlaServer(PORT, quality=os.environ.get("CARLA_QUALITY", "Epic"),
+                         log_dir=os.path.join(OUT, "carla"))
+    server.start()
+    print(f"  carla: {server.describe()} ready in "
+          f"{server.wait_ready():.0f}s", flush=True)
     env = build_env(TOWNS[town_i], seed=SEED, encoder=enc, port=PORT,
                     state_keys=())
     obs, info = env.reset(seed=SEED)
@@ -310,9 +321,11 @@ def main():
             if TOWN_EVERY > 0 and episodes % TOWN_EVERY == 0 and len(TOWNS) > 1:
                 town_i = (town_i + 1) % len(TOWNS)
                 env.close()
+                took = server.restart()
                 env = build_env(TOWNS[town_i], seed=SEED + episodes, port=PORT,
                                 encoder=enc, state_keys=())
-                print(f"[Town] -> {TOWNS[town_i]} at episode {episodes}", flush=True)
+                print(f"[Town] -> {TOWNS[town_i]} at episode {episodes} "
+                      f"(server restarted in {took:.0f}s)", flush=True)
             obs, info = env.reset()
             vid.start(episodes)
             hidden = agent.reset_hidden(1)
@@ -337,6 +350,7 @@ def main():
     os.makedirs(d, exist_ok=True)
     agent.save(d)
     env.close()
+    server.stop()
     print(f"[Done] {MAX_STEPS} steps, {episodes} episodes in "
           f"{(time.time() - t_start) / 3600:.2f} h -> {d}", flush=True)
 

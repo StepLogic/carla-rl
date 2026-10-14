@@ -63,38 +63,13 @@ for f in "$SIF" "$PY" "$REPO/slurm/smoke_sac_cluster.py"; do
   [ -e "$f" ] || { echo "FATAL: missing $f"; exit 1; }
 done
 
-CARLA_LOG=${SLURM_JOB_NAME:-sac_smoke}_${SLURM_JOB_ID:-0}_carla.log
-apptainer run --nv -e "$SIF" /workspace/CarlaUE4.sh \
-  -RenderOffScreen -nosound -quality-level="$CARLA_QUALITY" \
-  -carla-rpc-port="$CARLA_PORT" > "$CARLA_LOG" 2>&1 &
-CARLA_PID=$!
-echo "[carla] pid $CARLA_PID, log $CARLA_LOG"
-
-# Poll WHILE it runs. 150 s, and the server's own liveness is checked each pass
-# so a crashed start is reported as a crash rather than as a timeout.
-up=0
-for i in $(seq 1 150); do
-  if ! kill -0 "$CARLA_PID" 2>/dev/null; then
-    echo "FATAL: CARLA exited after ${i}s. Last lines:"; tail -25 "$CARLA_LOG"; exit 1
-  fi
-  if command -v ss >/dev/null && ss -ltn 2>/dev/null | grep -q ":$CARLA_PORT\b"; then
-    up=$i; break
-  fi
-  sleep 1
-done
-[ "$up" -gt 0 ] && echo "[carla] listening after ${up}s" || {
-  echo "[carla] port never opened in 150s; continuing anyway -- the client's own "
-  echo "        timeout is the real test, and 'ss' may be absent in this image."; }
-
-# IS THE SIMULATOR ACTUALLY ON THE GPU? The container's log carries "lavapipe is
-# not a conformant vulkan implementation", which is the SOFTWARE rasteriser
-# announcing itself -- if CARLA fell back to it, Epic quality would be rendered
-# on the CPU and the run would be unusably slow while looking healthy. The
-# decisive check is whether the CarlaUE4 process holds GPU memory (a working
-# start holds ~1.6 GB), so take it here rather than inferring from the log.
-echo "=== GPU processes after startup ==="
-nvidia-smi --query-compute-apps=pid,process_name,used_memory --format=csv 2>/dev/null \
-  | grep -iE "carla|pid" || echo "[warn] CARLA holds NO GPU memory -- suspect software rendering"
+# THE TRAINER STARTS CARLA, NOT THIS SCRIPT. It owns the simulator so a town
+# change can restart it (torch_rl/carla_server.py); starting one here too would
+# put two servers on the same port. CARLA_SIF is passed through.
+# Export the RESOLVED path: a bare `export CARLA_SIF` is an unbound
+# variable under set -u when the caller did not set one.
+export CARLA_SIF="$SIF"
+echo "[carla] owned by the trainer (image $CARLA_SIF)"
 
 export PYTHONNOUSERSITE=1
 # rlib_integration IS NESTED: the importable package is
@@ -132,8 +107,4 @@ echo "=== $(date +%T) python ==="
 "$PY" -u train_carla_sac.py
 rc=$?
 echo "=== $(date +%T) train rc=$rc ==="
-kill "$CARLA_PID" 2>/dev/null
-sleep 5
-kill -9 "$CARLA_PID" 2>/dev/null
-echo "=== carla log tail ==="; tail -15 "$CARLA_LOG"
 exit $rc

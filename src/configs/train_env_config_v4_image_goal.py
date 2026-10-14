@@ -508,8 +508,16 @@ class STBL3Experiment(BaseExperiment):
         # spend probability mass on actions the env silently truncates. With
         # the default max_throttle=1.0 this is identical to the old space, so
         # existing runs are unaffected.
+        # THROTTLE SPANS [-max_throttle, +max_throttle] AND NEGATIVE IS REVERSE
+        # (user 2026-10-14). It used to be [0, max_throttle] while compute_action
+        # read a negative value as BRAKE -- so a tanh actor, which emits [-1, 1]
+        # on both dimensions, spent about half its probability mass braking. A
+        # live run showed the result: the camera barely changed over a 1000-step
+        # episode (mean frame-to-frame difference 1.6 against 4-8 in episodes
+        # where the car moved), the throttle command read -0.76, +0.09, -0.32,
+        # and the episode ran to the cap at -0.63 per step.
         return Box(
-            low=np.array([-self.max_steer, 0.0], np.float32),
+            low=np.array([-self.max_steer, -self.max_throttle], np.float32),
             high=np.array([self.max_steer, self.max_throttle], np.float32),
             dtype=np.float32
         )
@@ -573,18 +581,26 @@ class STBL3Experiment(BaseExperiment):
         steer, throttle_brake = a0, a1
         vehicle_control.steer = float(np.clip(steer, -self.max_steer, self.max_steer))
 
-        if throttle_brake >= 0:
-            vehicle_control.throttle = float(np.clip(throttle_brake, 0.0, self.max_throttle))
-            vehicle_control.brake = 0.0
-        else:
-            vehicle_control.throttle = 0.0
-            vehicle_control.brake = float(np.clip(-throttle_brake, 0.0, 1.0))
-            
-        vehicle_control.reverse = False
+        # NEGATIVE IS REVERSE, NOT BRAKE (user 2026-10-14). The magnitude is the
+        # throttle either way and the gear carries the sign, so the command is
+        # symmetric about zero -- which matters because the actor is a tanh and
+        # its output is symmetric about zero. Under the old mapping its negative
+        # half became braking, and a live run spent whole episodes stationary.
+        #
+        # There is no brake under this mapping. The policy slows by commanding
+        # the opposite gear, and the reward already prices that: progress is
+        # measured along the heading, so reversing pays negatively.
+        vehicle_control.reverse = bool(throttle_brake < 0)
+        vehicle_control.throttle = float(np.clip(abs(throttle_brake), 0.0,
+                                                 self.max_throttle))
+        vehicle_control.brake = 0.0
         vehicle_control.hand_brake = False
-        
+
         self.steer = vehicle_control.steer
-        self.throttle = vehicle_control.throttle
+        # SIGNED, so anything reading it back sees the commanded direction and
+        # not just its magnitude.
+        self.throttle = (-vehicle_control.throttle if vehicle_control.reverse
+                         else vehicle_control.throttle)
         self.last_action = vehicle_control
         
         return vehicle_control

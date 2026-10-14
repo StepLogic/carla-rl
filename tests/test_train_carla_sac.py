@@ -149,6 +149,8 @@ def test_a_preflight_banner_is_printed_before_stepping():
     j = s.index("for step in range(1, MAX_STEPS")
     assert i < j
     banner = s[i:j]
+    assert "env.action_space" in s or "_box = env.action_space" in s, \
+        "the banner must print the SPACE, not the env vars meant to shape it"
     for want in ("towns=", "seed=", "action box", "checkpoints ->", "reward:",
                  "HELD OUT", "FROZEN", "mode bit ONLY"):
         assert want in banner, want

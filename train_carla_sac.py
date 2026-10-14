@@ -219,8 +219,15 @@ def main():
     print(f"  update: every {UPDATE_EVERY} steps x{UPDATES_PER}, chunk "
           f"B={CHUNK_B} T={CHUNK_T} burn_in={BURN_IN}, starts at {LEARNING_STARTS}",
           flush=True)
-    print(f"  action box: steer +/-{os.environ.get('MAX_STEER')} "
-          f"throttle 0-{os.environ.get('MAX_THROTTLE')} "
+    # THE SPACE ITSELF, not the environment variables that were meant to shape
+    # it. The banner used to print "throttle 0-1.0" from MAX_THROTTLE while the
+    # space was [-1, 1] with negative meaning reverse -- a preflight that states
+    # the intent rather than the fact cannot catch the case where they differ,
+    # which is the only case it is for.
+    _box = env.action_space
+    print(f"  action box: steer [{_box.low[0]:+.2f}, {_box.high[0]:+.2f}]  "
+          f"throttle [{_box.low[1]:+.2f}, {_box.high[1]:+.2f}] "
+          f"(negative = REVERSE)  "
           f"incremental={os.environ.get('INCREMENTAL_ACTIONS')}", flush=True)
     print(f"  reward: GATED_GOAL_REWARD={os.environ.get('GATED_GOAL_REWARD')} "
           f"bonus={os.environ.get('GOAL_EXPLORE_ARRIVAL_BONUS')} "

@@ -170,3 +170,43 @@ def test_checkpoints_are_written_periodically_and_at_the_end():
     s = src()
     assert "step % CKPT_EVERY == 0" in s
     assert s.count("agent.save(d)") >= 2
+
+
+# ------------------------------------------------------------- the videos --
+def test_videos_record_the_camera_AND_the_goal_frame():
+    """User 2026-10-14: videos for debugging. The pair is the point -- a camera
+    panel alone cannot show whether the car is driving towards the view it was
+    given, which is this arm's whole question."""
+    s = src()
+    assert 'vid.add(info["debit_cur"], info["debit_goal"]' in s
+
+
+def test_only_five_episodes_are_kept():
+    """User 2026-10-14: "Store only 5 episodes at a time"."""
+    s = src()
+    assert 'env_int("VIDEO_KEEP", 5)' in s
+
+
+def test_a_video_is_started_for_the_first_episode_and_after_every_reset():
+    """Missing the first means the run's opening episode is never recorded;
+    missing the reset means every later video is the first episode again."""
+    s = src()
+    assert "vid.start(0)" in s
+    assert "vid.start(episodes)" in s
+
+
+def test_the_video_is_saved_with_the_end_reason():
+    """So the interesting ones can be found without opening them: crossings and
+    arrivals are different debugging sessions."""
+    s = src()
+    assert "vid.save(end)" in s
+    i_end = s.index('end = str(info.get("goal_end"')
+    assert s.index("vid.save(end)") > i_end
+
+
+def test_recording_happens_before_the_observation_is_advanced():
+    """info must still be the step that was just acted on. Record after `obs,
+    info = nobs, ninfo` and every frame is one step late -- the stale-frame bug
+    that cost an earlier run its perception."""
+    s = src()
+    assert s.index('vid.add(info["debit_cur"]') < s.index("obs, info, row, prev_a = nobs")

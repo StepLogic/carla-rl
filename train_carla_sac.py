@@ -61,6 +61,14 @@ BURN_IN = env_int("BURN_IN", 8)
 CAPACITY = env_int("REPLAY_CAPACITY", 150_000)
 LOG_EVERY = env_int("LOG_EVERY", 10)
 CKPT_EVERY = env_int("CKPT_EVERY", 25_000)
+# DEBUGGING VIDEOS (user 2026-10-14). On by default and nearly free: both
+# frames are already in memory each step for the replay, so recording adds no
+# render and no GPU work. One episode in VIDEO_EVERY, capped and pruned.
+VIDEO_EVERY = env_int("VIDEO_EVERY", 50)
+VIDEO_MAX_FRAMES = env_int("VIDEO_MAX_FRAMES", 1200)
+# USER 2026-10-14: "Store only 5 episodes at a time" -- the newest 5 mp4s
+# are kept and older ones deleted as each new video is written.
+VIDEO_KEEP = env_int("VIDEO_KEEP", 5)
 TOWN = os.environ.get("ENV_TOWNS", "Town05").split(",")[0]
 PORT = env_int("CARLA_PORT", 2000)
 SEED = env_int("SEED", 0)
@@ -81,6 +89,7 @@ def main():
     from torch_rl.debit_encoder import DebitTinyEncoder
     from torch_rl.debit_visual import IMG
     from torch_rl.episode_buffer import DeviceEpisodeBuffer
+    from torch_rl.episode_video import EpisodeVideo
     from torch_rl.gated_recurrent_sac import (GatedRecurrentSAC,
                                               GatedRecurrentSACConfig)
 
@@ -158,6 +167,11 @@ def main():
           f"band={os.environ.get('GOAL_DIST_MIN')}-{os.environ.get('GOAL_DIST_MAX')} m",
           flush=True)
     print(f"  checkpoints -> {OUT}", flush=True)
+    vid = EpisodeVideo(os.path.join(OUT, "videos"), every=VIDEO_EVERY,
+                       max_frames=VIDEO_MAX_FRAMES, keep=VIDEO_KEEP)
+    print(f"  videos: 1 episode in {VIDEO_EVERY}, <={VIDEO_MAX_FRAMES} frames, "
+          f"keep {VIDEO_KEEP} -> {vid.out_dir} "
+          "(camera | goal, with step/mode/reward/action burnt in)", flush=True)
 
     def row_of(o, i, prev_a):
         """The replay row for the step whose observation is `o` and whose info
@@ -174,6 +188,7 @@ def main():
     mode = int(round(float(np.asarray(obs["mode"]).ravel()[0])))
 
     ep_ret, ep_len, episodes = 0.0, 0, 0
+    vid.start(0)
     recent = {"goal": [], "explore": [], "policy": [], "ends": {}}
     t_start = time.time()
     metrics = {}
@@ -189,6 +204,9 @@ def main():
         nrow = row_of(nobs, ninfo, action)
         buf.add(row, action, float(reward), bool(terminated), bool(truncated),
                 nrow, mode, goal=goal_blk)
+        # The frames the policy just acted on, beside the goal it was given.
+        vid.add(info["debit_cur"], info["debit_goal"], ep_len, mode,
+                float(reward), action, ep_ret)
         ep_ret += float(reward)
         ep_len += 1
         obs, info, row, prev_a = nobs, ninfo, nrow, action
@@ -197,6 +215,9 @@ def main():
             buf.end_episode()
             episodes += 1
             end = str(info.get("goal_end", info.get("explore_end", "?")))
+            saved = vid.save(end)
+            if saved:
+                print(f"[Video] {saved}", flush=True)
             recent["ends"][end] = recent["ends"].get(end, 0) + 1
             arrived = end == "reached"
             recent["policy"].append(float(arrived))
@@ -228,6 +249,7 @@ def main():
                 recent["ends"] = {}
 
             obs, info = env.reset()
+            vid.start(episodes)
             hidden = agent.reset_hidden(1)
             goal_blk = pxr.goal_block(info["debit_goal"])
             prev_a = np.zeros(2, np.float32)

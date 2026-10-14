@@ -102,32 +102,10 @@ export SHORT_HORIZON=1 LANE_FOLLOW=1 LANE_STRICT=1 LANE_EXPLORE=0
 export GATED_EXPLORE_MAX_STEPS=1000 MAX_EPISODE_STEPS=2000
 export EXPERT_PROB=0 BC_WEIGHT=0 EPISODE_HER=0
 
-# v52'S REWARD, TERM FOR TERM. This arm is meant to reuse the reward that
-# actually trains in CARLA, and "meant to" is not the same as "does": the first
-# version of this script inherited its exports from the smoke job, so 21 terms
-# fell back to CODE DEFAULTS that are not v52's -- off-road cost NOTHING
-# (EXPLORE_OFF_ROAD_PENALTY 10 -> 0), collisions were not terminal, and the lane
-# penalties were half. Every value below is read from
-# clean_fix1/results/run_env/carla_gated_v52_segvae_samesetup_t05.env and
-# tests/test_reward_matches_v52.py fails if they drift again.
-export EXPLORE_COLLISION_FATAL=1          # user 2026-10-14: collisions terminate
-export EXPLORE_OFF_ROAD_PENALTY=10.0
-export EXPLORE_LANE_PENALTY_NONE=5.0
-export LANE_COLLISION_PENALTY=10.0
-export LANE_DEPARTURE_PENALTY=10.0
-export WEDGE_TRUNCATE=0
-export GATED_GOAL_MAX_STEPS=1250
-export EXPLORE_OFF_ROAD_FATAL=1 EXPLORE_LANE_MODE=terminal
-export EXPLORE_EXEMPT_MARKS=NONE
-export EXPLORE_GOAL_DIST_M=100
-# INERT UNDER GATED_GOAL_REWARD=explore -- the goal arm is paid explore's reward,
-# so these are read only by the sorb/progress kinds. Set to v52's values anyway,
-# so the run's environment matches the recorded one exactly and the comparison
-# has no "well, that one does not matter" exceptions to remember.
-export GOAL_LANE_GRADED=1 GOAL_LANE_PENALTY=10.0 GOAL_LANE_PENALTY_BROKEN=10.0
-export GOAL_LANE_PENALTY_NONE=5.0 GOAL_OFF_ROAD_PENALTY=10.0
-export GOAL_OFFROAD_TRUNCATE_STEPS=1 GOAL_COLLISION_TRUNCATE_STEPS=1
-export GOAL_TRUNCATE_COUNTS=1 ROUTE_POTENTIAL=1 POTENTIAL_K=0
+# THE REWARD IS v52'S, from the one file that defines it (user 2026-10-14).
+# Do not inline these: a copy is how they drifted last time.
+. "$REPO/slurm/v52_reward.env"
+
 
 cd "$REPO" || exit 1
 echo "=== $(date +%T) python ==="

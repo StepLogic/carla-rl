@@ -20,6 +20,10 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SNAP = os.path.join(ROOT, "clean_fix1", "results", "run_env",
                     "carla_gated_v52_segvae_samesetup_t05.env")
 SBATCH = os.path.join(ROOT, "slurm", "train_sac.sbatch")
+# The reward lives in ONE file that launchers source, so a new launcher
+# inherits it instead of copying it (user 2026-10-14: make v52 the default
+# going forward). Copying is how it drifted the first time.
+REWARD_ENV = os.path.join(ROOT, "slurm", "v52_reward.env")
 REWARD_SRC = ("src/vae_nav/gated_reward.py", "src/vae_nav/lane_explore_reward.py",
               "src/vae_nav/lane_follow_reward.py")
 
@@ -36,7 +40,8 @@ def _v52():
 def _exported():
     """Every assignment on every export line -- `export A=1 B=2` sets both."""
     out = {}
-    for line in open(SBATCH):
+    lines = list(open(REWARD_ENV)) + list(open(SBATCH))
+    for line in lines:
         line = line.strip()
         if not line.startswith("export "):
             continue
@@ -73,6 +78,14 @@ def test_every_reward_term_matches_v52():
             src = "exported" if name in exported else "CODE DEFAULT"
             drift.append(f"{name}: v52={v52[name]} launcher={mine} ({src})")
     assert not drift, "the launcher's reward is not v52's:\n  " + "\n  ".join(drift)
+
+
+def test_the_reward_is_a_sourced_file_not_an_inlined_copy():
+    """The default must be inherited, not pasted: 21 terms drifted when one
+    launcher carried its own copy."""
+    assert os.path.exists(REWARD_ENV)
+    assert 'v52_reward.env' in open(SBATCH).read(), \
+        "the launcher must source the reward file rather than inline it"
 
 
 @pytest.mark.skipif(not os.path.exists(SNAP), reason="v52 snapshot not present")

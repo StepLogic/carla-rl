@@ -102,9 +102,19 @@ class DebitGoalWrapper(Wrapper):
     tests need neither weights nor a GPU.
     """
 
-    def __init__(self, env, encoder=None, state_keys=("state", "mode"),
+    def __init__(self, env, encoder=None, state_keys=("vector",),
                  wrong_goal: bool = False, wrong_goal_min_m: float = None,
                  seed: int = 0) -> None:
+        # state_keys DEFAULTS TO ("vector",), the env's proprioceptive block:
+        # [steer/max_steer, throttle/max_throttle, speed/target_speed, mask flag].
+        # NOT "state" -- that key holds the env's own 5400-d MobileNet features,
+        # which this arm does not use, and feeding them as proprioception made
+        # the replay row 43,035 wide instead of 37,639. Worth stating plainly:
+        # `vector` carries NO goal bearing (the env computes a goal heading for
+        # its own termination check and does not publish it), so an image-goal
+        # policy here cannot read the goal direction from proprioception. If it
+        # could, the wrong-goal gate would show no gap however blind the policy
+        # was, and the arm's central question would be unanswerable.
         super().__init__(env)
         self.encoder = encoder
         self.state_keys = tuple(state_keys)
@@ -116,10 +126,13 @@ class DebitGoalWrapper(Wrapper):
         self._goal_frame = None
         self._served_wrong = False
         base = getattr(env, "observation_space", None)
-        inner = dict(getattr(base, "spaces", {}) or {})
-        inner.pop("latent", None)
-        inner.pop("goal", None)
+        # ONLY the state keys survive, plus binoc and the mode. The env's own
+        # "state" and "goal" entries are 5400-d MobileNet features this arm does
+        # not use, and keeping them would put them in the replay row.
+        inner = {k: v for k, v in (getattr(base, "spaces", {}) or {}).items()
+                 if k in self.state_keys}
         inner["binoc"] = spaces.Box(-np.inf, np.inf, (BINOC_DIM,), np.float32)
+        inner["mode"] = spaces.Box(0.0, 1.0, (1,), np.float32)
         self.observation_space = spaces.Dict(inner)
 
     # ----------------------------------------------------------------- frames --
@@ -165,6 +178,21 @@ class DebitGoalWrapper(Wrapper):
         info["served_wrong_goal"] = bool(self._served_wrong)
         out = {k: np.asarray(obs[k], np.float32) for k in self.state_keys
                if k in obs}
+        missing = [k for k in self.state_keys if k not in obs]
+        if missing:
+            raise KeyError(
+                f"observation has no {missing} (it has {sorted(obs)}). The "
+                "state block would silently be short and the learner's "
+                "mode_index would land on the wrong column.")
+        # THE MODE COMES FROM info, NOT the observation: GatedReward draws it per
+        # episode and publishes it there, and this env's observation has no mode
+        # key at all. It is added here so the observation is self-contained and
+        # the learner's state block ends with it.
+        if "mode" not in info:
+            raise KeyError(
+                "info has no 'mode': GatedReward must sit below this wrapper. "
+                "Without it the gated learner cannot tell the two arms apart.")
+        out["mode"] = np.asarray([float(info["mode"])], np.float32)
         if self.encoder is None:
             # NO ENCODER: the pixels still travel, so a collection run or a test
             # can exercise the whole path without weights or a GPU. A zero vector

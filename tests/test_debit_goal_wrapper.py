@@ -43,24 +43,31 @@ class _Env(gymnasium.Env):
     def __init__(self, goal_pos=(0.0, 0.0), goal_fill=200, drift=False):
         from gymnasium import spaces
         super().__init__()
+        # THE REAL ENV'S SPACES, as the pilot run revealed them: "state" is
+        # the env's own 5400-d MobileNet features, "vector" is the 4-d
+        # proprioceptive block, and there is NO mode key -- GatedReward
+        # publishes the mode in info. The first version of this fake invented a
+        # 9-d "state" and a "mode" key, so it tested a shape the env never
+        # produces and the trainer failed on real frames with KeyError: mode.
         self.observation_space = spaces.Dict({
-            "latent": spaces.Box(-np.inf, np.inf, (512,), np.float32),
-            "goal": spaces.Box(-np.inf, np.inf, (4,), np.float32),
-            "state": spaces.Box(-np.inf, np.inf, (9,), np.float32),
-            "mode": spaces.Box(0.0, 1.0, (1,), np.float32)})
+            "state": spaces.Box(-np.inf, np.inf, (5400,), np.float32),
+            "goal": spaces.Box(-np.inf, np.inf, (5400,), np.float32),
+            "vector": spaces.Box(-5.1, 5.1, (4,), np.float32)})
         self.goal_pos = np.asarray(goal_pos, np.float64)
         self.goal_fill = int(goal_fill)
         self.drift = bool(drift)
+        self.mode_value = 1          # GatedReward's per-episode draw
         self.t = 0
 
     def _obs_info(self):
-        obs = {"latent": np.zeros(512, np.float32), "goal": np.zeros(4, np.float32),
-               "state": np.arange(9, dtype=np.float32), "mode": np.ones(1, np.float32)}
+        obs = {"state": np.zeros(5400, np.float32),
+               "goal": np.zeros(5400, np.float32),
+               "vector": np.arange(4, dtype=np.float32)}
         # drift: the goal camera re-renders slightly differently each step, as
         # the real one does under moving light.
         gf = self.goal_fill + (self.t if self.drift else 0)
         info = {"rgb": _frame(10 + self.t, size=120), "goal_rgb": _frame(gf),
-                "goal_pos": self.goal_pos}
+                "goal_pos": self.goal_pos, "mode": self.mode_value}
         return obs, info
 
     def reset(self, **kw):
@@ -151,10 +158,12 @@ def test_the_encoder_is_given_the_pair_in_the_right_order():
 def test_the_observation_replaces_the_goal_block_with_binoc():
     env = DebitGoalWrapper(_Env(), encoder=_Enc())
     obs, _info = env.reset()
-    assert set(obs) == {"state", "mode", "binoc"}
+    assert set(obs) == {"vector", "mode", "binoc"}
     assert obs["binoc"].shape == (BINOC_DIM,)
     assert "goal" not in env.observation_space.spaces
-    assert "latent" not in env.observation_space.spaces
+    assert "state" not in env.observation_space.spaces, \
+        "the env's 5400-d MobileNet features must not travel as proprioception"
+    assert env.observation_space.spaces["mode"].shape == (1,)
 
 
 def test_without_an_encoder_the_pixels_still_flow_and_the_flag_says_so():
@@ -226,3 +235,53 @@ def test_the_distance_floor_comes_from_the_environment_when_unset(monkeypatch):
     monkeypatch.setenv("WRONG_GOAL_MIN_M", "12.5")
     env = DebitGoalWrapper(_Env(), encoder=_Enc(), wrong_goal=True)
     assert env.bank.min_m == 12.5
+
+
+# ------------------------------------------- what the pilot run taught us --
+def test_the_mode_comes_from_INFO_and_reaches_the_observation():
+    """GatedReward draws the mode per episode and publishes it in info; this
+    env's observation has no mode key at all. The learner's state block must end
+    with it, so the wrapper adds it."""
+    env = DebitGoalWrapper(_Env(), encoder=_Enc())
+    obs, _info = env.reset()
+    assert obs["mode"].shape == (1,) and obs["mode"][0] == 1.0
+    env.env.mode_value = 0
+    obs, _r, _t, _tr, _i = env.step(np.zeros(2, np.float32))
+    assert obs["mode"][0] == 0.0
+
+
+def test_a_missing_mode_in_info_is_refused():
+    """Without GatedReward below, the gated learner cannot tell the arms apart
+    -- and a default would quietly train everything as one mode."""
+    class _NoMode(_Env):
+        def reset(self, **kw):
+            obs, info = super().reset(**kw)
+            info.pop("mode")
+            return obs, info
+
+    with pytest.raises(KeyError, match="mode"):
+        DebitGoalWrapper(_NoMode(), encoder=_Enc()).reset()
+
+
+def test_a_missing_state_key_is_refused_not_silently_dropped():
+    """The first version copied only the keys that happened to exist, so a
+    renamed block produced a SHORT state and the learner's mode_index landed on
+    the wrong column -- with no error."""
+    class _NoVector(_Env):
+        def reset(self, **kw):
+            obs, info = super().reset(**kw)
+            obs.pop("vector")
+            return obs, info
+
+    with pytest.raises(KeyError, match="vector"):
+        DebitGoalWrapper(_NoVector(), encoder=_Enc()).reset()
+
+
+def test_the_proprioceptive_block_carries_no_goal_bearing():
+    """THE ARM'S CENTRAL QUESTION DEPENDS ON THIS. The env's vector is
+    [steer, throttle, speed, mask flag]; it computes a goal heading for its own
+    termination check and does not publish it. If a bearing were in here, the
+    wrong-goal gate would show no gap however blind the policy was."""
+    env = DebitGoalWrapper(_Env(), encoder=_Enc())
+    obs, _info = env.reset()
+    assert obs["vector"].shape == (4,)

@@ -27,45 +27,26 @@ def src():
 
 
 # ------------------------------------------------------------ the encoder --
-def test_the_env_is_built_WITHOUT_an_encoder():
-    """The learner's act() encodes the same pair a moment later through the same
-    adapters. Letting the wrapper encode too doubles the per-step cost for a
-    vector the loop never reads."""
-    s = src()
-    assert re.search(r"build_env\([^)]*encoder=None", s, re.S), \
-        "build_env must be called with encoder=None"
-
-
-def test_one_encoder_instance_is_shared_with_the_learner():
-    """Two instances would mean two sets of adapters: the rollout would act with
-    parameters the update never touches."""
-    s = src()
-    assert "debit_encoder=enc" in s
-    assert s.count("DebitTinyEncoder(") == 1
-
-
-def test_the_adapters_are_added_before_the_learner_is_built():
-    """build_visual wraps whatever the encoder's blocks are at construction. Add
-    the adapters afterwards and the learner's optimiser never sees them."""
-    s = src()
-    assert s.index("add_encoder_adapters") < s.index("GatedRecurrentSAC(cfg)")
-
-
 # ------------------------------------------------------------- the row --
-def test_the_mode_bit_is_appended_to_the_state_block():
+def test_the_state_block_is_the_MODE_BIT_AND_NOTHING_ELSE():
+    """User 2026-10-14: "get rid of all state vectors except mode bit". The
+    actor used to receive its own last steer and throttle as observation -- a
+    feedback path a policy can latch onto -- and the run that collapsed sat at
+    full left lock for 800k steps."""
     s = src()
-    assert 'np.asarray(o["mode"]' in s and "concatenate" in s
-    assert 'np.asarray(o["vector"]' in s, \
-        'the state block is the 4-d proprioceptive vector, not the env\'s 5400-d features'
-    assert 'o["state"]' not in s
+    assert 'pxr.mono_row(i["debit_cur"], prev_a, o["mode"], o["binoc"])' in s
+    assert 'o["vector"]' not in s and 'o["state"]' not in s
+    assert "mode_index=0" in s
 
 
-def test_mode_index_points_at_the_LAST_state_column():
-    """The bit is appended, so the index must be the last column. Off by one and
-    the learner masks on a velocity."""
+def test_mode_index_points_at_the_FIRST_state_column():
+    """The state block is [mode | binoc], so the mode is column 0 and the binoc
+    columns follow it. Off by one and the critic reads a binoc feature as the
+    mode, which would not crash."""
     s = src()
-    assert "mode_index=state_dim - 1" in s
-    assert 'state_dim = int(np.shape(obs["vector"])[0]) + 1' in s
+    assert "mode_index=0" in s
+    assert "mode_index=state_dim - 1" not in s     # the previous arm's layout
+    assert "state_dim = pxr.mono_state_dim(binoc_dim)" in s
 
 
 def test_the_single_critics_view_is_the_MODE_BIT():
@@ -76,8 +57,8 @@ def test_the_single_critics_view_is_the_MODE_BIT():
     with goal_tokens the goal is an image the GRU has already folded in."""
     s = src()
     assert "one_critic=os.environ.get(\"ONE_CRITIC\", \"1\") == \"1\"" in s
-    assert "goal_cols=(state_dim - 1,), explore_cols=()" in s
-    assert "mode_index=state_dim - 1" in s          # the same column
+    assert "goal_cols=(0,), explore_cols=()" in s
+    assert "mode_index=0" in s                      # the same column
 
 
 def test_the_row_carries_the_action_that_was_ACTUALLY_taken():
@@ -162,7 +143,8 @@ def test_a_preflight_banner_is_printed_before_stepping():
     j = s.index("for step in range(1, MAX_STEPS")
     assert i < j
     banner = s[i:j]
-    for want in ("town=", "seed=", "action box", "checkpoints ->", "reward:"):
+    for want in ("towns=", "seed=", "action box", "checkpoints ->", "reward:",
+                 "HELD OUT", "FROZEN", "mode bit ONLY"):
         assert want in banner, want
 
 
@@ -210,3 +192,68 @@ def test_recording_happens_before_the_observation_is_advanced():
     that cost an earlier run its perception."""
     s = src()
     assert s.index('vid.add(info["debit_cur"]') < s.index("obs, info, row, prev_a = nobs")
+
+
+# --------------------------------------- the binocular + monocular stack --
+def test_debit_is_FROZEN_and_no_adapters_are_added():
+    """User 2026-10-14: "keep debit frozen". Frozen means its output is a fixed
+    function of (view, goal), which is what lets the ENV precompute it instead
+    of the learner re-encoding the chunk twice per update at 209 ms."""
+    s = src()
+    assert "add_encoder_adapters" not in s
+    assert "debit_adapters" not in s
+
+
+def test_the_env_IS_given_the_encoder_now():
+    """The opposite of the previous arm: there the learner encoded, so the
+    wrapper must not; here the encoder is frozen, so the wrapper encodes once
+    per step and the learner never touches it."""
+    s = src()
+    assert "encoder=enc" in s
+    assert "encoder=None" not in s, \
+        "a None encoder makes the wrapper serve a ZERO binoc"
+
+
+def test_the_trainable_visual_path_is_the_resnet():
+    s = src()
+    assert 'mono_encoder="resnet"' in s
+    assert "grid=pxr.MONO_IMG" in s and "goal_tokens=False" in s
+
+
+def test_the_binoc_reaches_the_GRU_through_core_state_cols():
+    """The peer's own vc3 layout: the goal arrives already encoded, so it enters
+    as state columns rather than as a stacked goal image."""
+    s = src()
+    assert "core_state_cols=pxr.mono_core_state_cols(binoc_dim)" in s
+
+
+def test_an_unencoded_binoc_is_REFUSED():
+    """A zero binoc trains the policy goal-blind and nothing downstream looks
+    wrong -- the run simply never learns to use the goal."""
+    s = src()
+    assert 'i.get("binoc_encoded", False)' in s
+    assert "RuntimeError" in s
+
+
+def test_the_towns_exclude_town02_and_town03():
+    """User 2026-10-14: all towns except those two, which stay held out."""
+    s = src()
+    i = s.index("ENV_TOWNS")
+    line = s[i:i + 160]
+    for t in ("Town01", "Town04", "Town05", "Town06", "Town07", "Town10HD"):
+        assert t in line, t
+    assert "Town02" not in line and "Town03" not in line
+
+
+def test_the_town_rotates_on_a_reset_not_mid_episode():
+    s = src()
+    i_rot = s.index("town_i = (town_i + 1) % len(TOWNS)")
+    i_reset = s.index("obs, info = env.reset()\n            vid.start(episodes)")
+    assert i_rot < i_reset, "the town must change before the reset that uses it"
+
+
+def test_exactly_one_encoder_is_constructed():
+    """One frozen DEBiT, used by the env. Two would be wasted memory and an
+    invitation to let them diverge."""
+    s = src()
+    assert s.count("DebitTinyEncoder(") == 1

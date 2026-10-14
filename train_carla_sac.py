@@ -5,30 +5,33 @@ User 2026-10-13: move the recurrent SAC policy to the cluster; pixels in the
 replay; proceed. This is the loop that drives everything built for it:
 
   env         torch_rl/carla_env_build.build_env -- v52's wrapper chain with
-              DebitGoalWrapper where VAEGoalWrapper stood, and NO encoder passed,
-              because the learner encodes (see THE ENCODER IS SHARED below)
-  perception  DEBiT-tiny with AdaptFormer adapters in the ENCODER blocks only
-  replay      DeviceEpisodeBuffer of pixel rows, goal frame once per episode
-  learner     GatedRecurrentSAC: 10 critics per head, REDQ min-over-2, no TQC
+              DebitGoalWrapper where VAEGoalWrapper stood, GIVEN the encoder
+  perception  FROZEN DEBiT-tiny binocular (view, goal) -> 3136-d, precomputed in
+              the env; plus a half-width ResNet-18 over the frame, TRAINED FROM
+              SCRATCH, which is the only visual path carrying gradient
+  replay      DeviceEpisodeBuffer of [frame | prev action | mode | binoc] rows
+  learner     GatedRecurrentSAC, ONE critic for both reward modes, REDQ
+              min-over-2, no TQC
 
-THE ENCODER IS SHARED, AND THE ENV DOES NOT USE IT. DebitGoalWrapper can encode
-the binocular vector into the observation, and this loop passes encoder=None so
-it does not: the policy's own act() encodes the same frame pair through the same
-adapters a moment later, and encoding twice would cost 7 ms a step for a vector
-nothing reads. The wrapper still publishes both frames as pixels, which is what
-the replay stores and what the learner re-encodes with gradient.
+WHY THE ENV ENCODES AND THE LEARNER DOES NOT (user 2026-10-14, "keep debit
+frozen"). A frozen encoder's output is a fixed function of its inputs, so it can
+be computed once per step and stored. The previous arm put trainable adapters
+inside DEBiT, which forced the learner to re-encode a whole chunk twice per
+update at 209 ms; frozen, that cost disappears and only the small ResNet needs
+pixels and gradient.
 
-WHAT THE ROW HOLDS: [current frame 112x112x3 | previous action | state | mode].
-The goal frame rides the buffer's per-episode goal field. The state block ends
-with the mode bit at cfg.mode_index, and the critic column views are empty --
-with goal_tokens the goal is an image the GRU has already folded into the hidden
-state, so no state column carries it.
+WHAT THE ROW HOLDS: [frame 128x128x3 | previous action | mode | binoc 3136]. The
+state block is the MODE BIT AND THE BINOC, nothing else (user: "get rid of all
+state vectors except mode bit"): no steer, no throttle, no speed. The actor used
+to receive its own last steer and throttle, which is a feedback path a policy can
+latch onto, and the run that collapsed sat at full left lock for 800k steps. The
+binoc columns reach the GRU through core_state_cols; the single critic's view is
+the mode bit alone.
 
-THE UPDATE CADENCE IS A MEASUREMENT, NOT A GUESS. One pixel update costs 209 ms
-at B=8 T=40 on an L40 while the env runs at ~48 steps/s, so the two cannot both
-run flat out on one GPU. UPDATE_EVERY defaults to 20 env steps: ~2.4 updates/s,
-about half the GPU for the learner, and each update still learns from 320
-transitions, so every new transition is replayed ~16 times.
+THE UPDATE CADENCE. With DEBiT frozen the update is the cheap one again (~20 ms
+measured, against 209 ms when the encoder had to be re-run), so UPDATE_EVERY can
+come down from 20; it stays configurable and is worth re-measuring on the first
+run of this stack rather than assumed.
 """
 import os
 import sys
@@ -69,7 +72,16 @@ VIDEO_MAX_FRAMES = env_int("VIDEO_MAX_FRAMES", 1200)
 # USER 2026-10-14: "Store only 5 episodes at a time" -- the newest 5 mp4s
 # are kept and older ones deleted as each new video is written.
 VIDEO_KEEP = env_int("VIDEO_KEEP", 5)
-TOWN = os.environ.get("ENV_TOWNS", "Town05").split(",")[0]
+# ALL TOWNS EXCEPT Town02 AND Town03 (user 2026-10-14), which stay held out --
+# they are also the pair the earlier explore traces used, so the transfer read
+# is comparable. One CARLA server reloads the map every TOWN_EVERY episodes
+# rather than several servers running at once: six simultaneous simulators fit
+# in VRAM but not in eight CPU cores, and the ROLLOUT being blocked by town does
+# not make the LEARNING blocked -- the replay spans many blocks, so every update
+# still mixes towns.
+TOWNS = [t for t in os.environ.get(
+    "ENV_TOWNS", "Town01,Town04,Town05,Town06,Town07,Town10HD").split(",") if t]
+TOWN_EVERY = env_int("TOWN_EVERY", 25)
 PORT = env_int("CARLA_PORT", 2000)
 SEED = env_int("SEED", 0)
 DEVICE = os.environ.get("TORCH_DEVICE", "cuda")
@@ -83,7 +95,6 @@ OUT = os.path.join(os.environ.get("CKPT_DIR",
 def main():
     import torch
 
-    from torch_rl import debit_adapters as da
     from torch_rl import pixel_rows as pxr
     from torch_rl.carla_env_build import build_env
     from torch_rl.debit_encoder import DebitTinyEncoder
@@ -97,42 +108,51 @@ def main():
         raise SystemExit("no CUDA: this arm is GPU-resident, so this is fatal")
     os.makedirs(OUT, exist_ok=True)
 
+    # DEBiT IS FROZEN (user 2026-10-14), so no adapters are added and its 3136-d
+    # binocular output is a fixed function of (view, goal). That lets the ENV
+    # compute it once per step and store it in the row, instead of the learner
+    # re-encoding the whole chunk twice per update at 209 ms. The trainable
+    # visual path is the monocular ResNet, from scratch, which is why the row
+    # still carries pixels.
     enc = DebitTinyEncoder(TINY, device=DEVICE, half=False)
-    n_blocks = da.add_encoder_adapters(
-        enc.net, bottleneck=env_int("ADAPTER_BOTTLENECK", 64),
-        scale=env_float("ADAPTER_SCALE", 0.1))
 
-    # NO ENCODER FOR THE WRAPPER: see the module docstring. It still publishes
-    # the frames, which is all this loop takes from it.
-    env = build_env(TOWN, seed=SEED, encoder=None, port=PORT)
+    town_i = 0
+    env = build_env(TOWNS[town_i], seed=SEED, encoder=enc, port=PORT,
+                    state_keys=())
     obs, info = env.reset(seed=SEED)
-    # THE STATE BLOCK IS obs["vector"] + the mode bit, not obs["state"]: the
-    # env's "state" key holds its own 5400-d MobileNet features, which this arm
-    # does not use. The pilot run built a 43,035-wide row out of them before
-    # failing on the missing mode key.
-    state_dim = int(np.shape(obs["vector"])[0]) + 1
-    row_dim = pxr.row_dim(state_dim)
+    # THE STATE BLOCK IS THE MODE BIT AND THE BINOC, NOTHING ELSE (user
+    # 2026-10-14: "get rid of all state vectors except mode bit"). No steer, no
+    # throttle, no speed: the actor used to receive its own last steer and
+    # throttle, a feedback path a policy can latch onto, and the run that
+    # collapsed sat at full left lock for 800k steps.
+    binoc_dim = int(np.shape(obs["binoc"])[0])
+    state_dim = pxr.mono_state_dim(binoc_dim)
+    row_dim = pxr.mono_row_dim(binoc_dim)
 
     cfg = GatedRecurrentSACConfig(
-        embed_dim=3, grid=IMG, goal_tokens=True, mono_encoder="debit",
-        debit_encoder=enc, state_dim=state_dim, mode_index=state_dim - 1,
-        # ONE CRITIC FOR BOTH REWARD MODES (user 2026-10-13), and its view is
-        # the MODE BIT: the two modes differ only in what the env pays, so
-        # without that column the critic would predict two different returns
-        # from otherwise identical inputs and learn their average. There is no
-        # goal column besides it -- with goal_tokens the goal is an image the
-        # GRU has already folded into the hidden state.
+        # THE BINOCULAR + MONOCULAR STACK. The trainable visual path is a
+        # half-width ResNet-18 from scratch over the 128 px frame
+        # (mono_encoder="resnet"); the FROZEN DEBiT binocular vector reaches the
+        # GRU through core_state_cols, which is what the peer's own vc3 layout
+        # does. goal_tokens is OFF: that path stacks a goal IMAGE onto the
+        # frame, and here the goal arrives already encoded.
+        mono_encoder="resnet", embed_dim=3, grid=pxr.MONO_IMG,
+        goal_tokens=False,
+        mono_baseplanes=env_int("MONO_BASEPLANES", 32),
+        mono_ngroups=env_int("MONO_NGROUPS", 16),
+        core_state_cols=pxr.mono_core_state_cols(binoc_dim),
+        state_dim=state_dim, mode_index=0,
+        # ONE CRITIC FOR BOTH REWARD MODES, and the mode bit is its whole view:
+        # the two modes differ only in what the env pays, so without that column
+        # the critic would learn the average of two different returns.
         one_critic=os.environ.get("ONE_CRITIC", "1") == "1",
-        goal_cols=(state_dim - 1,), explore_cols=(),
+        goal_cols=(0,), explore_cols=(),
         hidden=env_int("HIDDEN", 512),
         visual_dim=env_int("VISUAL_DIM", 512), mlp=(256, 256), burn_in=BURN_IN,
         device=DEVICE, compile=os.environ.get("TORCH_COMPILE", "0") == "1",
         seed=SEED, n_critics=env_int("N_CRITICS", 10),
         subset_size=env_int("SUBSET_SIZE", 2),
         discount=env_float("DISCOUNT", 0.99),
-        # discount_e and the explore value bounds are inert under one_critic
-        # (nothing trains a second head); kept so a two-critic comparison run is
-        # one flag away and differs in nothing else.
         discount_e=env_float("EXPLORE_DISCOUNT", 0.99),
         explore_actor_warmup=env_int("EXPLORE_ACTOR_WARMUP", 5000),
         value_floor=env_float("TQC_VALUE_FLOOR", -200.0),
@@ -148,12 +168,19 @@ def main():
     # the label, the checkpoint directory, the town, the seeds and the action
     # mode, so a run's identity is in its own log rather than inferred later.
     print(f"=== [{RUN_NAME}] preflight ===", flush=True)
-    print(f"  town={TOWN} port={PORT} seed={SEED} device={DEVICE}", flush=True)
+    print(f"  towns={','.join(TOWNS)} (rotating every {TOWN_EVERY} episodes; "
+          f"Town02/Town03 HELD OUT) port={PORT} seed={SEED} device={DEVICE}",
+          flush=True)
     print(f"  {agent.describe()}", flush=True)
-    print(f"  visual: {agent.compress.describe()}", flush=True)
-    print(f"  adapters: {da.describe_adapters(enc.net)} on {n_blocks} blocks", flush=True)
+    print(f"  visual (TRAINED from scratch): {agent.compress.describe()}", flush=True)
+    print(f"  binocular (FROZEN, precomputed in the env): {binoc_dim}-d -> GRU "
+          f"via core_state_cols[{cfg.core_state_cols[0]}..{cfg.core_state_cols[-1]}]",
+          flush=True)
+    print(f"  state block: mode bit ONLY at index {cfg.mode_index} "
+          f"(no steer/throttle/speed) | critic view {cfg.goal_cols}", flush=True)
     print(f"  weights: {enc.describe()}", flush=True)
-    print(f"  row={row_dim} (frame {pxr.PIX} + prev action 2 + state {state_dim})"
+    print(f"  row={row_dim} (frame {pxr.MONO_PIX} + prev action 2 + "
+          f"mode 1 + binoc {binoc_dim})"
           f" | replay {CAPACITY} rows ~ {CAPACITY * row_dim * 2 / 2 ** 30:.1f} GiB fp16",
           flush=True)
     print(f"  update: every {UPDATE_EVERY} steps x{UPDATES_PER}, chunk "
@@ -174,15 +201,23 @@ def main():
           "(camera | goal, with step/mode/reward/action burnt in)", flush=True)
 
     def row_of(o, i, prev_a):
-        """The replay row for the step whose observation is `o` and whose info
-        is `i`. The mode bit is appended to the state block, so the learner's
-        mode_index lands on it."""
-        st = np.concatenate([np.asarray(o["vector"], np.float32).ravel(),
-                             np.asarray(o["mode"], np.float32).ravel()])
-        return pxr.pixel_row(i["debit_cur"], prev_a, st)
+        """[mono frame | previous action | mode | binoc] for this step.
+
+        The binoc comes from the observation, where the wrapper put it after
+        encoding (view, goal) through the FROZEN DEBiT -- so it is a stored
+        feature, not something the learner recomputes."""
+        # THE ENCODER MUST HAVE RUN. With no encoder the wrapper serves a ZERO
+        # binoc and flags it; stored, that trains the policy goal-blind and
+        # nothing downstream looks wrong -- the run simply never learns to use
+        # the goal, which is the failure this whole arm exists to detect.
+        if not i.get("binoc_encoded", False):
+            raise RuntimeError(
+                "info['binoc_encoded'] is False: the env wrapper has no DEBiT "
+                "encoder, so the binoc column would be zeros.")
+        return pxr.mono_row(i["debit_cur"], prev_a, o["mode"], o["binoc"])
 
     hidden = agent.reset_hidden(1)
-    goal_blk = pxr.goal_block(info["debit_goal"])
+    goal_blk = pxr.goal_block(info["debit_goal"])   # the buffer's episode goal
     prev_a = np.zeros(2, np.float32)
     row = row_of(obs, info, prev_a)
     mode = int(round(float(np.asarray(obs["mode"]).ravel()[0])))
@@ -248,10 +283,19 @@ def main():
                       flush=True)
                 recent["ends"] = {}
 
+            # ROTATE THE TOWN. One server, so this reloads the map inside the
+            # same simulator; the env is rebuilt because CarlaCore reads the
+            # town from the config it was constructed with.
+            if TOWN_EVERY > 0 and episodes % TOWN_EVERY == 0 and len(TOWNS) > 1:
+                town_i = (town_i + 1) % len(TOWNS)
+                env.close()
+                env = build_env(TOWNS[town_i], seed=SEED + episodes, port=PORT,
+                                encoder=enc, state_keys=())
+                print(f"[Town] -> {TOWNS[town_i]} at episode {episodes}", flush=True)
             obs, info = env.reset()
             vid.start(episodes)
             hidden = agent.reset_hidden(1)
-            goal_blk = pxr.goal_block(info["debit_goal"])
+            goal_blk = pxr.goal_block(info["debit_goal"])   # the buffer's episode goal
             prev_a = np.zeros(2, np.float32)
             row = row_of(obs, info, prev_a)
             mode = int(round(float(np.asarray(obs["mode"]).ravel()[0])))

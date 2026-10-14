@@ -106,7 +106,8 @@ def check_cluster_env() -> None:
 
 def build_env(town: str, seed: int, encoder=None, port: int = 2000,
               eval_mode: bool = False, max_episode_steps: Optional[int] = None,
-              env_factory: Optional[Callable] = None, base: Optional[dict] = None):
+              env_factory: Optional[Callable] = None, base: Optional[dict] = None,
+              state_keys=("vector",)):
     """CarlaEnv -> CoreState -> LaneFollow -> Gated -> DebitGoal -> TimeLimit.
 
     THE ORDER IS THE V52 ORDER with one substitution: DebitGoalWrapper stands
@@ -144,7 +145,7 @@ def build_env(town: str, seed: int, encoder=None, port: int = 2000,
         freeze_steps=0 if eval_mode else None,
         seed=seed)
     env = DebitGoalWrapper(
-        env, encoder=encoder,
+        env, encoder=encoder, state_keys=tuple(state_keys),
         wrong_goal=(os.environ.get("WRONG_GOAL_MODE", "0") == "1"),
         seed=seed)
     cap = int(max_episode_steps if max_episode_steps is not None

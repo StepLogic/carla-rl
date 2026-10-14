@@ -47,7 +47,10 @@ REPO=${REPO:-$HOME/carla-rl}
 SIF=${CARLA_SIF:-$HOME/carla-cluster/carla0916nv.sif}
 PY=${CLUSTER_PY:-$HOME/carla-cluster/envs/carla310/bin/python}
 export CARLA_PORT=${CARLA_PORT:-$((2000 + RANDOM % 900))}
-export ENV_TOWNS=${ENV_TOWNS:-Town05}
+# ALL TOWNS EXCEPT Town02 AND Town03 (user 2026-10-14); those two stay held
+# out for the transfer read. The trainer rotates the map every TOWN_EVERY
+# episodes on this one server.
+export ENV_TOWNS=${ENV_TOWNS:-Town01,Town04,Town05,Town06,Town07,Town10HD}
 export CARLA_QUALITY=${CARLA_QUALITY:-Epic}
 export RUN_NAME=${RUN_NAME:-carla_sac_debit_v1}
 export MAX_STEPS=${MAX_STEPS:-1000000}

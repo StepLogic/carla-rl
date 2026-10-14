@@ -156,6 +156,55 @@ def main():
                    f"q_g {out['q_g']:.2f} q_e {out['q_e']:.2f} "
                    f"alpha_g {out['alpha_g']:.4f}")
     say("gpu", f"{_t.cuda.max_memory_allocated() / 2 ** 30:.2f} GiB peak allocated")
+
+    # 6 -- THE PIXEL PATH, at production chunk shapes. This is the cost that
+    # decides whether the adapters can be trained online at all: with pixels in
+    # the replay every update re-encodes the whole chunk through DEBiT, once for
+    # the online branch and once for the target, where the precomputed-feature
+    # update above re-encodes nothing. The measurement, not an estimate, decides
+    # whether the chunk batch has to shrink or the goal tower has to be hoisted
+    # out of the per-step loop.
+    from torch_rl import pixel_rows as pxr
+    from torch_rl.debit_visual import IMG as PIMG
+    cfgp = GatedRecurrentSACConfig(
+        embed_dim=3, grid=PIMG, goal_tokens=True, mono_encoder="debit",
+        debit_encoder=enc, state_dim=state_dim, mode_index=state_dim - 1,
+        goal_cols=tuple(range(min(3, state_dim - 1))), explore_cols=(0,),
+        hidden=512, visual_dim=512, mlp=(256, 256), burn_in=8,
+        device=dev, compile=False, seed=0, explore_actor_warmup=0,
+        value_floor_e=-200.0, value_ceiling_e=150.0)
+    agentp = GatedRecurrentSAC(cfgp)
+    say("pixels", f"{agentp.compress.describe()}")
+    Bp, Kp, Tp = int(os.environ.get("PIX_B", 8)), cfgp.burn_in, 40
+    rowsp = _t.randint(0, 255, (Bp, Kp + Tp + 1, cfgp.obs_dim),
+                       dtype=_t.uint8, device=dev).float()
+    chunkp = {"obs": rowsp, "keep": _t.ones(Bp, Kp + 1, device=dev),
+              "actions": _t.rand(Bp, Tp, 2, device=dev) * 2 - 1,
+              "rewards": _t.randn(Bp, Tp, device=dev),
+              "masks": _t.ones(Bp, Tp, device=dev),
+              "valid": _t.ones(Bp, Tp, device=dev),
+              "mode": (_t.arange(Bp, device=dev) % 2).float(),
+              "goal": _t.randint(0, 255, (Bp, pxr.PIX), dtype=_t.uint8,
+                                 device=dev).float()}
+    before = [p.detach().clone() for p in da.adapter_parameters(enc.net)]
+    agentp.update(chunkp)                                   # warm up
+    _t.cuda.synchronize()
+    t = time.time()
+    for _ in range(5):
+        outp = agentp.update(chunkp)
+    _t.cuda.synchronize()
+    per = (time.time() - t) / 5
+    frames = Bp * (Kp + Tp + 1)
+    say("pixels", f"update {per * 1000:.0f} ms at B={Bp} T={Tp} "
+                  f"({frames} frames/branch, online + target) | "
+                  f"critic_loss_g {outp['critic_loss_g']:.3f}")
+    moved = sum(not _t.equal(a, b) for a, b in
+                zip(da.adapter_parameters(enc.net), before))
+    say("pixels", f"adapter tensors changed: {moved}/{len(before)} "
+                  f"(0 would mean the pixels bought nothing)")
+    say("pixels", f"sustainable update rate {1.0 / per:.1f}/s against "
+                  f"{40.7:.0f} env steps/s measured above")
+    say("gpu", f"{_t.cuda.max_memory_allocated() / 2 ** 30:.2f} GiB peak after pixels")
     env.close()
     say("done", f"ALL STAGES PASSED in {time.time() - t_all:.1f}s")
 

@@ -57,9 +57,17 @@ def _add_croco_to_path() -> str:
               "/home/robotlab/scratch/debit/src/croco"]
     for root in roots:
         if os.path.isfile(os.path.join(root, "models", "croco.py")):
+            # APPENDED, NEVER PREPENDED. The parent is dependencies/, which also
+            # holds rlib_integration/__init__.py -- an EMPTY wrapper around the
+            # real package one level down. Putting dependencies/ at the FRONT of
+            # sys.path made `import rlib_integration` bind to that wrapper for
+            # the rest of the process, so the CARLA env failed with "No module
+            # named rlib_integration.carla_env" three stages into a cluster run,
+            # pointing at a line that was correct. Nothing else provides `croco`,
+            # so appending resolves it just as well and shadows nothing.
             for p in (os.path.dirname(root), root):
                 if p not in sys.path:
-                    sys.path.insert(0, p)
+                    sys.path.append(p)
             return root
     raise SystemExit(
         "croco not found. Looked in: " + ", ".join(roots) +

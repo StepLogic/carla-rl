@@ -247,3 +247,24 @@ def test_the_real_debit_tiny_encoder_accepts_adapters_and_is_identity_at_init():
     trainable = [nm for nm, p in enc.net.named_parameters() if p.requires_grad]
     assert trainable and all(nm.startswith("enc_blocks.") for nm in trainable)
     assert not any("dec_blocks" in nm for nm in trainable)
+
+
+def test_the_adapters_land_on_the_blocks_OWN_device_and_dtype():
+    """A new nn.Linear is created on the CPU in fp32. The encoder is usually
+    already on the GPU, and may be fp16, by the time adapters are added -- so the
+    first forward died on the cluster with "Expected all tensors to be on the
+    same device, but found at least two devices, cpu and cuda:0". Dtype stands in
+    for device here, since this test must run without a GPU; the mechanism is the
+    same `.to()` and it reads the block rather than an argument."""
+    net = _FakeCroco()
+    net.enc_blocks = nn.ModuleList([b.double() for b in net.enc_blocks])
+    da.add_encoder_adapters(net, bottleneck=16, scale=0.1)
+    for blk in net.enc_blocks:
+        assert blk.mlp.down.weight.dtype == torch.float64
+        assert blk.mlp.up.weight.dtype == torch.float64
+    # And it still runs, which a mismatch would prevent.
+    x = torch.randn(1, 49, 384, dtype=torch.float64)
+    xpos = torch.zeros(1, 49, 2, dtype=torch.long)
+    for blk in net.enc_blocks:
+        x = blk(x, xpos)
+    assert x.dtype == torch.float64

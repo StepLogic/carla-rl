@@ -49,7 +49,12 @@ echo "[sync] DEBiT-tiny + croco"
 # leave dangling absolute paths on the cluster, so they are excluded above and
 # the real directories are made here -- replacing a link if an earlier sync left
 # one, which is why this is rm -f and not a bare mkdir.
-ssh "$HOST" "cd ~/$DEST && rm -f debit dependencies/croco dependencies/debit_weights && \
+# Remove them ONLY if an earlier sync left a symlink; once they are real
+# directories a plain `rm -f` fails on them and, under set -e, kills the script
+# before the assets are sent.
+ssh "$HOST" "cd ~/$DEST && \
+  for p in debit dependencies/croco dependencies/debit_weights; do \
+    [ -L \"\$p\" ] && rm -f \"\$p\"; done; \
   mkdir -p dependencies/debit_weights dependencies/croco"
 # shellcheck disable=SC2086
 rsync -az ${DRY:+--dry-run} --info=stats1 \
@@ -58,6 +63,17 @@ rsync -az ${DRY:+--dry-run} --info=stats1 \
 rsync -az ${DRY:+--dry-run} --info=stats1 --copy-links \
   /home/robotlab/scratch/carla-rl/dependencies/croco/ \
   "$HOST":"$DEST"/dependencies/croco/
+
+# rlib_integration is a git SUBMODULE and is not checked out in this worktree:
+# the directory exists and is EMPTY, so it synced as an empty directory and the
+# cluster env died on "No module named rlib_integration.carla_env" three stages
+# into a smoke run. It is populated in the main checkout, so it comes from there
+# like croco and the DEBiT weights.
+echo "[sync] rlib_integration (submodule, empty in this worktree)"
+# shellcheck disable=SC2086
+rsync -az ${DRY:+--dry-run} --info=stats1 --copy-links --exclude '__pycache__/' \
+  /home/robotlab/scratch/carla-rl/dependencies/rlib_integration/ \
+  "$HOST":"$DEST"/dependencies/rlib_integration/
 
 if [ -z "$DRY" ]; then
   ssh "$HOST" "mkdir -p ~/$DEST/logs ~/$DEST/checkpoints && \

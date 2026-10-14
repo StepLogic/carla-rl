@@ -106,7 +106,7 @@ class Vc1Compression(nn.Module):
         return torch.relu(self.fc(self.flatten(self.act(self.norm(self.conv(tokens))))))
 
 
-MONO_ENCODERS = ("vc1", "resnet")
+MONO_ENCODERS = ("vc1", "resnet", "debit")
 
 
 def mono_encoder_problems(mono_encoder: str, embed_dim: int, grid: int) -> Optional[str]:
@@ -121,6 +121,18 @@ def mono_encoder_problems(mono_encoder: str, embed_dim: int, grid: int) -> Optio
         if int(grid) % 32:
             return (f"mono_encoder=resnet needs grid (the image size) a multiple of 32, "
                     f"got {grid}")
+    if mono_encoder == "debit":
+        # The pixel path's geometry (carla-rl 2026-10-13). _embed reshapes a
+        # row's visual block to (embed_dim, grid, grid) and channel-stacks the
+        # per-chunk goal onto it, which is a frame PAIR only at 3 channels and
+        # DEBiT's own 112x112. Wrong here, it fails deep inside croco where the
+        # message says nothing about the cause.
+        if int(embed_dim) != 3:
+            return (f"mono_encoder=debit needs embed_dim 3 (RGB pixels): the "
+                    f"row's visual block IS a frame, got {embed_dim}")
+        if int(grid) != 112:
+            return (f"mono_encoder=debit needs grid 112, DEBiT's img_size, "
+                    f"got {grid}")
     return None
 
 
@@ -134,6 +146,20 @@ def build_visual(cfg, in_ch: int) -> nn.Module:
         from torch_rl.resnet_mono import MonoResNetEncoder
         return MonoResNetEncoder(cfg.grid, cfg.visual_dim, cfg.mono_baseplanes, cfg.mono_ngroups,
                                  in_channels=in_ch)
+    if cfg.mono_encoder == "debit":
+        # The DEBiT binocular encoder as the whole visual stack (carla-rl
+        # 2026-10-13, "pixels in replay"). It needs the encoder INSTANCE, which
+        # the trainer owns and shares with the env wrapper so the rollout and the
+        # update use the same adapter parameters; the config cannot carry a live
+        # module, so it is passed through cfg.debit_encoder.
+        from torch_rl.debit_visual import DebitVisual
+        enc = getattr(cfg, "debit_encoder", None)
+        if enc is None:
+            raise ValueError(
+                "mono_encoder='debit' needs cfg.debit_encoder set to the "
+                "DebitTinyEncoder instance (the same one the env wrapper uses, "
+                "so the rollout and the update share one set of adapters)")
+        return DebitVisual(enc, visual_dim=cfg.visual_dim)
     return Vc1Compression(in_ch, cfg.grid, cfg.visual_dim)
 
 
@@ -216,6 +242,11 @@ class GatedRecurrentTQCConfig:
     # clipped both heads and the SAC arm sets these.
     value_floor_e: Optional[float] = None
     value_ceiling_e: Optional[float] = None
+    # mono_encoder="debit" (carla-rl 2026-10-13): the live DebitTinyEncoder, set
+    # by the trainer rather than serialised. Excluded from a config round trip,
+    # which is why it carries a default and is never read by anything but
+    # build_visual.
+    debit_encoder: Optional[object] = None
 
     def __post_init__(self) -> None:
         self.goal_cols = tuple(int(c) for c in np.asarray(self.goal_cols).ravel())
@@ -223,6 +254,14 @@ class GatedRecurrentTQCConfig:
         self.core_state_cols = tuple(int(c) for c in
                                      np.asarray(tuple(self.core_state_cols), dtype=np.int64).ravel())
         self.mlp = tuple(int(h) for h in self.mlp)
+        # embed_dim and grid are checked by mono_encoder_problems below, which
+        # both learners' configs already run. This is the one condition it cannot
+        # see, because it takes no goal flag.
+        if self.mono_encoder == "debit" and not self.goal_tokens:
+            raise ValueError(
+                "mono_encoder='debit' needs goal_tokens=True: the goal FRAME "
+                "rides the per-chunk goal path, and the encoder is binocular -- "
+                "without it there is no goal image to compare against.")
         if self.prev_action and int(self.action_dim) != PREV_ACTION_DIM:
             raise ValueError(f"the replay row carries a {PREV_ACTION_DIM}-d previous action; "
                              f"action_dim={self.action_dim} does not fit it")

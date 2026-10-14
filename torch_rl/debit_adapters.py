@@ -111,7 +111,18 @@ def add_encoder_adapters(net: nn.Module, bottleneck: int = 64,
     dim = int(getattr(net, "enc_embed_dim", None)
               or net.enc_blocks[0].norm2.normalized_shape[0])
     for blk in net.enc_blocks:
-        blk.mlp = AdaptMLP(blk.mlp, dim=dim, bottleneck=bottleneck, scale=scale)
+        wrapped = AdaptMLP(blk.mlp, dim=dim, bottleneck=bottleneck, scale=scale)
+        # MATCH THE BLOCK'S DEVICE AND DTYPE. The encoder is usually already on
+        # the GPU (and may be fp16) by the time adapters are added, while new
+        # nn.Linear layers are created on the CPU in fp32 -- so the first forward
+        # died with "Expected all tensors to be on the same device, but found at
+        # least two devices, cpu and cuda:0". Read from the wrapped MLP rather
+        # than from an argument, so the adapters cannot disagree with the block
+        # they are part of.
+        ref = next((p for p in blk.mlp.parameters()), None)
+        if ref is not None:
+            wrapped = wrapped.to(device=ref.device, dtype=ref.dtype)
+        blk.mlp = wrapped
     return len(net.enc_blocks)
 
 

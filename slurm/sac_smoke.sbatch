@@ -86,7 +86,20 @@ nvidia-smi --query-compute-apps=pid,process_name,used_memory --format=csv 2>/dev
   | grep -iE "carla|pid" || echo "[warn] CARLA holds NO GPU memory -- suspect software rendering"
 
 export PYTHONNOUSERSITE=1
-export PYTHONPATH="$REPO:$REPO/src:$REPO/dependencies${PYTHONPATH:+:$PYTHONPATH}"
+# rlib_integration IS NESTED: the importable package is
+# dependencies/rlib_integration/rlib_integration, and the directory above it has
+# its own __init__.py. With only $REPO/dependencies on the path, `import
+# rlib_integration` binds to that OUTER wrapper, which holds no carla_env, and
+# the failure reads as a missing module rather than a path one. Locally the
+# package is pip-installed in develop mode, so this never showed up there.
+# $REPO/dependencies IS DELIBERATELY ABSENT. With it on the path, `import
+# rlib_integration` binds to dependencies/rlib_integration/__init__.py -- an
+# EMPTY wrapper -- and shadows the real package one level down, so the failure
+# reads as a missing module rather than a shadowed one. Adding the inner path
+# after it does not help: the first match wins. Locally the package is
+# pip-installed in develop mode, which is why this only appears here. Nothing
+# else needs $REPO/dependencies: debit_encoder puts croco on sys.path itself.
+export PYTHONPATH="$REPO:$REPO/src:$REPO/dependencies/rlib_integration${PYTHONPATH:+:$PYTHONPATH}"
 export DEBIT_SRC=${DEBIT_SRC:-$REPO/dependencies}
 # The peer measured that importing a simulator client can corrupt multi-threaded
 # torch CPU matmuls; they pin these in every worker and so do we.

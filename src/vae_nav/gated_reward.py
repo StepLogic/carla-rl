@@ -320,6 +320,22 @@ if GOAL_REWARD_KIND not in ("sorb", "shaped", "progress", "explore"):
 # than taking the other branch and continuing.
 GOAL_EXPLORE_ARRIVAL_BONUS = float(os.environ.get("GOAL_EXPLORE_ARRIVAL_BONUS", 50.0))
 STEP_COST = float(os.environ.get("STEP_COST", 1.0))
+
+# PROGRESS_SPEED_GATE (user 2026-10-14: "remove speed gating"). The progress
+# term is paid only below the target speed, so a car at or above it earns
+# NOTHING for driving forward. That gate is also why removing the state block
+# hurt so much: speed_factor decides the reward and the agent could no longer
+# see it. With the gate off, forward progress always pays.
+#
+# DEFAULT 1 KEEPS v52's BEHAVIOUR, because v52 is the recorded run that reaches
+# SR 0.48 and must stay reproducible; the launcher sets it to 0 explicitly, so
+# the deviation is in the run's environment rather than hidden in a default.
+PROGRESS_SPEED_GATE = os.environ.get("PROGRESS_SPEED_GATE", "1") == "1"
+
+
+def _pays_progress(speed_factor: float) -> bool:
+    """Whether the progress term is earned at this speed."""
+    return (not PROGRESS_SPEED_GATE) or speed_factor < 1.0
 GOAL_MAX_STEPS = int(os.environ.get("GATED_GOAL_MAX_STEPS", 1000))
 WEDGE_TRUNCATE = os.environ.get("WEDGE_TRUNCATE", "1") == "1"
 
@@ -367,7 +383,7 @@ def goal_reward(info, delta_mode="positive"):
     speed_factor = float(info.get("speed_factor", 0.0) or 0.0)
 
     r = -LF_K_STEER * steer_change
-    if speed_factor < 1.0:
+    if _pays_progress(speed_factor):
         r += d + proj
     if info.get("collision"):
         r -= LF_K_COLLISION
@@ -878,7 +894,7 @@ def explore_reward(info, disp):
     steer_change = float(info.get("action_smoothness_penalty", 0.0) or 0.0)
     speed_factor = float(info.get("speed_factor", 0.0) or 0.0)
     r = -BASE_PENALTY - steer_change
-    if speed_factor < 1.0:
+    if _pays_progress(speed_factor):
         r += PROGRESS_SCALE * progress          # LANE_PROGRESS_SCALE (10 for v5)
     if info.get("collision"):
         r -= COLLISION_PENALTY

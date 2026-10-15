@@ -46,7 +46,10 @@ def _exported():
         if not line.startswith("export "):
             continue
         for k, v in re.findall(r"([A-Z0-9_]+)=([^\s]+)", line[len("export "):]):
-            out.setdefault(k, v)
+            # LAST assignment wins, as the shell does. setdefault took the
+            # FIRST, so a later deliberate override read as "no drift" while
+            # the run used the other value -- the test would have lied.
+            out[k] = v
     return out
 
 
@@ -57,6 +60,20 @@ def _reward_env_names():
         if os.path.exists(p):
             src += open(p).read()
     return dict(re.findall(r'os\.environ\.get\(\s*"([A-Z0-9_]+)"\s*,\s*([^)]+)\)', src))
+
+
+# DELIBERATE DEVIATIONS FROM v52, each with the reason it was made. Anything
+# that differs and is NOT listed here is accidental drift and fails the test.
+# This is the point of the guard: a reward may change, but never by accident.
+DELIBERATE = {
+    "EXPLORE_LANE_MODE":
+        "2026-10-14: crossings are fined per step, not terminal -- at -0.34 a "
+        "step realised, ending the episode was worth +24 more than continuing, "
+        "which is what both collapses converged to",
+    "EXPLORE_OFF_ROAD_FATAL":
+        "2026-10-14: same reason -- off-road is the other door the agent drifts "
+        "through; it is now a per-step fine of 10",
+}
 
 
 def _same(a, b):
@@ -74,10 +91,37 @@ def test_every_reward_term_matches_v52():
         if name not in v52:
             continue                       # v52 never set it; nothing to match
         mine = exported.get(name, default.strip().strip('"').strip("'"))
-        if not _same(v52[name], mine):
+        if not _same(v52[name], mine) and name not in DELIBERATE:
             src = "exported" if name in exported else "CODE DEFAULT"
             drift.append(f"{name}: v52={v52[name]} launcher={mine} ({src})")
-    assert not drift, "the launcher's reward is not v52's:\n  " + "\n  ".join(drift)
+    assert not drift, ("the launcher's reward differs from v52 in ways nobody "
+                       "declared:\n  " + "\n  ".join(drift))
+
+
+def test_every_declared_deviation_really_deviates():
+    """A stale entry in DELIBERATE would silently excuse a future accident.
+
+    The baseline is v52's recorded value where it has one, and the CODE DEFAULT
+    otherwise -- v52 never exported EXPLORE_LANE_MODE, so what it actually ran
+    with was the default "terminal", and that is what this deviates from."""
+    v52, exported, names = _v52(), _exported(), _reward_env_names()
+    for name in DELIBERATE:
+        base = v52.get(name)
+        if base is None:
+            assert name in names, f"{name} is not a reward setting at all"
+            base = names[name].strip().strip('"').strip("'")
+        assert not _same(base, exported.get(name)), (
+            f"{name} no longer differs from its v52 baseline ({base}); "
+            "remove it from DELIBERATE")
+
+
+def test_the_closed_exits_are_actually_closed():
+    """The reward decision of 2026-10-14: crossings and off-road are fines, not
+    terminals, so an incompetent policy cannot escape into termination."""
+    e = _exported()
+    assert e.get("EXPLORE_LANE_MODE") == "penalise"
+    assert e.get("EXPLORE_OFF_ROAD_FATAL") == "0"
+    assert e.get("EXPLORE_COLLISION_FATAL") == "1", "collisions stay terminal"
 
 
 def test_the_reward_is_a_sourced_file_not_an_inlined_copy():

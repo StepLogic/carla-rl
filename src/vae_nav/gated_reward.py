@@ -332,6 +332,27 @@ STEP_COST = float(os.environ.get("STEP_COST", 1.0))
 # the deviation is in the run's environment rather than hidden in a default.
 PROGRESS_SPEED_GATE = os.environ.get("PROGRESS_SPEED_GATE", "1") == "1"
 
+# GOAL_ARRIVAL_MAX_SPEED (user 2026-10-14: "the agent should brake near goal"),
+# in km/h. Above it, being inside the goal radius does NOT count as arriving:
+# the bonus is not paid and the episode continues, so the car has to slow down
+# to collect it. Braking becomes instrumentally necessary rather than merely
+# encouraged.
+#
+# IT HAS TO BE THE ARRIVAL CONDITION, not a penalty on speed. Negative throttle
+# is REVERSE now and the progress term is ungated, so slowing is already paid
+# for negatively -- the reward as it stands wants maximum forward speed forever,
+# and nothing short of withholding the bonus gives a reason to stop.
+#
+# 0 DISABLES IT, which is v52's behaviour and stays the default.
+GOAL_ARRIVAL_MAX_SPEED = float(os.environ.get("GOAL_ARRIVAL_MAX_SPEED", 0.0))
+
+
+def _stopped_enough(info) -> bool:
+    """Is the car slow enough for being at the goal to count as arriving?"""
+    if GOAL_ARRIVAL_MAX_SPEED <= 0.0:
+        return True
+    return float(info.get("speed_kmh", 0.0) or 0.0) <= GOAL_ARRIVAL_MAX_SPEED
+
 
 def _pays_progress(speed_factor: float) -> bool:
     """Whether the progress term is earned at this speed."""
@@ -855,7 +876,11 @@ def goal_reward_explore(info, disp, t, max_steps=GOAL_MAX_STEPS):
     reward, fatal = explore_reward(info, disp)
     collided = bool(info.get("collision", False))
     failed = bool(collided and EXPLORE_COLLISION_FATAL) or bool(fatal)
+    # ARRIVAL REQUIRES BEING SLOW ENOUGH (GOAL_ARRIVAL_MAX_SPEED). Blasting
+    # through the goal radius at speed is not arriving: the bonus is withheld
+    # and the episode continues, so the car must brake to collect it.
     reached = bool(info.get("arrived", False) or info.get("is_success", False))
+    reached = reached and _stopped_enough(info)
     if failed:
         return float(reward), True, False, False
     if reached:

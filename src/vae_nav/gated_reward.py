@@ -1250,7 +1250,31 @@ class GatedReward(Wrapper):
             reward, terminated, truncated, arrived = goal_reward_explore(
                 info, disp, self._t, self.max_steps)
             info["is_success"] = arrived
-            info["gated_shaping"] = 0.0
+            # A DENSE GOAL TERM, GOAL MODE ONLY (POTENTIAL_K; 0 = off, which is
+            # v52 and the default). My decision 2026-10-14 under the user's
+            # reward delegation, after v6: the explore reward is identical in
+            # both modes, so goal mode had nothing to make it behave DIFFERENTLY
+            # -- its only distinction was a rare arrival bonus. v6's goal arm
+            # duly decayed 0.100 -> 0.010 while the explore arm improved to
+            # 0.20: the policy optimised the objective that pays every step.
+            # The peer's Habitat arm, which works, has exactly this term
+            # (d_prev - d on every step); ours had nothing until arrival.
+            #
+            # POTENTIAL-BASED, so the optimal policy is unchanged (Ng et al.):
+            # Phi(s) = -K * route_remaining, and the step pays
+            # gamma*Phi(s') - Phi(s) = K*(prev - gamma*rem). NOT paid on a
+            # terminal step, where Phi must be 0 for the invariance to hold --
+            # paying into an arrival or a crash would also make those bills
+            # inexact.
+            _rem = info.get("route_remaining_m", None)
+            _shaped = 0.0
+            if POTENTIAL_K and not (terminated or truncated):
+                if _rem is not None and self._prev_remaining is not None:
+                    _g = _BILL_GAMMA if SHAPING_DISCOUNTED else 1.0
+                    _shaped = POTENTIAL_K * (self._prev_remaining - _g * float(_rem))
+                    reward += _shaped
+            self._prev_remaining = None if _rem is None else float(_rem)
+            info["gated_shaping"] = float(_shaped)
             if terminated or truncated:
                 # NAME THE ACTUAL CAUSE, in explore mode's own order. NOT
                 # classify_goal_end: that reads the goal arm's fault COUNTERS

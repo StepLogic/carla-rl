@@ -70,6 +70,11 @@ DELIBERATE = {
         "2026-10-14: crossings are fined per step, not terminal -- at -0.34 a "
         "step realised, ending the episode was worth +24 more than continuing, "
         "which is what both collapses converged to",
+    "POTENTIAL_K":
+        "2026-10-14 after v6: a dense potential-based goal term. Both modes are "
+        "paid the same reward, so goal mode had nothing to make it behave "
+        "differently and its arm decayed 0.100 -> 0.010 while explore improved "
+        "to 0.20. Potential-based, so the optimal policy is unchanged",
     "EXPLORE_OFF_ROAD_FATAL":
         "2026-10-14: same reason -- off-road is the other door the agent drifts "
         "through; it is now a per-step fine of 10",

@@ -36,7 +36,17 @@ import numpy as np
 import torch
 
 W = os.path.dirname(os.path.abspath(__file__))
-DEBIT_CKPT = "/home/robotlab/scratch/carla-rl/dependencies/debit_weights/debit_base.pth"
+# WHICH DEBiT (2026-10-19). The arm now runs DEBiT-TINY, on the user's choice,
+# while this probe's published numbers (distance R2 0.50-0.56) were measured
+# with DEBiT-B. Seven training runs have failed to learn the goal task, and
+# nobody has checked whether TINY carries the goal at all on road imagery -- so
+# the encoder is selectable and the two are compared on identical pairs.
+DEBIT_SIZE = os.environ.get("DEBIT_SIZE", "base").lower()
+DEBIT_CKPT = os.environ.get(
+    "DEBIT_CKPT",
+    "/home/robotlab/scratch/debit/out/ckpt/hab_bl/imgnav/debit_tiny.pth"
+    if DEBIT_SIZE == "tiny" else
+    "/home/robotlab/scratch/carla-rl/dependencies/debit_weights/debit_base.pth")
 SEGVAE_CKPT = ("/home/robotlab/scratch/carla-rl/.claude/worktrees/gated-impl/"
                "results/seg_vae_v1_dec30/seg_vae.pkl")
 # croco needs BOTH paths. Its repo root holds models/ directly, so `croco` is a
@@ -52,6 +62,13 @@ GOAL_MIN_M, GOAL_MAX_M = 5.0, 25.0
 CROCO_B = dict(img_size=112, patch_size=16, enc_embed_dim=384, enc_depth=12,
                enc_num_heads=6, dec_embed_dim=512, dec_depth=8,
                dec_num_heads=16, pos_embed="cosine")
+# DEBiT-TINY, verified against the checkpoint's own tensor shapes: 8 encoder
+# blocks, 2 decoder blocks, 256-d decoder.
+CROCO_TINY = dict(img_size=112, patch_size=16, enc_embed_dim=384, enc_depth=8,
+                  enc_num_heads=6, dec_embed_dim=256, dec_depth=2,
+                  dec_num_heads=8, pos_embed="cosine")
+if DEBIT_SIZE == "tiny":
+    CROCO_B = CROCO_TINY
 BINOC_REPR = 3136          # 49 patches x 64 projected channels
 
 

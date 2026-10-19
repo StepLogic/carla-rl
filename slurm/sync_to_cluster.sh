@@ -16,6 +16,11 @@
 # cluster env has no jaxlib and torch_rl/carla_env_build.py exists precisely so
 # nothing in this arm touches train_carla_tqc.
 #
+# SLURM LOGS LIVE IN THE DESTINATION ROOT (sbatch writes %x_%j.log where it is
+# submitted), and --delete removed every one of them on 2026-10-19 -- including
+# the live v8 log, recovered from the trainer's open fd. '/*.log' is excluded
+# for that reason; never drop it.
+#
 # usage: slurm/sync_to_cluster.sh [--dry-run]
 set -euo pipefail
 HOST=${CLUSTER_HOST:-login1.acg.maine.edu}
@@ -30,6 +35,7 @@ echo "[sync] $SRC -> $HOST:~/$DEST"
 rsync -az --delete ${DRY:+--dry-run} --info=stats1 \
   --exclude '.git/' --exclude '.claude/' \
   --exclude 'checkpoints/' --exclude 'logs/' --exclude 'results/' \
+  --exclude '/*.log' \
   --exclude 'evidence/' --exclude 'icra-2027/' --exclude 'paper/' \
   --exclude 'data/' --exclude 'archive/' --exclude 'wandb/' \
   --exclude '*.sif' --exclude '*venv*/' --exclude '__pycache__/' \

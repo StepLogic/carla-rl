@@ -94,6 +94,18 @@ OUT = os.path.join(os.environ.get("CKPT_DIR",
                                   os.path.join(ROOT, "checkpoints")), RUN_NAME)
 
 
+def to_env(a, box):
+    """Actor action in [-1, 1] -> the env's box, per dimension."""
+    lo, hi = box.low.astype(np.float32), box.high.astype(np.float32)
+    return lo + 0.5 * (np.clip(a, -1.0, 1.0) + 1.0) * (hi - lo)
+
+
+def to_actor(e, box):
+    """Inverse of to_env: an env-box action -> the actor's [-1, 1]."""
+    lo, hi = box.low.astype(np.float32), box.high.astype(np.float32)
+    return (2.0 * (np.asarray(e, np.float32) - lo) / (hi - lo) - 1.0).astype(np.float32)
+
+
 def main():
     import torch
 
@@ -225,9 +237,9 @@ def main():
     # the intent rather than the fact cannot catch the case where they differ,
     # which is the only case it is for.
     _box = env.action_space
-    print(f"  action box: steer [{_box.low[0]:+.2f}, {_box.high[0]:+.2f}]  "
+    print(f"  env action box: steer [{_box.low[0]:+.2f}, {_box.high[0]:+.2f}]  "
           f"throttle [{_box.low[1]:+.2f}, {_box.high[1]:+.2f}] "
-          f"(negative = REVERSE)  "
+          f"(actor tanh rescaled onto it; no reverse)  "
           f"incremental={os.environ.get('INCREMENTAL_ACTIONS')}", flush=True)
     print(f"  reward: GATED_GOAL_REWARD={os.environ.get('GATED_GOAL_REWARD')} "
           f"bonus={os.environ.get('GOAL_EXPLORE_ARRIVAL_BONUS')} "
@@ -268,19 +280,22 @@ def main():
     metrics = {}
 
     for step in range(1, MAX_STEPS + 1):
+        # `action` is the ACTOR's, in tanh space [-1, 1]: that is what replay
+        # stores and the learner trains on. The env gets it rescaled onto its
+        # own box (throttle [0, max] since 2026-10-19).
         if step <= LEARNING_STARTS:
-            action = env.action_space.sample().astype(np.float32)
+            action = to_actor(env.action_space.sample().astype(np.float32), _box)
         else:
             action, hidden = agent.act(row, hidden, goal=goal_blk)
             action = np.asarray(action, np.float32)
 
-        nobs, reward, terminated, truncated, ninfo = env.step(action)
+        nobs, reward, terminated, truncated, ninfo = env.step(to_env(action, _box))
         nrow = row_of(nobs, ninfo)
         buf.add(row, action, float(reward), bool(terminated), bool(truncated),
                 nrow, mode, goal=goal_blk)
         # The frames the policy just acted on, beside the goal it was given.
         vid.add(info["debit_cur"], info["debit_goal"], ep_len, mode,
-                float(reward), action, ep_ret)
+                float(reward), to_env(action, _box), ep_ret)
         ep_ret += float(reward)
         ep_len += 1
         obs, info, row = nobs, ninfo, nrow

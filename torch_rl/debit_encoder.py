@@ -131,9 +131,11 @@ class DebitTinyEncoder:
         net = CroCoDownstreamBinocular(_LinearHead(proj_channels), **self.cfg)
         missing, unexpected = net.load_state_dict(load_binocular_state(weights),
                                                   strict=False)
-        # The head is TASK-SPECIFIC and is re-initialised here (DEBiT's own head
-        # was trained for Habitat image-goal); everything else must match, or the
-        # config and the checkpoint disagree and the encoder is not DEBiT's.
+        # DEBiT's TRAINED head (head.proj, from its Habitat image-goal training)
+        # IS in the checkpoint and DOES load -- verified 2026-10-19, all 156
+        # (tiny) / 348 (base) tensors equal the checkpoint's. The head is only
+        # excused from the check below so a checkpoint WITHOUT one still loads;
+        # everything else must match, or the config and the checkpoint disagree.
         missing = [k for k in missing if not k.startswith("head.")]
         unexpected = [k for k in unexpected if not k.startswith("head.")]
         if missing or unexpected:

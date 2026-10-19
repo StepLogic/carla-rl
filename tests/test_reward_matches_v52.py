@@ -66,6 +66,13 @@ def _reward_env_names():
 # that differs and is NOT listed here is accidental drift and fails the test.
 # This is the point of the guard: a reward may change, but never by accident.
 DELIBERATE = {
+    "EXPLORE_LANE_MODE":
+        "2026-10-19: crossings fined, not terminal. v9 (terminal, the user's "
+        "rule) never learned to stay in lane: goal arm 0.03-0.16 at 212k vs "
+        "v8's 0.55 fined; the user approved going back",
+    "LANE_DEPARTURE_PENALTY":
+        "2026-10-19 after v8 parked: at 10 a single crossing outweighed parking "
+        "for the rest of the episode (parked ~ -10 at gamma 0.99)",
     "POTENTIAL_K":
         "2026-10-14 after v6: a dense potential-based goal term. Both modes are "
         "paid the same reward, so goal mode had nothing to make it behave "
@@ -117,10 +124,11 @@ def test_every_declared_deviation_really_deviates():
 
 
 def test_which_events_end_an_episode():
-    """User 2026-10-19: lane invasion and collision both terminal (v52's lane
-    rule, restored). Off-road stays a per-step fine (2026-10-14 decision)."""
+    """Collisions end the episode (user). Crossings are FINED again after v9
+    showed terminal crossings stop learning (user-approved 2026-10-19).
+    Off-road is a per-step fine."""
     e = _exported()
-    assert e.get("EXPLORE_LANE_MODE") == "terminal", "crossings are terminal"
+    assert e.get("EXPLORE_LANE_MODE") == "penalise", "crossings are fined"
     assert e.get("EXPLORE_COLLISION_FATAL") == "1", "collisions are terminal"
     assert e.get("EXPLORE_OFF_ROAD_FATAL") == "0", "off-road is a fine"
 
@@ -156,3 +164,11 @@ def test_progress_is_measured_along_the_lane_as_v52_did():
     import re
     assert not re.search(r"LANE_PROGRESS_MODE=", open(SBATCH).read()), \
         "the launcher must not override the progress mode"
+
+
+def test_parking_is_not_free():
+    """v8 parked because standing still cost almost nothing (2026-10-19)."""
+    e = _exported()
+    assert float(e.get("EXPLORE_IDLE_PENALTY", 0)) > 0
+    assert float(e.get("EXPLORE_IDLE_SPEED_KMH", 0)) < float(e["GOAL_ARRIVAL_MAX_SPEED"])
+    assert e.get("EXPLORE_DIST_MODE") == "net"

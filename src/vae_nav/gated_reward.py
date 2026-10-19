@@ -827,6 +827,24 @@ EXPLORE_LANE_PENALTY_NONE = float(
 # byte-identical.
 EXPLORE_COLLISION_FATAL = os.environ.get("EXPLORE_COLLISION_FATAL", "0") == "1"
 EXPLORE_GOAL_DIST_M = float(os.environ.get("EXPLORE_GOAL_DIST_M", 100.0))
+# HOW EXPLORE "ARRIVAL" MEASURES DISTANCE (2026-10-19, after v8). "path" (the
+# default, v52) counts CUMULATIVE path, which a car driving tight loops also
+# accumulates -- v8 episode 1360 was logged "reached" while circling a single
+# junction. "net" counts straight-line displacement from where the episode
+# started, which looping cannot build up.
+EXPLORE_DIST_MODE = os.environ.get("EXPLORE_DIST_MODE", "path")
+if EXPLORE_DIST_MODE not in ("path", "net"):
+    raise ValueError(f"EXPLORE_DIST_MODE={EXPLORE_DIST_MODE!r}: use path or net")
+# A COST FOR STANDING STILL, both modes (2026-10-19, after v8 parked). v8's
+# last ~120 episodes sat motionless (92-100% still frames) with steer locked at
+# +0.9 and throttle 0.03-0.19: a parked step cost only -0.03 to -0.15, so at
+# gamma 0.99 parking forever was worth about -10 -- the price of ONE lane
+# crossing. Charging EXPLORE_IDLE_PENALTY a step below EXPLORE_IDLE_SPEED_KMH
+# makes parking forever worth about -50 at 0.5, clearly worse than driving.
+# The threshold sits below GOAL_ARRIVAL_MAX_SPEED so slowing to arrive is free.
+# 0 = off (v52).
+EXPLORE_IDLE_PENALTY = float(os.environ.get("EXPLORE_IDLE_PENALTY", 0.0))
+EXPLORE_IDLE_SPEED_KMH = float(os.environ.get("EXPLORE_IDLE_SPEED_KMH", 2.0))
 EXPLORE_ARRIVAL_BONUS = float(os.environ.get("EXPLORE_ARRIVAL_BONUS", 10.0))
 EXPLORE_LANE_MODE = os.environ.get("EXPLORE_LANE_MODE", "terminal")
 if EXPLORE_LANE_MODE not in ("penalise", "terminal"):
@@ -921,6 +939,9 @@ def explore_reward(info, disp):
     r = -BASE_PENALTY - steer_change
     if _pays_progress(speed_factor):
         r += PROGRESS_SCALE * progress          # LANE_PROGRESS_SCALE (10 for v5)
+    if (EXPLORE_IDLE_PENALTY
+            and float(info.get("speed_kmh", 0.0) or 0.0) < EXPLORE_IDLE_SPEED_KMH):
+        r -= EXPLORE_IDLE_PENALTY
     if info.get("collision"):
         r -= COLLISION_PENALTY
     # Per-step cost of being off the road. Independent of whether off-road is
@@ -1098,6 +1119,10 @@ class GatedReward(Wrapper):
               f"exempt_marks={sorted(EXPLORE_EXEMPT_MARKS)} junction=forgiven "
               f"penalty={LANE_DEPARTURE_PENALTY} "
               f"(LANE_INVASION_NOOP={LANE_INVASION_NOOP})", flush=True)
+        print(f"[Gated] idle: -{EXPLORE_IDLE_PENALTY:g}/step below "
+              f"{EXPLORE_IDLE_SPEED_KMH:g} km/h (both modes; 0 = off) | explore "
+              f"arrival: {EXPLORE_GOAL_DIST_M:g} m of {EXPLORE_DIST_MODE} distance",
+              flush=True)
         print(f"[Gated] explore_prob={self.explore_prob} "
               f"force_mode={self.force_mode} explore_max_steps={self.max_steps} "
               f"progress={PROGRESS_MODE} x{PROGRESS_SCALE:g}")
@@ -1114,8 +1139,16 @@ class GatedReward(Wrapper):
                   "the lane penalty, so the explore halves are not directly "
                   "comparable unless that baseline is retrained.")
         else:
-            print(f"[Gated] lane invasion: penalty {LANE_DEPARTURE_PENALTY} "
-                  "and terminal, with the junction exemption")
+            print(f"[Gated] lane invasion: penalty {LANE_DEPARTURE_PENALTY}, "
+                  f"{'terminal' if EXPLORE_LANE_MODE == 'terminal' else 'NOT terminal (fined)'}"
+                  ", with the junction exemption")
+
+    def _explore_dist(self) -> float:
+        """Distance that counts towards explore arrival (EXPLORE_DIST_MODE)."""
+        if EXPLORE_DIST_MODE == "net":
+            start = getattr(self, "_start", self._prev)
+            return float(np.linalg.norm(self._prev - start))
+        return float(self._path_m)
 
     def reset(self, **kwargs):
         out = self.env.reset(**kwargs)
@@ -1130,6 +1163,7 @@ class GatedReward(Wrapper):
         self._crossing_steps = 0
         self._path_m = 0.0
         self._prev = np.asarray(info.get("hero_pos", (0.0, 0.0)), np.float64)
+        self._start = self._prev.copy()
         # The potential is a DIFFERENCE, so step 1 has nothing to difference
         # against and must pay no shaping. A stale value here would pay the
         # whole route length as a one-off reward on the first step of every
@@ -1345,7 +1379,7 @@ class GatedReward(Wrapper):
             # ARRIVAL BEATS THE CAP BUT NOT A FAILURE: a car that crosses a
             # line on the step it passes 100 m still crossed a line.
             if (not terminated and EXPLORE_GOAL_DIST_M > 0.0
-                    and self._path_m >= EXPLORE_GOAL_DIST_M):
+                    and self._explore_dist() >= EXPLORE_GOAL_DIST_M):
                 reward += EXPLORE_ARRIVAL_BONUS
                 terminated, truncated = True, False
                 info["explore_end"] = "reached"

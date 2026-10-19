@@ -94,6 +94,11 @@ export GATED=1 PERCEPTION=debit
 export OBS_WITH_MODE=1 OBS_WITH_GOAL=1 OBS_WITH_STATE=1
 export GATED_GOAL_REWARD=explore GOAL_EXPLORE_ARRIVAL_BONUS=50 EXPLORE_ARRIVAL_BONUS=10
 export DISCOUNT=0.99 EXPLORE_DISCOUNT=0.99
+# CRITIC TARGET FLOOR -1000, not -200 (2026-10-19, user-approved after v8). v8's
+# looping goal episodes realised ~-3.5 a step, worth about -350 at gamma 0.99;
+# a -200 floor clipped that to -200, so the critic could not see how bad
+# looping was. The ceiling stays 150 (the largest return is the 50 arrival).
+export TQC_VALUE_FLOOR=${TQC_VALUE_FLOOR:--1000} EXPLORE_VALUE_FLOOR=${EXPLORE_VALUE_FLOOR:--1000}
 export GOAL_DIST_MIN=5 GOAL_DIST_MAX=25 GOAL_DIST_START=25 GOAL_DIST_TARGET=25
 export LANE_PROGRESS_SCALE=1   # LANE_PROGRESS_MODE comes from v52_reward.env
 export MAX_STEER=1.0 MAX_THROTTLE=1.0 INCREMENTAL_ACTIONS=0 TARGET_SPEED=20.0

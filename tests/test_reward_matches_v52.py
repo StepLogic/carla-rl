@@ -148,3 +148,15 @@ def test_collisions_are_terminal():
 def test_leaving_the_road_actually_costs_something():
     """It fell back to 0.0, so driving off the road was free."""
     assert float(_exported().get("EXPLORE_OFF_ROAD_PENALTY", 0)) > 0
+
+
+def test_progress_is_measured_along_the_lane_as_v52_did():
+    """v52 left LANE_PROGRESS_MODE at its code default, `projected`, so the
+    term-by-term comparison above never looked at it -- and the launcher's
+    `heading` (which pays circling) trained seven runs unnoticed."""
+    exported = _exported()
+    assert exported.get("LANE_PROGRESS_MODE") == "projected", exported.get(
+        "LANE_PROGRESS_MODE")
+    import re
+    assert not re.search(r"LANE_PROGRESS_MODE=", open(SBATCH).read()), \
+        "the launcher must not override the progress mode"

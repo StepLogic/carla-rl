@@ -66,10 +66,6 @@ def _reward_env_names():
 # that differs and is NOT listed here is accidental drift and fails the test.
 # This is the point of the guard: a reward may change, but never by accident.
 DELIBERATE = {
-    "EXPLORE_LANE_MODE":
-        "2026-10-14: crossings are fined per step, not terminal -- at -0.34 a "
-        "step realised, ending the episode was worth +24 more than continuing, "
-        "which is what both collapses converged to",
     "POTENTIAL_K":
         "2026-10-14 after v6: a dense potential-based goal term. Both modes are "
         "paid the same reward, so goal mode had nothing to make it behave "
@@ -120,13 +116,13 @@ def test_every_declared_deviation_really_deviates():
             "remove it from DELIBERATE")
 
 
-def test_the_closed_exits_are_actually_closed():
-    """The reward decision of 2026-10-14: crossings and off-road are fines, not
-    terminals, so an incompetent policy cannot escape into termination."""
+def test_which_events_end_an_episode():
+    """User 2026-10-19: lane invasion and collision both terminal (v52's lane
+    rule, restored). Off-road stays a per-step fine (2026-10-14 decision)."""
     e = _exported()
-    assert e.get("EXPLORE_LANE_MODE") == "penalise"
-    assert e.get("EXPLORE_OFF_ROAD_FATAL") == "0"
-    assert e.get("EXPLORE_COLLISION_FATAL") == "1", "collisions stay terminal"
+    assert e.get("EXPLORE_LANE_MODE") == "terminal", "crossings are terminal"
+    assert e.get("EXPLORE_COLLISION_FATAL") == "1", "collisions are terminal"
+    assert e.get("EXPLORE_OFF_ROAD_FATAL") == "0", "off-road is a fine"
 
 
 def test_the_reward_is_a_sourced_file_not_an_inlined_copy():

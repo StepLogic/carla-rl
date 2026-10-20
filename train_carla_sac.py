@@ -69,6 +69,16 @@ CAPACITY = env_int("REPLAY_CAPACITY", 150_000)
 # L40 nodes) and ships only each sampled chunk to the GPU. REPLAY_U8=1 stores
 # the /255 camera frame as uint8 -- exact, and ~55 KB a row instead of ~105 KB.
 REPLAY_DEVICE = os.environ.get("REPLAY_DEVICE", "cuda")
+# EVALUATION MODE. EVAL_FROM=<checkpoint dir> loads that agent into the SAME
+# construction the trainer uses (so the observation, encoder and action mapping
+# cannot drift from training), runs EVAL_EPISODES goal-mode episodes with the
+# DETERMINISTIC action, records every one, and exits without training.
+# Faults END the episode (USER RULE, eval always fault-ends): a painted lane
+# crossing on open road, off-road, or a collision -- the same crossing rule the
+# training reward fines, so "crossing" means the same thing in both.
+EVAL_FROM = os.environ.get("EVAL_FROM", "")
+EVAL_EPISODES = env_int("EVAL_EPISODES", 40)
+EVAL_SEED = env_int("EVAL_SEED", 10_000)
 REPLAY_U8 = os.environ.get("REPLAY_U8", "0") == "1"
 LOG_EVERY = env_int("LOG_EVERY", 10)
 CKPT_EVERY = env_int("CKPT_EVERY", 25_000)
@@ -112,6 +122,95 @@ def to_actor(e, box):
     return (2.0 * (np.asarray(e, np.float32) - lo) / (hi - lo) - 1.0).astype(np.float32)
 
 
+def _fault(info):
+    """The eval fault rule: collision, off-road, or a lane crossing as the
+    training reward reads one -- solid lines, curbs and grass anywhere, broken
+    lines on open road. A broken line inside a junction (the turn) and an
+    unpainted road edge are not faults."""
+    import vae_nav.gated_reward as G
+    if info.get("collision"):
+        return "collision"
+    if info.get("off_road"):
+        return "off_road"
+    lane = bool(info.get("lane_any", info.get("lane_invasion_any", False)))
+    if lane and G.explore_lane_fatal(lane, info.get("lane_marking_types"), False,
+                                     in_junction=bool(info.get("in_junction", False)),
+                                     off_road_fatal=False):
+        return "crossing"
+    return None
+
+
+def run_eval(env, agent, pxr, server, out_root):
+    """EVAL_EPISODES goal episodes, deterministic actions, faults terminal,
+    every episode recorded. Writes eval.json next to the videos."""
+    import json
+    from torch_rl.episode_video import EpisodeVideo
+
+    tag = os.path.basename(os.path.normpath(EVAL_FROM))
+    out = os.path.join(out_root, f"eval_{tag}")
+    vid = EpisodeVideo(os.path.join(out, "videos"), every=1, max_frames=1200,
+                       keep=max(EVAL_EPISODES, 1))
+    box = env.action_space
+    print(f"=== EVAL {EVAL_FROM} | {EVAL_EPISODES} goal episodes, seeds "
+          f"{EVAL_SEED}..{EVAL_SEED + EVAL_EPISODES - 1}, DETERMINISTIC actions, "
+          f"faults END the episode (crossing/off-road/collision) | town "
+          f"{','.join(TOWNS)} -> {out}", flush=True)
+    rows = []
+    for k in range(EVAL_EPISODES):
+        obs, info = env.reset(seed=EVAL_SEED + k)
+        mode = int(round(float(np.asarray(obs["mode"]).ravel()[0])))
+        if mode != 1:
+            raise RuntimeError("eval episode is not in GOAL mode: EVAL_FORCE_MODE "
+                               "must be the goal mode")
+        hidden = agent.reset_hidden(1)
+        goal_blk = pxr.goal_block(info["debit_goal"])
+        vid.start(k)
+        ret, t, end = 0.0, 0, None
+        while end is None:
+            row = pxr.mono_row(info["debit_cur"], obs["mode"], obs["binoc"])
+            action, hidden = agent.act(row, hidden, deterministic=True, goal=goal_blk)
+            a_env = to_env(np.asarray(action, np.float32), box)
+            vid.add(info["debit_cur"], info["debit_goal"], t, mode, 0.0, a_env, ret)
+            obs, r, term, trunc, info = env.step(a_env)
+            ret += float(r)
+            t += 1
+            if info.get("is_success") or info.get("goal_end") == "reached":
+                end = "reached"
+            else:
+                end = _fault(info)
+            if end is None and (term or trunc):
+                end = str(info.get("goal_end", "timeout"))
+        path = vid.save(end)
+        rows.append({"episode": k, "seed": EVAL_SEED + k, "end": end,
+                     "steps": t, "return": round(ret, 2),
+                     "reached": end == "reached", "video": path})
+        sr = np.mean([x["reached"] for x in rows])
+        print(f"[Eval {k + 1:3d}/{EVAL_EPISODES}] seed={EVAL_SEED + k} end={end} "
+              f"steps={t} return={ret:.1f} | SR so far {sr:.3f}", flush=True)
+
+    n = len(rows)
+    sr = float(np.mean([x["reached"] for x in rows])) if n else float("nan")
+    # Wilson 95% interval: at n=40 the binomial noise is about +-0.15.
+    z = 1.96
+    centre = (sr + z * z / (2 * n)) / (1 + z * z / n)
+    half = z * np.sqrt(sr * (1 - sr) / n + z * z / (4 * n * n)) / (1 + z * z / n)
+    ends = {}
+    for x in rows:
+        ends[x["end"]] = ends.get(x["end"], 0) + 1
+    summary = {"checkpoint": EVAL_FROM, "episodes": n, "success_rate": sr,
+               "wilson95": [round(centre - half, 3), round(centre + half, 3)],
+               "ends": ends, "fault_ends": "crossing/off_road/collision",
+               "deterministic": True, "towns": TOWNS, "seed0": EVAL_SEED,
+               "episodes_detail": rows}
+    os.makedirs(out, exist_ok=True)
+    with open(os.path.join(out, "eval.json"), "w") as fh:
+        json.dump(summary, fh, indent=1)
+    print(f"[EvalDone] SR={sr:.3f} (95% CI {summary['wilson95'][0]:.2f}-"
+          f"{summary['wilson95'][1]:.2f}, n={n}) ends={ends} -> {out}", flush=True)
+    env.close()
+    server.stop()
+
+
 def main():
     import torch
 
@@ -150,7 +249,7 @@ def main():
     print(f"  carla: {server.describe()} ready in "
           f"{server.wait_ready():.0f}s", flush=True)
     env = build_env(TOWNS[town_i], seed=SEED, encoder=enc, port=PORT,
-                    state_keys=())
+                    state_keys=(), eval_mode=bool(EVAL_FROM))
     obs, info = env.reset(seed=SEED)
     # THE STATE BLOCK IS THE MODE BIT AND THE BINOC, NOTHING ELSE (user
     # 2026-10-14: "get rid of all state vectors except mode bit"). No steer, no
@@ -209,7 +308,10 @@ def main():
     # target encoding with random weights.
     mono_report = load_debit_mono(agent.compress, TINY)
     agent.compress_targ.load_state_dict(agent.compress.state_dict())
-    buf = DeviceEpisodeBuffer(row_dim, 2, CAPACITY, DEVICE, seed=SEED,
+    if EVAL_FROM:
+        agent.load(EVAL_FROM)          # strict: every module, name and shape
+        return run_eval(env, agent, pxr, server, OUT)
+    buf = DeviceEpisodeBuffer(row_dim, 2, 1000 if EVAL_FROM else CAPACITY, DEVICE, seed=SEED,
                               goal_dim=pxr.PIX,
                               goal_batch_frac=env_float("GOAL_BATCH_FRAC", 0.5),
                               store_device=REPLAY_DEVICE,

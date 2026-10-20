@@ -79,6 +79,9 @@ REPLAY_DEVICE = os.environ.get("REPLAY_DEVICE", "cuda")
 EVAL_FROM = os.environ.get("EVAL_FROM", "")
 EVAL_EPISODES = env_int("EVAL_EPISODES", 40)
 EVAL_SEED = env_int("EVAL_SEED", 10_000)
+# The env's arrival test: straight-line distance to the goal < 2 m
+# (train_env_config_v4_image_goal, passed_chckp). SPL measures to this circle.
+GOAL_RADIUS_M = env_float("GOAL_RADIUS_M", 2.0)
 REPLAY_U8 = os.environ.get("REPLAY_U8", "0") == "1"
 LOG_EVERY = env_int("LOG_EVERY", 10)
 CKPT_EVERY = env_int("CKPT_EVERY", 25_000)
@@ -155,8 +158,18 @@ def run_eval(env, agent, pxr, server, out_root):
           f"{EVAL_SEED}..{EVAL_SEED + EVAL_EPISODES - 1}, DETERMINISTIC actions, "
           f"faults END the episode (crossing/off-road/collision) | town "
           f"{','.join(TOWNS)} -> {out}", flush=True)
+    import random as _random
     rows = []
     for k in range(EVAL_EPISODES):
+        # THE EPISODE SET IS FIXED BY SEEDING THE GLOBAL RNGs. The start and the
+        # goal are drawn with Python's module-level `random` inside rlib's
+        # carla_core (random.choice over waypoints / junctions / the distance
+        # band), which reset(seed=...) never touches: two evals of the same
+        # seeds shared 1 start-goal distance in 40 (2026-10-20). Seeding here,
+        # immediately before reset, pins them -- eval only; training is unseeded
+        # as before.
+        _random.seed(EVAL_SEED + k)
+        np.random.seed(EVAL_SEED + k)
         obs, info = env.reset(seed=EVAL_SEED + k)
         mode = int(round(float(np.asarray(obs["mode"]).ravel()[0])))
         if mode != 1:
@@ -201,8 +214,13 @@ def run_eval(env, agent, pxr, server, out_root):
         path = vid.save(end)
         ell = l_route if l_route is not None else l_straight
         reached = end == "reached"
-        spl_i = (float(reached) * ell / max(path_m, ell)
-                 if (ell is not None and ell > 0) else float("nan"))
+        # SHORTEST PATH TO THE SUCCESS REGION, not to the goal point: arrival
+        # counts within GOAL_RADIUS_M (2 m, the env's passed_chckp test), so a
+        # 5 m goal is reached after ~3.5 m and l / max(p, l) was 1.0 for every
+        # success -- SPL equalled SR by construction (2026-10-20 evals).
+        ell_eff = None if ell is None else max(ell - GOAL_RADIUS_M, 0.1)
+        spl_i = (float(reached) * ell_eff / max(path_m, ell_eff)
+                 if ell_eff is not None else float("nan"))
         rows.append({"episode": k, "seed": EVAL_SEED + k, "end": end,
                      "steps": t, "return": round(ret, 2), "reached": reached,
                      "shortest_m": None if ell is None else round(ell, 2),

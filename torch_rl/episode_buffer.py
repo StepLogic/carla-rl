@@ -175,23 +175,62 @@ class DeviceEpisodeBuffer:
     obs_dtype = np.float16
 
     def __init__(self, obs_dim: int, action_dim: int, capacity: int, device,
-                 seed: int = 0, goal_batch_frac: float = 0.5, goal_dim: int = 0) -> None:
+                 seed: int = 0, goal_batch_frac: float = 0.5, goal_dim: int = 0,
+                 store_device=None, u8_cols: int = 0) -> None:
+        """`device` is where SAMPLED batches are delivered (the learner's).
+        `store_device` is where the ring lives; default `device`. Set it to
+        "cpu" to hold the replay in host RAM -- user 2026-10-19, "move to main
+        memory": the L40 fits ~350k rows in fp16, host RAM fits millions.
+
+        `u8_cols` (default 0 = off): the first `u8_cols` obs columns are
+        stored as uint8 levels round(x * 255) and returned as level / 255. Only
+        for columns that ARE k/255 for integer k (the /255 camera frame of
+        pixel_rows.mono_row), for which the round trip is EXACT; it halves
+        those columns' memory. Anything else in those columns is refused."""
         self.obs_dim, self.action_dim, self.capacity = int(obs_dim), int(action_dim), int(capacity)
         self.goal_dim = int(goal_dim)
         self.device = torch.device(device)
+        self.store_device = torch.device(store_device) if store_device is not None else self.device
+        self.u8_cols = int(u8_cols)
+        if not 0 <= self.u8_cols <= self.obs_dim:
+            raise ValueError(f"u8_cols={u8_cols} outside [0, obs_dim={self.obs_dim}]")
         self.goal_batch_frac = float(goal_batch_frac)
         self.rng = np.random.default_rng(seed)
 
-        self.obs = torch.zeros((self.capacity, self.obs_dim), dtype=torch.float16, device=self.device)
-        self.actions = torch.zeros((self.capacity, self.action_dim), dtype=torch.float32, device=self.device)
-        self.rewards = torch.zeros((self.capacity,), dtype=torch.float32, device=self.device)
-        self.masks = torch.zeros((self.capacity,), dtype=torch.float32, device=self.device)
+        sd, U = self.store_device, self.u8_cols
+        self.obs_u8 = torch.zeros((self.capacity, U), dtype=torch.uint8, device=sd)
+        self.obs = torch.zeros((self.capacity, self.obs_dim - U), dtype=torch.float16, device=sd)
+        self.actions = torch.zeros((self.capacity, self.action_dim), dtype=torch.float32, device=sd)
+        self.rewards = torch.zeros((self.capacity,), dtype=torch.float32, device=sd)
+        self.masks = torch.zeros((self.capacity,), dtype=torch.float32, device=sd)
 
         self._episodes: List = []   # ended episodes, FIFO (oldest first): (start, n, mode)
         self._write = 0             # next free row
         self._size = 0              # transitions in ended + open episodes (mirrors EpisodeBuffer.size)
         self._open: Dict[int, _OpenEpisode] = {}   # env_id -> its one open episode
-        self._goals: Dict[int, torch.Tensor] = {}  # episode start row -> (goal_dim,) fp16 on device
+        self._goals: Dict[int, torch.Tensor] = {}  # episode start row -> (goal_dim,) fp16 on store_device
+
+    @property
+    def nbytes(self) -> int:
+        """Bytes held by the ring (not counting the per-episode goal rows)."""
+        return sum(t.numel() * t.element_size() for t in
+                   (self.obs_u8, self.obs, self.actions, self.rewards, self.masks))
+
+    def _put_obs(self, start: int, rows: torch.Tensor) -> None:
+        """Write (k, obs_dim) rows: the u8 columns as exact levels, the rest fp16."""
+        U = self.u8_cols
+        if U:
+            pix = rows[:, :U].to(torch.float32) * 255.0
+            lv = torch.round(pix)
+            if bool((lv < 0).any()) or bool((lv > 255).any()) or \
+                    bool(((pix - lv).abs() > 0.25).any()):  # levels are 1 apart; fp16 input rounds by <=0.07
+                raise ValueError(
+                    f"u8_cols={U}: columns are not k/255 pixel levels, so storing "
+                    "them as uint8 would change them")
+            self.obs_u8[start:start + rows.shape[0]] = lv.to(
+                device=self.store_device, dtype=torch.uint8)
+        self.obs[start:start + rows.shape[0]] = rows[:, U:].to(
+            device=self.store_device, dtype=torch.float16)
 
     @property
     def size(self) -> int:
@@ -267,7 +306,7 @@ class DeviceEpisodeBuffer:
                 )
             # copy=True: the stored row never aliases the caller's array/tensor
             # (a row of an env-owned batch that is overwritten next step, say).
-            goal_t = goal_t.to(device=self.device, dtype=torch.float16, copy=True)
+            goal_t = goal_t.to(device=self.store_device, dtype=torch.float16, copy=True)
         if ep is None:
             ep = _OpenEpisode(m, is_torch=obs_is_torch, goal=goal_t)
             # Torch rows are kept as-is (no dtype/device cast here): a per-step
@@ -308,18 +347,18 @@ class DeviceEpisodeBuffer:
             # the ring only) happens ONCE for the whole episode, never per row,
             # and never through .cpu()/.numpy() -- rows already on the learner
             # device are never pulled back to host to be staged or stored.
-            obs_t = torch.stack(ep.obs).to(device=self.device, dtype=self.obs.dtype)
-            self.obs[start:start + n + 1] = obs_t
+            self._put_obs(start, torch.stack(ep.obs))
         else:
             obs_arr = np.asarray(ep.obs, self.obs_dtype)       # (n + 1, obs_dim)
-            self.obs[start:start + n + 1] = torch.from_numpy(obs_arr).to(self.device)
+            self._put_obs(start, torch.from_numpy(obs_arr))
         act_arr = np.asarray(ep.actions, np.float32)       # (n, action_dim)
         rew_arr = np.asarray(ep.rewards, np.float32)       # (n,)
         mask_arr = np.asarray(ep.masks, np.float32)        # (n,)
         # One transfer per episode -- the hot (per-step) path above never touches `device`.
-        self.actions[start:start + n] = torch.from_numpy(act_arr).to(self.device)
-        self.rewards[start:start + n] = torch.from_numpy(rew_arr).to(self.device)
-        self.masks[start:start + n] = torch.from_numpy(mask_arr).to(self.device)
+        sd = self.store_device
+        self.actions[start:start + n] = torch.from_numpy(act_arr).to(sd)
+        self.rewards[start:start + n] = torch.from_numpy(rew_arr).to(sd)
+        self.masks[start:start + n] = torch.from_numpy(mask_arr).to(sd)
         if self.goal_dim > 0:
             # After _reserve_rows (which raises before any write and has already
             # dropped the goals of the episodes these rows evicted): a failed
@@ -427,17 +466,24 @@ class DeviceEpisodeBuffer:
         r_keep = t0[:, None] - K + j_keep[None, :]                       # (B, K+1)
         keep = (r_keep > 0).astype(np.float32)
 
-        dev = self.device
-        obs_idx_t = torch.from_numpy(obs_idx).to(device=dev, dtype=torch.long)
+        dev, sd = self.device, self.store_device
+        # Gather on the STORE device (host RAM when store_device="cpu"), then
+        # ship only the sampled rows to the learner: B*(K+T+1) rows, ~19 MB
+        # at 8x49 with uint8 frames, against a ring of tens of GB.
+        obs_idx_t = torch.from_numpy(obs_idx).to(device=sd, dtype=torch.long)
         obs_valid_t = torch.from_numpy(obs_valid.astype(np.float32)).to(dev).unsqueeze(-1)
-        # The gather is the one device op; index arithmetic above is host-side numpy.
-        obs = self.obs[obs_idx_t].to(torch.float32) * obs_valid_t
+        rest = self.obs[obs_idx_t].to(device=dev, dtype=torch.float32)
+        if self.u8_cols:
+            pix = self.obs_u8[obs_idx_t].to(device=dev, dtype=torch.float32) / 255.0
+            obs = torch.cat([pix, rest], dim=-1) * obs_valid_t
+        else:
+            obs = rest * obs_valid_t
 
-        t_idx_t = torch.from_numpy(t_idx).to(device=dev, dtype=torch.long)
+        t_idx_t = torch.from_numpy(t_idx).to(device=sd, dtype=torch.long)
         valid_t = torch.from_numpy(t_valid.astype(np.float32)).to(dev)
-        actions = self.actions[t_idx_t] * valid_t.unsqueeze(-1)
-        rewards = self.rewards[t_idx_t] * valid_t
-        masks = self.masks[t_idx_t] * valid_t
+        actions = self.actions[t_idx_t].to(dev) * valid_t.unsqueeze(-1)
+        rewards = self.rewards[t_idx_t].to(dev) * valid_t
+        masks = self.masks[t_idx_t].to(dev) * valid_t
 
         out = {
             "obs": obs,
@@ -450,5 +496,6 @@ class DeviceEpisodeBuffer:
         }
         if self.goal_dim > 0:
             # One row per episode, looked up by the chunk's episode start row.
-            out["goal"] = torch.stack([self._goals[int(s)] for s in starts]).to(torch.float32)  # (B, goal_dim)
+            out["goal"] = torch.stack([self._goals[int(s)] for s in starts]).to(
+                device=dev, dtype=torch.float32)  # (B, goal_dim)
         return out

@@ -64,6 +64,12 @@ CHUNK_B = env_int("CHUNK_B", 8)
 CHUNK_T = env_int("CHUNK_T", 40)
 BURN_IN = env_int("BURN_IN", 8)
 CAPACITY = env_int("REPLAY_CAPACITY", 150_000)
+# REPLAY IN HOST RAM (user 2026-10-19: "move to main memory"). "cuda" (default)
+# is the old GPU-resident ring; "cpu" keeps it in the node's RAM (500 GB on the
+# L40 nodes) and ships only each sampled chunk to the GPU. REPLAY_U8=1 stores
+# the /255 camera frame as uint8 -- exact, and ~55 KB a row instead of ~105 KB.
+REPLAY_DEVICE = os.environ.get("REPLAY_DEVICE", "cuda")
+REPLAY_U8 = os.environ.get("REPLAY_U8", "0") == "1"
 LOG_EVERY = env_int("LOG_EVERY", 10)
 CKPT_EVERY = env_int("CKPT_EVERY", 25_000)
 # DEBUGGING VIDEOS (user 2026-10-14). On by default and nearly free: both
@@ -205,7 +211,9 @@ def main():
     agent.compress_targ.load_state_dict(agent.compress.state_dict())
     buf = DeviceEpisodeBuffer(row_dim, 2, CAPACITY, DEVICE, seed=SEED,
                               goal_dim=pxr.PIX,
-                              goal_batch_frac=env_float("GOAL_BATCH_FRAC", 0.5))
+                              goal_batch_frac=env_float("GOAL_BATCH_FRAC", 0.5),
+                              store_device=REPLAY_DEVICE,
+                              u8_cols=pxr.MONO_PIX if REPLAY_U8 else 0)
 
     # PREFLIGHT, printed before a single step (user rule, after four restarts):
     # the label, the checkpoint directory, the town, the seeds and the action
@@ -226,7 +234,9 @@ def main():
     print(f"  weights: {enc.describe()}", flush=True)
     print(f"  row={row_dim} (frame {pxr.MONO_PIX} + mode 1 + "
           f"binoc {binoc_dim}; NO prev action)"
-          f" | replay {CAPACITY} rows ~ {CAPACITY * row_dim * 2 / 2 ** 30:.1f} GiB fp16",
+          f" | replay {CAPACITY} rows = {buf.nbytes / 2 ** 30:.1f} GiB on "
+          f"{buf.store_device} (frames {'uint8' if REPLAY_U8 else 'fp16'}), "
+          f"batches delivered to {buf.device}",
           flush=True)
     print(f"  update: every {UPDATE_EVERY} steps x{UPDATES_PER}, chunk "
           f"B={CHUNK_B} T={CHUNK_T} burn_in={BURN_IN}, starts at {LEARNING_STARTS}",
@@ -274,6 +284,9 @@ def main():
     mode = int(round(float(np.asarray(obs["mode"]).ravel()[0])))
 
     ep_ret, ep_len, episodes = 0.0, 0, 0
+    # Executed-action symptoms since the last log line: steering at full lock
+    # (v7, v10) and throttle near zero (v8, v10 parking). Logged only.
+    roll = {"n": 0, "lock": 0, "idle_thr": 0}
     vid.start(0)
     recent = {"goal": [], "explore": [], "policy": [], "ends": {}}
     t_start = time.time()
@@ -289,7 +302,11 @@ def main():
             action, hidden = agent.act(row, hidden, goal=goal_blk)
             action = np.asarray(action, np.float32)
 
-        nobs, reward, terminated, truncated, ninfo = env.step(to_env(action, _box))
+        _env_a = to_env(action, _box)
+        roll["n"] += 1
+        roll["lock"] += int(abs(float(action[0])) > 0.95)
+        roll["idle_thr"] += int(float(_env_a[1]) < 0.05)
+        nobs, reward, terminated, truncated, ninfo = env.step(_env_a)
         nrow = row_of(nobs, ninfo)
         buf.add(row, action, float(reward), bool(terminated), bool(truncated),
                 nrow, mode, goal=goal_blk)
@@ -335,6 +352,20 @@ def main():
                       f"q_e={metrics.get('q_e', float('nan')):.2f} "
                       f"alpha_g={metrics.get('alpha_g', float('nan')):.4f}",
                       flush=True)
+                # The saturation diagnostics, on their own line so the [Ep] line
+                # every existing parser reads is unchanged.
+                _m = lambda k: float(metrics.get(k, float("nan")))
+                print(f"[Diag] step={step} -logpi={_m('neg_logp_g'):.2f} "
+                      f"(target {cfg.target_entropy:g}) "
+                      f"log_std={_m('log_std_g'):.2f} "
+                      f"|u| steer={_m('mean_abs_u_steer'):.2f} "
+                      f"thr={_m('mean_abs_u_throttle'):.2f} "
+                      f"sat(replay) steer={_m('sat_steer'):.2f} "
+                      f"thr={_m('sat_throttle'):.2f} | rollout: "
+                      f"steer_lock={roll['lock'] / max(1, roll['n']):.2f} "
+                      f"throttle<0.05={roll['idle_thr'] / max(1, roll['n']):.2f}",
+                      flush=True)
+                roll = {"n": 0, "lock": 0, "idle_thr": 0}
                 recent["ends"] = {}
 
             # ROTATE THE TOWN. One server, so this reloads the map inside the

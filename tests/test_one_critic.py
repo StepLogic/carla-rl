@@ -204,3 +204,19 @@ def test_the_replay_keeps_the_fixed_fifty_fifty_mix():
         buf.end_episode()
     got = buf.sample_chunks(8, 12, 2)["mode"]
     assert float(got.sum()) == 4.0, f"expected 4 goal chunks of 8, got {got}"
+
+
+def test_the_saturation_diagnostics_are_reported_and_in_range():
+    """2026-10-19: v7/v8/v10 each locked one action at its limit while alpha_g
+    fell to ~5e-4. The update now reports what the temperature actually tunes
+    against (-log pi, sampled and squashed) and how saturated the actions are,
+    so the next stall can be read off the log instead of guessed."""
+    agent = GatedRecurrentSAC(_cfg(one=True))
+    out = agent.update(_chunk(agent.cfg, [1.0, 0.0]))
+    for k in ("neg_logp_g", "sat_steer", "sat_throttle",
+              "mean_abs_u_steer", "mean_abs_u_throttle", "log_std_g"):
+        assert k in out, k
+        assert torch.isfinite(torch.as_tensor(out[k])), k
+    for k in ("sat_steer", "sat_throttle"):
+        assert 0.0 <= float(out[k]) <= 1.0, k
+    assert float(out["mean_abs_u_steer"]) >= 0.0

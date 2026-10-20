@@ -898,9 +898,25 @@ class GatedRecurrentTQC:
             # Entropy Rule: the diagnostic is the analytic entropy of the base
             # Gaussian, never the sampled squashed -log pi. _actor_forward
             # already returns fp32, so this is exact whatever cfg.bf16 is.
-            _, log_std = self._actor_forward(actor_in)
+            mean_u, log_std = self._actor_forward(actor_in)
             entropy = log_std.sum(dim=-1) + cfg.action_dim * _HALF_LOG_2PI_E
         new_a, logp = self._actor_sample(actor_in)
+        # SATURATION DIAGNOSTICS (2026-10-19, after v7/v8/v10 all locked one
+        # action at its limit while alpha_g fell to ~5e-4). Logged only; they
+        # change nothing. The temperature tunes against the SAMPLED, SQUASHED
+        # -log pi (neg_logp), not the base-Gaussian entropy above, so both are
+        # needed to tell "random enough" from "stuck at +-1 with a wide
+        # Gaussian behind it".
+        with torch.no_grad():
+            _a = new_a.detach()
+            diag = {
+                "neg_logp_g": _masked_mean(-logp.detach(), m_g),
+                "sat_steer": _masked_mean((_a[..., 0].abs() > 0.99).float(), m_g),
+                "sat_throttle": _masked_mean((_a[..., 1].abs() > 0.99).float(), m_g),
+                "mean_abs_u_steer": _masked_mean(mean_u[..., 0].abs(), m_g),
+                "mean_abs_u_throttle": _masked_mean(mean_u[..., 1].abs(), m_g),
+                "log_std_g": _masked_mean(log_std.mean(dim=-1), m_g),
+            }
         per_row = zero
         if has_g:
             q_g = self._q(self.critics_g, s_d, st, self.goal_cols, new_a).mean(dim=(0, 2))
@@ -960,6 +976,7 @@ class GatedRecurrentTQC:
                 "q_scale_g": self.q_scale_g.clone(), "q_scale_e": self.q_scale_e.clone(),
                 "entropy_g": _masked_mean(entropy, m_g), "entropy_e": _masked_mean(entropy, m_e),
                 "has_g": (m_g.sum() > 0).float(), "has_e": (m_e.sum() > 0).float(),
+                **diag,
                 "goal_frac": m_g.sum() / n_rows, "valid_frac": valid.mean(),
                 "target_at_floor": at_floor, "target_at_ceiling": at_ceiling,
                 "skipped": zero}

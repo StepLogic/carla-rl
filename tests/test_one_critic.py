@@ -220,3 +220,16 @@ def test_the_saturation_diagnostics_are_reported_and_in_range():
     for k in ("sat_steer", "sat_throttle"):
         assert 0.0 <= float(out[k]) <= 1.0, k
     assert float(out["mean_abs_u_steer"]) >= 0.0
+
+
+def test_the_entropy_target_is_configurable_and_moves_the_temperature():
+    """v12 (2026-10-20): TARGET_ENTROPY=0 instead of -2. With the target ABOVE
+    the policy's -log pi the temperature must RISE, which is the whole point:
+    alpha_g stops collapsing, and the entropy bonus keeps pinned actions costly."""
+    lo = GatedRecurrentSAC(_cfg(one=True, target_entropy=-50.0))
+    hi = GatedRecurrentSAC(_cfg(one=True, target_entropy=50.0))
+    a0 = float(lo.alpha_g)
+    for i in range(5):
+        lo.update(_chunk(lo.cfg, [1.0, 0.0], seed=i))
+        hi.update(_chunk(hi.cfg, [1.0, 0.0], seed=i))
+    assert float(hi.alpha_g) > a0 > float(lo.alpha_g)

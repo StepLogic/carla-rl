@@ -299,7 +299,15 @@ def main():
         value_floor=env_float("TQC_VALUE_FLOOR", -200.0),
         value_ceiling=env_float("TQC_VALUE_CEILING", 150.0),
         value_floor_e=env_float("EXPLORE_VALUE_FLOOR", -200.0),
-        value_ceiling_e=env_float("EXPLORE_VALUE_CEILING", 150.0))
+        value_ceiling_e=env_float("EXPLORE_VALUE_CEILING", 150.0),
+        # THE ENTROPY TARGET the temperature tunes -log pi (sampled, AFTER the
+        # tanh squash) towards. -2 (the default, -action_dim) let alpha_g fall
+        # to ~5e-4 in v10/v11 while the actor's raw outputs drifted past +-1:
+        # v10's deterministic eval sat at steer +-0.99 (SR 0.10). A higher
+        # target keeps alpha alive, and because the squash's Jacobian makes a
+        # pinned action improbable-looking, the only way to meet it is to keep
+        # actions off the limits. User 2026-10-20, "try 2": v12 sets 0.
+        target_entropy=env_float("TARGET_ENTROPY", -2.0))
     agent = GatedRecurrentSAC(cfg)
     # DEBiT'''S PRETRAINED MONOCULAR TRUNK (user 2026-10-14, "I want debit Mono +
     # binocular setup"). Loaded AFTER the learner builds the module and copied

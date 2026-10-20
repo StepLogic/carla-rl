@@ -166,6 +166,18 @@ def run_eval(env, agent, pxr, server, out_root):
         goal_blk = pxr.goal_block(info["debit_goal"])
         vid.start(k)
         ret, t, end = 0.0, 0, None
+        # SPL bookkeeping. p = metres actually driven; l = the shortest ROUTE
+        # to the goal, from the planner the reward's potential term uses. The
+        # planner publishes route_remaining_m on steps, not reliably at reset,
+        # so l = (route left after step 1) + (metres moved on step 1). The
+        # straight-line start distance is kept as a fallback: it is <= the
+        # route, so using it can only make SPL stricter, never kinder.
+        pos0 = np.asarray(info.get("hero_pos", (0.0, 0.0)), np.float64)
+        prev_pos = pos0.copy()
+        gpos = info.get("goal_pos")
+        l_straight = (float(np.linalg.norm(np.asarray(gpos, np.float64) - pos0))
+                      if gpos is not None else None)
+        l_route, path_m = None, 0.0
         while end is None:
             row = pxr.mono_row(info["debit_cur"], obs["mode"], obs["binoc"])
             action, hidden = agent.act(row, hidden, deterministic=True, goal=goal_blk)
@@ -174,6 +186,12 @@ def run_eval(env, agent, pxr, server, out_root):
             obs, r, term, trunc, info = env.step(a_env)
             ret += float(r)
             t += 1
+            pos = np.asarray(info.get("hero_pos", prev_pos), np.float64)
+            moved = float(np.linalg.norm(pos - prev_pos))
+            path_m += moved
+            prev_pos = pos
+            if t == 1 and info.get("route_remaining_m") is not None:
+                l_route = float(info["route_remaining_m"]) + moved
             if info.get("is_success") or info.get("goal_end") == "reached":
                 end = "reached"
             else:
@@ -181,12 +199,22 @@ def run_eval(env, agent, pxr, server, out_root):
             if end is None and (term or trunc):
                 end = str(info.get("goal_end", "timeout"))
         path = vid.save(end)
+        ell = l_route if l_route is not None else l_straight
+        reached = end == "reached"
+        spl_i = (float(reached) * ell / max(path_m, ell)
+                 if (ell is not None and ell > 0) else float("nan"))
         rows.append({"episode": k, "seed": EVAL_SEED + k, "end": end,
-                     "steps": t, "return": round(ret, 2),
-                     "reached": end == "reached", "video": path})
+                     "steps": t, "return": round(ret, 2), "reached": reached,
+                     "shortest_m": None if ell is None else round(ell, 2),
+                     "shortest_src": "route" if l_route is not None else "straight",
+                     "straight_m": None if l_straight is None else round(l_straight, 2),
+                     "path_m": round(path_m, 2), "spl": spl_i, "video": path})
         sr = np.mean([x["reached"] for x in rows])
+        spl = np.nanmean([x["spl"] for x in rows])
         print(f"[Eval {k + 1:3d}/{EVAL_EPISODES}] seed={EVAL_SEED + k} end={end} "
-              f"steps={t} return={ret:.1f} | SR so far {sr:.3f}", flush=True)
+              f"steps={t} shortest={ell if ell is None else round(ell, 1)} m "
+              f"driven={path_m:.1f} m return={ret:.1f} | SR {sr:.3f} SPL {spl:.3f}",
+              flush=True)
 
     n = len(rows)
     sr = float(np.mean([x["reached"] for x in rows])) if n else float("nan")
@@ -197,7 +225,10 @@ def run_eval(env, agent, pxr, server, out_root):
     ends = {}
     for x in rows:
         ends[x["end"]] = ends.get(x["end"], 0) + 1
+    spl = float(np.nanmean([x["spl"] for x in rows])) if n else float("nan")
+    n_route = sum(1 for x in rows if x["shortest_src"] == "route")
     summary = {"checkpoint": EVAL_FROM, "episodes": n, "success_rate": sr,
+               "spl": spl, "spl_shortest_from_route": n_route,
                "wilson95": [round(centre - half, 3), round(centre + half, 3)],
                "ends": ends, "fault_ends": "crossing/off_road/collision",
                "deterministic": True, "towns": TOWNS, "seed0": EVAL_SEED,
@@ -206,7 +237,9 @@ def run_eval(env, agent, pxr, server, out_root):
     with open(os.path.join(out, "eval.json"), "w") as fh:
         json.dump(summary, fh, indent=1)
     print(f"[EvalDone] SR={sr:.3f} (95% CI {summary['wilson95'][0]:.2f}-"
-          f"{summary['wilson95'][1]:.2f}, n={n}) ends={ends} -> {out}", flush=True)
+          f"{summary['wilson95'][1]:.2f}, n={n}) SPL={spl:.3f} "
+          f"(shortest path from the route planner in {n_route}/{n}, straight "
+          f"line otherwise) ends={ends} -> {out}", flush=True)
     env.close()
     server.stop()
 

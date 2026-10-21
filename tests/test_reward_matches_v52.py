@@ -70,9 +70,6 @@ DELIBERATE = {
         "2026-10-19: crossings fined, not terminal. v9 (terminal, the user's "
         "rule) never learned to stay in lane: goal arm 0.03-0.16 at 212k vs "
         "v8's 0.55 fined; the user approved going back",
-    "LANE_DEPARTURE_PENALTY":
-        "2026-10-19 after v8 parked: at 10 a single crossing outweighed parking "
-        "for the rest of the episode (parked ~ -10 at gamma 0.99)",
     "POTENTIAL_K":
         "2026-10-14 after v6: a dense potential-based goal term. Both modes are "
         "paid the same reward, so goal mode had nothing to make it behave "
@@ -172,3 +169,9 @@ def test_parking_is_not_free():
     assert float(e.get("EXPLORE_IDLE_PENALTY", 0)) > 0
     assert float(e.get("EXPLORE_IDLE_SPEED_KMH", 0)) < float(e["GOAL_ARRIVAL_MAX_SPEED"])
     assert e.get("EXPLORE_DIST_MODE") == "net"
+
+
+def test_a_crossing_costs_ten_again():
+    """User 2026-10-21: back to v52's 10 after v12 failed mostly on an opening
+    creep over the left line that a fine of 3 made cheap."""
+    assert float(_exported()["LANE_DEPARTURE_PENALTY"]) == 10.0

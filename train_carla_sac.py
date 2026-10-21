@@ -307,14 +307,19 @@ def main():
     parallel = PARALLEL_TOWNS and not EVAL_FROM and len(TOWNS) > 1
     ports = [PORT + 50 * i for i in range(len(TOWNS))] if parallel else [PORT]
     servers = []
-    for i, port in enumerate(ports):
+
+    def _start_server(i, port):
         srv = CarlaServer(port, quality=os.environ.get("CARLA_QUALITY", "Epic"),
                           log_dir=os.path.join(OUT, "carla", TOWNS[i]))
         srv.start()
         print(f"  carla[{TOWNS[i]}]: {srv.describe()} ready in "
               f"{srv.wait_ready():.0f}s", flush=True)
         servers.append(srv)
-    server = servers[0]
+        return srv
+
+    if not (PARALLEL_TOWNS and not EVAL_FROM and len(TOWNS) > 1):
+        _start_server(0, ports[0])
+    server = servers[0] if servers else None
     venv = None
     if parallel:
         import threading
@@ -327,8 +332,17 @@ def main():
         # still overlap on threads.
         _build_lock = threading.Lock()
 
+        # EACH SERVER STARTS RIGHT BEFORE ITS ENV, inside the lock (job 455090).
+        # A server with no client renders its default map free-running at Epic
+        # until an env connects and puts it in synchronous mode; started all
+        # up front, the idle second server starved the first of GPU and its
+        # first sensor read missed rlib's 10 s timeout. Every single-server
+        # smoke (Town05/Town01, either goal camera) passed. The JAX trainer
+        # also started each server inside its env factory, staggered.
         def _make(t, p, k):
             with _build_lock:
+                if not any(sv.port == p for sv in servers):
+                    _start_server(k, p)
                 return build_env(t, seed=SEED + k, encoder=enc, port=p,
                                  state_keys=())
         venv = ThreadedVecEnv(
@@ -336,6 +350,7 @@ def main():
              for k, (t, p) in enumerate(zip(TOWNS, ports))],
             names=list(TOWNS))
         env = venv.envs[0]
+        server = servers[0]
     else:
         env = build_env(TOWNS[town_i], seed=SEED, encoder=enc, port=PORT,
                         state_keys=(), eval_mode=bool(EVAL_FROM))

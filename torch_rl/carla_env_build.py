@@ -132,6 +132,11 @@ def build_env(town: str, seed: int, encoder=None, port: int = 2000,
     if env_factory is None:
         from rlib_integration.carla_env import CarlaEnv
         env_factory = CarlaEnv
+        from torch_rl import goal_camera
+        if goal_camera.ENABLED:
+            from src.configs.train_env_config_v4_image_goal import config as _cfg
+            goal_camera.install(_cfg["env_config"]["experiment"]["hero"]
+                                ["sensors"]["rgb"]["transform"])
 
     env = env_factory(config=env_config(town, port, base=base))
     env = CoreStateWrapper(env)

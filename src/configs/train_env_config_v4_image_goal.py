@@ -1369,11 +1369,21 @@ config = {
                     "goal_heading": {
                         "type": "sensor.goal.heading"
                     },
-                    "goal": {
+                    # GOAL_CAM_MATCH=1 (user 2026-10-21, "match the
+                    # cameras"): the goal camera takes the hero rgb camera's
+                    # resolution and FOV, and torch_rl.goal_camera mounts it
+                    # like the hero camera at the goal. Off: the original
+                    # 112x112 at CARLA's default 90 deg.
+                    "goal": ({
+                        "type": "sensor.goal",
+                        "image_size_x": 748,
+                        "image_size_y": 348,
+                        "fov": 110,
+                    } if os.environ.get("GOAL_CAM_MATCH", "0") == "1" else {
                         "type": "sensor.goal",
                         "image_size_x": 112,
                         "image_size_y": 112,
-                    },
+                    }),
                 },
             },
             "background_activity": {

@@ -68,3 +68,5 @@ def install(hero_rgb_transform):
 
     GoalImageSensor._compute_goal_transform = _compute_goal_transform
     GoalImageSensor._goal_cam_matched = True
+    print(f"[GoalCam] goal camera = hero camera: mounted {fwd:g} m ahead along "
+          f"the lane, {up:g} m above the road, pitch {pitch:g}", flush=True)

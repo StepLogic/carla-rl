@@ -317,10 +317,22 @@ def main():
     server = servers[0]
     venv = None
     if parallel:
+        import threading
         from vae_nav.vec_env import ThreadedVecEnv
+        # BUILT ONE AT A TIME, STEPPED TOGETHER. ThreadedVecEnv constructs its
+        # envs concurrently; with two Epic servers that made one env's first
+        # sensor read time out while the other map was still loading (job
+        # 455086, "A sensor took too long to send their data"). The lock
+        # serialises construction -- and any later rebuild -- while the steps
+        # still overlap on threads.
+        _build_lock = threading.Lock()
+
+        def _make(t, p, k):
+            with _build_lock:
+                return build_env(t, seed=SEED + k, encoder=enc, port=p,
+                                 state_keys=())
         venv = ThreadedVecEnv(
-            [(lambda t=t, p=p, k=k: build_env(t, seed=SEED + k, encoder=enc,
-                                              port=p, state_keys=()))
+            [(lambda t=t, p=p, k=k: _make(t, p, k))
              for k, (t, p) in enumerate(zip(TOWNS, ports))],
             names=list(TOWNS))
         env = venv.envs[0]

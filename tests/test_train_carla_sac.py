@@ -85,7 +85,10 @@ def test_the_goal_frame_is_latched_per_EPISODE():
     """Once at start and once per reset -- never per step, which would make the
     target drift under the policy."""
     s = src()
-    assert s.count('pxr.goal_block(info["debit_goal"])') == 2
+    # Counted in main() only: run_eval (EVAL_FROM) latches its own goal once
+    # per eval episode, which is the same rule, in a different function.
+    main_src = s[s.index("\ndef main():"):]
+    assert main_src.count('pxr.goal_block(info["debit_goal"])') == 2
     body = s[s.index("for step in range(1, MAX_STEPS"):]
     assert 'goal_block(info["debit_goal"])' in body     # the reset branch
     assert body.count("goal_block(") == 1, "the goal must not be re-read per step"

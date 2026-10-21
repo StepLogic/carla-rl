@@ -156,6 +156,11 @@ class ThreadedVecEnv:
             if done:
                 inf["episode_return"] = float(self.episode_returns[i])
                 inf["episode_length"] = int(self.episode_lengths[i])
+                # The TERMINAL observation, before the auto-reset overwrites
+                # obs[i] below. A truncated (time-limit) transition still
+                # bootstraps from it, so a replay that stored the reset
+                # observation instead would value the next episode's start.
+                inf["final_obs"] = o
                 final_infos.append(inf)
                 reset_idx.append(i)
             else:

@@ -103,6 +103,16 @@ VIDEO_KEEP = env_int("VIDEO_KEEP", 5)
 TOWNS = [t for t in os.environ.get(
     "ENV_TOWNS", "Town01,Town04,Town05,Town06,Town07,Town10HD").split(",") if t]
 TOWN_EVERY = env_int("TOWN_EVERY", 25)
+# ALL TOWNS AT ONCE (user 2026-10-21: Town05 and Town01, "do not switch
+# towns", "use existing code"): one CARLA server per town, stepped together by
+# vae_nav.vec_env.ThreadedVecEnv -- the vector env the two-town JAX runs used.
+# Replaces the TOWN_EVERY rotation when on. Ports are PORT + 50*i so each
+# server's RPC and streaming ports (port, +1, +2) never overlap.
+PARALLEL_TOWNS = os.environ.get("PARALLEL_TOWNS", "0") == "1"
+# HINDSIGHT RELABELLING (user 2026-10-21, "add HER"): torch_rl.image_her.
+HER = os.environ.get("HER", "0") == "1"
+HER_RELABEL = env_int("HER_RELABEL", 2)
+HER_EXPLORE = os.environ.get("HER_EXPLORE", "1") == "1"
 PORT = env_int("CARLA_PORT", 2000)
 SEED = env_int("SEED", 0)
 DEVICE = os.environ.get("TORCH_DEVICE", "cuda")
@@ -294,13 +304,29 @@ def main():
     # map change worked, the next rebuild hung while the server flooded "Invalid
     # session: no stream available"). A restart cannot inherit that state.
     town_i = 0
-    server = CarlaServer(PORT, quality=os.environ.get("CARLA_QUALITY", "Epic"),
-                         log_dir=os.path.join(OUT, "carla"))
-    server.start()
-    print(f"  carla: {server.describe()} ready in "
-          f"{server.wait_ready():.0f}s", flush=True)
-    env = build_env(TOWNS[town_i], seed=SEED, encoder=enc, port=PORT,
-                    state_keys=(), eval_mode=bool(EVAL_FROM))
+    parallel = PARALLEL_TOWNS and not EVAL_FROM and len(TOWNS) > 1
+    ports = [PORT + 50 * i for i in range(len(TOWNS))] if parallel else [PORT]
+    servers = []
+    for i, port in enumerate(ports):
+        srv = CarlaServer(port, quality=os.environ.get("CARLA_QUALITY", "Epic"),
+                          log_dir=os.path.join(OUT, "carla", TOWNS[i]))
+        srv.start()
+        print(f"  carla[{TOWNS[i]}]: {srv.describe()} ready in "
+              f"{srv.wait_ready():.0f}s", flush=True)
+        servers.append(srv)
+    server = servers[0]
+    venv = None
+    if parallel:
+        from vae_nav.vec_env import ThreadedVecEnv
+        venv = ThreadedVecEnv(
+            [(lambda t=t, p=p, k=k: build_env(t, seed=SEED + k, encoder=enc,
+                                              port=p, state_keys=()))
+             for k, (t, p) in enumerate(zip(TOWNS, ports))],
+            names=list(TOWNS))
+        env = venv.envs[0]
+    else:
+        env = build_env(TOWNS[town_i], seed=SEED, encoder=enc, port=PORT,
+                        state_keys=(), eval_mode=bool(EVAL_FROM))
     obs, info = env.reset(seed=SEED)
     # THE STATE BLOCK IS THE MODE BIT AND THE BINOC, NOTHING ELSE (user
     # 2026-10-14: "get rid of all state vectors except mode bit"). No steer, no
@@ -438,6 +464,50 @@ def main():
                 "info['binoc_encoded'] is False: the env wrapper has no DEBiT "
                 "encoder, so the binoc column would be zeros.")
         return pxr.mono_row(i["debit_cur"], o["mode"], o["binoc"])
+
+    if parallel:
+        from torch_rl.parallel_loop import run_parallel
+        print(f"  PARALLEL: {len(TOWNS)} envs at once, one server per town "
+              f"({', '.join(f'{t}:{p}' for t, p in zip(TOWNS, ports))}); no "
+              f"town switching", flush=True)
+        vids = [EpisodeVideo(os.path.join(OUT, "videos", t), every=VIDEO_EVERY,
+                             max_frames=VIDEO_MAX_FRAMES, keep=VIDEO_KEEP)
+                for t in TOWNS]
+        her = None
+        if HER:
+            import vae_nav.gated_reward as _G
+            from torch_rl.image_her import ImageGoalHER
+            her = ImageGoalHER(
+                buf, enc, pxr, n_relabel=HER_RELABEL,
+                min_m=env_float("GOAL_DIST_MIN", 5.0),
+                max_m=env_float("GOAL_DIST_MAX", 25.0), radius=GOAL_RADIUS_M,
+                max_speed=float(_G.GOAL_ARRIVAL_MAX_SPEED or 1e9),
+                goal_bonus=float(_G.GOAL_EXPLORE_ARRIVAL_BONUS),
+                explore_bonus=float(_G.EXPLORE_ARRIVAL_BONUS),
+                potential_k=float(_G.POTENTIAL_K),
+                lane_fault=lambda inf: _fault(inf) == "crossing",
+                relabel_explore=HER_EXPLORE, seed=SEED)
+            print(f"  HER: {HER_RELABEL} hindsight legs per episode, "
+                  f"{env_float('GOAL_DIST_MIN', 5.0):g}-{env_float('GOAL_DIST_MAX', 25.0):g} m, "
+                  f"arrival {GOAL_RADIUS_M:g} m at <= {_G.GOAL_ARRIVAL_MAX_SPEED:g} km/h, "
+                  f"+{_G.GOAL_EXPLORE_ARRIVAL_BONUS:g}; progress K={_G.POTENTIAL_K:g} "
+                  f"to the hindsight goal; clean prefix only; explore episodes "
+                  f"{'relabelled' if HER_EXPLORE else 'skipped'}", flush=True)
+        t_start = time.time()
+        steps, episodes = run_parallel(
+            venv, agent, buf, row_of, _box, to_env=to_env, to_actor=to_actor,
+            goal_block=pxr.goal_block, max_steps=MAX_STEPS,
+            learning_starts=LEARNING_STARTS, update_every=UPDATE_EVERY,
+            updates_per=UPDATES_PER, chunk_b=CHUNK_B, chunk_t=CHUNK_T,
+            burn_in=BURN_IN, ckpt_every=CKPT_EVERY, out_dir=OUT,
+            log_every=LOG_EVERY, vids=vids, her=her,
+            log=lambda m: print(m, flush=True))
+        venv.close()
+        for srv in servers:
+            srv.stop()
+        print(f"[Done] {steps} steps, {episodes} episodes in "
+              f"{(time.time() - t_start) / 3600:.2f} h -> {OUT}", flush=True)
+        return
 
     hidden = agent.reset_hidden(1)
     goal_blk = pxr.goal_block(info["debit_goal"])   # the buffer's episode goal

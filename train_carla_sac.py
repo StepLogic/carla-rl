@@ -204,6 +204,20 @@ def run_eval(env, agent, pxr, server, out_root):
         np.random.seed(EVAL_SEED + k)
         torch.manual_seed(EVAL_SEED + k)
         obs, info = env.reset(seed=EVAL_SEED + k)
+        if EVAL_LANE_DEBUG and "lane_priv" in info and info.get("goal_pos") is not None:
+            # Where the goal sits in the START lane's frame: lateral metres
+            # (LEFT +, lane_priv's convention) and metres ahead. ~3.5 m sideways
+            # on a straight road = the goal is in the next lane over.
+            lp0 = np.asarray(info["lane_priv"], np.float64)
+            lane_yaw = float(info.get("hero_yaw", 0.0)) - float(np.arctan2(lp0[2], lp0[3]))
+            d = (np.asarray(info["goal_pos"], np.float64)
+                 - np.asarray(info.get("hero_pos", (0.0, 0.0)), np.float64))
+            cy, sy = np.cos(lane_yaw), np.sin(lane_yaw)
+            g_lat = float(lp0[0]) - float(-d[0] * sy + d[1] * cy)
+            g_fwd = float(d[0] * cy + d[1] * sy)
+            print(f"[LaneStart] ep={k} goal_lat={g_lat:+.2f}m goal_fwd={g_fwd:+.1f}m "
+                  f"lane_w={lp0[4]:.2f} left_illegal={int(lp0[7])} "
+                  f"right_illegal={int(lp0[8])}", flush=True)
         mode = int(round(float(np.asarray(obs["mode"]).ravel()[0])))
         if mode != 1:
             raise RuntimeError("eval episode is not in GOAL mode: EVAL_FORCE_MODE "
@@ -243,6 +257,7 @@ def run_eval(env, agent, pxr, server, out_root):
                           f"junc={int(lp[11])} c={info.get('lane_potential', float('nan')):.3f} "
                           f"F={info.get('lane_shaping', float('nan')):+.3f} "
                           f"half_car={info.get('hero_half_width')} cross={int(cross)} "
+                          f"marks={[str(m).split('.')[-1] for m in (info.get('lane_marking_types') or [])]} "
                           f"a=({a_env[0]:+.2f},{a_env[1]:.2f})", flush=True)
             pos = np.asarray(info.get("hero_pos", prev_pos), np.float64)
             moved = float(np.linalg.norm(pos - prev_pos))

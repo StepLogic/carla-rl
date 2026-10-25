@@ -83,6 +83,9 @@ EVAL_SEED = env_int("EVAL_SEED", 10_000)
 # of tanh(mean): measures how much of the train/eval gap is the noise alone.
 # Torch is seeded per episode so the sampled run repeats too.
 EVAL_STOCHASTIC = os.environ.get("EVAL_STOCHASTIC", "0") == "1"
+# EVAL_LANE_DEBUG=1 prints the lane block and the lane-centre shaping each
+# 5th step and on every crossing, to check the signal on a real simulator.
+EVAL_LANE_DEBUG = os.environ.get("EVAL_LANE_DEBUG", "0") == "1"
 # EVAL_NOISE_SCALE scales that noise: 0 = tanh(mean), 1 = training's own
 # sampling. A sweep over it says whether the mean action is worse than the
 # samples that earned the training return. EVAL_STOCHASTIC=1 means scale 1.
@@ -231,6 +234,16 @@ def run_eval(env, agent, pxr, server, out_root):
             obs, r, term, trunc, info = env.step(a_env)
             ret += float(r)
             t += 1
+            if EVAL_LANE_DEBUG and "lane_priv" in info:
+                lp = np.asarray(info["lane_priv"], np.float64)
+                cross = bool(info.get("lane_any", info.get("lane_invasion_any", False)))
+                if cross or t % 5 == 1:
+                    print(f"[Lane] ep={k} t={t} off={lp[0]:+.2f}m "
+                          f"lane_w={lp[4]:.2f} herr={np.degrees(np.arctan2(lp[2], lp[3])):+.0f}deg "
+                          f"junc={int(lp[11])} c={info.get('lane_potential', float('nan')):.3f} "
+                          f"F={info.get('lane_shaping', float('nan')):+.3f} "
+                          f"half_car={info.get('hero_half_width')} cross={int(cross)} "
+                          f"a=({a_env[0]:+.2f},{a_env[1]:.2f})", flush=True)
             pos = np.asarray(info.get("hero_pos", prev_pos), np.float64)
             moved = float(np.linalg.norm(pos - prev_pos))
             path_m += moved

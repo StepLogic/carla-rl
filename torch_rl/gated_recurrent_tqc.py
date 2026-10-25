@@ -684,7 +684,8 @@ class GatedRecurrentTQC:
             n, self.cfg.goal_dim)
 
     @torch.no_grad()
-    def act(self, row: np.ndarray, hidden, deterministic: bool = False, goal=None):
+    def act(self, row: np.ndarray, hidden, deterministic: bool = False, goal=None,
+            noise_scale: float = 1.0):
         """One (obs_dim,) row in, one action out; always batch 1. `goal`
         ((goal_dim,) or (1, goal_dim), required with goal_tokens): the goal
         image's flattened tokens."""
@@ -692,7 +693,8 @@ class GatedRecurrentTQC:
         g = self._goal_input(goal, 1)
         s, hidden = self.core.step(self._embed(self.compress, self.act_embed, x, g), hidden)
         inp = torch.cat([s, self._state(x)], dim=-1)
-        a = self.actor.deterministic(inp) if deterministic else self.actor.sample(inp)[0]
+        a = (self.actor.deterministic(inp) if deterministic
+             else self.actor.sample(inp, noise_scale=noise_scale)[0])
         return a[0].cpu().numpy(), hidden
 
     @torch.no_grad()

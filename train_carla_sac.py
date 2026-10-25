@@ -83,6 +83,19 @@ EVAL_SEED = env_int("EVAL_SEED", 10_000)
 # of tanh(mean): measures how much of the train/eval gap is the noise alone.
 # Torch is seeded per episode so the sampled run repeats too.
 EVAL_STOCHASTIC = os.environ.get("EVAL_STOCHASTIC", "0") == "1"
+# EVAL_NOISE_SCALE scales that noise: 0 = tanh(mean), 1 = training's own
+# sampling. A sweep over it says whether the mean action is worse than the
+# samples that earned the training return. EVAL_STOCHASTIC=1 means scale 1.
+EVAL_NOISE_SCALE = float(os.environ.get(
+    "EVAL_NOISE_SCALE", "1.0" if EVAL_STOCHASTIC else "0.0"))
+
+
+def _eval_suffix(scale: float) -> str:
+    """Eval output folder suffix, so one checkpoint's scales never collide.
+    Scale 1.0 keeps the `_stoch` name already published for v13's Town02 run."""
+    if scale <= 0.0:
+        return ""
+    return "_stoch" if scale == 1.0 else f"_n{int(round(scale * 100))}"
 # The env's arrival test: straight-line distance to the goal < 2 m
 # (train_env_config_v4_image_goal, passed_chckp). SPL measures to this circle.
 GOAL_RADIUS_M = env_float("GOAL_RADIUS_M", 2.0)
@@ -165,13 +178,13 @@ def run_eval(env, agent, pxr, server, out_root):
     from torch_rl.episode_video import EpisodeVideo
 
     tag = os.path.basename(os.path.normpath(EVAL_FROM))
-    out = os.path.join(out_root, f"eval_{tag}" + ("_stoch" if EVAL_STOCHASTIC else ""))
+    out = os.path.join(out_root, f"eval_{tag}" + _eval_suffix(EVAL_NOISE_SCALE))
     vid = EpisodeVideo(os.path.join(out, "videos"), every=1, max_frames=1200,
                        keep=max(EVAL_EPISODES, 1))
     box = env.action_space
     print(f"=== EVAL {EVAL_FROM} | {EVAL_EPISODES} goal episodes, seeds "
           f"{EVAL_SEED}..{EVAL_SEED + EVAL_EPISODES - 1}, "
-          f"{'SAMPLED (stochastic)' if EVAL_STOCHASTIC else 'DETERMINISTIC'} actions, "
+          f"{'DETERMINISTIC' if EVAL_NOISE_SCALE <= 0 else f'SAMPLED at noise x{EVAL_NOISE_SCALE:g}'} actions, "
           f"faults END the episode (crossing/off-road/collision) | town "
           f"{','.join(TOWNS)} -> {out}", flush=True)
     import random as _random
@@ -210,7 +223,9 @@ def run_eval(env, agent, pxr, server, out_root):
         l_route, path_m = None, 0.0
         while end is None:
             row = pxr.mono_row(info["debit_cur"], obs["mode"], obs["binoc"])
-            action, hidden = agent.act(row, hidden, deterministic=not EVAL_STOCHASTIC, goal=goal_blk)
+            action, hidden = agent.act(row, hidden, goal=goal_blk,
+                                       deterministic=EVAL_NOISE_SCALE <= 0,
+                                       noise_scale=EVAL_NOISE_SCALE)
             a_env = to_env(np.asarray(action, np.float32), box)
             vid.add(info["debit_cur"], info["debit_goal"], t, mode, 0.0, a_env, ret)
             obs, r, term, trunc, info = env.step(a_env)
@@ -266,7 +281,8 @@ def run_eval(env, agent, pxr, server, out_root):
                "spl": spl, "spl_shortest_from_route": n_route,
                "wilson95": [round(centre - half, 3), round(centre + half, 3)],
                "ends": ends, "fault_ends": "crossing/off_road/collision",
-               "deterministic": not EVAL_STOCHASTIC, "towns": TOWNS, "seed0": EVAL_SEED,
+               "deterministic": EVAL_NOISE_SCALE <= 0,
+               "noise_scale": EVAL_NOISE_SCALE, "towns": TOWNS, "seed0": EVAL_SEED,
                "episodes_detail": rows}
     os.makedirs(out, exist_ok=True)
     with open(os.path.join(out, "eval.json"), "w") as fh:

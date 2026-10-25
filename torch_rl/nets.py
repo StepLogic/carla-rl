@@ -54,10 +54,22 @@ class Actor(nn.Module):
         mean, log_std = self.trunk(s).chunk(2, dim=-1)
         return mean, log_std.clamp(self.lo, self.hi)
 
-    def sample(self, s: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+    def sample(self, s: torch.Tensor, noise_scale: float = 1.0
+               ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """`noise_scale` shrinks the draw towards the mean: 1.0 is training's
+        own sampling, 0.0 is tanh(mean) exactly. It exists for the eval, which
+        scores tanh(mean) while the return was earned by samples; sweeping the
+        scale separates "the mean action is bad" from "the task is hard".
+        The returned log_prob is the density of the UNSCALED policy at the drawn
+        point, so it is only the behaviour log-density at scale 1.0 -- nothing
+        but the learner (always scale 1.0) consumes it.
+        """
+        noise_scale = float(noise_scale)
+        if noise_scale < 0.0:
+            raise ValueError(f"noise_scale={noise_scale} must be >= 0")
         mean, log_std = self(s)
         std = log_std.exp()
-        noise = torch.randn_like(mean)
+        noise = torch.randn_like(mean) * noise_scale
         pre = mean + std * noise
         action = torch.tanh(pre)
         log_prob = (-0.5 * noise ** 2 - log_std - 0.5 * math.log(2 * math.pi)).sum(-1)

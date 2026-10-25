@@ -79,6 +79,10 @@ REPLAY_DEVICE = os.environ.get("REPLAY_DEVICE", "cuda")
 EVAL_FROM = os.environ.get("EVAL_FROM", "")
 EVAL_EPISODES = env_int("EVAL_EPISODES", 40)
 EVAL_SEED = env_int("EVAL_SEED", 10_000)
+# EVAL_STOCHASTIC=1 samples actions from the policy (training noise) instead
+# of tanh(mean): measures how much of the train/eval gap is the noise alone.
+# Torch is seeded per episode so the sampled run repeats too.
+EVAL_STOCHASTIC = os.environ.get("EVAL_STOCHASTIC", "0") == "1"
 # The env's arrival test: straight-line distance to the goal < 2 m
 # (train_env_config_v4_image_goal, passed_chckp). SPL measures to this circle.
 GOAL_RADIUS_M = env_float("GOAL_RADIUS_M", 2.0)
@@ -157,15 +161,17 @@ def run_eval(env, agent, pxr, server, out_root):
     """EVAL_EPISODES goal episodes, deterministic actions, faults terminal,
     every episode recorded. Writes eval.json next to the videos."""
     import json
+    import torch
     from torch_rl.episode_video import EpisodeVideo
 
     tag = os.path.basename(os.path.normpath(EVAL_FROM))
-    out = os.path.join(out_root, f"eval_{tag}")
+    out = os.path.join(out_root, f"eval_{tag}" + ("_stoch" if EVAL_STOCHASTIC else ""))
     vid = EpisodeVideo(os.path.join(out, "videos"), every=1, max_frames=1200,
                        keep=max(EVAL_EPISODES, 1))
     box = env.action_space
     print(f"=== EVAL {EVAL_FROM} | {EVAL_EPISODES} goal episodes, seeds "
-          f"{EVAL_SEED}..{EVAL_SEED + EVAL_EPISODES - 1}, DETERMINISTIC actions, "
+          f"{EVAL_SEED}..{EVAL_SEED + EVAL_EPISODES - 1}, "
+          f"{'SAMPLED (stochastic)' if EVAL_STOCHASTIC else 'DETERMINISTIC'} actions, "
           f"faults END the episode (crossing/off-road/collision) | town "
           f"{','.join(TOWNS)} -> {out}", flush=True)
     import random as _random
@@ -180,6 +186,7 @@ def run_eval(env, agent, pxr, server, out_root):
         # as before.
         _random.seed(EVAL_SEED + k)
         np.random.seed(EVAL_SEED + k)
+        torch.manual_seed(EVAL_SEED + k)
         obs, info = env.reset(seed=EVAL_SEED + k)
         mode = int(round(float(np.asarray(obs["mode"]).ravel()[0])))
         if mode != 1:
@@ -203,7 +210,7 @@ def run_eval(env, agent, pxr, server, out_root):
         l_route, path_m = None, 0.0
         while end is None:
             row = pxr.mono_row(info["debit_cur"], obs["mode"], obs["binoc"])
-            action, hidden = agent.act(row, hidden, deterministic=True, goal=goal_blk)
+            action, hidden = agent.act(row, hidden, deterministic=not EVAL_STOCHASTIC, goal=goal_blk)
             a_env = to_env(np.asarray(action, np.float32), box)
             vid.add(info["debit_cur"], info["debit_goal"], t, mode, 0.0, a_env, ret)
             obs, r, term, trunc, info = env.step(a_env)
@@ -259,7 +266,7 @@ def run_eval(env, agent, pxr, server, out_root):
                "spl": spl, "spl_shortest_from_route": n_route,
                "wilson95": [round(centre - half, 3), round(centre + half, 3)],
                "ends": ends, "fault_ends": "crossing/off_road/collision",
-               "deterministic": True, "towns": TOWNS, "seed0": EVAL_SEED,
+               "deterministic": not EVAL_STOCHASTIC, "towns": TOWNS, "seed0": EVAL_SEED,
                "episodes_detail": rows}
     os.makedirs(out, exist_ok=True)
     with open(os.path.join(out, "eval.json"), "w") as fh:

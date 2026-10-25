@@ -129,6 +129,12 @@ TOWN_EVERY = env_int("TOWN_EVERY", 25)
 # Replaces the TOWN_EVERY rotation when on. Ports are PORT + 50*i so each
 # server's RPC and streaming ports (port, +1, +2) never overlap.
 PARALLEL_TOWNS = os.environ.get("PARALLEL_TOWNS", "0") == "1"
+# NOISE-FREE TRAINING EPISODES (user 2026-10-25, v15): this share of episodes,
+# drawn per env per episode, acts with tanh(mean) -- the action the eval scores.
+# v14 parked at full lock with ~0 throttle on 7 of 21 Town02 eval failures, a
+# state the noisy rollouts almost never visited, so the critic never priced it.
+# Parallel loop only. 0 = off (every earlier run).
+DET_EPISODE_FRAC = float(os.environ.get("DET_EPISODE_FRAC", "0") or 0.0)
 # HINDSIGHT RELABELLING (user 2026-10-21, "add HER"): torch_rl.image_her.
 HER = os.environ.get("HER", "0") == "1"
 HER_RELABEL = env_int("HER_RELABEL", 2)
@@ -548,6 +554,9 @@ def main():
         print(f"  PARALLEL: {len(TOWNS)} envs at once, one server per town "
               f"({', '.join(f'{t}:{p}' for t, p in zip(TOWNS, ports))}); no "
               f"town switching", flush=True)
+        print(f"  NOISE-FREE EPISODES: {DET_EPISODE_FRAC:.0%} of training episodes "
+              f"act with tanh(mean), drawn per env per episode"
+              + ("" if DET_EPISODE_FRAC else " -- OFF"), flush=True)
         vids = [EpisodeVideo(os.path.join(OUT, "videos", t), every=VIDEO_EVERY,
                              max_frames=VIDEO_MAX_FRAMES, keep=VIDEO_KEEP)
                 for t in TOWNS]
@@ -579,7 +588,8 @@ def main():
             updates_per=UPDATES_PER, chunk_b=CHUNK_B, chunk_t=CHUNK_T,
             burn_in=BURN_IN, ckpt_every=CKPT_EVERY, out_dir=OUT,
             log_every=LOG_EVERY, vids=vids, her=her,
-            log=lambda m: print(m, flush=True))
+            log=lambda m: print(m, flush=True),
+            det_frac=DET_EPISODE_FRAC, det_seed=SEED)
         venv.close()
         for srv in servers:
             srv.stop()

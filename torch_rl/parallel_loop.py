@@ -30,8 +30,14 @@ def _mode_of(obs):
 def run_parallel(venv, agent, buf, row_of, box, *, to_env, to_actor, goal_block,
                  max_steps, learning_starts, update_every, updates_per,
                  chunk_b, chunk_t, burn_in, ckpt_every, out_dir, log_every,
-                 vids=None, her=None, log=print, on_episode=None):
-    """Train until `max_steps` transitions. Returns (steps, episodes)."""
+                 vids=None, her=None, log=print, on_episode=None,
+                 det_frac=0.0, det_seed=0):
+    """Train until `max_steps` transitions. Returns (steps, episodes).
+
+    `det_frac` (user 2026-10-25): the share of episodes, drawn per env at each
+    episode start, that act NOISE-FREE (noise scale 0) -- the action the eval
+    scores -- so the states only that action reaches enter replay with their
+    real cost. 0 = every episode samples, and no scale is passed at all."""
     n = venv.n
     names = list(venv.names)
     obs_s, infos = venv.reset()
@@ -41,6 +47,8 @@ def run_parallel(venv, agent, buf, row_of, box, *, to_env, to_actor, goal_block,
     goals = [goal_block(infos[i]["debit_goal"]) for i in range(n)]
     modes = [_mode_of(obs[i]) for i in range(n)]
     hidden = agent.reset_hidden(n)
+    det_rng = np.random.default_rng(det_seed)
+    det = [bool(det_frac) and bool(det_rng.random() < det_frac) for _ in range(n)]
     ep_ret = [0.0] * n
     ep_len = [0] * n
     if vids:
@@ -50,7 +58,7 @@ def run_parallel(venv, agent, buf, row_of, box, *, to_env, to_actor, goal_block,
         for i in range(n):
             her.begin(i, infos[i], modes[i])
 
-    recent = {"goal": [], "explore": [], "policy": [], "ends": {}}
+    recent = {"goal": [], "explore": [], "policy": [], "ends": {}, "det_goal": []}
     roll = {"n": 0, "lock": 0, "idle_thr": 0}
     metrics = {}
     step, episodes = 0, 0
@@ -62,8 +70,13 @@ def run_parallel(venv, agent, buf, row_of, box, *, to_env, to_actor, goal_block,
             actions = np.stack([to_actor(box.sample().astype(np.float32), box)
                                 for _ in range(n)]).astype(np.float32)
         else:
-            actions, hidden = agent.act_batch(np.stack(rows), hidden,
-                                              goal=np.stack(goals))
+            if det_frac:
+                actions, hidden = agent.act_batch(
+                    np.stack(rows), hidden, goal=np.stack(goals),
+                    noise_scale=np.array([0.0 if d else 1.0 for d in det], np.float32))
+            else:
+                actions, hidden = agent.act_batch(np.stack(rows), hidden,
+                                                  goal=np.stack(goals))
             actions = np.asarray(actions, np.float32)
         env_actions = np.stack([to_env(a, box) for a in actions])
         for a, ea in zip(actions, env_actions):
@@ -113,7 +126,9 @@ def run_parallel(venv, agent, buf, row_of, box, *, to_env, to_actor, goal_block,
             recent["policy"].append(float(arrived))
             recent["goal" if modes[i] == 1 else "explore"].append(
                 dict(len=ep_len[i], arrived=float(arrived)))
-            for k in ("goal", "explore", "policy"):
+            if det[i] and modes[i] == 1:
+                recent["det_goal"].append(float(arrived))
+            for k in ("goal", "explore", "policy", "det_goal"):
                 recent[k] = recent[k][-100:]
             if on_episode is not None:
                 on_episode(i, end, ep_ret[i], ep_len[i])
@@ -125,6 +140,7 @@ def run_parallel(venv, agent, buf, row_of, box, *, to_env, to_actor, goal_block,
             goals[i] = goal_block(rinf["debit_goal"])
             modes[i] = _mode_of(o_new)
             hidden = agent.zero_hidden_columns(hidden, [i])
+            det[i] = bool(det_frac) and bool(det_rng.random() < det_frac)
             ep_ret[i], ep_len[i] = 0.0, 0
             if vids:
                 vids[i].start(episodes)
@@ -145,6 +161,9 @@ def run_parallel(venv, agent, buf, row_of, box, *, to_env, to_actor, goal_block,
                     f"ends={recent['ends']} buffer={buf.size} {per_h / 1000:.0f}k steps/h "
                     f"| {_m('critic_loss_g'):.3f} q_g={_m('q_g'):.2f} "
                     f"q_e={_m('q_e'):.2f} alpha_g={_m('alpha_g'):.4f}"
+                    + (f" | det={np.mean(recent['det_goal']) if recent['det_goal'] else float('nan'):.3f}"
+                       f"(n={len(recent['det_goal'])} noise-free goal eps)"
+                       if det_frac else "")
                     + (f" | her={her.describe_counts()}" if her is not None else ""))
                 log(f"[Diag] step={step} -logpi={_m('neg_logp_g'):.2f} "
                     f"log_std={_m('log_std_g'):.2f} "

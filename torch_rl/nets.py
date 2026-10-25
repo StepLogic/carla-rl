@@ -64,12 +64,21 @@ class Actor(nn.Module):
         point, so it is only the behaviour log-density at scale 1.0 -- nothing
         but the learner (always scale 1.0) consumes it.
         """
-        noise_scale = float(noise_scale)
-        if noise_scale < 0.0:
-            raise ValueError(f"noise_scale={noise_scale} must be >= 0")
+        if torch.is_tensor(noise_scale):
+            # PER ROW (noise-free training episodes): (N, 1) or (N,) against
+            # an (N, action_dim) mean; a 0 row is exactly tanh(mean).
+            if bool((noise_scale < 0).any()):
+                raise ValueError("noise_scale must be >= 0 in every row")
+            if noise_scale.dim() == 1:
+                noise_scale = noise_scale[:, None]
+        else:
+            noise_scale = float(noise_scale)
+            if noise_scale < 0.0:
+                raise ValueError(f"noise_scale={noise_scale} must be >= 0")
         mean, log_std = self(s)
         std = log_std.exp()
-        noise = torch.randn_like(mean) * noise_scale
+        noise = torch.randn_like(mean) * (noise_scale.to(mean) if torch.is_tensor(noise_scale)
+                                          else noise_scale)
         pre = mean + std * noise
         action = torch.tanh(pre)
         log_prob = (-0.5 * noise ** 2 - log_std - 0.5 * math.log(2 * math.pi)).sum(-1)

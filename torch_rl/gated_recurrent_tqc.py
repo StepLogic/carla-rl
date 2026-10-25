@@ -698,7 +698,8 @@ class GatedRecurrentTQC:
         return a[0].cpu().numpy(), hidden
 
     @torch.no_grad()
-    def act_batch(self, rows, hidden: torch.Tensor, deterministic: bool = False, goal=None):
+    def act_batch(self, rows, hidden: torch.Tensor, deterministic: bool = False, goal=None,
+                  noise_scale=None):
         """N (obs_dim,) rows in -> N actions out, one GRU step shared across the
         batch (12 parallel envs' worth in the 50M-step run). `hidden` is
         (1, N, hidden), one column per env, carried by the caller across calls
@@ -733,7 +734,14 @@ class GatedRecurrentTQC:
         g = self._goal_input(goal, x.shape[0])
         s, hidden = self.core.step(self._embed(self.compress, self.act_embed, x, g), hidden)
         inp = torch.cat([s, self._state(x)], dim=-1)
-        a = self.actor.deterministic(inp) if deterministic else self.actor.sample(inp)[0]
+        if deterministic:
+            a = self.actor.deterministic(inp)
+        elif noise_scale is None:
+            a = self.actor.sample(inp)[0]
+        else:
+            # Per-env scale (N,): 0 = that env's episode acts noise-free.
+            ns = torch.as_tensor(np.asarray(noise_scale, np.float32), device=self.device)
+            a = self.actor.sample(inp, noise_scale=ns)[0]
         return a.cpu().numpy(), hidden
 
     @staticmethod

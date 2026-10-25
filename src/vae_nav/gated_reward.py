@@ -54,6 +54,7 @@ try:
 except ImportError:
     from gym import Wrapper
 
+from vae_nav.lane_priv import lane_keep_cost
 from vae_nav.lane_explore_reward import (BASE_PENALTY, COLLISION_PENALTY,
                                          LANE_DEPARTURE_PENALTY, PROGRESS_MODE, PROGRESS_SCALE,
                                          lane_departure_is_fatal)
@@ -846,6 +847,17 @@ if EXPLORE_DIST_MODE not in ("path", "net"):
 EXPLORE_IDLE_PENALTY = float(os.environ.get("EXPLORE_IDLE_PENALTY", 0.0))
 EXPLORE_IDLE_SPEED_KMH = float(os.environ.get("EXPLORE_IDLE_SPEED_KMH", 2.0))
 EXPLORE_ARRIVAL_BONUS = float(os.environ.get("EXPLORE_ARRIVAL_BONUS", 10.0))
+# LANE-CENTRE COST (user 2026-10-25, "Both modes"): a per-step cost for
+# distance from the lane centre (k at the moment the body meets the marking,
+# quadratic, capped 2.25 k) and for heading error (k at 45 deg, capped there),
+# from CARLA's map via vae_nav.lane_priv.lane_keep_cost. Charged in
+# explore_reward, which BOTH modes call, so goal and explore pay alike and the
+# hindsight relabeller keeps it inside the base reward it re-uses. Crossings
+# stay fined, not terminal. 0 = off (every earlier run).
+LANE_CENTRE_COST = float(os.environ.get("LANE_CENTRE_COST", 0.0) or 0.0)
+LANE_HEADING_COST = float(os.environ.get("LANE_HEADING_COST", 0.0) or 0.0)
+# Fallback when info carries no hero_half_width: vehicle.micro.microlino.
+LANE_CAR_HALF_WIDTH = float(os.environ.get("LANE_CAR_HALF_WIDTH", 0.74))
 EXPLORE_LANE_MODE = os.environ.get("EXPLORE_LANE_MODE", "terminal")
 if EXPLORE_LANE_MODE not in ("penalise", "terminal"):
     raise ValueError(f"EXPLORE_LANE_MODE={EXPLORE_LANE_MODE!r}: penalise|terminal")
@@ -942,6 +954,15 @@ def explore_reward(info, disp):
     if (EXPLORE_IDLE_PENALTY
             and float(info.get("speed_kmh", 0.0) or 0.0) < EXPLORE_IDLE_SPEED_KMH):
         r -= EXPLORE_IDLE_PENALTY
+    if LANE_CENTRE_COST or LANE_HEADING_COST:
+        if "lane_priv" not in info:
+            raise KeyError("LANE_CENTRE_COST/LANE_HEADING_COST is on but info "
+                           "has no 'lane_priv': CoreStateWrapper must run below "
+                           "the reward with the same environment.")
+        half_car = info.get("hero_half_width")
+        r -= lane_keep_cost(info["lane_priv"], LANE_CENTRE_COST,
+                            LANE_HEADING_COST,
+                            LANE_CAR_HALF_WIDTH if half_car is None else half_car)
     if info.get("collision"):
         r -= COLLISION_PENALTY
     # Per-step cost of being off the road. Independent of whether off-road is
@@ -1123,6 +1144,11 @@ class GatedReward(Wrapper):
               f"{EXPLORE_IDLE_SPEED_KMH:g} km/h (both modes; 0 = off) | explore "
               f"arrival: {EXPLORE_GOAL_DIST_M:g} m of {EXPLORE_DIST_MODE} distance",
               flush=True)
+        print(f"[Gated] lane-centre cost: offset {LANE_CENTRE_COST:g}/step where "
+              f"the body meets the line (quadratic, cap x2.25), heading "
+              f"{LANE_HEADING_COST:g}/step at 45 deg (cap there); both modes, "
+              f"junctions forgiven" + ("" if (LANE_CENTRE_COST or LANE_HEADING_COST)
+                                       else " -- OFF"), flush=True)
         print(f"[Gated] explore_prob={self.explore_prob} "
               f"force_mode={self.force_mode} explore_max_steps={self.max_steps} "
               f"progress={PROGRESS_MODE} x{PROGRESS_SCALE:g}")

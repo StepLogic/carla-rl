@@ -21,6 +21,12 @@ reward that is wrong everywhere and looks merely difficult.
 import math
 
 OBS_PRIV = os.environ.get("OBS_PRIV", "0") == "1"
+# The same block feeds the LANE-CENTRE COST in gated_reward (user 2026-10-25).
+# Published in info only -- the DEBiT observation never reads it -- whenever
+# either cost is on, so turning the cost on cannot leave it reading nothing.
+LANE_GEOM = (OBS_PRIV
+             or float(os.environ.get("LANE_CENTRE_COST", 0.0) or 0.0) > 0.0
+             or float(os.environ.get("LANE_HEADING_COST", 0.0) or 0.0) > 0.0)
 
 import numpy as np
 
@@ -84,14 +90,21 @@ class CoreStateWrapper(Wrapper):
         # 2026-09-27). One map query per step; only the privileged critic ever
         # reads the result -- see vae_nav.lane_priv. Off by default, so every
         # other run's info is unchanged.
-        if OBS_PRIV:
+        if LANE_GEOM:
             from vae_nav.lane_priv import lane_priv_from_map
             world_map = getattr(core, "map", None)
             if world_map is None:
-                raise SystemExit("OBS_PRIV=1 but core.map is None: the "
-                                 "privileged lane block needs the CARLA map.")
+                raise SystemExit("OBS_PRIV=1 or a lane-centre cost is on but "
+                                 "core.map is None: the lane block needs the "
+                                 "CARLA map.")
             info["lane_priv"] = lane_priv_from_map(world_map, tf.location,
                                                    info["hero_yaw"])
+            # Half the hero's width, for the cost's "room before the body
+            # touches the line". From the bounding box, not a constant: the
+            # blueprint is a config choice.
+            bb = getattr(hero, "bounding_box", None)
+            info["hero_half_width"] = (float(bb.extent.y) if bb is not None
+                                       else None)
         info["goal_pos"] = np.array([goal_loc.x, goal_loc.y], np.float64)
         info["goal_location"] = goal_loc          # the expert oracle wants the
                                                   # carla.Location itself

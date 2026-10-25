@@ -94,6 +94,38 @@ def lane_priv(hero_xy, hero_yaw_rad, wp):
     return out
 
 
+def lane_keep_cost(priv, k_offset, k_heading, car_half_width,
+                   min_room=0.3, offset_cap=1.5, heading_full=math.pi / 4):
+    """LANE-CENTRE COST (user 2026-10-25, "Both modes"), from the 13-d block.
+
+    The boundary fine (LANE_DEPARTURE_PENALTY) says only that a cliff exists
+    somewhere near the marking; nothing pointed at the centre. This does:
+
+        offset  k_offset * min(|lat| / room, offset_cap) ** 2
+                room = lane_width/2 - car_half_width (>= min_room): the lateral
+                slack before the BODY touches the marking, so the cost is
+                exactly k_offset at the moment a crossing begins and ~0 near
+                the centre (quadratic).
+        heading k_heading * min(|heading error| / heading_full, 1) ** 2
+                k_heading at 45 deg and capped there: beyond it the car is
+                already as wrong as it can be told.
+
+    Zero inside a junction (the waypoint can belong to a crossing lane, and the
+    crossing rule forgives junctions too) and when no waypoint was found.
+    """
+    if priv is None:
+        return 0.0
+    priv = np.asarray(priv, np.float64)
+    if priv.shape[-1] != PRIV_DIM or priv[12] < 0.5 or priv[11] > 0.5:
+        return 0.0
+    lat, width = abs(float(priv[0])), float(priv[4])
+    room = max(float(min_room), width / 2.0 - float(car_half_width))
+    off = min(lat / room, float(offset_cap)) ** 2
+    herr = abs(math.atan2(float(priv[2]), float(priv[3])))
+    head = min(herr / float(heading_full), 1.0) ** 2
+    return float(k_offset) * off + float(k_heading) * head
+
+
 def lane_priv_from_map(world_map, location, hero_yaw_rad):
     """Query the map at a carla.Location and build the block."""
     import carla

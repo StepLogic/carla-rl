@@ -847,15 +847,24 @@ if EXPLORE_DIST_MODE not in ("path", "net"):
 EXPLORE_IDLE_PENALTY = float(os.environ.get("EXPLORE_IDLE_PENALTY", 0.0))
 EXPLORE_IDLE_SPEED_KMH = float(os.environ.get("EXPLORE_IDLE_SPEED_KMH", 2.0))
 EXPLORE_ARRIVAL_BONUS = float(os.environ.get("EXPLORE_ARRIVAL_BONUS", 10.0))
-# LANE-CENTRE COST (user 2026-10-25, "Both modes"): a per-step cost for
-# distance from the lane centre (k at the moment the body meets the marking,
-# quadratic, capped 2.25 k) and for heading error (k at 45 deg, capped there),
-# from CARLA's map via vae_nav.lane_priv.lane_keep_cost. Charged in
-# explore_reward, which BOTH modes call, so goal and explore pay alike and the
-# hindsight relabeller keeps it inside the base reward it re-uses. Crossings
-# stay fined, not terminal. 0 = off (every earlier run).
-LANE_CENTRE_COST = float(os.environ.get("LANE_CENTRE_COST", 0.0) or 0.0)
-LANE_HEADING_COST = float(os.environ.get("LANE_HEADING_COST", 0.0) or 0.0)
+# LANE-CENTRE SHAPING (user 2026-10-25: "Both modes", then "Potential
+# shaping" to remove the cheap-crash risk of a per-step cost). The potential is
+#     c(s) = vae_nav.lane_priv.lane_keep_cost(lane block of s)
+#          = LANE_CENTRE_K * min(|offset| / room, 1.5)^2       (room: slack
+#            before the BODY meets the marking; = K at the line, ~0 centred)
+#          + LANE_HEADING_K * min(|heading err| / 45 deg, 1)^2
+# and every step, in BOTH modes, pays F = c(s) - gamma * c(s'), with c = 0 at a
+# terminal state and gamma the LEARNER's discount (DISCOUNT / EXPLORE_DISCOUNT,
+# the trainer's own variables). Over any episode the discounted F telescopes to
+# c(start): crashing at step 5 and arriving at step 500 get the same total, so
+# the term points at the centre without ever making an early end cheaper (Ng,
+# Harada & Russell 1999). It cannot by itself make lane keeping MORE valuable --
+# the crossing fine (LANE_DEPARTURE_PENALTY) still does that. 0 = off.
+LANE_CENTRE_K = float(os.environ.get("LANE_CENTRE_K", 0.0) or 0.0)
+LANE_HEADING_K = float(os.environ.get("LANE_HEADING_K", 0.0) or 0.0)
+LANE_SHAPING = bool(LANE_CENTRE_K or LANE_HEADING_K)
+LANE_GAMMA_GOAL = float(os.environ.get("DISCOUNT", 0.99))
+LANE_GAMMA_EXPLORE = float(os.environ.get("EXPLORE_DISCOUNT", 0.99))
 # Fallback when info carries no hero_half_width: vehicle.micro.microlino.
 LANE_CAR_HALF_WIDTH = float(os.environ.get("LANE_CAR_HALF_WIDTH", 0.74))
 EXPLORE_LANE_MODE = os.environ.get("EXPLORE_LANE_MODE", "terminal")
@@ -933,6 +942,19 @@ def goal_explore_end(info, arrived, truncated):
     return "crossing"
 
 
+def lane_potential(info):
+    """c(s) for the lane-centre shaping, from this step's info. A missing lane
+    block is a wiring error (CoreStateWrapper publishes it whenever the shaping
+    is on), and is raised rather than read as a centred car."""
+    if "lane_priv" not in info:
+        raise KeyError("LANE_CENTRE_K/LANE_HEADING_K is on but info has no "
+                       "'lane_priv': CoreStateWrapper must run below the reward "
+                       "with the same environment.")
+    half_car = info.get("hero_half_width")
+    return lane_keep_cost(info["lane_priv"], LANE_CENTRE_K, LANE_HEADING_K,
+                          LANE_CAR_HALF_WIDTH if half_car is None else half_car)
+
+
 def explore_reward(info, disp):
     """The goal-free half. Same terms as LaneExploreReward, novelty disabled."""
     if PROGRESS_MODE == "projected":
@@ -954,15 +976,6 @@ def explore_reward(info, disp):
     if (EXPLORE_IDLE_PENALTY
             and float(info.get("speed_kmh", 0.0) or 0.0) < EXPLORE_IDLE_SPEED_KMH):
         r -= EXPLORE_IDLE_PENALTY
-    if LANE_CENTRE_COST or LANE_HEADING_COST:
-        if "lane_priv" not in info:
-            raise KeyError("LANE_CENTRE_COST/LANE_HEADING_COST is on but info "
-                           "has no 'lane_priv': CoreStateWrapper must run below "
-                           "the reward with the same environment.")
-        half_car = info.get("hero_half_width")
-        r -= lane_keep_cost(info["lane_priv"], LANE_CENTRE_COST,
-                            LANE_HEADING_COST,
-                            LANE_CAR_HALF_WIDTH if half_car is None else half_car)
     if info.get("collision"):
         r -= COLLISION_PENALTY
     # Per-step cost of being off the road. Independent of whether off-road is
@@ -1144,11 +1157,12 @@ class GatedReward(Wrapper):
               f"{EXPLORE_IDLE_SPEED_KMH:g} km/h (both modes; 0 = off) | explore "
               f"arrival: {EXPLORE_GOAL_DIST_M:g} m of {EXPLORE_DIST_MODE} distance",
               flush=True)
-        print(f"[Gated] lane-centre cost: offset {LANE_CENTRE_COST:g}/step where "
-              f"the body meets the line (quadratic, cap x2.25), heading "
-              f"{LANE_HEADING_COST:g}/step at 45 deg (cap there); both modes, "
-              f"junctions forgiven" + ("" if (LANE_CENTRE_COST or LANE_HEADING_COST)
-                                       else " -- OFF"), flush=True)
+        print(f"[Gated] lane-centre SHAPING: F = c(s) - gamma c(s'), c = "
+              f"{LANE_CENTRE_K:g} where the body meets the line (quadratic, cap "
+              f"x2.25) + {LANE_HEADING_K:g} at 45 deg heading error (cap there); "
+              f"gamma goal {LANE_GAMMA_GOAL:g} / explore {LANE_GAMMA_EXPLORE:g}; "
+              f"c=0 at terminal; both modes, junctions forgiven"
+              + ("" if LANE_SHAPING else " -- OFF"), flush=True)
         print(f"[Gated] explore_prob={self.explore_prob} "
               f"force_mode={self.force_mode} explore_max_steps={self.max_steps} "
               f"progress={PROGRESS_MODE} x{PROGRESS_SCALE:g}")
@@ -1201,6 +1215,8 @@ class GatedReward(Wrapper):
             # dropping a step of progress per episode. None if no route.
             _r0 = info.get("route_remaining_m", None)
             self._prev_remaining = None if _r0 is None else float(_r0)
+        # The shaping differences c(s) - gamma c(s'), so it needs c(s0).
+        self._lane_c = lane_potential(info) if LANE_SHAPING else 0.0
         info["mode"] = self.mode
         return obs, info
 
@@ -1423,6 +1439,18 @@ class GatedReward(Wrapper):
             elif truncated:
                 info["explore_end"] = "cap"
 
+        if LANE_SHAPING:
+            gamma = LANE_GAMMA_GOAL if self.mode == GOAL else LANE_GAMMA_EXPLORE
+            c_next = 0.0 if terminated else lane_potential(info)
+            tail = gamma * c_next
+            shaping = self._lane_c - tail
+            reward = float(reward) + shaping
+            # The hindsight relabeller makes a non-terminal row TERMINAL at the
+            # leg's arrival; there c(s') must be 0, so it adds `tail` back.
+            info["lane_shaping"] = shaping
+            info["lane_shaping_tail"] = tail
+            info["lane_potential"] = c_next
+            self._lane_c = c_next
         info["mode"] = self.mode
         info["gated_reward"] = reward
         return obs, reward, terminated, truncated, info

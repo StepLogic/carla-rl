@@ -1,8 +1,9 @@
-"""LANE-CENTRE COST (user 2026-10-25, "Both modes"): a small per-step cost for
-distance from the lane centre and for heading error, from CARLA's map, charged
-in BOTH modes through the shared explore_reward. Crossings stay fined, not
-terminal; this term only adds a gradient towards the centre that the boundary
-fine alone never gave.
+"""LANE-CENTRE SHAPING (user 2026-10-25, "Both modes", then "Potential
+shaping"): c(s) from the lane block (distance from the lane centre and heading
+error, CARLA's map) is a POTENTIAL; every step in both modes pays
+c(s) - gamma c(s'), c = 0 at a terminal state. That points at the centre but
+telescopes, so no early end can ever be made cheaper -- the cheap-crash risk a
+per-step cost carried. Crossings stay fined, not terminal.
 """
 import importlib
 import math
@@ -83,52 +84,155 @@ def test_narrow_lane_keeps_a_minimum_room():
     assert c == pytest.approx(0.2)
 
 
-def _reward(monkeypatch, **env):
-    for k, v in env.items():
-        monkeypatch.setenv(k, str(v))
+# ---- the shaping in GatedReward ------------------------------------------
+pytest.importorskip("gymnasium")
+import gymnasium as gym                       # noqa: E402
+from gymnasium import spaces                  # noqa: E402
+
+
+class _LaneEnv(gym.Env):
+    """Scripted lane offsets: step t reports offset lats[t] (reset: lats0)."""
+    metadata = {}
+
+    def __init__(self, lat0, lats, crash_at=None):
+        self.observation_space = spaces.Dict({})
+        self.action_space = spaces.Box(np.array([-1.0, 0.0], np.float32),
+                                       np.array([1.0, 1.0], np.float32))
+        self.lat0, self.lats, self.crash_at = lat0, list(lats), crash_at
+        self.t = 0
+
+    def _info(self, lat, x):
+        return {"lane_priv": _priv(lat=lat), "hero_half_width": HALF_CAR,
+                "hero_pos": (x, 0.0), "hero_yaw": 0.0,
+                "wp_forward": np.array([1.0, 0.0]), "speed_kmh": 20.0,
+                "speed_factor": 0.5, "action_smoothness_penalty": 0.0}
+
+    def reset(self, **kw):
+        self.t = 0
+        return np.zeros(4, np.float32), self._info(self.lat0, 0.0)
+
+    def step(self, action):
+        lat = self.lats[self.t]
+        info = self._info(lat, 0.25 * (self.t + 1))
+        if self.crash_at is not None and self.t == self.crash_at:
+            info["collision"] = True
+        self.t += 1
+        return np.zeros(4, np.float32), 0.0, False, False, info
+
+
+def _gr(monkeypatch, k_off=2.0, k_head=1.0, gamma=0.99):
+    monkeypatch.setenv("LANE_CENTRE_K", str(k_off))
+    monkeypatch.setenv("LANE_HEADING_K", str(k_head))
+    monkeypatch.setenv("DISCOUNT", str(gamma))
+    monkeypatch.setenv("EXPLORE_DISCOUNT", str(gamma))
+    monkeypatch.setenv("GATED_GOAL_REWARD", "explore")
     import vae_nav.gated_reward as gr
     return importlib.reload(gr)
 
 
-def _info(lat=0.0, herr_deg=0.0, junction=False):
-    return {"lane_priv": _priv(lat=lat, herr_deg=herr_deg, junction=junction),
-            "hero_half_width": HALF_CAR, "wp_forward": np.array([1.0, 0.0]),
-            "speed_kmh": 20.0, "speed_factor": 0.5,
-            "action_smoothness_penalty": 0.0}
+def _run(gr, lat0, lats, crash_at=None, mode=None, max_steps=50):
+    w = gr.GatedReward(_LaneEnv(lat0, lats, crash_at),
+                       force_mode=gr.EXPLORE if mode is None else mode,
+                       max_steps=max_steps, seed=0)
+    w.reset()
+    out = []
+    for _ in lats:
+        _o, r, term, trunc, info = w.step(np.zeros(2))
+        out.append((r, term, trunc, info))
+        if term or trunc:
+            break
+    return out
 
 
-def test_explore_reward_charges_the_cost_when_on(monkeypatch):
-    gr = _reward(monkeypatch, LANE_CENTRE_COST=0.2, LANE_HEADING_COST=0.2)
-    disp = np.array([0.25, 0.0])
-    r_mid, _ = gr.explore_reward(_info(), disp)
-    r_off, _ = gr.explore_reward(_info(lat=1.75 - HALF_CAR), disp)
-    assert r_mid - r_off == pytest.approx(0.2)
+ROOM = 1.75 - HALF_CAR
 
 
-def test_explore_reward_is_unchanged_when_off(monkeypatch):
-    gr = _reward(monkeypatch, LANE_CENTRE_COST=0.0, LANE_HEADING_COST=0.0)
-    disp = np.array([0.25, 0.0])
-    r_mid, _ = gr.explore_reward(_info(), disp)
-    r_off, _ = gr.explore_reward(_info(lat=1.0, herr_deg=40), disp)
-    assert r_mid == pytest.approx(r_off)
+def test_drifting_out_is_charged_and_coming_back_is_paid(monkeypatch):
+    gr = _gr(monkeypatch)
+    out = _run(gr, 0.0, [ROOM, 0.0, 0.0])
+    f = [i["lane_shaping"] for _r, _t, _tr, i in out]
+    assert f[0] == pytest.approx(0.0 - 0.99 * 2.0)       # drift to the line
+    assert f[1] == pytest.approx(2.0 - 0.0)              # back to the centre
+    assert f[2] == pytest.approx(0.0)
 
 
-def test_cost_on_without_lane_block_is_a_loud_error(monkeypatch):
-    gr = _reward(monkeypatch, LANE_CENTRE_COST=0.2, LANE_HEADING_COST=0.0)
-    info = _info()
-    del info["lane_priv"]
+def test_discounted_total_is_fixed_by_the_start_however_it_ends(monkeypatch):
+    """The whole point: an early crash and a long drive from the same start
+    collect the same discounted shaping, c(s0), so no lane term can make
+    ending early cheaper."""
+    gr = _gr(monkeypatch)
+    g = 0.99
+    lat0 = ROOM / 2
+    c0 = 2.0 * 0.25
+
+    def total(lats, crash_at):
+        out = _run(gr, lat0, lats, crash_at=crash_at)
+        assert out[-1][1]                                # ended TERMINAL
+        return sum(g ** t * i["lane_shaping"] for t, (_r, _t, _tr, i) in enumerate(out))
+
+    early = total([ROOM, ROOM], crash_at=1)
+    late = total([ROOM, 0.2, -0.3, 0.9, 0.0, 0.0, 0.4, 0.0], crash_at=7)
+    assert early == pytest.approx(c0)
+    assert late == pytest.approx(c0)
+
+
+def test_terminal_step_has_no_tail(monkeypatch):
+    gr = _gr(monkeypatch)
+    out = _run(gr, 0.0, [ROOM, ROOM], crash_at=1)
+    _r, term, _tr, info = out[-1]
+    assert term
+    assert info["lane_shaping_tail"] == 0.0
+    assert info["lane_shaping"] == pytest.approx(2.0)   # c(s) - 0
+
+
+def test_truncation_keeps_the_tail(monkeypatch):
+    gr = _gr(monkeypatch)
+    out = _run(gr, 0.0, [ROOM, ROOM], max_steps=2)
+    _r, term, trunc, info = out[-1]
+    assert trunc and not term
+    assert info["lane_shaping_tail"] == pytest.approx(0.99 * 2.0)
+
+
+def test_goal_mode_is_shaped_too(monkeypatch):
+    gr = _gr(monkeypatch)
+    out = _run(gr, 0.0, [ROOM, 0.0], mode=gr.GOAL)
+    f = [i["lane_shaping"] for _r, _t, _tr, i in out]
+    assert f[0] == pytest.approx(-0.99 * 2.0)
+    assert f[1] == pytest.approx(2.0)
+
+
+def test_shaping_reaches_the_reward(monkeypatch):
+    gr = _gr(monkeypatch)
+    on = _run(gr, 0.0, [ROOM])
+    gr = _gr(monkeypatch, k_off=0.0, k_head=0.0)
+    off = _run(gr, 0.0, [ROOM])
+    assert "lane_shaping" not in off[0][3]
+    assert on[0][0] - off[0][0] == pytest.approx(on[0][3]["lane_shaping"])
+
+
+def test_shaping_on_without_lane_block_is_a_loud_error(monkeypatch):
+    gr = _gr(monkeypatch)
+    env = _LaneEnv(0.0, [0.0])
+    w = gr.GatedReward(env, force_mode=gr.EXPLORE, max_steps=5, seed=0)
+    orig = env.reset
+
+    def reset_without_block(**kw):
+        o, i = orig(**kw)
+        del i["lane_priv"]
+        return o, i
+    env.reset = reset_without_block
     with pytest.raises(KeyError):
-        gr.explore_reward(info, np.array([0.25, 0.0]))
+        w.reset()
 
 
-def test_core_state_publishes_the_block_when_the_cost_is_on(monkeypatch):
+def test_core_state_publishes_the_block_when_shaping_is_on(monkeypatch):
     monkeypatch.setenv("OBS_PRIV", "0")
-    monkeypatch.setenv("LANE_CENTRE_COST", "0.2")
+    monkeypatch.setenv("LANE_CENTRE_K", "2.0")
     import vae_nav.core_state as cs
     cs = importlib.reload(cs)
     assert cs.LANE_GEOM is True
-    monkeypatch.setenv("LANE_CENTRE_COST", "0")
-    monkeypatch.setenv("LANE_HEADING_COST", "0")
+    monkeypatch.setenv("LANE_CENTRE_K", "0")
+    monkeypatch.setenv("LANE_HEADING_K", "0")
     cs = importlib.reload(cs)
     assert cs.LANE_GEOM is False
 
@@ -136,7 +240,8 @@ def test_core_state_publishes_the_block_when_the_cost_is_on(monkeypatch):
 @pytest.fixture(autouse=True)
 def _restore_modules(monkeypatch):
     yield
-    for k in ("LANE_CENTRE_COST", "LANE_HEADING_COST", "OBS_PRIV"):
+    for k in ("LANE_CENTRE_K", "LANE_HEADING_K", "OBS_PRIV", "DISCOUNT",
+              "EXPLORE_DISCOUNT", "GATED_GOAL_REWARD"):
         monkeypatch.delenv(k, raising=False)
     import vae_nav.gated_reward as gr
     import vae_nav.core_state as cs

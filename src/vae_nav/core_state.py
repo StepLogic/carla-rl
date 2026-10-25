@@ -21,12 +21,12 @@ reward that is wrong everywhere and looks merely difficult.
 import math
 
 OBS_PRIV = os.environ.get("OBS_PRIV", "0") == "1"
-# The same block feeds the LANE-CENTRE COST in gated_reward (user 2026-10-25).
+# The same block feeds the LANE-CENTRE SHAPING in gated_reward (user 2026-10-25).
 # Published in info only -- the DEBiT observation never reads it -- whenever
 # either cost is on, so turning the cost on cannot leave it reading nothing.
 LANE_GEOM = (OBS_PRIV
-             or float(os.environ.get("LANE_CENTRE_COST", 0.0) or 0.0) > 0.0
-             or float(os.environ.get("LANE_HEADING_COST", 0.0) or 0.0) > 0.0)
+             or float(os.environ.get("LANE_CENTRE_K", 0.0) or 0.0) > 0.0
+             or float(os.environ.get("LANE_HEADING_K", 0.0) or 0.0) > 0.0)
 
 import numpy as np
 
@@ -94,12 +94,12 @@ class CoreStateWrapper(Wrapper):
             from vae_nav.lane_priv import lane_priv_from_map
             world_map = getattr(core, "map", None)
             if world_map is None:
-                raise SystemExit("OBS_PRIV=1 or a lane-centre cost is on but "
+                raise SystemExit("OBS_PRIV=1 or the lane-centre shaping is on but "
                                  "core.map is None: the lane block needs the "
                                  "CARLA map.")
             info["lane_priv"] = lane_priv_from_map(world_map, tf.location,
                                                    info["hero_yaw"])
-            # Half the hero's width, for the cost's "room before the body
+            # Half the hero's width, for the potential's "room before the body
             # touches the line". From the bounding box, not a constant: the
             # blueprint is a config choice.
             bb = getattr(hero, "bounding_box", None)

@@ -149,3 +149,28 @@ def test_a_real_arrival_bonus_is_removed_before_recomputing():
     _drive(her, speeds, end_reached_at=None)
     (start, n, _), = _legs(buf)
     assert max(float(buf.rewards[start + k]) for k in range(n - 1)) < 1.0
+
+
+def test_arrival_row_restores_the_lane_shaping_tail():
+    """LANE-CENTRE SHAPING stores c(s) - gamma c(s') in a non-terminal env row.
+    The hindsight arrival row is TERMINAL, where c(s') = 0, so it must add the
+    published tail back; every other leg row keeps the stored value."""
+    buf, her = _her()
+    speeds = [30.0] * 60
+    speeds[40] = 5.0
+    tail = 0.7
+    her.begin(0, {}, 1)
+    for t in range(len(speeds)):
+        info_t = {"debit_cur": _frame(t)}
+        info_n = {"debit_cur": _frame(t + 1),
+                  "hero_pos": np.array([0.5 * (t + 1), 0.0]),
+                  "speed_kmh": speeds[t], "gated_shaping": 0.3,
+                  "lane_shaping_tail": tail}
+        row = pxr.mono_row(_frame(t), np.array([1.0], np.float32), np.zeros(D, np.float32))
+        nrow = pxr.mono_row(_frame(t + 1), np.array([1.0], np.float32), np.zeros(D, np.float32))
+        her.record(0, row, np.zeros(2, np.float32), -0.1 + 0.3, False, False,
+                   nrow, info_t, info_n)
+    assert her.flush(0) > 0
+    (start, n, _mode), = _legs(buf)
+    assert float(buf.rewards[start + n - 1]) == pytest.approx(-0.1 + 50.0 + tail)
+    assert float(buf.masks[start + n - 1]) == 0.0           # terminal

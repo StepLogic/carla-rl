@@ -56,7 +56,7 @@ class ImageGoalHER:
         self._ep[env_id] = {"mode": int(mode), "rows": [], "next_rows": [],
                             "actions": [], "base": [], "frames": [],
                             "next_frames": [], "pos": [], "speed": [],
-                            "dirty": []}
+                            "dirty": [], "lane_tail": []}
 
     def record(self, env_id, row, action, reward, term, trunc, next_row,
                info_t, info_next):
@@ -79,6 +79,10 @@ class ImageGoalHER:
         e["speed"].append(float(info_next.get("speed_kmh", 0.0) or 0.0))
         e["dirty"].append(bool(info_next.get("collision")) or bool(info_next.get("off_road"))
                           or bool(self.lane_fault(info_next)))
+        # LANE-CENTRE SHAPING: the stored reward holds c(s) - gamma c(s'). The
+        # env's row was not terminal, but the hindsight arrival row is, where
+        # c(s') must be 0 -- so that one row adds gamma c(s') back (_add_leg).
+        e["lane_tail"].append(float(info_next.get("lane_shaping_tail", 0.0) or 0.0))
 
     # ---- flushing -------------------------------------------------------
     def flush(self, env_id, terminated=False, truncated=False):
@@ -154,7 +158,7 @@ class ImageGoalHER:
             row[P + 1:], nrow[P + 1:] = b_cur[k], b_nxt[k]
             last = t == j
             if last:
-                r = e["base"][t] + self.goal_bonus
+                r = e["base"][t] + self.goal_bonus + e["lane_tail"][t]
             else:
                 d_prev = cum[g] - (cum[t - 1] if t > 0 else 0.0)
                 d_now = cum[g] - cum[t]

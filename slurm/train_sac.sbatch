@@ -110,6 +110,13 @@ export EXPERT_PROB=0 BC_WEIGHT=0 EPISODE_HER=0
 # THE REWARD IS v52'S, from the one file that defines it (user 2026-10-14).
 # Do not inline these: a copy is how they drifted last time.
 . "$REPO/slurm/v52_reward.env"
+# A RUN'S DELIBERATE CHANGES go in a named overlay file, sourced AFTER the
+# canonical one and echoed, never inlined on the command line (where the file
+# above would silently overwrite them anyway). REWARD_OVERLAY=slurm/<name>.env
+if [ -n "${REWARD_OVERLAY:-}" ]; then
+  echo "=== reward overlay $REWARD_OVERLAY ==="; grep '^export' "$REPO/$REWARD_OVERLAY"
+  . "$REPO/$REWARD_OVERLAY"
+fi
 
 
 cd "$REPO" || exit 1

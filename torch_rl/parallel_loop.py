@@ -170,7 +170,7 @@ def run_parallel(venv, agent, buf, row_of, box, *, to_env, to_actor, goal_block,
                     f"|u| steer={_m('mean_abs_u_steer'):.2f} "
                     f"thr={_m('mean_abs_u_throttle'):.2f} "
                     f"sat(replay) steer={_m('sat_steer'):.2f} "
-                    f"thr={_m('sat_throttle'):.2f} | rollout: "
+                    f"thr={_m('sat_throttle'):.2f} enc_alive={_m('enc_alive'):.2f} | rollout: "
                     f"steer_lock={roll['lock'] / max(1, roll['n']):.2f} "
                     f"throttle<0.05={roll['idle_thr'] / max(1, roll['n']):.2f}")
                 roll = {"n": 0, "lock": 0, "idle_thr": 0}

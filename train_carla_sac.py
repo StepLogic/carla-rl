@@ -448,6 +448,9 @@ def main():
         # does. goal_tokens is OFF: that path stacks a goal IMAGE onto the
         # frame, and here the goal arrives already encoded.
         mono_encoder="resnet", embed_dim=3, grid=pxr.MONO_IMG,
+        # Encoder output head (user 2026-10-26): ln_tanh = fc -> LayerNorm ->
+        # tanh, which cannot die; relu (default) is what v13-v16 ran.
+        mono_head=os.environ.get("MONO_HEAD", "relu"),
         goal_tokens=False,
         # NO PREVIOUS ACTION IN THE OBSERVATION (user 2026-10-14). The
         # learner then builds no action embedding and the GRU reads

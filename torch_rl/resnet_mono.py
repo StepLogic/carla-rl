@@ -134,7 +134,7 @@ class MonoResNetEncoder(nn.Module):
     layer_init is never called)."""
 
     def __init__(self, image_size: int = 128, out_dim: int = 512, baseplanes: int = 32,
-                 ngroups: int = 16, in_channels: int = 3) -> None:
+                 ngroups: int = 16, in_channels: int = 3, head: str = "relu") -> None:
         super().__init__()
         if image_size % 32:
             raise ValueError(f"image_size {image_size} must be a multiple of 32")
@@ -149,7 +149,8 @@ class MonoResNetEncoder(nn.Module):
         g = self.image_size // 32
         self.feature_shape: Tuple[int, int, int] = (self.backbone.final_channels, g, g)
         from torch_rl.gated_recurrent_tqc import Vc1Compression   # local import: that module imports nothing from here
-        self.compress = Vc1Compression(self.backbone.final_channels, grid=g, out_dim=self.out_dim)
+        self.compress = Vc1Compression(self.backbone.final_channels, grid=g, out_dim=self.out_dim,
+                                       head=head)
 
     def forward(self, pixels: torch.Tensor) -> torch.Tensor:
         if pixels.dim() != 4 or tuple(pixels.shape[1:]) != (self.in_channels, self.image_size, self.image_size):
@@ -176,5 +177,6 @@ class MonoResNetEncoder(nn.Module):
         return (f"MonoResNetEncoder half-width ResNet-18 (baseplanes {self.baseplanes}, "
                 f"GroupNorm {self.ngroups}, no pre-pool, ImageNet normalisation) "
                 f"{self.in_channels}x{self.image_size}x{self.image_size} -> {self.feature_shape} "
-                f"-> compression {flat} -> {self.out_dim}; {self.param_count():,} params, "
+                f"-> compression {flat} -> {self.out_dim} (head {self.compress.head}); "
+                f"{self.param_count():,} params, "
                 f"trained from scratch")

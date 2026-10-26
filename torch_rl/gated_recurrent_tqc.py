@@ -92,8 +92,16 @@ class Vc1Compression(nn.Module):
     vc2 passes 2*D for channel-stacked [cur | goal] grids."""
 
     def __init__(self, embed_dim: int, grid: int = 8, out_dim: int = 512,
-                 flat_size: int = 2048) -> None:
+                 flat_size: int = 2048, head: str = "relu") -> None:
         super().__init__()
+        # THE OUTPUT HEAD (user 2026-10-26). "relu" (default, every earlier
+        # run): relu(fc). Trained only by the critic, it went negative for
+        # every frame -- v15@1.5M had 0/512 units alive. "ln_tanh":
+        # tanh(LayerNorm(fc)); LayerNorm re-centres the units per image so the
+        # layer cannot drift below zero together, tanh has no dead region.
+        if head not in ("relu", "ln_tanh"):
+            raise ValueError(f"head={head!r}: expected 'relu' or 'ln_tanh'")
+        self.head = head
         self.embed_dim, self.grid = int(embed_dim), int(grid)
         channels = int(round(flat_size / self.grid ** 2))
         self.conv = nn.Conv2d(self.embed_dim, channels, kernel_size=3, padding=1, bias=False)
@@ -101,9 +109,14 @@ class Vc1Compression(nn.Module):
         self.act = nn.ReLU()
         self.flatten = nn.Flatten()
         self.fc = nn.Linear(channels * self.grid * self.grid, int(out_dim))
+        if head == "ln_tanh":
+            self.out_norm = nn.LayerNorm(int(out_dim))
 
     def forward(self, tokens: torch.Tensor) -> torch.Tensor:
-        return torch.relu(self.fc(self.flatten(self.act(self.norm(self.conv(tokens))))))
+        z = self.fc(self.flatten(self.act(self.norm(self.conv(tokens)))))
+        if self.head == "ln_tanh":
+            return torch.tanh(self.out_norm(z))
+        return torch.relu(z)
 
 
 MONO_ENCODERS = ("vc1", "resnet", "debit")
@@ -145,7 +158,7 @@ def build_visual(cfg, in_ch: int) -> nn.Module:
     if cfg.mono_encoder == "resnet":
         from torch_rl.resnet_mono import MonoResNetEncoder
         return MonoResNetEncoder(cfg.grid, cfg.visual_dim, cfg.mono_baseplanes, cfg.mono_ngroups,
-                                 in_channels=in_ch)
+                                 in_channels=in_ch, head=cfg.mono_head)
     if cfg.mono_encoder == "debit":
         # The DEBiT binocular encoder as the whole visual stack (carla-rl
         # 2026-10-13, "pixels in replay"). It needs the encoder INSTANCE, which
@@ -160,7 +173,7 @@ def build_visual(cfg, in_ch: int) -> nn.Module:
                 "DebitTinyEncoder instance (the same one the env wrapper uses, "
                 "so the rollout and the update share one set of adapters)")
         return DebitVisual(enc, visual_dim=cfg.visual_dim)
-    return Vc1Compression(in_ch, cfg.grid, cfg.visual_dim)
+    return Vc1Compression(in_ch, cfg.grid, cfg.visual_dim, head=cfg.mono_head)
 
 
 def visual_describe(module: nn.Module) -> str:
@@ -247,6 +260,8 @@ class GatedRecurrentTQCConfig:
     mono_encoder: str = "vc1"
     mono_baseplanes: int = 32
     mono_ngroups: int = 16
+    # Encoder output head (see Vc1Compression): "relu" | "ln_tanh".
+    mono_head: str = "relu"
     # carla-rl 2026-10-12 (appended last, so an older config.json reloads as
     # None = the peer's unclipped explore critic, which did not diverge in
     # Habitat). On CARLA it DID: our explore critic ran 20 -> 11,801 against a
@@ -544,6 +559,19 @@ class GatedRecurrentTQC:
         with self._autocast():
             a, logp = self.actor.sample(x)
         return a.float(), logp.float()
+
+    def _enc_alive(self, obs: torch.Tensor) -> torch.Tensor:
+        """Fraction of the visual stack's output units whose value varies
+        (std > 1e-4) across the batch's last frames. Same pixel path as
+        _embed; off (returns 1) where the visual input is not one frame."""
+        cfg = self.cfg
+        if cfg.goal_tokens or cfg.mono_encoder == "debit":
+            return torch.ones((), device=obs.device)
+        with torch.no_grad():
+            last = obs[:, -1, :cfg.token_dim].reshape(-1, cfg.embed_dim, cfg.grid, cfg.grid)
+            with self._autocast():
+                vis = self.compress(last)
+            return (vis.float().std(dim=0) > 1e-4).float().mean()
 
     def _state(self, rows: torch.Tensor) -> torch.Tensor:
         return rows[..., self.cfg.token_dim + self.cfg.prev_action_dim:]
@@ -938,6 +966,9 @@ class GatedRecurrentTQC:
                 "mean_abs_u_steer": _masked_mean(mean_u[..., 0].abs(), m_g),
                 "mean_abs_u_throttle": _masked_mean(mean_u[..., 1].abs(), m_g),
                 "log_std_g": _masked_mean(log_std.mean(dim=-1), m_g),
+                # ENCODER HEALTH (2026-10-26): share of visual output units that
+                # vary across this batch's last frames. 0 = the camera is dead.
+                "enc_alive": self._enc_alive(obs),
             }
         per_row = zero
         if has_g:

@@ -93,6 +93,22 @@ EVAL_NOISE_SCALE = float(os.environ.get(
     "EVAL_NOISE_SCALE", "1.0" if EVAL_STOCHASTIC else "0.0"))
 
 
+# EVAL_EXPLORE=1 (user 2026-10-25: "can also explore when given random goal
+# image"): score EXPLORE-mode episodes instead -- the mode bit says explore and
+# the goal image is unrelated to the reward. Success = the explore arrival
+# (EXPLORE_GOAL_DIST_M of net distance) with the same fault rule. Needs
+# EVAL_FORCE_MODE=0 so the env draws explore episodes.
+EVAL_EXPLORE = os.environ.get("EVAL_EXPLORE", "0") == "1"
+EVAL_WRONG_GOAL = os.environ.get("WRONG_GOAL_MODE", "0") == "1"
+
+
+def _eval_tag_suffix(scale: float, explore: bool, wrong: bool) -> str:
+    """Folder suffix: noise scale, then explore mode, then a wrong goal image,
+    so no two kinds of eval of one checkpoint ever share a folder."""
+    return (_eval_suffix(scale) + ("_explore" if explore else "")
+            + ("_wrong" if wrong else ""))
+
+
 def _eval_suffix(scale: float) -> str:
     """Eval output folder suffix, so one checkpoint's scales never collide.
     Scale 1.0 keeps the `_stoch` name already published for v13's Town02 run."""
@@ -187,7 +203,8 @@ def run_eval(env, agent, pxr, server, out_root):
     from torch_rl.episode_video import EpisodeVideo
 
     tag = os.path.basename(os.path.normpath(EVAL_FROM))
-    out = os.path.join(out_root, f"eval_{tag}" + _eval_suffix(EVAL_NOISE_SCALE))
+    out = os.path.join(out_root, f"eval_{tag}"
+                       + _eval_tag_suffix(EVAL_NOISE_SCALE, EVAL_EXPLORE, EVAL_WRONG_GOAL))
     vid = EpisodeVideo(os.path.join(out, "videos"), every=1, max_frames=1200,
                        keep=max(EVAL_EPISODES, 1))
     box = env.action_space
@@ -225,9 +242,10 @@ def run_eval(env, agent, pxr, server, out_root):
                   f"lane_w={lp0[4]:.2f} left_illegal={int(lp0[7])} "
                   f"right_illegal={int(lp0[8])}", flush=True)
         mode = int(round(float(np.asarray(obs["mode"]).ravel()[0])))
-        if mode != 1:
-            raise RuntimeError("eval episode is not in GOAL mode: EVAL_FORCE_MODE "
-                               "must be the goal mode")
+        if mode != (0 if EVAL_EXPLORE else 1):
+            raise RuntimeError(
+                f"eval episode is in mode {mode}: EVAL_FORCE_MODE must be "
+                f"{0 if EVAL_EXPLORE else 1} for {'an explore' if EVAL_EXPLORE else 'a goal'} eval")
         hidden = agent.reset_hidden(1)
         goal_blk = pxr.goal_block(info["debit_goal"])
         vid.start(k)
@@ -271,12 +289,13 @@ def run_eval(env, agent, pxr, server, out_root):
             prev_pos = pos
             if t == 1 and info.get("route_remaining_m") is not None:
                 l_route = float(info["route_remaining_m"]) + moved
-            if info.get("is_success") or info.get("goal_end") == "reached":
+            _end_key = "explore_end" if EVAL_EXPLORE else "goal_end"
+            if info.get("is_success") or info.get(_end_key) == "reached":
                 end = "reached"
             else:
                 end = _fault(info)
             if end is None and (term or trunc):
-                end = str(info.get("goal_end", "timeout"))
+                end = str(info.get(_end_key, "timeout"))
         path = vid.save(end)
         ell = l_route if l_route is not None else l_straight
         reached = end == "reached"

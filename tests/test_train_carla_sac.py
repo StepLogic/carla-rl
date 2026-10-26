@@ -193,7 +193,7 @@ def test_the_video_is_saved_with_the_end_reason():
     arrivals are different debugging sessions."""
     s = src()
     assert "vid.save(end)" in s
-    i_end = s.index('end = str(info.get("goal_end"')
+    i_end = s.index('end = str(info.get(_end_key')
     assert s.index("vid.save(end)") > i_end
 
 

@@ -59,3 +59,18 @@ def test_eval_out_suffix_names_the_scale():
     assert _eval_suffix(1.0) == "_stoch"      # the folder already published
     assert _eval_suffix(0.25) == "_n25"
     assert _eval_suffix(0.5) == "_n50"
+
+
+def test_explore_and_wrong_goal_evals_get_their_own_folders():
+    from train_carla_sac import _eval_tag_suffix
+    assert _eval_tag_suffix(0.0, False, False) == ""
+    assert _eval_tag_suffix(0.0, True, False) == "_explore"
+    assert _eval_tag_suffix(0.0, False, True) == "_wrong"
+    assert _eval_tag_suffix(0.25, True, True) == "_n25_explore_wrong"
+
+
+def test_explore_eval_scores_the_explore_arrival():
+    src = open(os.path.join(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))), "train_carla_sac.py")).read()
+    assert '_end_key = "explore_end" if EVAL_EXPLORE else "goal_end"' in src
+    assert "mode != (0 if EVAL_EXPLORE else 1)" in src

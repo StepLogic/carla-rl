@@ -80,6 +80,13 @@ echo "[sync] rlib_integration (submodule, empty in this worktree)"
 rsync -az ${DRY:+--dry-run} --info=stats1 --copy-links --exclude '__pycache__/' \
   /home/robotlab/scratch/carla-rl/dependencies/rlib_integration/ \
   "$HOST":"$DEST"/dependencies/rlib_integration/
+# The rsync above restores the main checkout's carla_core.py every time, so the
+# GOAL_BRANCH switch (slurm/patch_rlib_goal_branch.py) is re-applied after it.
+if [ -z "$DRY" ]; then
+  ssh "$HOST" "python3 -I ~/$DEST/slurm/patch_rlib_goal_branch.py \
+    ~/$DEST/dependencies/rlib_integration/rlib_integration/carla_core.py" || {
+    echo "[sync] goal-branch patch FAILED"; exit 1; }
+fi
 
 if [ -z "$DRY" ]; then
   ssh "$HOST" "mkdir -p ~/$DEST/logs ~/$DEST/checkpoints && \

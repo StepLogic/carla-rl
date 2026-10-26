@@ -487,7 +487,9 @@ def main():
         # target keeps alpha alive, and because the squash's Jacobian makes a
         # pinned action improbable-looking, the only way to meet it is to keep
         # actions off the limits. User 2026-10-20, "try 2": v12 sets 0.
-        target_entropy=env_float("TARGET_ENTROPY", -2.0))
+        target_entropy=env_float("TARGET_ENTROPY", -2.0),
+        actor_pretanh_l2=env_float("ACTOR_PRETANH_L2", 0.0),
+        actor_pretanh_free=env_float("ACTOR_PRETANH_FREE", 1.5))
     agent = GatedRecurrentSAC(cfg)
     # DEBiT'''S PRETRAINED MONOCULAR TRUNK (user 2026-10-14, "I want debit Mono +
     # binocular setup"). Loaded AFTER the learner builds the module and copied

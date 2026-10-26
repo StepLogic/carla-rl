@@ -172,6 +172,14 @@ def visual_describe(module: nn.Module) -> str:
             f"fc {module.fc.in_features}->{module.fc.out_features})")
 
 
+def pretanh_penalty(mean_u, free: float):
+    """ACTOR OUTPUT PENALTY (user 2026-10-26, v16): sum over action dims of
+    relu(|u| - free)^2 on the actor's PRE-tanh mean. Zero inside the free band;
+    quadratic beyond it, where tanh is flat and the Q gradient that should pull
+    the action back is cut by its slope (0.06-0.08 at v15's parked actions)."""
+    return (mean_u.abs() - float(free)).clamp_min(0.0).pow(2).sum(dim=-1)
+
+
 @dataclasses.dataclass
 class GatedRecurrentTQCConfig:
     embed_dim: int
@@ -210,6 +218,10 @@ class GatedRecurrentTQCConfig:
     q_norm_tau: float = 0.01
     q_norm_floor: float = 1e-3
     explore_actor_warmup: int = 5000
+    # ACTOR OUTPUT PENALTY (v16): weight on pretanh_penalty in the actor loss,
+    # and the |pre-tanh mean| below which it is zero. 0 = off (every earlier run).
+    actor_pretanh_l2: float = 0.0
+    actor_pretanh_free: float = 1.5
     burn_in: int = 8
     seed: int = 42
     compile: bool = True
@@ -939,6 +951,14 @@ class GatedRecurrentTQC:
             # explore_actor_warmup updates. A tensor, so no per-update guard.
             w_e = (self.n_updates >= cfg.explore_actor_warmup).to(logp.dtype)
             per_row = per_row + w_e * (alpha_e * logp - q_e / scale_e) * m_e
+        if cfg.actor_pretanh_l2 > 0.0:
+            # A second actor forward WITH grad: the one above is no_grad.
+            mean_live, _ = self._actor_forward(actor_in)
+            pen = pretanh_penalty(mean_live, cfg.actor_pretanh_free)
+            per_row = per_row + cfg.actor_pretanh_l2 * pen * (m_g + m_e)
+            diag["pretanh_pen"] = _masked_mean(pen.detach(), m_g + m_e)
+        else:
+            diag["pretanh_pen"] = zero
         actor_loss = per_row.sum() / (m_g + m_e).sum().clamp_min(1.0)
         self.opt_actor.zero_grad(set_to_none=True)
         actor_loss.backward()

@@ -56,14 +56,30 @@ class CarlaServer:
         os.makedirs(log_dir, exist_ok=True)
 
     # ------------------------------------------------------------- lifecycle --
+    def _cmd(self) -> list:
+        """The launch command. CARLA_LOCAL_ROOT (user 2026-10-27, local v18):
+        a local CARLA install instead of the apptainer image, WINDOWED unless
+        CARLA_OFFSCREEN=1 -- the user's rule for local training, and Town05
+        segfaults offscreen here. Unset, the cluster command is unchanged."""
+        root = os.environ.get("CARLA_LOCAL_ROOT")
+        if root:
+            off = os.environ.get("CARLA_OFFSCREEN", "0") == "1"
+            return ([os.path.join(root, "CarlaUE4.sh")]
+                    + (["-RenderOffScreen"] if off else [])
+                    + ["-nosound", f"-quality-level={self.quality}",
+                       f"-carla-rpc-port={self.port}"] + self.extra_args)
+        return ["apptainer", "run", "--nv", "-e", self.sif, ENTRY,
+                "-RenderOffScreen", "-nosound",
+                f"-quality-level={self.quality}",
+                f"-carla-rpc-port={self.port}"] + self.extra_args
+
     def start(self) -> None:
-        if not os.path.exists(self.sif):
-            raise SystemExit(f"no CARLA image at {self.sif}")
+        root = os.environ.get("CARLA_LOCAL_ROOT")
+        target = os.path.join(root, "CarlaUE4.sh") if root else self.sif
+        if not os.path.exists(target):
+            raise SystemExit(f"no CARLA at {target}")
         log = os.path.join(self.log_dir, f"carla_{self.port}_{self.n_starts}.log")
-        cmd = ["apptainer", "run", "--nv", "-e", self.sif, ENTRY,
-               "-RenderOffScreen", "-nosound",
-               f"-quality-level={self.quality}",
-               f"-carla-rpc-port={self.port}"] + self.extra_args
+        cmd = self._cmd()
         self.proc = subprocess.Popen(
             cmd, stdout=open(log, "w"), stderr=subprocess.STDOUT,
             start_new_session=True)          # its own group, so it can be swept
@@ -117,4 +133,5 @@ class CarlaServer:
 
     def describe(self) -> str:
         return (f"CarlaServer(port={self.port}, quality={self.quality}, "
-                f"starts={self.n_starts}, image={os.path.basename(self.sif)})")
+                f"starts={self.n_starts}, image="
+                f"{os.environ.get('CARLA_LOCAL_ROOT') or os.path.basename(self.sif)})")

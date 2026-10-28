@@ -140,9 +140,10 @@ def test_the_actor_is_sized_from_the_env_action_space():
     'operands could not be broadcast together with shapes (2,) (3,)' -- which a
     simulator probe hit before any run was launched."""
     src = open(os.path.join(ROOT, "train_carla_sac.py")).read()
-    assert "action_dim=int(env.action_space.shape[0])" in src
+    assert "ACT_DIM = int(env.action_space.shape[0])" in src
+    assert "action_dim=ACT_DIM," in src
     i_env = min(src.index("venv = ThreadedVecEnv"), src.index("env = build_env"))
-    assert src.index("action_dim=int(env.action_space.shape[0])") > i_env
+    assert src.index("ACT_DIM = int(env.action_space.shape[0])") > i_env
 
 
 def test_the_learner_builds_as_many_outputs_as_asked():
@@ -151,3 +152,14 @@ def test_the_learner_builds_as_many_outputs_as_asked():
     agent = GatedRecurrentSAC(_cfg(one=True, action_dim=3, prev_action=False))
     assert agent.actor.action_dim == 3
     assert agent.actor.trunk[-1].out_features == 6          # mean + log_std
+
+
+def test_every_action_width_comes_from_the_env():
+    """The replay buffer was built with a hardcoded 2 as well, which only
+    showed up when an episode was stored: 'The expanded size of the tensor (2)
+    must match the existing size (3)'. Nothing in the action path may assume 2."""
+    src = open(os.path.join(ROOT, "train_carla_sac.py")).read()
+    i = src.index("buf = DeviceEpisodeBuffer(")
+    call = src[i:i + 200]
+    assert "ACT_DIM" in call, call
+    assert "ACT_DIM = int(env.action_space.shape[0])" in src

@@ -448,6 +448,11 @@ def main():
     state_dim = pxr.mono_state_dim(binoc_dim)
     row_dim = pxr.mono_row_dim(binoc_dim)
 
+    # THE ACTOR AND THE REPLAY ARE SIZED FROM THE ENV (STOP_ACTION adds a third
+    # dimension). The defaults were 2 in both places; a simulator probe hit the
+    # first ("shapes (2,) (3,)") and the smoke run the second ("the expanded
+    # size of the tensor (2) must match the existing size (3)").
+    ACT_DIM = int(env.action_space.shape[0])
     cfg = GatedRecurrentSACConfig(
         # THE BINOCULAR + MONOCULAR STACK. The trainable visual path is a
         # half-width ResNet-18 from scratch over the 128 px frame
@@ -459,7 +464,7 @@ def main():
         # THE ACTOR IS SIZED FROM THE ENV (STOP_ACTION adds a third dimension;
         # the default 2 then dies on "operands could not be broadcast together
         # with shapes (2,) (3,)", which a simulator probe hit on 2026-10-28).
-        action_dim=int(env.action_space.shape[0]),
+        action_dim=ACT_DIM,
         # Encoder output head (user 2026-10-26): ln_tanh = fc -> LayerNorm ->
         # tanh, which cannot die; relu (default) is what v13-v16 ran.
         mono_head=os.environ.get("MONO_HEAD", "relu"),
@@ -516,7 +521,7 @@ def main():
     if EVAL_FROM:
         agent.load(EVAL_FROM)          # strict: every module, name and shape
         return run_eval(env, agent, pxr, server, OUT)
-    buf = DeviceEpisodeBuffer(row_dim, 2, 1000 if EVAL_FROM else CAPACITY, DEVICE, seed=SEED,
+    buf = DeviceEpisodeBuffer(row_dim, ACT_DIM, 1000 if EVAL_FROM else CAPACITY, DEVICE, seed=SEED,
                               goal_dim=pxr.PIX,
                               goal_batch_frac=env_float("GOAL_BATCH_FRAC", 0.5),
                               store_device=REPLAY_DEVICE,

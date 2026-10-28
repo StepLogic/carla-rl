@@ -512,6 +512,15 @@ class STBL3Experiment(BaseExperiment):
         # action space of the environment to 0 - 1"). Forward only: no
         # reverse, no brake. A tanh actor's output is rescaled onto this box
         # by the trainer (train_carla_sac.to_env), not here.
+        # STOP_ACTION=1 (user 2026-10-28): a third dimension by which the car
+        # DECLARES it has arrived, as Habitat's imagenav STOP action does. It
+        # drives nothing -- compute_action ignores it and the reward wrapper
+        # reads info["stop_action"] -- so the vehicle control is unchanged.
+        if os.environ.get("STOP_ACTION", "0") == "1":
+            return Box(
+                low=np.array([-self.max_steer, 0.0, -1.0], np.float32),
+                high=np.array([self.max_steer, self.max_throttle, 1.0], np.float32),
+                dtype=np.float32)
         return Box(
             low=np.array([-self.max_steer, 0.0], np.float32),
             high=np.array([self.max_steer, self.max_throttle], np.float32),
@@ -540,6 +549,8 @@ class STBL3Experiment(BaseExperiment):
         Off by default so the existing goal-navigation runs are unchanged.
         """
         a0, a1 = float(action[0]), float(action[1])
+        # The declaration rides in info, never in the control (STOP_ACTION).
+        self.info["stop_action"] = float(action[2]) if len(action) > 2 else 0.0
 
         vehicle_control = carla.VehicleControl()
 

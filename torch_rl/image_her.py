@@ -30,6 +30,8 @@ wrong shaping; the tests pin both.
 The path distance stands in for the planner's route_remaining: on a leg the car
 actually drove, metres along its own path are the route it took.
 """
+import os
+
 import numpy as np
 
 
@@ -48,6 +50,8 @@ class ImageGoalHER:
         self.relabel_explore = bool(relabel_explore)
         self.rng = np.random.default_rng(seed)
         self._ep = {}
+        # Index of the declaration dimension, or None when STOP_ACTION is off.
+        self.stop_dim = 2 if os.environ.get("STOP_ACTION", "0") == "1" else None
         self.counts = {"episodes": 0, "legs": 0, "rows": 0, "no_clean": 0,
                        "no_slow_goal": 0, "skipped_explore": 0}
 
@@ -158,6 +162,13 @@ class ImageGoalHER:
             row[P + 1:], nrow[P + 1:] = b_cur[k], b_nxt[k]
             last = t == j
             if last:
+                # STOP_ACTION: the leg's last row is relabelled as an arrival,
+                # so its action must DECLARE one -- otherwise HER teaches the
+                # critic that arriving silently pays, which the env denies.
+                if self.stop_dim is not None:
+                    act = np.array(e["actions"][t], np.float32, copy=True)
+                    act[self.stop_dim] = 1.0
+                    e["actions"][t] = act
                 r = e["base"][t] + self.goal_bonus + e["lane_tail"][t]
             else:
                 d_prev = cum[g] - (cum[t - 1] if t > 0 else 0.0)

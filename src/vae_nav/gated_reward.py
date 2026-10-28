@@ -355,6 +355,22 @@ def _stopped_enough(info) -> bool:
     return float(info.get("speed_kmh", 0.0) or 0.0) <= GOAL_ARRIVAL_MAX_SPEED
 
 
+# THE CAR DECLARES ARRIVAL (user 2026-10-28, "Yes, add a stop action"). With
+# automatic arrival the wrong-goal eval of v18@300k scored 0.600 against 0.725
+# with the true goal image: driving the lane and halting collected most
+# successes without reading the goal. Habitat's imagenav (DEBiT's own task)
+# scores success only when the agent calls STOP inside the radius. Here
+# declaring also requires being slow, so a random a[2] cannot end episodes at
+# speed. 0 = off: every earlier run keeps automatic arrival.
+STOP_ACTION = os.environ.get("STOP_ACTION", "0") == "1"
+
+
+def declared_arrival(info) -> bool:
+    """Did the car claim it has arrived on this step? (STOP_ACTION only.)"""
+    return (float(info.get("stop_action", 0.0) or 0.0) > 0.0
+            and _stopped_enough(info))
+
+
 def _pays_progress(speed_factor: float) -> bool:
     """Whether the progress term is earned at this speed."""
     return (not PROGRESS_SPEED_GATE) or speed_factor < 1.0
@@ -922,6 +938,14 @@ def goal_reward_explore(info, disp, t, max_steps=GOAL_MAX_STEPS):
     reached = reached and _stopped_enough(info)
     if failed:
         return float(reward), True, False, False
+    if STOP_ACTION:
+        # Being there is not arriving: the car must say so, and saying so
+        # anywhere else ends the episode unpaid (Habitat's STOP rule).
+        if not declared_arrival(info):
+            return float(reward), False, bool(t >= max_steps), False
+        if not reached:
+            info["false_stop"] = True
+            return float(reward), True, False, False
     if reached:
         return float(reward) + GOAL_EXPLORE_ARRIVAL_BONUS, True, False, True
     return float(reward), False, bool(t >= max_steps), False
@@ -935,6 +959,8 @@ def goal_explore_end(info, arrived, truncated):
         return "reached"
     if truncated:
         return "clock"
+    if info.get("false_stop"):
+        return "false_stop"
     if EXPLORE_COLLISION_FATAL and bool(info.get("collision", False)):
         return "collision"
     if EXPLORE_OFF_ROAD_FATAL and bool(info.get("off_road", False)):

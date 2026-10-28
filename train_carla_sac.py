@@ -102,6 +102,14 @@ EVAL_EXPLORE = os.environ.get("EVAL_EXPLORE", "0") == "1"
 EVAL_WRONG_GOAL = os.environ.get("WRONG_GOAL_MODE", "0") == "1"
 
 
+def use_parallel(parallel_towns: bool, eval_from: str, n_towns: int) -> bool:
+    """Whether training runs through torch_rl.parallel_loop. ONE town counts
+    (user 2026-10-27, local single-town v18): that loop is the only one with
+    image HER, noise-free episodes and the enc_alive diagnostic, so requiring
+    two towns silently gave a one-town run a weaker recipe. Eval never does."""
+    return bool(parallel_towns) and not eval_from and n_towns >= 1
+
+
 def _eval_tag_suffix(scale: float, explore: bool, wrong: bool) -> str:
     """Folder suffix: noise scale, then explore mode, then a wrong goal image,
     so no two kinds of eval of one checkpoint ever share a folder."""
@@ -380,7 +388,7 @@ def main():
     # map change worked, the next rebuild hung while the server flooded "Invalid
     # session: no stream available"). A restart cannot inherit that state.
     town_i = 0
-    parallel = PARALLEL_TOWNS and not EVAL_FROM and len(TOWNS) > 1
+    parallel = use_parallel(PARALLEL_TOWNS, EVAL_FROM, len(TOWNS))
     ports = [PORT + 50 * i for i in range(len(TOWNS))] if parallel else [PORT]
     servers = []
 
@@ -393,7 +401,7 @@ def main():
         servers.append(srv)
         return srv
 
-    if not (PARALLEL_TOWNS and not EVAL_FROM and len(TOWNS) > 1):
+    if not parallel:
         _start_server(0, ports[0])
     server = servers[0] if servers else None
     venv = None

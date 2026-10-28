@@ -157,3 +157,24 @@ def test_log_lines_name_the_town(tmp_path):
     *_, logs = _run(tmp_path)
     ep_lines = [s for s in logs if s.startswith("[Ep")]
     assert ep_lines and any("TownA:" in s or "TownB:" in s for s in ep_lines)
+
+
+def test_one_town_still_uses_the_parallel_loop():
+    """HER, noise-free episodes and enc_alive live only in the parallel loop."""
+    from train_carla_sac import use_parallel
+    assert use_parallel(True, "", 1) and use_parallel(True, "", 2)
+    assert not use_parallel(False, "", 2)
+    assert not use_parallel(True, "/ckpt/step_1", 2)       # eval never
+
+
+def test_the_loop_runs_with_a_single_env(tmp_path):
+    venv = ThreadedVecEnv([lambda: FakeTown(0, 5, True)], names=["TownA"])
+    buf = DeviceEpisodeBuffer(1 + BINOC, 2, 1000, "cpu")
+    steps, eps = run_parallel(
+        venv, FakeAgent(), buf, _row, venv.action_space,
+        to_env=lambda a, b: a, to_actor=lambda e, b: e,
+        goal_block=lambda g: np.asarray(g, np.float32).reshape(-1),
+        max_steps=20, learning_starts=0, update_every=100, updates_per=1,
+        chunk_b=1, chunk_t=2, burn_in=1, ckpt_every=100, out_dir=str(tmp_path),
+        log_every=100, log=lambda s: None)
+    assert steps == 20 and eps == 4

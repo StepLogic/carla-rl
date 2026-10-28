@@ -59,8 +59,8 @@ class StopEnv(gym.Env):
         return np.zeros(4, np.float32), 0.0, False, False, inf
 
 
-def _gr(monkeypatch, stop=1, radius=2.0, max_speed=10.0):
-    for k, v in dict(STOP_ACTION=stop, GOAL_ARRIVAL_RADIUS=radius,
+def _gr(monkeypatch, stop=1, radius=2.0, max_speed=10.0, fine=0.0):
+    for k, v in dict(STOP_ACTION=stop, FALSE_STOP_PENALTY=fine, GOAL_ARRIVAL_RADIUS=radius,
                      GOAL_ARRIVAL_MAX_SPEED=max_speed, GATED_GOAL_REWARD="explore",
                      LANE_ANY_FATAL=0, LANE_INVASION_NOOP=0).items():
         monkeypatch.setenv(k, str(v))
@@ -163,3 +163,30 @@ def test_every_action_width_comes_from_the_env():
     call = src[i:i + 200]
     assert "ACT_DIM" in call, call
     assert "ACT_DIM = int(env.action_space.shape[0])" in src
+
+
+# ---- v21: a wrong declaration is a fine, not the end of the episode --------
+
+def test_false_stop_fine_keeps_the_episode_alive(monkeypatch):
+    """v20 scored 0.000 over 120 eval episodes: ending the episode on a wrong
+    declaration forfeited everything the car would still have earned, so never
+    declaring was safest and the eval (which drives the mean action) never
+    declared at all. With a fine the car can try declaring."""
+    gr = _gr(monkeypatch, fine=5.0)
+    clean = _run(gr, StopEnv(dist=20.0, speed=2.0), -1.0)
+    fined = _run(gr, StopEnv(dist=20.0, speed=2.0), +1.0)
+    assert not fined[2] and not fined[3]            # episode continues
+    assert clean[1] - fined[1] == pytest.approx(5.0)
+    assert fined[4].get("false_stop") is True       # still counted
+
+
+def test_declaring_at_the_goal_still_pays_and_ends(monkeypatch):
+    gr = _gr(monkeypatch, fine=5.0)
+    _o, r, term, _tr, info = _run(gr, StopEnv(dist=0.5, speed=2.0), +1.0)
+    assert term and info.get("goal_end") == "reached" and r > 40
+
+
+def test_zero_fine_keeps_the_v20_rule(monkeypatch):
+    gr = _gr(monkeypatch, fine=0.0)
+    _o, _r, term, _tr, info = _run(gr, StopEnv(dist=20.0, speed=2.0), +1.0)
+    assert term and info.get("goal_end") == "false_stop"

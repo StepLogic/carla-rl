@@ -363,6 +363,13 @@ def _stopped_enough(info) -> bool:
 # declaring also requires being slow, so a random a[2] cannot end episodes at
 # speed. 0 = off: every earlier run keeps automatic arrival.
 STOP_ACTION = os.environ.get("STOP_ACTION", "0") == "1"
+# FALSE_STOP_PENALTY (user 2026-10-28, after v20 scored 0.000 on 120 eval
+# episodes): what declaring away from the goal costs. 0 (v20) ENDS the episode,
+# which forfeits every reward the car would still have earned -- so never
+# declaring was safest, the eval's mean action never declared, and the score
+# was exactly zero however well it drove. A positive value charges that much
+# and DRIVES ON, so declaring is something the policy can try.
+FALSE_STOP_PENALTY = float(os.environ.get("FALSE_STOP_PENALTY", 0.0) or 0.0)
 
 
 def declared_arrival(info) -> bool:
@@ -945,6 +952,9 @@ def goal_reward_explore(info, disp, t, max_steps=GOAL_MAX_STEPS):
             return float(reward), False, bool(t >= max_steps), False
         if not reached:
             info["false_stop"] = True
+            if FALSE_STOP_PENALTY > 0.0:
+                return (float(reward) - FALSE_STOP_PENALTY, False,
+                        bool(t >= max_steps), False)
             return float(reward), True, False, False
     if reached:
         return float(reward) + GOAL_EXPLORE_ARRIVAL_BONUS, True, False, True
@@ -1185,6 +1195,13 @@ class GatedReward(Wrapper):
               f"{EXPLORE_IDLE_SPEED_KMH:g} km/h (both modes; 0 = off) | explore "
               f"arrival: {EXPLORE_GOAL_DIST_M:g} m of {EXPLORE_DIST_MODE} distance",
               flush=True)
+        if STOP_ACTION:
+            print(f"[Gated] DECLARED ARRIVAL: action dim 2 > 0 and speed <= "
+                  f"{GOAL_ARRIVAL_MAX_SPEED:g} km/h means 'I am at the goal'. "
+                  f"At the goal: +{GOAL_EXPLORE_ARRIVAL_BONUS:g} and the episode ends. "
+                  + (f"Elsewhere: -{FALSE_STOP_PENALTY:g} and it DRIVES ON."
+                     if FALSE_STOP_PENALTY > 0 else
+                     "Elsewhere: the episode ENDS unpaid."), flush=True)
         print(f"[Gated] lane-centre SHAPING: F = c(s) - gamma c(s'), c = "
               f"{LANE_CENTRE_K:g} where the body meets the line (quadratic, cap "
               f"x2.25) + {LANE_HEADING_K:g} at 45 deg heading error (cap there); "

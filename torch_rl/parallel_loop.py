@@ -51,6 +51,9 @@ def run_parallel(venv, agent, buf, row_of, box, *, to_env, to_actor, goal_block,
     det = [bool(det_frac) and bool(det_rng.random() < det_frac) for _ in range(n)]
     ep_ret = [0.0] * n
     ep_len = [0] * n
+    # FINED LANE CROSSINGS this episode (user 2026-10-27). They end nothing, so
+    # without this they appear nowhere until an eval checkpoint.
+    ep_cross = [0] * n
     if vids:
         for i in range(n):
             vids[i].start(0)
@@ -58,7 +61,8 @@ def run_parallel(venv, agent, buf, row_of, box, *, to_env, to_actor, goal_block,
         for i in range(n):
             her.begin(i, infos[i], modes[i])
 
-    recent = {"goal": [], "explore": [], "policy": [], "ends": {}, "det_goal": []}
+    recent = {"goal": [], "explore": [], "policy": [], "ends": {}, "det_goal": [],
+              "cross": []}
     roll = {"n": 0, "lock": 0, "idle_thr": 0}
     metrics = {}
     step, episodes = 0, 0
@@ -106,6 +110,7 @@ def run_parallel(venv, agent, buf, row_of, box, *, to_env, to_actor, goal_block,
                            trunc, nrow, infos[i], inf)
             ep_ret[i] += float(rewards[i])
             ep_len[i] += 1
+            ep_cross[i] += int(bool(inf.get("lane_fined", False)))
 
             if not done:
                 rows[i], infos[i] = nrow, inf
@@ -128,7 +133,8 @@ def run_parallel(venv, agent, buf, row_of, box, *, to_env, to_actor, goal_block,
                 dict(len=ep_len[i], arrived=float(arrived)))
             if det[i] and modes[i] == 1:
                 recent["det_goal"].append(float(arrived))
-            for k in ("goal", "explore", "policy", "det_goal"):
+            recent["cross"].append(float(ep_cross[i]))
+            for k in ("goal", "explore", "policy", "det_goal", "cross"):
                 recent[k] = recent[k][-100:]
             if on_episode is not None:
                 on_episode(i, end, ep_ret[i], ep_len[i])
@@ -141,7 +147,7 @@ def run_parallel(venv, agent, buf, row_of, box, *, to_env, to_actor, goal_block,
             modes[i] = _mode_of(o_new)
             hidden = agent.zero_hidden_columns(hidden, [i])
             det[i] = bool(det_frac) and bool(det_rng.random() < det_frac)
-            ep_ret[i], ep_len[i] = 0.0, 0
+            ep_ret[i], ep_len[i], ep_cross[i] = 0.0, 0, 0
             if vids:
                 vids[i].start(episodes)
             if her is not None:
@@ -158,6 +164,7 @@ def run_parallel(venv, agent, buf, row_of, box, *, to_env, to_actor, goal_block,
                     f"goal={sr:.3f}(n={len(g)}) "
                     f"goal_len={np.mean([x['len'] for x in g]) if g else float('nan'):.0f} "
                     f"explore_len={np.mean([x['len'] for x in e]) if e else float('nan'):.0f} "
+                    f"cross={np.mean(recent['cross']) if recent['cross'] else float('nan'):.2f}/ep "
                     f"ends={recent['ends']} buffer={buf.size} {per_h / 1000:.0f}k steps/h "
                     f"| {_m('critic_loss_g'):.3f} q_g={_m('q_g'):.2f} "
                     f"q_e={_m('q_e'):.2f} alpha_g={_m('alpha_g'):.4f}"

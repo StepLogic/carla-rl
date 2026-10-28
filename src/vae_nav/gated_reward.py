@@ -987,6 +987,7 @@ def explore_reward(info, disp):
         # DOES: it is not a lane crossing, and it is the only term left that
         # discourages leaving the road, since the progress term pays the same
         # for circling as for driving down it.
+        info["lane_fined"] = False
         fatal = bool(info.get("off_road", False))
     else:
         crossing = explore_lane_fatal(
@@ -1007,6 +1008,7 @@ def explore_reward(info, disp):
         # A crash ends the episode (EXPLORE_COLLISION_FATAL); COLLISION_PENALTY
         # was already charged above, so this adds termination, not a second fine.
         _crash = EXPLORE_COLLISION_FATAL and bool(info.get("collision", False))
+        info["lane_fined"] = bool(crossing)
         if EXPLORE_LANE_MODE == "penalise":
             if crossing:
                 r -= LANE_DEPARTURE_PENALTY      # charged, not ended

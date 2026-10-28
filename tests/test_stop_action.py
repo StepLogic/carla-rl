@@ -133,3 +133,21 @@ def test_her_declares_on_its_hindsight_arrival_row():
     declare -- otherwise HER teaches that arriving silently pays."""
     src = open(os.path.join(ROOT, "torch_rl", "image_her.py")).read()
     assert "stop_dim" in src and "STOP_ACTION" in src
+
+
+def test_the_actor_is_sized_from_the_env_action_space():
+    """With STOP_ACTION the box has 3 dimensions; a 2-output actor then dies on
+    'operands could not be broadcast together with shapes (2,) (3,)' -- which a
+    simulator probe hit before any run was launched."""
+    src = open(os.path.join(ROOT, "train_carla_sac.py")).read()
+    assert "action_dim=int(env.action_space.shape[0])" in src
+    i_env = min(src.index("venv = ThreadedVecEnv"), src.index("env = build_env"))
+    assert src.index("action_dim=int(env.action_space.shape[0])") > i_env
+
+
+def test_the_learner_builds_as_many_outputs_as_asked():
+    from tests.test_one_critic import _cfg
+    from torch_rl.gated_recurrent_sac import GatedRecurrentSAC
+    agent = GatedRecurrentSAC(_cfg(one=True, action_dim=3, prev_action=False))
+    assert agent.actor.action_dim == 3
+    assert agent.actor.trunk[-1].out_features == 6          # mean + log_std

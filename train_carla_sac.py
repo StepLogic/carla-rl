@@ -456,6 +456,10 @@ def main():
         # does. goal_tokens is OFF: that path stacks a goal IMAGE onto the
         # frame, and here the goal arrives already encoded.
         mono_encoder="resnet", embed_dim=3, grid=pxr.MONO_IMG,
+        # THE ACTOR IS SIZED FROM THE ENV (STOP_ACTION adds a third dimension;
+        # the default 2 then dies on "operands could not be broadcast together
+        # with shapes (2,) (3,)", which a simulator probe hit on 2026-10-28).
+        action_dim=int(env.action_space.shape[0]),
         # Encoder output head (user 2026-10-26): ln_tanh = fc -> LayerNorm ->
         # tanh, which cannot die; relu (default) is what v13-v16 ran.
         mono_head=os.environ.get("MONO_HEAD", "relu"),
@@ -553,7 +557,10 @@ def main():
     print(f"  env action box: steer [{_box.low[0]:+.2f}, {_box.high[0]:+.2f}]  "
           f"throttle [{_box.low[1]:+.2f}, {_box.high[1]:+.2f}] "
           f"(actor tanh rescaled onto it; no reverse)  "
-          f"incremental={os.environ.get('INCREMENTAL_ACTIONS')}", flush=True)
+          f"incremental={os.environ.get('INCREMENTAL_ACTIONS')}"
+          + (f"  | DECLARE ARRIVAL: dim 2, > 0 and slow = 'I am at the goal'; "
+             f"declaring elsewhere ends the episode unpaid"
+             if _box.shape[0] > 2 else ""), flush=True)
     print(f"  reward: GATED_GOAL_REWARD={os.environ.get('GATED_GOAL_REWARD')} "
           f"bonus={os.environ.get('GOAL_EXPLORE_ARRIVAL_BONUS')} "
           f"band={os.environ.get('GOAL_DIST_MIN')}-{os.environ.get('GOAL_DIST_MAX')} m",

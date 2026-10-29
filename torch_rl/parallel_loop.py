@@ -54,6 +54,10 @@ def run_parallel(venv, agent, buf, row_of, box, *, to_env, to_actor, goal_block,
     # FINED LANE CROSSINGS this episode (user 2026-10-27). They end nothing, so
     # without this they appear nowhere until an eval checkpoint.
     ep_cross = [0] * n
+    # DECLARATIONS this episode, and how many were at the goal (STOP_ACTION).
+    # Without this, "declares often but badly" and "never declares" look the
+    # same in the log, which is what v21 ran into.
+    ep_decl = [0] * n
     if vids:
         for i in range(n):
             vids[i].start(0)
@@ -62,7 +66,7 @@ def run_parallel(venv, agent, buf, row_of, box, *, to_env, to_actor, goal_block,
             her.begin(i, infos[i], modes[i])
 
     recent = {"goal": [], "explore": [], "policy": [], "ends": {}, "det_goal": [],
-              "cross": []}
+              "cross": [], "declare": []}
     roll = {"n": 0, "lock": 0, "idle_thr": 0}
     metrics = {}
     step, episodes = 0, 0
@@ -111,6 +115,7 @@ def run_parallel(venv, agent, buf, row_of, box, *, to_env, to_actor, goal_block,
             ep_ret[i] += float(rewards[i])
             ep_len[i] += 1
             ep_cross[i] += int(bool(inf.get("lane_fined", False)))
+            ep_decl[i] += int(bool(inf.get("declared", False)))
 
             if not done:
                 rows[i], infos[i] = nrow, inf
@@ -134,7 +139,8 @@ def run_parallel(venv, agent, buf, row_of, box, *, to_env, to_actor, goal_block,
             if det[i] and modes[i] == 1:
                 recent["det_goal"].append(float(arrived))
             recent["cross"].append(float(ep_cross[i]))
-            for k in ("goal", "explore", "policy", "det_goal", "cross"):
+            recent["declare"].append(float(ep_decl[i]))
+            for k in ("goal", "explore", "policy", "det_goal", "cross", "declare"):
                 recent[k] = recent[k][-100:]
             if on_episode is not None:
                 on_episode(i, end, ep_ret[i], ep_len[i])
@@ -147,7 +153,7 @@ def run_parallel(venv, agent, buf, row_of, box, *, to_env, to_actor, goal_block,
             modes[i] = _mode_of(o_new)
             hidden = agent.zero_hidden_columns(hidden, [i])
             det[i] = bool(det_frac) and bool(det_rng.random() < det_frac)
-            ep_ret[i], ep_len[i], ep_cross[i] = 0.0, 0, 0
+            ep_ret[i], ep_len[i], ep_cross[i], ep_decl[i] = 0.0, 0, 0, 0
             if vids:
                 vids[i].start(episodes)
             if her is not None:
@@ -159,12 +165,17 @@ def run_parallel(venv, agent, buf, row_of, box, *, to_env, to_actor, goal_block,
                 sr = float(np.mean([x["arrived"] for x in g])) if g else float("nan")
                 per_h = step / max(1e-9, time.time() - t0) * 3600
                 _m = lambda k: float(metrics.get(k, float("nan")))
+                # Printed only once the car has ever declared, so runs without
+                # STOP_ACTION keep their line unchanged.
+                _dec = (f"declare={np.mean(recent['declare']):.2f}/ep "
+                        if recent["declare"] and max(recent["declare"]) > 0 else "")
                 log(f"[Ep {episodes:5d}] step={step:8d} "
                     f"policy={pol:.3f}(n={len(recent['policy'])}) "
                     f"goal={sr:.3f}(n={len(g)}) "
                     f"goal_len={np.mean([x['len'] for x in g]) if g else float('nan'):.0f} "
                     f"explore_len={np.mean([x['len'] for x in e]) if e else float('nan'):.0f} "
                     f"cross={np.mean(recent['cross']) if recent['cross'] else float('nan'):.2f}/ep "
+                    f"{_dec}"
                     f"ends={recent['ends']} buffer={buf.size} {per_h / 1000:.0f}k steps/h "
                     f"| {_m('critic_loss_g'):.3f} q_g={_m('q_g'):.2f} "
                     f"q_e={_m('q_e'):.2f} alpha_g={_m('alpha_g'):.4f}"

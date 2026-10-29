@@ -112,3 +112,32 @@ def test_the_log_line_reports_crossings_per_episode(tmp_path):
                  out_dir=str(tmp_path), log_every=2, log=logs.append)
     ep = [s for s in logs if s.startswith("[Ep")]
     assert ep and "cross=2.00" in ep[-1], ep[-1]      # 2 of every 4 steps
+
+
+# ---- declarations per episode (user 2026-10-28) ---------------------------
+
+class DeclareTown(FakeTown):
+    """Declares on every other step; the last step of each episode is at goal."""
+
+    def step(self, action):
+        o, r, term, trunc, inf = super().step(action)
+        inf["declared"] = (self.t % 2 == 0)
+        inf["false_stop"] = inf["declared"] and not (term or trunc)
+        return o, r, term, trunc, inf
+
+
+def test_the_log_line_reports_declarations_per_episode(tmp_path):
+    """v21 showed zero arrivals in 297 episodes and nothing said whether the
+    car was declaring at all -- declaring often but badly, and never declaring,
+    look identical in the log."""
+    venv = ThreadedVecEnv([lambda: DeclareTown(0, 4, True)], names=["TownA"])
+    buf = DeviceEpisodeBuffer(1 + BINOC, 2, 1000, "cpu")
+    logs = []
+    run_parallel(venv, FakeAgent(), buf, _row, venv.action_space,
+                 to_env=lambda a, b: a, to_actor=lambda e, b: e,
+                 goal_block=lambda g: np.asarray(g, np.float32).reshape(-1),
+                 max_steps=40, learning_starts=0, update_every=100, updates_per=1,
+                 chunk_b=1, chunk_t=2, burn_in=1, ckpt_every=100,
+                 out_dir=str(tmp_path), log_every=2, log=logs.append)
+    ep = [s for s in logs if s.startswith("[Ep")]
+    assert ep and "declare=2.00/ep" in ep[-1], ep[-1]

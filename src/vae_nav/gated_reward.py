@@ -948,7 +948,8 @@ def goal_reward_explore(info, disp, t, max_steps=GOAL_MAX_STEPS):
     if STOP_ACTION:
         # Being there is not arriving: the car must say so, and saying so
         # anywhere else ends the episode unpaid (Habitat's STOP rule).
-        if not declared_arrival(info):
+        info["declared"] = declared_arrival(info)
+        if not info["declared"]:
             return float(reward), False, bool(t >= max_steps), False
         if not reached:
             info["false_stop"] = True

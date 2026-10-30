@@ -1185,8 +1185,17 @@ class GatedReward(Wrapper):
                   f"collision_fatal={EXPLORE_COLLISION_FATAL}) + "
                   f"{GOAL_EXPLORE_ARRIVAL_BONUS:g}*1[arrived] (explore pays "
                   f"{EXPLORE_ARRIVAL_BONUS:g} at {EXPLORE_GOAL_DIST_M:g} m); cap "
-                  f"{self.max_steps} (shared with explore); NO term pulls "
-                  f"towards the goal; arrival ends the episode; clock truncates",
+                  f"{self.max_steps} (shared with explore); "
+                  + (f"GOAL_ROUTE_ONLY: goal mode drops forward progress and is "
+                     f"paid {POTENTIAL_K:g}/m of ROUTE progress only; "
+                     if GOAL_ROUTE_ONLY else
+                     f"route potential K={POTENTIAL_K:g}; " if POTENTIAL_K else
+                     "NO term pulls towards the goal; ")
+                  + (f"explore +{EXPLORE_JUNCTION_BONUS:g} per junction cleared "
+                     f"(>= {EXPLORE_JUNCTION_MIN_STEPS} steps inside, "
+                     f">= {EXPLORE_JUNCTION_MIN_GAP_M:g} m apart); "
+                     if EXPLORE_JUNCTION_BONUS else "")
+                  + "arrival ends the episode; clock truncates",
                   flush=True)
         if self.goal_kind == "progress":
             # Precomputed: a nested same-quote expression inside an

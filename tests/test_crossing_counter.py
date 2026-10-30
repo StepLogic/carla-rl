@@ -141,3 +141,36 @@ def test_the_log_line_reports_declarations_per_episode(tmp_path):
                  out_dir=str(tmp_path), log_every=2, log=logs.append)
     ep = [s for s in logs if s.startswith("[Ep")]
     assert ep and "declare=2.00/ep" in ep[-1], ep[-1]
+
+
+# ---- junctions cleared per explore episode (v26, 2026-10-30) --------------
+
+class JunctionTown(FakeTown):
+    """An EXPLORE episode (mode 0) whose reward reports 3 junctions cleared by
+    its last step."""
+
+    def _obs(self):
+        o = super()._obs()
+        o["mode"] = np.array([0.0], np.float32)
+        return o
+
+    def step(self, action):
+        o, r, term, trunc, inf = super().step(action)
+        inf["junctions_cleared"] = 3 if (term or trunc) else 1
+        return o, r, term, trunc, inf
+
+
+def test_the_log_line_reports_junctions_per_explore_episode(tmp_path):
+    """Under v26 explore episodes have no arrival, so junctions cleared is the
+    only sign in the log that they get anywhere."""
+    venv = ThreadedVecEnv([lambda: JunctionTown(0, 4, True)], names=["TownA"])
+    buf = DeviceEpisodeBuffer(1 + BINOC, 2, 1000, "cpu")
+    logs = []
+    run_parallel(venv, FakeAgent(), buf, _row, venv.action_space,
+                 to_env=lambda a, b: a, to_actor=lambda e, b: e,
+                 goal_block=lambda g: np.asarray(g, np.float32).reshape(-1),
+                 max_steps=40, learning_starts=0, update_every=100, updates_per=1,
+                 chunk_b=1, chunk_t=2, burn_in=1, ckpt_every=100,
+                 out_dir=str(tmp_path), log_every=2, log=logs.append)
+    ep = [s for s in logs if s.startswith("[Ep")]
+    assert ep and "junc=3.00/ep" in ep[-1], ep[-1]

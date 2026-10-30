@@ -76,7 +76,11 @@ class ImageGoalHER:
         e["rows"].append(np.asarray(row, np.float16))
         e["next_rows"].append(np.asarray(next_row, np.float16))
         e["actions"].append(np.asarray(action, np.float32))
-        e["base"].append(float(reward) - shaping - bonus)
+        # EXPLORE-ONLY PAY (gated_reward: forward progress under GOAL_ROUTE_ONLY,
+        # the junction bonus). A relabelled explore episode becomes goal rows,
+        # and goal mode pays neither.
+        explore_only = float(info_next.get("explore_only", 0.0) or 0.0)
+        e["base"].append(float(reward) - shaping - bonus - explore_only)
         e["frames"].append(np.asarray(info_t["debit_cur"]))
         e["next_frames"].append(np.asarray(info_next["debit_cur"]))
         e["pos"].append(np.asarray(info_next.get("hero_pos", (0.0, 0.0)), np.float64))

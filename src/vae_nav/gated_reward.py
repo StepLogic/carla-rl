@@ -320,6 +320,30 @@ if GOAL_REWARD_KIND not in ("sorb", "shaped", "progress", "explore"):
 # about 30 at 0.99 -- or a goal on one branch of a junction would be worth less
 # than taking the other branch and continuing.
 GOAL_EXPLORE_ARRIVAL_BONUS = float(os.environ.get("GOAL_EXPLORE_ARRIVAL_BONUS", 50.0))
+# GOAL_ROUTE_ONLY (v26, user 2026-10-30: both modes pay "metres along the road
+# towards the target", the reward of nisheeth-golakiya/carla-rl adapted to a
+# goal). Goal episodes were paid TWICE for driving: explore's forward progress,
+# which pays any direction the lane goes -- including down the wrong branch,
+# away from the goal -- plus the route potential towards the goal
+# (POTENTIAL_K). With this on, goal mode keeps only the route term.
+GOAL_ROUTE_ONLY = os.environ.get("GOAL_ROUTE_ONLY", "0") == "1"
+if GOAL_ROUTE_ONLY and not POTENTIAL_K:
+    raise ValueError("GOAL_ROUTE_ONLY=1 with POTENTIAL_K=0 leaves goal mode no "
+                     "positive dense term at all; set POTENTIAL_K (1 = one per "
+                     "metre of route progress)")
+# EXPLORE_JUNCTION_BONUS (v26). Explore episodes have no goal image, so a
+# specific target junction would be invisible to the policy: at a fork it would
+# be paid for one branch and charged for the other with nothing in its view to
+# tell them apart. The target is instead THE NEXT JUNCTION AHEAD, ANY EXIT:
+# forward road progress already pays every metre towards it, clearing it pays
+# this bonus, and the following junction becomes the target -- the episode goes
+# on. Cleared = leaving a junction after at least MIN_STEPS steps inside it and
+# at least MIN_GAP_M of driving after the last paid one, so a waypoint
+# projection flickering at a junction edge cannot be farmed. 0 = off.
+EXPLORE_JUNCTION_BONUS = float(os.environ.get("EXPLORE_JUNCTION_BONUS", 0.0))
+EXPLORE_JUNCTION_MIN_STEPS = int(os.environ.get("EXPLORE_JUNCTION_MIN_STEPS", 5))
+EXPLORE_JUNCTION_MIN_GAP_M = float(os.environ.get("EXPLORE_JUNCTION_MIN_GAP_M", 10.0))
+_NO_DISP = np.zeros(2, np.float64)
 STEP_COST = float(os.environ.get("STEP_COST", 1.0))
 
 # PROGRESS_SPEED_GATE (user 2026-10-14: "remove speed gating"). The progress
@@ -935,7 +959,9 @@ def goal_reward_explore(info, disp, t, max_steps=GOAL_MAX_STEPS):
     explore's own "arrival beats the cap but not a failure". The clock TRUNCATES
     so the critic bootstraps rather than treating time-out as absorbing.
     """
-    reward, fatal = explore_reward(info, disp)
+    # GOAL_ROUTE_ONLY: everything explore pays EXCEPT its forward progress; the
+    # route potential added by the wrapper is then the only metre-pay.
+    reward, fatal = explore_reward(info, _NO_DISP if GOAL_ROUTE_ONLY else disp)
     collided = bool(info.get("collision", False))
     failed = bool(collided and EXPLORE_COLLISION_FATAL) or bool(fatal)
     # ARRIVAL REQUIRES BEING SLOW ENOUGH (GOAL_ARRIVAL_MAX_SPEED). Blasting
@@ -1248,6 +1274,12 @@ class GatedReward(Wrapper):
         self._collision_steps = 0
         self._crossing_steps = 0
         self._path_m = 0.0
+        # EXPLORE_JUNCTION_BONUS state: consecutive steps inside the current
+        # junction, the path metre of the last paid clearing (-inf: the first
+        # junction of an episode always qualifies), and the episode's count.
+        self._j_steps = 0
+        self._j_last_m = -np.inf
+        self._j_count = 0
         self._prev = np.asarray(info.get("hero_pos", (0.0, 0.0)), np.float64)
         self._start = self._prev.copy()
         # The potential is a DIFFERENCE, so step 1 has nothing to difference
@@ -1464,6 +1496,32 @@ class GatedReward(Wrapper):
             _collided = bool(info.get("collision", False))
             terminated = bool(_collided or fatal)
             truncated = (not terminated) and self._t >= self.max_steps
+            # What only explore pays, for HER: a relabelled explore episode
+            # becomes GOAL rows, which must not carry it. Forward progress is
+            # explore-only when goal mode is route-only; the junction bonus
+            # always is.
+            _explore_only = (reward - explore_reward(info, _NO_DISP)[0]
+                             if GOAL_ROUTE_ONLY else 0.0)
+            cleared = False
+            if EXPLORE_JUNCTION_BONUS:
+                if bool(info.get("in_junction", False)):
+                    self._j_steps += 1
+                else:
+                    # Leaving a junction. A crash on the exit step is not a
+                    # clearing; the clock running out on it is.
+                    cleared = (not terminated
+                               and self._j_steps >= EXPLORE_JUNCTION_MIN_STEPS
+                               and self._path_m - self._j_last_m
+                               >= EXPLORE_JUNCTION_MIN_GAP_M)
+                    self._j_steps = 0
+                if cleared:
+                    reward += EXPLORE_JUNCTION_BONUS
+                    _explore_only += EXPLORE_JUNCTION_BONUS
+                    self._j_last_m = self._path_m
+                    self._j_count += 1
+            info["junction_cleared"] = cleared
+            info["junctions_cleared"] = self._j_count
+            info["explore_only"] = float(_explore_only)
             # ARRIVAL BEATS THE CAP BUT NOT A FAILURE: a car that crosses a
             # line on the step it passes 100 m still crossed a line.
             if (not terminated and EXPLORE_GOAL_DIST_M > 0.0

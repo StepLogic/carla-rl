@@ -41,20 +41,21 @@ class Road(gym.Env):
     """Drives STEP_M a step along +x. `junction[t]` says whether step t ends
     inside a junction; `route[t]` is the route distance left after step t."""
 
-    def __init__(self, junction=None, route=None, collide_at=None):
+    def __init__(self, junction=None, route=None, collide_at=None, speed=10.0):
         self.observation_space = spaces.Dict({})
         self.action_space = spaces.Box(np.array([-1.0, 0.0], np.float32),
                                        np.array([1.0, 1.0], np.float32))
         self.junction = list(junction or [])
         self.route = list(route or [])
         self.collide_at = collide_at
+        self.speed = float(speed)
         self.t = 0
 
     def _info(self):
         t = self.t
         inf = {"hero_pos": (STEP_M * t, 0.0), "goal_pos": (500.0, 0.0),
                "hero_yaw": 0.0, "wp_forward": np.array([1.0, 0.0]),
-               "speed_kmh": 20.0, "speed_factor": 0.5,
+               "speed_kmh": self.speed, "speed_factor": self.speed / 20.0,
                "action_smoothness_penalty": 0.0, "arrived": False,
                "collision": t > 0 and t == self.collide_at,
                "off_road": False, "lane_any": False, "lane_marking_types": [],
@@ -235,3 +236,36 @@ def test_her_removes_explore_only_from_the_base(monkeypatch):
                {"debit_cur": frame},
                {"debit_cur": frame, "explore_only": 10.3, "gated_shaping": 0.0})
     assert her._ep[0]["base"][0] == pytest.approx(-0.05)
+
+
+# ---- the speed gate on the route term (v27, user 2026-10-30) -------------
+# The repo pays nothing above the target speed. With GOAL_ROUTE_ONLY the route
+# term IS goal mode's progress, so PROGRESS_SPEED_GATE now gates it too -- but
+# only what it PAYS: moving away from the goal is charged at any speed, or
+# "approach slowly, retreat fast" would be a loop that earns.
+
+def _route_pay(monkeypatch, speed, route, gate=1):
+    gr = _gr(monkeypatch, GOAL_ROUTE_ONLY=1, PROGRESS_SPEED_GATE=gate)
+    moving = _rewards(gr, Road(route=route, speed=speed), gr.GOAL, 5)
+    still = _rewards(gr, Road(route=[route[0]] * len(route), speed=speed), gr.GOAL, 5)
+    return [m[0] - s[0] for m, s in zip(moving[1:], still[1:])]
+
+
+def test_route_progress_pays_below_the_target_speed(monkeypatch):
+    closing = [40.0 - STEP_M * t for t in range(10)]
+    assert _route_pay(monkeypatch, 15.0, closing) == pytest.approx([STEP_M] * 4)
+
+
+def test_route_progress_pays_nothing_at_or_above_it(monkeypatch):
+    closing = [40.0 - STEP_M * t for t in range(10)]
+    assert _route_pay(monkeypatch, 25.0, closing) == pytest.approx([0.0] * 4)
+
+
+def test_moving_away_is_charged_at_any_speed(monkeypatch):
+    opening = [40.0 + STEP_M * t for t in range(10)]
+    assert _route_pay(monkeypatch, 25.0, opening) == pytest.approx([-STEP_M] * 4)
+
+
+def test_gate_off_pays_at_any_speed(monkeypatch):
+    closing = [40.0 - STEP_M * t for t in range(10)]
+    assert _route_pay(monkeypatch, 25.0, closing, gate=0) == pytest.approx([STEP_M] * 4)

@@ -1435,6 +1435,14 @@ class GatedReward(Wrapper):
                 if _rem is not None and self._prev_remaining is not None:
                     _g = _BILL_GAMMA if SHAPING_DISCOUNTED else 1.0
                     _shaped = POTENTIAL_K * (self._prev_remaining - _g * float(_rem))
+                    # THE SPEED GATE (v27). Under GOAL_ROUTE_ONLY this term IS
+                    # goal mode's progress, so PROGRESS_SPEED_GATE gates it like
+                    # explore's -- but only what it PAYS. Moving away is charged
+                    # at any speed, or "approach slowly, retreat fast" would be
+                    # a loop that earns.
+                    if (GOAL_ROUTE_ONLY and _shaped > 0.0 and not _pays_progress(
+                            float(info.get("speed_factor", 0.0) or 0.0))):
+                        _shaped = 0.0
                     reward += _shaped
             self._prev_remaining = None if _rem is None else float(_rem)
             info["gated_shaping"] = float(_shaped)

@@ -163,6 +163,11 @@ DET_EPISODE_FRAC = float(os.environ.get("DET_EPISODE_FRAC", "0") or 0.0)
 HER = os.environ.get("HER", "0") == "1"
 HER_RELABEL = env_int("HER_RELABEL", 2)
 HER_EXPLORE = os.environ.get("HER_EXPLORE", "1") == "1"
+# JUNCTION RAMP (v27, user 2026-10-30): start the goals' junction fraction
+# here and raise it to JUNCTION_GOAL_FRAC as training goal success rises.
+# Unset = off, every earlier run unchanged.
+JUNCTION_RAMP_START = (float(os.environ["JUNCTION_RAMP_START"])
+                       if os.environ.get("JUNCTION_RAMP_START") else None)
 PORT = env_int("CARLA_PORT", 2000)
 SEED = env_int("SEED", 0)
 DEVICE = os.environ.get("TORCH_DEVICE", "cuda")
@@ -389,6 +394,11 @@ def main():
     # session: no stream available"). A restart cannot inherit that state.
     town_i = 0
     parallel = use_parallel(PARALLEL_TOWNS, EVAL_FROM, len(TOWNS))
+    # JUNCTION RAMP (torch_rl.junction_ramp) lives in the parallel loop only,
+    # and never in eval, whose goal set must stay at the overlay's fraction.
+    if JUNCTION_RAMP_START is not None and not parallel and not EVAL_FROM:
+        raise ValueError("JUNCTION_RAMP_START needs PARALLEL_TOWNS=1: the "
+                         "serial loop has no junction ramp")
     ports = [PORT + 50 * i for i in range(len(TOWNS))] if parallel else [PORT]
     servers = []
 
@@ -617,13 +627,29 @@ def main():
                 explore_bonus=float(_G.EXPLORE_ARRIVAL_BONUS),
                 potential_k=float(_G.POTENTIAL_K),
                 lane_fault=lambda inf: _fault(inf) == "crossing",
-                relabel_explore=HER_EXPLORE, seed=SEED)
+                relabel_explore=HER_EXPLORE, seed=SEED,
+                speed_gate_kmh=(env_float("TARGET_SPEED", 20.0)
+                                if (_G.PROGRESS_SPEED_GATE and _G.GOAL_ROUTE_ONLY)
+                                else None))
             print(f"  HER: {HER_RELABEL} hindsight legs per episode, "
                   f"{env_float('GOAL_DIST_MIN', 5.0):g}-{env_float('GOAL_DIST_MAX', 25.0):g} m, "
                   f"arrival {GOAL_RADIUS_M:g} m at <= {_G.GOAL_ARRIVAL_MAX_SPEED:g} km/h, "
                   f"+{_G.GOAL_EXPLORE_ARRIVAL_BONUS:g}; progress K={_G.POTENTIAL_K:g} "
                   f"to the hindsight goal; clean prefix only; explore episodes "
                   f"{'relabelled' if HER_EXPLORE else 'skipped'}", flush=True)
+        ramp = None
+        if JUNCTION_RAMP_START is not None:
+            from torch_rl.junction_ramp import JunctionRamp
+            # The ramp's TARGET is the overlay's JUNCTION_GOAL_FRAC, the
+            # fraction the evals use; read before the ramp overwrites it.
+            ramp = JunctionRamp(
+                start=JUNCTION_RAMP_START,
+                target=env_float("JUNCTION_GOAL_FRAC", 0.85),
+                step=env_float("JUNCTION_RAMP_STEP", 0.05),
+                up=env_float("JUNCTION_RAMP_UP", 0.3),
+                down=env_float("JUNCTION_RAMP_DOWN", 0.1),
+                window=int(env_float("JUNCTION_RAMP_WINDOW", 100)))
+            print(f"  {ramp.describe()}", flush=True)
         t_start = time.time()
         steps, episodes = run_parallel(
             venv, agent, buf, row_of, _box, to_env=to_env, to_actor=to_actor,
@@ -633,7 +659,7 @@ def main():
             burn_in=BURN_IN, ckpt_every=CKPT_EVERY, out_dir=OUT,
             log_every=LOG_EVERY, vids=vids, her=her,
             log=lambda m: print(m, flush=True),
-            det_frac=DET_EPISODE_FRAC, det_seed=SEED)
+            det_frac=DET_EPISODE_FRAC, det_seed=SEED, junction_ramp=ramp)
         venv.close()
         for srv in servers:
             srv.stop()

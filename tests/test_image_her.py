@@ -174,3 +174,37 @@ def test_arrival_row_restores_the_lane_shaping_tail():
     (start, n, _mode), = _legs(buf)
     assert float(buf.rewards[start + n - 1]) == pytest.approx(-0.1 + 50.0 + tail)
     assert float(buf.masks[start + n - 1]) == 0.0           # terminal
+
+
+# ---- the speed gate (v27): hindsight rows are gated like live ones -------
+
+def _rewards_of(buf):
+    return [float(x) for x in buf.rewards[: buf.size].cpu().numpy()]
+
+
+def test_hindsight_progress_is_not_paid_above_the_gate():
+    """A live goal row above the target speed earns no route progress, so a
+    hindsight row must not either -- or HER would teach the critic that speed
+    pays when the env says it does not. Same episode, gate on and off: the
+    same rows, and the gated ones are paid exactly K * step_m less on every
+    fast non-arrival step and the same everywhere else."""
+    speeds = [30.0] * 12 + [5.0] * 6           # fast, then slow enough to arrive
+    buf, her = _her(speed_gate_kmh=20.0, potential_k=1.0)
+    _drive(her, speeds, shaping=0.0, step_m=1.0)
+    ref, her_ref = _her(potential_k=1.0)
+    _drive(her_ref, speeds, shaping=0.0, step_m=1.0)
+    gated, free = _rewards_of(buf), _rewards_of(ref)
+    assert her.counts["rows"] == her_ref.counts["rows"] > 0
+    assert len(gated) == len(free)
+    diff = sorted({round(b - a, 6) for a, b in zip(gated, free)})
+    assert diff[0] == 0.0 and set(diff) <= {0.0, 1.0}
+    assert sum(gated) < sum(free)
+
+
+def test_no_gate_by_default():
+    speeds = [30.0] * 12 + [5.0] * 6
+    a, her_a = _her(potential_k=1.0)
+    _drive(her_a, speeds, shaping=0.0, step_m=1.0)
+    b, her_b = _her(potential_k=1.0, speed_gate_kmh=None)
+    _drive(her_b, speeds, shaping=0.0, step_m=1.0)
+    assert _rewards_of(a) == _rewards_of(b)

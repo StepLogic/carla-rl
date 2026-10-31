@@ -31,7 +31,7 @@ def run_parallel(venv, agent, buf, row_of, box, *, to_env, to_actor, goal_block,
                  max_steps, learning_starts, update_every, updates_per,
                  chunk_b, chunk_t, burn_in, ckpt_every, out_dir, log_every,
                  vids=None, her=None, log=print, on_episode=None,
-                 det_frac=0.0, det_seed=0):
+                 det_frac=0.0, det_seed=0, junction_ramp=None):
     """Train until `max_steps` transitions. Returns (steps, episodes).
 
     `det_frac` (user 2026-10-25): the share of episodes, drawn per env at each
@@ -138,6 +138,12 @@ def run_parallel(venv, agent, buf, row_of, box, *, to_env, to_actor, goal_block,
                 dict(len=ep_len[i], arrived=float(arrived)))
             if det[i] and modes[i] == 1:
                 recent["det_goal"].append(float(arrived))
+            # JUNCTION RAMP (torch_rl.junction_ramp): every finished goal
+            # episode moves the goal sampler's junction fraction, or not.
+            if junction_ramp is not None and modes[i] == 1:
+                _msg = junction_ramp.record(arrived)
+                if _msg:
+                    log(_msg)
             recent["cross"].append(float(ep_cross[i]))
             recent["declare"].append(float(ep_decl[i]))
             # JUNCTIONS CLEARED per explore episode (EXPLORE_JUNCTION_BONUS):
@@ -177,13 +183,15 @@ def run_parallel(venv, agent, buf, row_of, box, *, to_env, to_actor, goal_block,
                         if recent["declare"] and max(recent["declare"]) > 0 else "")
                 _junc = (f"junc={np.mean(recent['junc']):.2f}/ep "
                          if recent["junc"] and max(recent["junc"]) > 0 else "")
+                _jf = (f"jfrac={junction_ramp.value:.2f} "
+                       if junction_ramp is not None else "")
                 log(f"[Ep {episodes:5d}] step={step:8d} "
                     f"policy={pol:.3f}(n={len(recent['policy'])}) "
                     f"goal={sr:.3f}(n={len(g)}) "
                     f"goal_len={np.mean([x['len'] for x in g]) if g else float('nan'):.0f} "
                     f"explore_len={np.mean([x['len'] for x in e]) if e else float('nan'):.0f} "
                     f"cross={np.mean(recent['cross']) if recent['cross'] else float('nan'):.2f}/ep "
-                    f"{_dec}{_junc}"
+                    f"{_dec}{_junc}{_jf}"
                     f"ends={recent['ends']} buffer={buf.size} {per_h / 1000:.0f}k steps/h "
                     f"| {_m('critic_loss_g'):.3f} q_g={_m('q_g'):.2f} "
                     f"q_e={_m('q_e'):.2f} alpha_g={_m('alpha_g'):.4f}"

@@ -39,12 +39,17 @@ class ImageGoalHER:
     def __init__(self, buf, encoder, pxr, *, n_relabel=2, min_m=5.0,
                  max_m=25.0, radius=2.0, max_speed=10.0, goal_bonus=50.0,
                  explore_bonus=10.0, potential_k=1.0, lane_fault=None,
-                 env_id_offset=1000, relabel_explore=True, seed=0):
+                 env_id_offset=1000, relabel_explore=True, seed=0,
+                 speed_gate_kmh=None):
         self.buf, self.enc, self.pxr = buf, encoder, pxr
         self.n_relabel, self.min_m, self.max_m = int(n_relabel), float(min_m), float(max_m)
         self.radius, self.max_speed = float(radius), float(max_speed)
         self.goal_bonus, self.explore_bonus = float(goal_bonus), float(explore_bonus)
         self.k = float(potential_k)
+        # THE SPEED GATE (v27): live goal rows earn no route progress at or
+        # above the target speed (gated_reward, PROGRESS_SPEED_GATE under
+        # GOAL_ROUTE_ONLY), so hindsight rows must not either. None = off.
+        self.speed_gate = None if speed_gate_kmh is None else float(speed_gate_kmh)
         self.lane_fault = lane_fault or (lambda info: False)
         self.offset = int(env_id_offset)
         self.relabel_explore = bool(relabel_explore)
@@ -177,7 +182,11 @@ class ImageGoalHER:
             else:
                 d_prev = cum[g] - (cum[t - 1] if t > 0 else 0.0)
                 d_now = cum[g] - cum[t]
-                r = e["base"][t] + self.k * (d_prev - d_now)
+                prog = self.k * (d_prev - d_now)
+                if (self.speed_gate is not None and prog > 0.0
+                        and e["speed"][t] >= self.speed_gate):
+                    prog = 0.0
+                r = e["base"][t] + prog
             self.buf.add(row, e["actions"][t], float(r), last, False, nrow, 1,
                          env_id=eid, goal=goal_blk)
         self.counts["legs"] += 1

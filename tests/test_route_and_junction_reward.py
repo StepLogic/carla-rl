@@ -81,7 +81,7 @@ def _clean_modules():
     yield
     import vae_nav.lane_explore_reward as ler
     import vae_nav.gated_reward as gr
-    for k in ("GOAL_ROUTE_ONLY", "EXPLORE_JUNCTION_BONUS"):
+    for k in ("GOAL_ROUTE_ONLY", "EXPLORE_JUNCTION_BONUS", "STEER_CHANGE_SCALE"):
         os.environ.pop(k, None)
     importlib.reload(ler)
     importlib.reload(gr)
@@ -269,3 +269,43 @@ def test_moving_away_is_charged_at_any_speed(monkeypatch):
 def test_gate_off_pays_at_any_speed(monkeypatch):
     closing = [40.0 - STEP_M * t for t in range(10)]
     assert _route_pay(monkeypatch, 25.0, closing, gate=0) == pytest.approx([STEP_M] * 4)
+
+
+# ---- the steering-change cost (v28, user 2026-10-31) ----------------------
+# Every step charged |delta steer| (0..2) unscaled. With absolute actions that
+# averaged ~0.2 a step on v27's failing eval episodes -- more than driving
+# earned -- so their return per step was -0.08 to -0.13, the goal critic sat
+# at -20..-48, and ending an episode on a -1 crossing became the cheap way
+# out. The repo this reward follows has no such term. STEER_CHANGE_SCALE
+# multiplies it; 1 (default) keeps every earlier run, 0 removes it.
+
+class Jitter(Road):
+    def _info(self):
+        inf = super()._info()
+        inf["action_smoothness_penalty"] = 0.5
+        return inf
+
+
+@pytest.mark.parametrize("mode_name", ["GOAL", "EXPLORE"])
+def test_scale_zero_removes_the_steering_cost(monkeypatch, mode_name):
+    gr = _gr(monkeypatch, GOAL_ROUTE_ONLY=1, STEER_CHANGE_SCALE=0)
+    mode = getattr(gr, mode_name)
+    jit = _rewards(gr, Jitter(route=[40.0] * 10), mode, 4)
+    calm = _rewards(gr, Road(route=[40.0] * 10), mode, 4)
+    assert [r for r, *_ in jit] == pytest.approx([r for r, *_ in calm])
+
+
+def test_default_scale_still_charges_it(monkeypatch):
+    gr = _gr(monkeypatch, GOAL_ROUTE_ONLY=1)
+    jit = _rewards(gr, Jitter(route=[40.0] * 10), gr.EXPLORE, 4)
+    calm = _rewards(gr, Road(route=[40.0] * 10), gr.EXPLORE, 4)
+    assert [c - j for (j, *_), (c, *_) in zip(jit, calm)] == pytest.approx([0.5] * 4)
+
+
+def test_lane_explore_reward_uses_the_same_scale(monkeypatch):
+    monkeypatch.setenv("STEER_CHANGE_SCALE", "0")
+    import vae_nav.lane_explore_reward as ler
+    importlib.reload(ler)
+    assert ler.STEER_CHANGE_SCALE == 0.0
+    import inspect
+    assert "STEER_CHANGE_SCALE * steer_change" in inspect.getsource(ler)

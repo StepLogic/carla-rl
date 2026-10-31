@@ -57,7 +57,7 @@ except ImportError:
 from vae_nav.lane_priv import lane_keep_cost
 from vae_nav.lane_explore_reward import (BASE_PENALTY, COLLISION_PENALTY,
                                          LANE_DEPARTURE_PENALTY, PROGRESS_MODE, PROGRESS_SCALE,
-                                         lane_departure_is_fatal)
+                                         STEER_CHANGE_SCALE, lane_departure_is_fatal)
 
 GOAL, EXPLORE = 1, 0
 EXPLORE_PROB = float(os.environ.get("EXPLORE_PROB", 0.5))
@@ -1033,7 +1033,7 @@ def explore_reward(info, disp):
 
     steer_change = float(info.get("action_smoothness_penalty", 0.0) or 0.0)
     speed_factor = float(info.get("speed_factor", 0.0) or 0.0)
-    r = -BASE_PENALTY - steer_change
+    r = -BASE_PENALTY - STEER_CHANGE_SCALE * steer_change
     if _pays_progress(speed_factor):
         r += PROGRESS_SCALE * progress          # LANE_PROGRESS_SCALE (10 for v5)
     if (EXPLORE_IDLE_PENALTY
@@ -1195,6 +1195,7 @@ class GatedReward(Wrapper):
                      f"(>= {EXPLORE_JUNCTION_MIN_STEPS} steps inside, "
                      f">= {EXPLORE_JUNCTION_MIN_GAP_M:g} m apart); "
                      if EXPLORE_JUNCTION_BONUS else "")
+                  + f"steer-change cost x{STEER_CHANGE_SCALE:g}; "
                   + "arrival ends the episode; clock truncates",
                   flush=True)
         if self.goal_kind == "progress":

@@ -71,6 +71,13 @@ except ImportError:
 # progress term.
 K_NOVELTY = float(os.environ.get("K_NOVELTY", 0.2))
 BASE_PENALTY = float(os.environ.get("LANE_BASE_PENALTY", 4e-3))
+# STEER_CHANGE_SCALE (v28, user 2026-10-31) multiplies the per-step |delta
+# steer| cost (0..2, unscaled before). On v27 it averaged ~0.2 a step on
+# failing eval episodes -- more than driving earned -- so the goal critic sat
+# at -20..-48 and ending an episode on a -1 crossing became the cheap way out.
+# The repo this reward follows (nisheeth-golakiya/carla-rl) has no such term.
+# 1 = every earlier run; 0 removes it.
+STEER_CHANGE_SCALE = float(os.environ.get("STEER_CHANGE_SCALE", 1.0))
 COLLISION_PENALTY = float(os.environ.get("LANE_COLLISION_PENALTY", 3.0))
 LANE_DEPARTURE_PENALTY = float(os.environ.get("LANE_DEPARTURE_PENALTY", 5.0))
 SPEED_PENALTY = float(os.environ.get("LANE_SPEED_PENALTY", 3.0))
@@ -308,7 +315,7 @@ class LaneExploreReward(Wrapper):
         steer_change = float(info.get("action_smoothness_penalty", 0.0))
         speed_factor = float(info.get("speed_factor", 0.0))
 
-        reward = -BASE_PENALTY - steer_change
+        reward = -BASE_PENALTY - STEER_CHANGE_SCALE * steer_change
         # Upstream gates the progress term on being under the target speed.
         if speed_factor < 1.0:
             reward += PROGRESS_SCALE * projected      # LANE_PROGRESS_SCALE

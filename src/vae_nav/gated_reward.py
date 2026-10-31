@@ -327,6 +327,24 @@ GOAL_EXPLORE_ARRIVAL_BONUS = float(os.environ.get("GOAL_EXPLORE_ARRIVAL_BONUS", 
 # away from the goal -- plus the route potential towards the goal
 # (POTENTIAL_K). With this on, goal mode keeps only the route term.
 GOAL_ROUTE_ONLY = os.environ.get("GOAL_ROUTE_ONLY", "0") == "1"
+# ROUTE_PROGRESS_POSITIVE (v29, user 2026-10-31: "Do it"). Pay route progress
+# and charge NOTHING for moving away: max(K * (d_prev - d), 0).
+#
+# WHY, from v28's eval records: failing episodes drove 51 m at 200k and
+# 203-366 m at 400k-500k for returns of -21 to +3. The car follows lanes but
+# drives the WRONG WAY, and the signed term charges every metre of it, so the
+# value of continuing falls below the -1 a crossing costs and ending the
+# episode becomes the best move (the 2026-10-14 cheap-termination mechanism,
+# third appearance). Clipped, driving the wrong way is merely unpaid.
+#
+# THE USUAL OBJECTION AND WHY IT DOES NOT APPLY HERE. Clipping gives up the
+# potential (Ng et al.): an approach-retreat cycle returns to the same state
+# having been paid for the approach half, which is a loop the agent can farm.
+# Under this arm's rules retreating means turning round, which crosses a
+# painted line and ENDS the episode (EXPLORE_LANE_MODE=terminal), so the loop
+# cannot be run. It becomes farmable again the moment crossings stop being
+# terminal -- so this flag and that rule must move together.
+ROUTE_PROGRESS_POSITIVE = os.environ.get("ROUTE_PROGRESS_POSITIVE", "0") == "1"
 if GOAL_ROUTE_ONLY and not POTENTIAL_K:
     raise ValueError("GOAL_ROUTE_ONLY=1 with POTENTIAL_K=0 leaves goal mode no "
                      "positive dense term at all; set POTENTIAL_K (1 = one per "
@@ -917,6 +935,18 @@ LANE_CAR_HALF_WIDTH = float(os.environ.get("LANE_CAR_HALF_WIDTH", 0.74))
 EXPLORE_LANE_MODE = os.environ.get("EXPLORE_LANE_MODE", "terminal")
 if EXPLORE_LANE_MODE not in ("penalise", "terminal"):
     raise ValueError(f"EXPLORE_LANE_MODE={EXPLORE_LANE_MODE!r}: penalise|terminal")
+# ROUTE_PROGRESS_POSITIVE IS ONLY FARM-PROOF WHILE A CROSSING ENDS THE EPISODE.
+# Clipped progress pays the approach half of an approach-retreat cycle every
+# time round; what stops the cycle is that turning back crosses a painted line
+# and ends the episode. With crossings merely fined, or ignored, the car can
+# drive up to the goal and away again for unbounded reward, so the pair is
+# refused rather than left to be discovered in a run's numbers.
+if ROUTE_PROGRESS_POSITIVE and (EXPLORE_LANE_MODE != "terminal" or LANE_INVASION_NOOP):
+    raise ValueError(
+        "ROUTE_PROGRESS_POSITIVE=1 needs EXPLORE_LANE_MODE=terminal and "
+        f"LANE_INVASION_NOOP=0 (got {EXPLORE_LANE_MODE!r}, noop="
+        f"{int(LANE_INVASION_NOOP)}): clipped progress makes approach-retreat "
+        "farmable unless turning back ends the episode")
 
 
 def explore_lane_fatal(lane_any, marking_types, off_road, in_junction=False,
@@ -1187,7 +1217,8 @@ class GatedReward(Wrapper):
                   f"{EXPLORE_ARRIVAL_BONUS:g} at {EXPLORE_GOAL_DIST_M:g} m); cap "
                   f"{self.max_steps} (shared with explore); "
                   + (f"GOAL_ROUTE_ONLY: goal mode drops forward progress and is "
-                     f"paid {POTENTIAL_K:g}/m of ROUTE progress only; "
+                     f"paid {POTENTIAL_K:g}/m of ROUTE progress only"
+                     + (", retreat FREE" if ROUTE_PROGRESS_POSITIVE else "") + "; "
                      if GOAL_ROUTE_ONLY else
                      f"route potential K={POTENTIAL_K:g}; " if POTENTIAL_K else
                      "NO term pulls towards the goal; ")
@@ -1443,6 +1474,8 @@ class GatedReward(Wrapper):
                     # a loop that earns.
                     if (GOAL_ROUTE_ONLY and _shaped > 0.0 and not _pays_progress(
                             float(info.get("speed_factor", 0.0) or 0.0))):
+                        _shaped = 0.0
+                    if ROUTE_PROGRESS_POSITIVE and _shaped < 0.0:
                         _shaped = 0.0
                     reward += _shaped
             self._prev_remaining = None if _rem is None else float(_rem)

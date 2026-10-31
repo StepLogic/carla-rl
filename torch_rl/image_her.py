@@ -40,7 +40,7 @@ class ImageGoalHER:
                  max_m=25.0, radius=2.0, max_speed=10.0, goal_bonus=50.0,
                  explore_bonus=10.0, potential_k=1.0, lane_fault=None,
                  env_id_offset=1000, relabel_explore=True, seed=0,
-                 speed_gate_kmh=None):
+                 speed_gate_kmh=None, positive=False):
         self.buf, self.enc, self.pxr = buf, encoder, pxr
         self.n_relabel, self.min_m, self.max_m = int(n_relabel), float(min_m), float(max_m)
         self.radius, self.max_speed = float(radius), float(max_speed)
@@ -50,6 +50,9 @@ class ImageGoalHER:
         # above the target speed (gated_reward, PROGRESS_SPEED_GATE under
         # GOAL_ROUTE_ONLY), so hindsight rows must not either. None = off.
         self.speed_gate = None if speed_gate_kmh is None else float(speed_gate_kmh)
+        # ROUTE_PROGRESS_POSITIVE: the live reward charges nothing for moving
+        # away from the goal, so a hindsight row must not either.
+        self.positive = bool(positive)
         self.lane_fault = lane_fault or (lambda info: False)
         self.offset = int(env_id_offset)
         self.relabel_explore = bool(relabel_explore)
@@ -182,7 +185,7 @@ class ImageGoalHER:
             else:
                 d_prev = cum[g] - (cum[t - 1] if t > 0 else 0.0)
                 d_now = cum[g] - cum[t]
-                prog = self.k * (d_prev - d_now)
+                prog = self._progress(self.k * (d_prev - d_now))
                 if (self.speed_gate is not None and prog > 0.0
                         and e["speed"][t] >= self.speed_gate):
                     prog = 0.0
@@ -192,6 +195,10 @@ class ImageGoalHER:
         self.counts["legs"] += 1
         self.counts["rows"] += j - s + 1
         return j - s + 1
+
+    def _progress(self, prog):
+        """The paid part of one step's route progress."""
+        return max(0.0, float(prog)) if self.positive else float(prog)
 
     def describe_counts(self):
         c = self.counts

@@ -630,7 +630,8 @@ def main():
                 relabel_explore=HER_EXPLORE, seed=SEED,
                 speed_gate_kmh=(env_float("TARGET_SPEED", 20.0)
                                 if (_G.PROGRESS_SPEED_GATE and _G.GOAL_ROUTE_ONLY)
-                                else None))
+                                else None),
+                positive=bool(_G.ROUTE_PROGRESS_POSITIVE))
             print(f"  HER: {HER_RELABEL} hindsight legs per episode, "
                   f"{env_float('GOAL_DIST_MIN', 5.0):g}-{env_float('GOAL_DIST_MAX', 25.0):g} m, "
                   f"arrival {GOAL_RADIUS_M:g} m at <= {_G.GOAL_ARRIVAL_MAX_SPEED:g} km/h, "

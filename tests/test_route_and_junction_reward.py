@@ -81,7 +81,8 @@ def _clean_modules():
     yield
     import vae_nav.lane_explore_reward as ler
     import vae_nav.gated_reward as gr
-    for k in ("GOAL_ROUTE_ONLY", "EXPLORE_JUNCTION_BONUS", "STEER_CHANGE_SCALE"):
+    for k in ("GOAL_ROUTE_ONLY", "EXPLORE_JUNCTION_BONUS", "STEER_CHANGE_SCALE",
+              "ROUTE_PROGRESS_POSITIVE"):
         os.environ.pop(k, None)
     importlib.reload(ler)
     importlib.reload(gr)
@@ -309,3 +310,57 @@ def test_lane_explore_reward_uses_the_same_scale(monkeypatch):
     assert ler.STEER_CHANGE_SCALE == 0.0
     import inspect
     assert "STEER_CHANGE_SCALE * steer_change" in inspect.getsource(ler)
+
+
+# ---- clipped route progress (v29, user 2026-10-31) -----------------------
+# ROUTE_PROGRESS_POSITIVE pays route progress and charges NOTHING for moving
+# away. v28's eval records: failing episodes drove 51 m (200k) and 203-366 m
+# (400k-500k) for returns of -21 to +3 -- the car follows lanes but drives the
+# wrong way, and the signed term charges every metre of it, so continuing is
+# worth less than a -1 crossing. The usual objection is that clipping gives up
+# the potential and makes approach-retreat a farmable loop; here retreating
+# means turning round, which crosses a line and ENDS the episode, so the loop
+# cannot be run.
+
+def test_moving_away_is_free_when_clipped(monkeypatch):
+    opening = [40.0 + STEP_M * t for t in range(10)]
+    gr = _gr(monkeypatch, GOAL_ROUTE_ONLY=1, ROUTE_PROGRESS_POSITIVE=1)
+    away = _rewards(gr, Road(route=opening), gr.GOAL, 5)
+    flat = _rewards(gr, Road(route=[40.0] * 10), gr.GOAL, 5)
+    assert [r for r, *_ in away[1:]] == pytest.approx([r for r, *_ in flat[1:]])
+
+
+def test_moving_away_is_charged_when_signed(monkeypatch):
+    opening = [40.0 + STEP_M * t for t in range(10)]
+    gr = _gr(monkeypatch, GOAL_ROUTE_ONLY=1, ROUTE_PROGRESS_POSITIVE=0)
+    away = _rewards(gr, Road(route=opening), gr.GOAL, 5)
+    flat = _rewards(gr, Road(route=[40.0] * 10), gr.GOAL, 5)
+    assert [f - a for (a, *_), (f, *_) in zip(away[1:], flat[1:])] == pytest.approx([STEP_M] * 4)
+
+
+def test_clipping_still_pays_progress(monkeypatch):
+    closing = [40.0 - STEP_M * t for t in range(10)]
+    gr = _gr(monkeypatch, GOAL_ROUTE_ONLY=1, ROUTE_PROGRESS_POSITIVE=1)
+    toward = _rewards(gr, Road(route=closing), gr.GOAL, 5)
+    flat = _rewards(gr, Road(route=[40.0] * 10), gr.GOAL, 5)
+    assert [t - f for (t, *_), (f, *_) in zip(toward[1:], flat[1:])] == pytest.approx([STEP_M] * 4)
+
+
+def test_the_published_shaping_is_clipped_too(monkeypatch):
+    """info["gated_shaping"] is what HER subtracts to rebuild a row's base, so
+    it must be the amount actually paid."""
+    opening = [40.0 + STEP_M * t for t in range(10)]
+    gr = _gr(monkeypatch, GOAL_ROUTE_ONLY=1, ROUTE_PROGRESS_POSITIVE=1)
+    out = _rewards(gr, Road(route=opening), gr.GOAL, 5)
+    assert [i["gated_shaping"] for *_x, i in out] == pytest.approx([0.0] * len(out))
+
+
+def test_clipping_is_refused_when_a_crossing_does_not_end_the_episode(monkeypatch):
+    """What stops approach-retreat being farmed is that turning back crosses a
+    line and ends the episode. Fined crossings reopen the loop."""
+    with pytest.raises(ValueError, match="ROUTE_PROGRESS_POSITIVE"):
+        _gr(monkeypatch, GOAL_ROUTE_ONLY=1, ROUTE_PROGRESS_POSITIVE=1,
+            EXPLORE_LANE_MODE="penalise")
+    with pytest.raises(ValueError, match="ROUTE_PROGRESS_POSITIVE"):
+        _gr(monkeypatch, GOAL_ROUTE_ONLY=1, ROUTE_PROGRESS_POSITIVE=1,
+            LANE_INVASION_NOOP=1)

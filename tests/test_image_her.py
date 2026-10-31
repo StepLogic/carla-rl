@@ -208,3 +208,25 @@ def test_no_gate_by_default():
     b, her_b = _her(potential_k=1.0, speed_gate_kmh=None)
     _drive(her_b, speeds, shaping=0.0, step_m=1.0)
     assert _rewards_of(a) == _rewards_of(b)
+
+
+# ---- clipped route progress (v29): hindsight rows match the live rule ----
+
+def test_hindsight_progress_can_be_clipped():
+    """With ROUTE_PROGRESS_POSITIVE the live reward never charges for moving
+    away, so a hindsight leg must not either. On a leg the car drove forward
+    the two agree; the knob exists so HER cannot drift from the env rule."""
+    speeds = [10.0] * 18
+    a, her_a = _her(potential_k=1.0, positive=True)
+    _drive(her_a, speeds, shaping=0.0, step_m=1.0)
+    b, her_b = _her(potential_k=1.0)
+    _drive(her_b, speeds, shaping=0.0, step_m=1.0)
+    assert her_a.counts["rows"] == her_b.counts["rows"] > 0
+    assert _rewards_of(a) == pytest.approx(_rewards_of(b))
+
+
+def test_a_backward_step_is_free_when_clipped():
+    her = ImageGoalHER(None, None, None, potential_k=1.0, positive=True)
+    assert her._progress(-2.0) == 0.0 and her._progress(2.0) == 2.0
+    signed = ImageGoalHER(None, None, None, potential_k=1.0)
+    assert signed._progress(-2.0) == -2.0

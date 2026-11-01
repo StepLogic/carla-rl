@@ -38,6 +38,15 @@ class CoverageGrid:
     def fraction(self):
         return float(self.covered.mean()) if len(self.wp) else 0.0
 
+    def nearest_uncovered(self, xy):
+        """The uncovered waypoint closest to `xy`, or None when all are covered:
+        where a stalled trace restarts, so coverage grows again."""
+        left = np.flatnonzero(~self.covered)
+        if not len(left):
+            return None
+        d = np.sum((self.wp[left] - np.asarray(xy, np.float64)[:2]) ** 2, axis=1)
+        return self.wp[left[int(np.argmin(d))]]
+
 
 class StuckDetector:
     """Fires when `limit` consecutive restarts land within `radius` m of the

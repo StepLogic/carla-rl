@@ -93,7 +93,7 @@ def test_trace_mode_dispatches_before_eval():
 def test_the_trace_uses_the_same_action_mapping_and_fault_rule_as_eval():
     body = _trainer_src().split("def run_trace(")[1].split("\ndef run_eval(")[0]
     assert "to_env(" in body and "_fault(info)" in body
-    assert "act_with_stats(" in body and "noise_scale=1.0" in body
+    assert "act_with_stats(" in body and "noise_scale=max(TRACE_NOISE_SCALE, 0.0)" in body
 
 
 def test_continuation_and_resume_are_in_place():
@@ -117,3 +117,36 @@ def test_unwrapping_reaches_the_innermost_env():
 
     core = Core()
     assert tcs._carla_env(W(W(W(core)))) is core
+
+
+# ---- deterministic traces (user 2026-11-01: "redo and switch to deterministic
+# actions") -------------------------------------------------------------------
+# With training noise the Town02 trace faulted every ~11 m (148 segments in
+# 2 km, 86 crossings / 49 off-road / 13 collisions, 7.5 km/h). The noise was
+# there so a retried corner would not repeat; the stuck detector now handles
+# that directly (and never fired in 148 segments). A deterministic car that
+# never faults could instead circle one block, so a COVERAGE STALL restarts
+# at the nearest waypoint not yet covered.
+
+def test_nearest_uncovered_skips_covered_waypoints():
+    wps = np.array([[0.0, 0.0], [10.0, 0.0], [30.0, 0.0]])
+    cov = CoverageGrid(wps, radius=5.0)
+    cov.add((0.0, 0.0))
+    assert tuple(cov.nearest_uncovered((0.0, 0.0))) == (10.0, 0.0)
+    cov.add((10.0, 0.0))
+    assert tuple(cov.nearest_uncovered((0.0, 0.0))) == (30.0, 0.0)
+
+
+def test_nearest_uncovered_is_none_when_all_covered():
+    cov = CoverageGrid(np.array([[0.0, 0.0]]), radius=5.0)
+    cov.add((0.0, 0.0))
+    assert cov.nearest_uncovered((0.0, 0.0)) is None
+
+
+def test_the_trace_reads_its_noise_scale_and_stall_settings():
+    src = _trainer_src()
+    assert 'TRACE_NOISE_SCALE = env_float("TRACE_NOISE_SCALE", 1.0)' in src
+    body = src.split("def run_trace(")[1].split("\ndef run_eval(")[0]
+    assert "deterministic=TRACE_NOISE_SCALE <= 0" in body
+    assert "nearest_uncovered(" in body and "TRACE_STALL_M" in body
+    assert "limit=TRACE_STUCK_LIMIT" in body

@@ -127,6 +127,20 @@ TRACE_DIST_M = env_float("TRACE_DIST_M", 6000.0)
 TRACE_COVERAGE = env_float("TRACE_COVERAGE", 0.90)
 TRACE_SPACING_M = env_float("TRACE_SPACING_M", 2.0)
 TRACE_MAX_STEPS = env_int("TRACE_MAX_STEPS", 60000)
+# TRACE_NOISE_SCALE (user 2026-11-01: "redo and switch to deterministic
+# actions"): 0 = tanh(mean), as the eval drives. With the training noise (1.0)
+# the Town02 trace faulted every ~11 m -- 148 segments in 2 km, 86 crossings,
+# 49 off-road, 13 collisions, at 7.5 km/h -- and the map should reflect how the
+# NAVIGATING policy drives. The noise only existed so a retried corner would
+# not repeat; the stuck rule handles that directly.
+# TRACE_STUCK_LIMIT: restarts within 5 m before jumping 25 m on (a
+# deterministic retry usually repeats the failure, so 3 rather than 4).
+# TRACE_STALL_M: metres driven with no coverage gain before the next segment
+# restarts at the nearest UNCOVERED waypoint -- a deterministic car that never
+# faults could otherwise circle one block for the whole budget.
+TRACE_NOISE_SCALE = env_float("TRACE_NOISE_SCALE", 1.0)
+TRACE_STUCK_LIMIT = env_int("TRACE_STUCK_LIMIT", 4)
+TRACE_STALL_M = env_float("TRACE_STALL_M", 1500.0)
 
 
 def use_parallel(parallel_towns: bool, eval_from: str, n_towns: int) -> bool:
@@ -257,8 +271,13 @@ def run_trace(env, agent, pxr, server, out_root):
         walks the town instead of sampling disconnected islands. If 4 restarts
         in a row land within 5 m (a corner the policy keeps failing), the
         restart jumps 25 m on, recorded per segment as `jumped`.
-      * SAMPLED ACTIONS: a deterministic policy restarted at the same spot
-        repeats the same failure. Torch is seeded per segment, so it repeats.
+      * ACTIONS at TRACE_NOISE_SCALE: 0 = deterministic, as the eval drives
+        (the user's choice, 2026-11-01). The v43 design sampled at the training
+        noise so a retried corner would not repeat; on this arm that faulted
+        every ~11 m, and the stuck rule now covers repeats directly. A COVERAGE
+        STALL (TRACE_STALL_M driven with no gain) restarts the next segment at
+        the nearest uncovered waypoint, so a car that never faults cannot circle
+        one block. Torch is seeded per segment, so a sampled run repeats too.
       * KEPT EVERY TRACE_SPACING_M metres: the frame the policy saw
         (info["debit_cur"]), true pose and yaw, speed, action, reward, and
         act_with_stats's policy entropy and critic-ensemble mean/spread -- the
@@ -297,9 +316,14 @@ def run_trace(env, agent, pxr, server, out_root):
         total_m += sg["metres"]
         steps += sg["steps"]
     restart = index["segments"][-1]["stop_xy"] if index["segments"] else None
-    stuck = StuckDetector(radius=5.0, limit=4)
+    stuck = StuckDetector(radius=5.0, limit=TRACE_STUCK_LIMIT)
+    stall_m, last_cov = 0.0, cov.fraction()
     seg_i = len(index["segments"])
-    print(f"=== TRACE {EVAL_FROM} | {TOWNS[0]} | explore mode, SAMPLED actions, "
+    print(f"=== TRACE {EVAL_FROM} | {TOWNS[0]} | explore mode, "
+          + ("DETERMINISTIC actions" if TRACE_NOISE_SCALE <= 0
+             else f"SAMPLED actions at noise x{TRACE_NOISE_SCALE:g}")
+          + f", stuck after {TRACE_STUCK_LIMIT} restarts, stall jump after "
+          f"{TRACE_STALL_M:g} m without coverage, "
           f"keep every {TRACE_SPACING_M:g} m | stop at coverage {TRACE_COVERAGE:.0%} "
           f"or {TRACE_DIST_M:g} m or {TRACE_MAX_STEPS} steps | {len(wps)} map waypoints"
           + (f" | RESUMING at segment {seg_i}, {total_m:.0f} m, coverage "
@@ -308,14 +332,19 @@ def run_trace(env, agent, pxr, server, out_root):
     while (total_m < TRACE_DIST_M and cov.fraction() < TRACE_COVERAGE
            and steps < TRACE_MAX_STEPS):
         jumped = False
+        if restart is not None and stall_m >= TRACE_STALL_M:
+            # COVERAGE STALLED: restart where the map has not been yet.
+            far = cov.nearest_uncovered(restart)
+            if far is not None:
+                restart, jumped, stall_m = far.tolist(), "stall", 0.0
         if restart is not None:
             wp = core.map.get_waypoint(carla.Location(x=float(restart[0]), y=float(restart[1]),
                                                       z=0.0),
                                        project_to_road=True, lane_type=carla.LaneType.Driving)
-            ahead = 3.0
-            if stuck.restart(restart):
-                ahead, jumped = 25.0, True
-            nxt = wp.next(ahead)
+            ahead = 0.0 if jumped == "stall" else 3.0
+            if jumped != "stall" and stuck.restart(restart):
+                ahead, jumped = 25.0, "stuck"
+            nxt = wp.next(ahead) if ahead > 0 else None
             wp = nxt[0] if nxt else wp
             dst = wp.next(30.0)
             base.set_start_transform(wp.transform.location)
@@ -335,8 +364,9 @@ def run_trace(env, agent, pxr, server, out_root):
         prev, last_kept, metres, t, end = start.copy(), None, 0.0, 0, None
         while end is None:
             row = pxr.mono_row(info["debit_cur"], obs["mode"], obs["binoc"])
-            action, hidden, st = agent.act_with_stats(row, hidden, goal=goal_blk,
-                                                      noise_scale=1.0)
+            action, hidden, st = agent.act_with_stats(
+                row, hidden, goal=goal_blk, deterministic=TRACE_NOISE_SCALE <= 0,
+                noise_scale=max(TRACE_NOISE_SCALE, 0.0))
             a_env = to_env(np.asarray(action, np.float32), box)
             obs, r, term, trunc, info = env.step(a_env)
             t += 1
@@ -376,8 +406,11 @@ def run_trace(env, agent, pxr, server, out_root):
         total_m += metres
         steps += t
         restart = prev[:2].tolist()
+        now = cov.fraction()
+        stall_m = 0.0 if now > last_cov + 1e-9 else stall_m + metres
+        last_cov = now
         print(f"[Trace {seg_i:4d}] end={end} steps={t} {metres:.0f} m kept={len(rec['t'])}"
-              f"{' JUMPED' if jumped else ''} | total {total_m:.0f} m, {int(steps)} steps, "
+              f"{f' JUMPED({jumped})' if jumped else ''} | total {total_m:.0f} m, {int(steps)} steps, "
               f"coverage {cov.fraction():.1%}", flush=True)
         seg_i += 1
     kept = sum(sg["kept"] for sg in index["segments"])

@@ -502,6 +502,10 @@ def main():
         visual_dim=env_int("VISUAL_DIM", 512), mlp=(256, 256), burn_in=BURN_IN,
         device=DEVICE, compile=os.environ.get("TORCH_COMPILE", "0") == "1",
         seed=SEED, n_critics=env_int("N_CRITICS", 10),
+        # LR drives the critic and the actor; ALPHA_LR the temperatures
+        # (0 = follow LR). Under a high replay ratio both have to come
+        # down: see GatedRecurrentSACConfig.alpha_lr.
+        lr=env_float("LR", 3e-4), alpha_lr=env_float("ALPHA_LR", 0.0),
         subset_size=env_int("SUBSET_SIZE", 2),
         discount=env_float("DISCOUNT", 0.99),
         discount_e=env_float("EXPLORE_DISCOUNT", 0.99),
@@ -545,6 +549,15 @@ def main():
           f"Town02/Town03 HELD OUT) port={PORT} seed={SEED} device={DEVICE}",
           flush=True)
     print(f"  {agent.describe()}", flush=True)
+    # THE REPLAY RATIO AND THE RATES THAT HAVE TO MATCH IT (v31). Samples per
+    # new transition is what destabilises a single critic, not "updates", so
+    # the banner states it: CHUNK_B*CHUNK_T samples every UPDATE_EVERY vec
+    # steps over len(TOWNS) envs.
+    _per_tr = CHUNK_B * CHUNK_T * UPDATES_PER / max(1, UPDATE_EVERY * len(TOWNS))
+    print(f"  replay ratio: {UPDATES_PER} update(s) of {CHUNK_B}x{CHUNK_T} every "
+          f"{UPDATE_EVERY} vec step(s) = {_per_tr:.0f} replayed samples per new "
+          f"transition | lr={cfg.lr:g} alpha_lr={cfg.alpha_lr or cfg.lr:g}"
+          + ("" if cfg.alpha_lr else " (follows lr)"), flush=True)
     print(f"  monocular (TRAINED): {agent.compress.describe()}", flush=True)
     print(f"  {describe_load(mono_report)}", flush=True)
     print(f"  binocular (FROZEN, precomputed in the env): {binoc_dim}-d -> GRU "

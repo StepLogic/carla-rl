@@ -212,6 +212,18 @@ class GatedRecurrentTQCConfig:
     n_quantiles: int = 25
     top_quantiles_to_drop_per_net: int = 2
     lr: float = 3e-4
+    # ALPHA_LR (v31, 2026-11-01): the temperature optimisers' rate, separately
+    # from the critic's and the actor's. 0 = follow `lr`, which is what every
+    # run before this knob did.
+    #
+    # WHY IT MUST BE SEPARABLE. The temperature falls until policy entropy
+    # reaches target_entropy, and how fast it falls is set by gradient STEPS,
+    # not environment steps. v30 (one update per 20 vec steps) took 650k steps
+    # for alpha 0.075 -> 0.0005; with UPDATE_EVERY=1 the same collapse arrives
+    # in ~30k, ending exploration before the first checkpoint. Raising the
+    # replay ratio therefore requires lowering this, or the run explores for a
+    # fraction of its length.
+    alpha_lr: float = 0.0
     discount: float = 0.99
     discount_e: float = 0.99
     tau: float = 0.005
@@ -489,8 +501,9 @@ class GatedRecurrentTQC:
             [p for mod in _critic_mods if mod is not None
              for p in mod.parameters()], lr=cfg.lr)
         self.opt_actor = torch.optim.Adam(self.actor.parameters(), lr=cfg.lr)
-        self.opt_temp_g = torch.optim.Adam([self.log_alpha_g], lr=cfg.lr)
-        self.opt_temp_e = torch.optim.Adam([self.log_alpha_e], lr=cfg.lr)
+        _alpha_lr = float(cfg.alpha_lr) or float(cfg.lr)
+        self.opt_temp_g = torch.optim.Adam([self.log_alpha_g], lr=_alpha_lr)
+        self.opt_temp_e = torch.optim.Adam([self.log_alpha_e], lr=_alpha_lr)
 
         # Everything that changes between updates is an on-device tensor,
         # mutated in place: a Python scalar read inside the compiled update is

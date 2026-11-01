@@ -506,6 +506,11 @@ def main():
         # (0 = follow LR). Under a high replay ratio both have to come
         # down: see GatedRecurrentSACConfig.alpha_lr.
         lr=env_float("LR", 3e-4), alpha_lr=env_float("ALPHA_LR", 0.0),
+        # DroQ: dropout + LayerNorm per critic hidden layer. REDQ (the min over
+        # a random subset) was already here; these two are what let the replay
+        # ratio go up without the critic running away.
+        critic_dropout=env_float("CRITIC_DROPOUT", 0.0),
+        critic_layer_norm=os.environ.get("CRITIC_LAYERNORM", "0") == "1",
         subset_size=env_int("SUBSET_SIZE", 2),
         discount=env_float("DISCOUNT", 0.99),
         discount_e=env_float("EXPLORE_DISCOUNT", 0.99),

@@ -224,6 +224,12 @@ class GatedRecurrentTQCConfig:
     # replay ratio therefore requires lowering this, or the run explores for a
     # fraction of its length.
     alpha_lr: float = 0.0
+    # DroQ-style critic regularisation (user 2026-11-01). This arm already had
+    # REDQ (n_critics with the target a min over a random subset); dropout +
+    # LayerNorm on each hidden layer is the other half, and the part that makes
+    # a high replay ratio stable. 0 / False = every earlier run.
+    critic_dropout: float = 0.0
+    critic_layer_norm: bool = False
     discount: float = 0.99
     discount_e: float = 0.99
     tau: float = 0.005
@@ -472,9 +478,13 @@ class GatedRecurrentTQC:
                             + len(cfg.core_state_cols), cfg.hidden).to(dev)
         self.actor = Actor(cfg.hidden + cfg.state_dim, cfg.action_dim, cfg.mlp).to(dev)
         self.critics_g = QuantileCritics(cfg.hidden + len(cfg.goal_cols), cfg.action_dim,
-                                         cfg.n_critics, cfg.n_quantiles, cfg.mlp).to(dev)
+                                         cfg.n_critics, cfg.n_quantiles, cfg.mlp,
+                                         dropout=cfg.critic_dropout,
+                                         layer_norm=cfg.critic_layer_norm).to(dev)
         self.critics_e = QuantileCritics(cfg.hidden + len(cfg.explore_cols), cfg.action_dim,
-                                         cfg.n_critics, cfg.n_quantiles, cfg.mlp).to(dev)
+                                         cfg.n_critics, cfg.n_quantiles, cfg.mlp,
+                                         dropout=cfg.critic_dropout,
+                                         layer_norm=cfg.critic_layer_norm).to(dev)
         self.compress_targ = _frozen_copy(self.compress)
         self.act_embed_targ = _frozen_copy(self.act_embed) if cfg.prev_action else None
         self.core_targ = _frozen_copy(self.core)

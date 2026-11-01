@@ -93,9 +93,20 @@ class QuantileCritics(nn.Module):
     """N critics as stacked parameters: forward is einsum over the critic axis."""
 
     def __init__(self, state_dim: int, action_dim: int, n_critics: int = 5,
-                 n_quantiles: int = 25, hidden: Sequence[int] = (256, 256)) -> None:
+                 n_quantiles: int = 25, hidden: Sequence[int] = (256, 256),
+                 dropout: float = 0.0, layer_norm: bool = False) -> None:
+        """DroQ-style regularisation (dropout, layer_norm) is off by default.
+
+        Linear -> Dropout -> LayerNorm -> ReLU on every HIDDEN layer, the
+        paper's order, and the part that makes a high replay ratio stable --
+        this arm already had REDQ (min over a random subset of the ensemble).
+        Both are PER CRITIC: the ensemble is stacked parameters, so the norm's
+        affine terms carry a critic axis as well, or all heads would share one
+        normalisation and stop being independent estimators.
+        """
         super().__init__()
         self.n_critics, self.n_quantiles = int(n_critics), int(n_quantiles)
+        self.dropout, self.layer_norm = float(dropout), bool(layer_norm)
         dims = [int(state_dim) + int(action_dim)] + list(hidden) + [self.n_quantiles]
         self.weights = nn.ParameterList()
         self.biases = nn.ParameterList()
@@ -111,13 +122,31 @@ class QuantileCritics(nn.Module):
                 nn.init.kaiming_uniform_(w[i].T, a=math.sqrt(5))
             self.weights.append(nn.Parameter(w))
             self.biases.append(nn.Parameter(b))
+        if self.layer_norm:
+            # One affine pair per HIDDEN layer (the head is left raw), each with
+            # a critic axis.
+            self.ln_w = nn.ParameterList(
+                [nn.Parameter(torch.ones(self.n_critics, d)) for d in dims[1:-1]])
+            self.ln_b = nn.ParameterList(
+                [nn.Parameter(torch.zeros(self.n_critics, d)) for d in dims[1:-1]])
+
+    def _reg(self, x: torch.Tensor, k: int, idx: Optional[int] = None) -> torch.Tensor:
+        """Dropout then LayerNorm on hidden layer k, for one critic or all."""
+        if self.dropout > 0.0:
+            x = nn.functional.dropout(x, self.dropout, self.training)
+        if self.layer_norm:
+            x = nn.functional.layer_norm(x, (x.shape[-1],))
+            w, b = self.ln_w[k], self.ln_b[k]
+            x = x * (w[idx] if idx is not None else w[:, None, :]) \
+                + (b[idx] if idx is not None else b[:, None, :])
+        return x
 
     def forward(self, s: torch.Tensor, a: torch.Tensor) -> torch.Tensor:
         x = torch.cat([s, a], dim=-1)[None].expand(self.n_critics, -1, -1)
         for k, (w, b) in enumerate(zip(self.weights, self.biases)):
             x = torch.einsum("nbi,nio->nbo", x, w) + b[:, None, :]
             if k < len(self.weights) - 1:
-                x = torch.relu(x)
+                x = torch.relu(self._reg(x, k))
         return x
 
     def single_forward(self, i: int, s: torch.Tensor, a: torch.Tensor) -> torch.Tensor:
@@ -125,7 +154,7 @@ class QuantileCritics(nn.Module):
         for k, (w, b) in enumerate(zip(self.weights, self.biases)):
             x = x @ w[i] + b[i]
             if k < len(self.weights) - 1:
-                x = torch.relu(x)
+                x = torch.relu(self._reg(x, k, idx=i))
         return x
 
 

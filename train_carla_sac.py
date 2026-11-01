@@ -100,6 +100,17 @@ EVAL_NOISE_SCALE = float(os.environ.get(
 # EVAL_FORCE_MODE=0 so the env draws explore episodes.
 EVAL_EXPLORE = os.environ.get("EVAL_EXPLORE", "0") == "1"
 EVAL_WRONG_GOAL = os.environ.get("WRONG_GOAL_MODE", "0") == "1"
+# THE GIBSON REPLICATION (2026-11-01; see vae_nav.carla_benchmark).
+# EVAL_PROBE=1: reset each seed in EVAL_SEED..+EVAL_EPISODES, take ONE zero
+#   step to read the planner's route distance, and write probe.json -- no
+#   policy, no video. Selection turns probes into the fixed episode set.
+# EVAL_EPISODES_FILE: drive exactly the seeds listed for this town, carrying
+#   their bin and path type into eval.json. Replaces EVAL_SEED/EVAL_EPISODES.
+# EVAL_VIDEO_EVERY: keep a video of every Nth episode (1 = all, as before);
+#   1,800 episodes per arm of videos would be several GB.
+EVAL_PROBE = os.environ.get("EVAL_PROBE", "0") == "1"
+EVAL_EPISODES_FILE = os.environ.get("EVAL_EPISODES_FILE", "")
+EVAL_VIDEO_EVERY = env_int("EVAL_VIDEO_EVERY", 1)
 
 
 def use_parallel(parallel_towns: bool, eval_from: str, n_towns: int) -> bool:
@@ -218,17 +229,32 @@ def run_eval(env, agent, pxr, server, out_root):
     tag = os.path.basename(os.path.normpath(EVAL_FROM))
     out = os.path.join(out_root, f"eval_{tag}"
                        + _eval_tag_suffix(EVAL_NOISE_SCALE, EVAL_EXPLORE, EVAL_WRONG_GOAL))
-    vid = EpisodeVideo(os.path.join(out, "videos"), every=1, max_frames=1200,
-                       keep=max(EVAL_EPISODES, 1))
+    from vae_nav.carla_benchmark import EpisodeTracker
+    if EVAL_EPISODES_FILE:
+        with open(EVAL_EPISODES_FILE) as fh:
+            episodes = [e for e in json.load(fh) if e["town"] == TOWNS[0]]
+        if not episodes:
+            raise RuntimeError(f"{EVAL_EPISODES_FILE} lists no episodes for {TOWNS[0]}")
+    else:
+        episodes = [{"seed": EVAL_SEED + k} for k in range(EVAL_EPISODES)]
+    n_eps = len(episodes)
+    vid = EpisodeVideo(os.path.join(out, "videos"), every=EVAL_VIDEO_EVERY,
+                       max_frames=1200,
+                       keep=max(n_eps // max(1, EVAL_VIDEO_EVERY) + 1, 1))
     box = env.action_space
-    print(f"=== EVAL {EVAL_FROM} | {EVAL_EPISODES} goal episodes, seeds "
-          f"{EVAL_SEED}..{EVAL_SEED + EVAL_EPISODES - 1}, "
+    print(f"=== EVAL {EVAL_FROM} | {n_eps} goal episodes, "
+          + (f"from {EVAL_EPISODES_FILE}" if EVAL_EPISODES_FILE else
+             f"seeds {EVAL_SEED}..{EVAL_SEED + EVAL_EPISODES - 1}")
+          + (" | PROBE: one zero step each, no policy" if EVAL_PROBE else "")
+          + f" | arrival radius {GOAL_RADIUS_M:g} m (2 m also scored), "
           f"{'DETERMINISTIC' if EVAL_NOISE_SCALE <= 0 else f'SAMPLED at noise x{EVAL_NOISE_SCALE:g}'} actions, "
           f"faults END the episode (crossing/off-road/collision) | town "
           f"{','.join(TOWNS)} -> {out}", flush=True)
     import random as _random
     rows = []
-    for k in range(EVAL_EPISODES):
+    probes = []
+    for k, ep in enumerate(episodes):
+        seed = int(ep["seed"])
         # THE EPISODE SET IS FIXED BY SEEDING THE GLOBAL RNGs. The start and the
         # goal are drawn with Python's module-level `random` inside rlib's
         # carla_core (random.choice over waypoints / junctions / the distance
@@ -236,10 +262,29 @@ def run_eval(env, agent, pxr, server, out_root):
         # seeds shared 1 start-goal distance in 40 (2026-10-20). Seeding here,
         # immediately before reset, pins them -- eval only; training is unseeded
         # as before.
-        _random.seed(EVAL_SEED + k)
-        np.random.seed(EVAL_SEED + k)
-        torch.manual_seed(EVAL_SEED + k)
-        obs, info = env.reset(seed=EVAL_SEED + k)
+        _random.seed(seed)
+        np.random.seed(seed)
+        torch.manual_seed(seed)
+        obs, info = env.reset(seed=seed)
+        if EVAL_PROBE:
+            # One zero step: the planner publishes route_remaining_m on steps,
+            # not at reset. Zero throttle from rest moves the car ~0 m.
+            p0 = np.asarray(info.get("hero_pos", (0.0, 0.0)), np.float64)
+            g0 = info.get("goal_pos")
+            zero = np.clip(np.zeros(box.shape, np.float32), box.low, box.high)
+            _o, _r, _te, _tr, inf1 = env.step(zero)
+            p1 = np.asarray(inf1.get("hero_pos", p0), np.float64)
+            rem = inf1.get("route_remaining_m")
+            probes.append({
+                "town": TOWNS[0], "seed": seed,
+                "route_m": (None if rem is None
+                            else round(float(rem) + float(np.linalg.norm(p1 - p0)), 3)),
+                "euclid_m": (None if g0 is None else round(float(np.linalg.norm(
+                    np.asarray(g0, np.float64)[:2] - p0[:2])), 3))})
+            if (k + 1) % 50 == 0:
+                print(f"[Probe {k + 1}/{n_eps}] seed={seed} route={probes[-1]['route_m']} "
+                      f"euclid={probes[-1]['euclid_m']}", flush=True)
+            continue
         if EVAL_LANE_DEBUG and "lane_priv" in info and info.get("goal_pos") is not None:
             # Where the goal sits in the START lane's frame: lateral metres
             # (LEFT +, lane_priv's convention) and metres ahead. ~3.5 m sideways
@@ -275,6 +320,10 @@ def run_eval(env, agent, pxr, server, out_root):
         l_straight = (float(np.linalg.norm(np.asarray(gpos, np.float64) - pos0))
                       if gpos is not None else None)
         l_route, path_m = None, 0.0
+        # Scores our training radius (2 m) inside a run at GOAL_RADIUS_M.
+        tracker = (EpisodeTracker(gpos, pos0, max_speed=float(
+            os.environ.get("GOAL_ARRIVAL_MAX_SPEED", 10.0)), radius=GOAL_RADIUS_M,
+            radius_2m=2.0) if gpos is not None else None)
         while end is None:
             row = pxr.mono_row(info["debit_cur"], obs["mode"], obs["binoc"])
             action, hidden = agent.act(row, hidden, goal=goal_blk,
@@ -297,6 +346,8 @@ def run_eval(env, agent, pxr, server, out_root):
                           f"marks={[str(m).split('.')[-1] for m in (info.get('lane_marking_types') or [])]} "
                           f"a=({a_env[0]:+.2f},{a_env[1]:.2f})", flush=True)
             pos = np.asarray(info.get("hero_pos", prev_pos), np.float64)
+            if tracker is not None:
+                tracker.step(pos, float(info.get("speed_kmh", 0.0) or 0.0))
             moved = float(np.linalg.norm(pos - prev_pos))
             path_m += moved
             prev_pos = pos
@@ -319,7 +370,12 @@ def run_eval(env, agent, pxr, server, out_root):
         ell_eff = None if ell is None else max(ell - GOAL_RADIUS_M, 0.1)
         spl_i = (float(reached) * ell_eff / max(path_m, ell_eff)
                  if ell_eff is not None else float("nan"))
-        rows.append({"episode": k, "seed": EVAL_SEED + k, "end": end,
+        two = (tracker.finish(reached=reached, t_end=t, route_m=ell)
+               if tracker is not None else {"reached_2m": reached, "spl_2m": spl_i})
+        rows.append({"episode": k, "seed": seed, "town": TOWNS[0], "end": end,
+                     **{key: ep[key] for key in ("bin", "kind") if key in ep},
+                     "reached_2m": bool(two["reached_2m"]),
+                     "spl_2m": float(two["spl_2m"]),
                      "steps": t, "return": round(ret, 2), "reached": reached,
                      "shortest_m": None if ell is None else round(ell, 2),
                      "shortest_src": "route" if l_route is not None else "straight",
@@ -327,11 +383,20 @@ def run_eval(env, agent, pxr, server, out_root):
                      "path_m": round(path_m, 2), "spl": spl_i, "video": path})
         sr = np.mean([x["reached"] for x in rows])
         spl = np.nanmean([x["spl"] for x in rows])
-        print(f"[Eval {k + 1:3d}/{EVAL_EPISODES}] seed={EVAL_SEED + k} end={end} "
+        print(f"[Eval {k + 1:3d}/{n_eps}] seed={seed} end={end} "
               f"steps={t} shortest={ell if ell is None else round(ell, 1)} m "
               f"driven={path_m:.1f} m return={ret:.1f} | SR {sr:.3f} SPL {spl:.3f}",
               flush=True)
 
+    if EVAL_PROBE:
+        os.makedirs(out, exist_ok=True)
+        pf = os.path.join(out, "probe.json")
+        with open(pf, "w") as fh:
+            json.dump(probes, fh, indent=1)
+        routed = sum(1 for p in probes if p["route_m"] is not None)
+        print(f"[ProbeDone] {len(probes)} seeds, {routed} routed -> {pf}", flush=True)
+        env.close()
+        return
     n = len(rows)
     sr = float(np.mean([x["reached"] for x in rows])) if n else float("nan")
     # Wilson 95% interval: at n=40 the binomial noise is about +-0.15.
@@ -342,9 +407,12 @@ def run_eval(env, agent, pxr, server, out_root):
     for x in rows:
         ends[x["end"]] = ends.get(x["end"], 0) + 1
     spl = float(np.nanmean([x["spl"] for x in rows])) if n else float("nan")
+    sr_2m = float(np.mean([x["reached_2m"] for x in rows])) if n else float("nan")
     n_route = sum(1 for x in rows if x["shortest_src"] == "route")
     summary = {"checkpoint": EVAL_FROM, "episodes": n, "success_rate": sr,
                "spl": spl, "spl_shortest_from_route": n_route,
+               "arrival_radius_m": GOAL_RADIUS_M, "success_rate_2m": sr_2m,
+               "episodes_file": EVAL_EPISODES_FILE or None,
                "wilson95": [round(centre - half, 3), round(centre + half, 3)],
                "ends": ends, "fault_ends": "crossing/off_road/collision",
                "deterministic": EVAL_NOISE_SCALE <= 0,
@@ -356,7 +424,8 @@ def run_eval(env, agent, pxr, server, out_root):
     print(f"[EvalDone] SR={sr:.3f} (95% CI {summary['wilson95'][0]:.2f}-"
           f"{summary['wilson95'][1]:.2f}, n={n}) SPL={spl:.3f} "
           f"(shortest path from the route planner in {n_route}/{n}, straight "
-          f"line otherwise) ends={ends} -> {out}", flush=True)
+          f"line otherwise) SR@2m={sr_2m:.3f} radius={GOAL_RADIUS_M:g}m "
+          f"ends={ends} -> {out}", flush=True)
     env.close()
     server.stop()
 

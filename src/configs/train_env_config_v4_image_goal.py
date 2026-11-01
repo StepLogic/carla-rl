@@ -224,6 +224,12 @@ WEDGE_ON_OFF_ROAD = os.environ.get("WEDGE_ON_OFF_ROAD", "1") == "1"
 # Additive only: with the flag off, nothing in the existing CORL/gated
 # behaviour changes by one bit.
 IMAGE_GOAL_TASK = os.environ.get("IMAGE_GOAL_TASK", "0") == "1"
+# ARRIVAL RADIUS (2026-11-01, the Gibson replication). Arrival was a hard-coded
+# `distance_to_goal < 2`; Gibson's image-goal success is 1.0 m. GOAL_RADIUS_M is
+# the variable train_carla_sac already reads for SPL and HER reads for its
+# hindsight arrivals, so ONE setting now governs the env, SPL and HER together
+# -- they cannot disagree. Default 2.0: every run before this is unchanged.
+ARRIVAL_RADIUS_M = float(os.environ.get("GOAL_RADIUS_M", 2.0))
 
 
 class STBL3Experiment(BaseExperiment):
@@ -1050,7 +1056,7 @@ class STBL3Experiment(BaseExperiment):
         # IMAGE-GOAL: the resample is SKIPPED -- the goal is fixed for the
         # episode and the reward wrapper decides what arrival means. See the
         # IMAGE_GOAL_TASK comment at the top of this file.
-        if distance_to_goal < 2 and not IMAGE_GOAL_TASK:
+        if distance_to_goal < ARRIVAL_RADIUS_M and not IMAGE_GOAL_TASK:
             # Resample when within 2m of goal (for 4-8m range)
             self.passed_chckp = True
             self.checkpoint_count += 1

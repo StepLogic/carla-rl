@@ -82,7 +82,7 @@ def _clean_modules():
     import vae_nav.lane_explore_reward as ler
     import vae_nav.gated_reward as gr
     for k in ("GOAL_ROUTE_ONLY", "EXPLORE_JUNCTION_BONUS", "STEER_CHANGE_SCALE",
-              "ROUTE_PROGRESS_POSITIVE"):
+              "ROUTE_PROGRESS_POSITIVE", "ROUTE_RETREAT_SCALE"):
         os.environ.pop(k, None)
     importlib.reload(ler)
     importlib.reload(gr)
@@ -364,3 +364,72 @@ def test_clipping_is_refused_when_a_crossing_does_not_end_the_episode(monkeypatc
     with pytest.raises(ValueError, match="ROUTE_PROGRESS_POSITIVE"):
         _gr(monkeypatch, GOAL_ROUTE_ONLY=1, ROUTE_PROGRESS_POSITIVE=1,
             LANE_INVASION_NOOP=1)
+
+
+# ---- a PARTIAL retreat charge (v30, 2026-10-31) --------------------------
+# The paired wrong-goal eval settled what the two ends of this dial cost.
+# v27 (full charge): true 0.470 vs wrong 0.300, so the image was worth +0.170
+# (McNemar p=0.0033) -- and the run collapsed, because the charge drove the
+# value negative. v29 (no charge): 0.480 vs 0.470, gap +0.010, p=1.00 -- stable
+# and the policy IGNORES the goal image, driving the lane and collecting
+# whatever goal it passes. Charging for retreat is what forces a choice of
+# direction, and the image is the only way to know the direction.
+# ROUTE_RETREAT_SCALE is that dial: 1 = v27/v28, 0 = v29, between = v30.
+
+def _retreat_pay(monkeypatch, scale, **kw):
+    opening = [40.0 + STEP_M * t for t in range(10)]
+    gr = _gr(monkeypatch, GOAL_ROUTE_ONLY=1, ROUTE_RETREAT_SCALE=scale, **kw)
+    away = _rewards(gr, Road(route=opening), gr.GOAL, 5)
+    flat = _rewards(gr, Road(route=[40.0] * 10), gr.GOAL, 5)
+    return [f - a for (a, *_), (f, *_) in zip(away[1:], flat[1:])]
+
+
+def test_a_partial_scale_charges_that_fraction(monkeypatch):
+    assert _retreat_pay(monkeypatch, 0.3) == pytest.approx([0.3 * STEP_M] * 4)
+
+
+def test_scale_one_is_the_old_full_charge(monkeypatch):
+    assert _retreat_pay(monkeypatch, 1.0) == pytest.approx([STEP_M] * 4)
+
+
+def test_scale_zero_is_free(monkeypatch):
+    assert _retreat_pay(monkeypatch, 0.0) == pytest.approx([0.0] * 4)
+
+
+def test_approach_is_paid_in_full_whatever_the_scale(monkeypatch):
+    closing = [40.0 - STEP_M * t for t in range(10)]
+    gr = _gr(monkeypatch, GOAL_ROUTE_ONLY=1, ROUTE_RETREAT_SCALE=0.3)
+    toward = _rewards(gr, Road(route=closing), gr.GOAL, 5)
+    flat = _rewards(gr, Road(route=[40.0] * 10), gr.GOAL, 5)
+    assert [t - f for (t, *_), (f, *_) in zip(toward[1:], flat[1:])] == pytest.approx([STEP_M] * 4)
+
+
+def test_the_old_flag_still_means_free(monkeypatch):
+    """ROUTE_PROGRESS_POSITIVE=1 is v29's setting and must keep working."""
+    opening = [40.0 + STEP_M * t for t in range(10)]
+    gr = _gr(monkeypatch, GOAL_ROUTE_ONLY=1, ROUTE_PROGRESS_POSITIVE=1)
+    assert gr.ROUTE_RETREAT_SCALE == 0.0
+    away = _rewards(gr, Road(route=opening), gr.GOAL, 5)
+    flat = _rewards(gr, Road(route=[40.0] * 10), gr.GOAL, 5)
+    assert [r for r, *_ in away[1:]] == pytest.approx([r for r, *_ in flat[1:]])
+
+
+def test_the_two_knobs_may_not_disagree(monkeypatch):
+    with pytest.raises(ValueError, match="ROUTE_PROGRESS_POSITIVE"):
+        _gr(monkeypatch, GOAL_ROUTE_ONLY=1, ROUTE_PROGRESS_POSITIVE=1,
+            ROUTE_RETREAT_SCALE=0.3)
+
+
+def test_any_discount_needs_terminal_crossings(monkeypatch):
+    """Any scale below 1 gives up part of the potential, so approach-retreat
+    nets reward per cycle; what stops it is that turning back ends the
+    episode."""
+    with pytest.raises(ValueError, match="ROUTE_RETREAT_SCALE"):
+        _gr(monkeypatch, GOAL_ROUTE_ONLY=1, ROUTE_RETREAT_SCALE=0.3,
+            EXPLORE_LANE_MODE="penalise")
+
+
+def test_out_of_range_is_refused(monkeypatch):
+    for bad in (-0.1, 1.5):
+        with pytest.raises(ValueError, match="ROUTE_RETREAT_SCALE"):
+            _gr(monkeypatch, GOAL_ROUTE_ONLY=1, ROUTE_RETREAT_SCALE=bad)

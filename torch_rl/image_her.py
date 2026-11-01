@@ -40,7 +40,7 @@ class ImageGoalHER:
                  max_m=25.0, radius=2.0, max_speed=10.0, goal_bonus=50.0,
                  explore_bonus=10.0, potential_k=1.0, lane_fault=None,
                  env_id_offset=1000, relabel_explore=True, seed=0,
-                 speed_gate_kmh=None, positive=False):
+                 speed_gate_kmh=None, positive=False, retreat_scale=None):
         self.buf, self.enc, self.pxr = buf, encoder, pxr
         self.n_relabel, self.min_m, self.max_m = int(n_relabel), float(min_m), float(max_m)
         self.radius, self.max_speed = float(radius), float(max_speed)
@@ -52,7 +52,12 @@ class ImageGoalHER:
         self.speed_gate = None if speed_gate_kmh is None else float(speed_gate_kmh)
         # ROUTE_PROGRESS_POSITIVE: the live reward charges nothing for moving
         # away from the goal, so a hindsight row must not either.
-        self.positive = bool(positive)
+        # ROUTE_RETREAT_SCALE: what a metre away from the goal costs here must
+        # be what it costs in the env, or HER prices hindsight rows differently
+        # from live ones. `positive` is the old all-or-nothing form (scale 0).
+        if retreat_scale is None:
+            retreat_scale = 0.0 if positive else 1.0
+        self.retreat_scale = float(retreat_scale)
         self.lane_fault = lane_fault or (lambda info: False)
         self.offset = int(env_id_offset)
         self.relabel_explore = bool(relabel_explore)
@@ -197,8 +202,10 @@ class ImageGoalHER:
         return j - s + 1
 
     def _progress(self, prog):
-        """The paid part of one step's route progress."""
-        return max(0.0, float(prog)) if self.positive else float(prog)
+        """The paid part of one step's route progress: approach in full,
+        retreat scaled (0 = free, 1 = charged like approach)."""
+        prog = float(prog)
+        return prog if prog >= 0.0 else prog * self.retreat_scale
 
     def describe_counts(self):
         c = self.counts

@@ -230,3 +230,14 @@ def test_a_backward_step_is_free_when_clipped():
     assert her._progress(-2.0) == 0.0 and her._progress(2.0) == 2.0
     signed = ImageGoalHER(None, None, None, potential_k=1.0)
     assert signed._progress(-2.0) == -2.0
+
+
+def test_hindsight_retreat_uses_the_same_scale():
+    """ROUTE_RETREAT_SCALE in the env must be the scale HER prices with."""
+    her = ImageGoalHER(None, None, None, potential_k=1.0, retreat_scale=0.3)
+    assert her._progress(-2.0) == pytest.approx(-0.6)
+    assert her._progress(2.0) == pytest.approx(2.0)
+    full = ImageGoalHER(None, None, None, potential_k=1.0)
+    assert full._progress(-2.0) == pytest.approx(-2.0)
+    free = ImageGoalHER(None, None, None, potential_k=1.0, retreat_scale=0.0)
+    assert free._progress(-2.0) == 0.0

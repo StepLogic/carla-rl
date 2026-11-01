@@ -24,8 +24,8 @@ from vae_nav import carla_benchmark as cb  # noqa: E402
 # ---- bins and path type ----------------------------------------------------
 
 @pytest.mark.parametrize("route,want", [
-    (4.99, None), (5.0, "easy"), (9.99, "easy"), (10.0, "medium"),
-    (14.99, "medium"), (15.0, "hard"), (25.0, "hard"), (25.01, None)])
+    (9.99, None), (10.0, "easy"), (24.99, "easy"), (25.0, "medium"),
+    (49.99, "medium"), (50.0, "hard"), (100.0, "hard"), (100.01, None)])
 def test_bins_are_half_open_by_route_distance(route, want):
     assert cb.assign_bin(route) == want
 
@@ -51,9 +51,9 @@ def _probe(seed, route, euclid=None, town="Town02"):
 
 
 def test_selection_takes_the_first_n_per_bin_in_seed_order():
-    probes = ([_probe(s, 7.0) for s in range(100, 110)]
-              + [_probe(s, 12.0) for s in range(200, 210)]
-              + [_probe(s, 20.0) for s in range(300, 310)])
+    probes = ([_probe(s, 15.0) for s in range(100, 110)]
+              + [_probe(s, 30.0) for s in range(200, 210)]
+              + [_probe(s, 70.0) for s in range(300, 310)])
     eps = cb.select_episodes(probes, per_bin=3)
     by = {}
     for e in eps:
@@ -63,15 +63,15 @@ def test_selection_takes_the_first_n_per_bin_in_seed_order():
 
 
 def test_selection_is_per_town():
-    probes = ([_probe(s, 7.0, town="Town02") for s in range(5)]
-              + [_probe(s, 7.0, town="Town03") for s in range(10, 15)])
+    probes = ([_probe(s, 15.0, town="Town02") for s in range(5)]
+              + [_probe(s, 15.0, town="Town03") for s in range(10, 15)])
     eps = cb.select_episodes(probes, per_bin=2, bins=("easy",))
     assert sorted((e["town"], e["seed"]) for e in eps) == [
         ("Town02", 0), ("Town02", 1), ("Town03", 10), ("Town03", 11)]
 
 
 def test_a_short_bin_is_reported_not_silently_padded():
-    probes = [_probe(s, 7.0) for s in range(2)]
+    probes = [_probe(s, 15.0) for s in range(2)]
     with pytest.raises(ValueError, match="Town02.*easy.*2.*3"):
         cb.select_episodes(probes, per_bin=3, bins=("easy",))
 
@@ -79,15 +79,15 @@ def test_a_short_bin_is_reported_not_silently_padded():
 def test_duplicate_seeds_within_a_town_are_refused():
     """Every episode must be a distinct seed, or the pairing double-counts."""
     with pytest.raises(ValueError, match="duplicate"):
-        cb.select_episodes([_probe(1, 7.0), _probe(1, 7.5)], per_bin=1,
+        cb.select_episodes([_probe(1, 15.0), _probe(1, 15.5)], per_bin=1,
                            bins=("easy",))
 
 
 def test_episodes_carry_their_metadata():
-    e = cb.select_episodes([_probe(4, 12.6, euclid=10.0)], per_bin=1,
+    e = cb.select_episodes([_probe(4, 37.8, euclid=30.0)], per_bin=1,
                            bins=("medium",))[0]
     assert e == {"town": "Town02", "seed": 4, "bin": "medium",
-                 "route_m": 12.6, "euclid_m": 10.0, "kind": "curved"}
+                 "route_m": 37.8, "euclid_m": 30.0, "kind": "curved"}
 
 
 # ---- paired statistics -----------------------------------------------------
@@ -221,20 +221,20 @@ def test_failures_score_zero_spl():
 # a seed under a different band would be a different episode.
 
 def test_a_banded_probe_counts_only_in_its_own_bin():
-    probes = [dict(_probe(1, 7.0), band="easy"),        # in band -> kept
-              dict(_probe(2, 12.0), band="easy"),       # routed long -> dropped
-              dict(_probe(3, 12.0), band="medium")]
+    probes = [dict(_probe(1, 15.0), band="easy"),       # in band -> kept
+              dict(_probe(2, 30.0), band="easy"),       # routed long -> dropped
+              dict(_probe(3, 30.0), band="medium")]
     eps = cb.select_episodes(probes, per_bin=1, bins=("easy", "medium"))
     assert [(e["seed"], e["bin"], e["band"]) for e in eps] == [
         (1, "easy", "easy"), (3, "medium", "medium")]
 
 
 def test_unbanded_probes_still_bin_by_route():
-    eps = cb.select_episodes([_probe(1, 12.0)], per_bin=1, bins=("medium",))
+    eps = cb.select_episodes([_probe(1, 30.0)], per_bin=1, bins=("medium",))
     assert eps[0]["bin"] == "medium" and "band" not in eps[0]
 
 
 def test_bands_must_be_known_bins():
     with pytest.raises(ValueError, match="band"):
-        cb.select_episodes([dict(_probe(1, 7.0), band="extra")], per_bin=1,
+        cb.select_episodes([dict(_probe(1, 15.0), band="extra")], per_bin=1,
                            bins=("easy",))

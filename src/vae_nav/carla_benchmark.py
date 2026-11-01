@@ -11,9 +11,9 @@ THE PROTOCOL BEING REPLICATED, from the peer session that runs it on Gibson
 
 THE CARLA ANALOGUE:
   * 6 held-out towns (training is Town05+Town01) x 3 bins x 100 = 1,800.
-  * Bins by ROUTE distance from the planner: 5-10 / 10-15 / 15-25 m -- our
-    trained 5-25 m band split the same way. Never straight-line: Gibson's
-    bins are geodesic, and an unroutable episode is dropped, not re-binned.
+  * Bins by ROUTE distance from the planner: 10-25 / 25-50 / 50-100 m, at
+    CARLA's scale (see BINS). Never straight-line: Gibson's bins are
+    geodesic, and an unroutable episode is dropped, not re-binned.
   * The FIXED episode set is a list of seeds. Starts and goals are drawn from
     the global RNGs inside rlib's carla_core, and the eval seeds them before
     every reset (train_carla_sac.run_eval), so a seed IS an episode. A probe
@@ -29,13 +29,19 @@ THE CARLA ANALOGUE:
 """
 from math import comb
 
-BINS = (("easy", 5.0, 10.0), ("medium", 10.0, 15.0), ("hard", 15.0, 25.0))
+# LONGER THAN THE TRAINING BAND, deliberately (user 2026-11-01, "use longer
+# distance in carla"). CARLA roads are a different scale from Gibson rooms, and
+# the policy was trained on goals up to 25 m: past that, reaching the goal
+# needs a MAP built from the exploration trace, which is exactly what the
+# peer's map arms test. The easy bin sits mostly inside the training band, so
+# the table shows where mapless stops working and maps start to matter.
+BINS = (("easy", 10.0, 25.0), ("medium", 25.0, 50.0), ("hard", 50.0, 100.0))
 STRAIGHT_RATIO = 1.20      # NRNS
 
 
 def assign_bin(route_m):
     """Difficulty bin of a route distance; None outside the band or unrouted.
-    Half-open [lo, hi) except the top bin, which includes 25.0."""
+    Half-open [lo, hi) except the top bin, which includes its upper edge."""
     if route_m is None:
         return None
     r = float(route_m)

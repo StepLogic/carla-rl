@@ -761,6 +761,29 @@ class GatedRecurrentTQC:
         return a[0].cpu().numpy(), hidden
 
     @torch.no_grad()
+    def act_with_stats(self, row: np.ndarray, hidden, deterministic: bool = False,
+                       goal=None, noise_scale: float = 1.0):
+        """act(), plus the per-step signals an exploration trace records for map
+        building: the policy's entropy (the Gaussian's, before the tanh squash,
+        as the training [Diag] reports it) and the critic ensemble's mean and
+        spread of Q at the action actually taken -- REDQ's 10 critics give an
+        epistemic signal for free. The action is the SAME draw act() makes
+        (identical RNG use), so a trace describes the policy that drove it."""
+        x = torch.as_tensor(np.asarray(row, np.float32)[None], device=self.device)
+        g = self._goal_input(goal, 1)
+        s, hidden = self.core.step(self._embed(self.compress, self.act_embed, x, g), hidden)
+        state = self._state(x)
+        inp = torch.cat([s, state], dim=-1)
+        a = (self.actor.deterministic(inp) if deterministic
+             else self.actor.sample(inp, noise_scale=noise_scale)[0])
+        _mean, log_std = self._actor_forward(inp)
+        entropy = float(log_std.sum() + self.cfg.action_dim * _HALF_LOG_2PI_E)
+        q = self.goal_q(s, state, a).mean(dim=-1)[:, 0]      # (n_critics,)
+        stats = {"entropy": entropy, "q_mean": float(q.mean()),
+                 "q_std": float(q.std(unbiased=False)), "n_critics": int(q.numel())}
+        return a[0].cpu().numpy(), hidden, stats
+
+    @torch.no_grad()
     def act_batch(self, rows, hidden: torch.Tensor, deterministic: bool = False, goal=None,
                   noise_scale=None):
         """N (obs_dim,) rows in -> N actions out, one GRU step shared across the

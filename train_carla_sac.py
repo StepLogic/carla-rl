@@ -116,6 +116,17 @@ EVAL_VIDEO_EVERY = env_int("EVAL_VIDEO_EVERY", 1)
 # record it; an episode-file eval replays only that band's episodes, since a
 # seed replayed under a different band is a different episode.
 BENCH_BAND = os.environ.get("BENCH_BAND") or None
+# EXPLORATION TRACE (user 2026-11-01: "first drive policy in exploration mode
+# and store trace") -- the trace the map-based arms of the Gibson replication
+# are built from. EVAL_TRACE=1 with EVAL_FORCE_MODE=0 drives EXPLORE episodes
+# with SAMPLED actions and keeps a sample every TRACE_SPACING_M metres, until
+# TRACE_COVERAGE of the town's drivable waypoints lie within 5 m of a sample,
+# or TRACE_DIST_M metres are driven, or TRACE_MAX_STEPS steps. See run_trace.
+EVAL_TRACE = os.environ.get("EVAL_TRACE", "0") == "1"
+TRACE_DIST_M = env_float("TRACE_DIST_M", 6000.0)
+TRACE_COVERAGE = env_float("TRACE_COVERAGE", 0.90)
+TRACE_SPACING_M = env_float("TRACE_SPACING_M", 2.0)
+TRACE_MAX_STEPS = env_int("TRACE_MAX_STEPS", 60000)
 
 
 def use_parallel(parallel_towns: bool, eval_from: str, n_towns: int) -> bool:
@@ -222,6 +233,157 @@ def _fault(info):
                                      off_road_fatal=False):
         return "crossing"
     return None
+
+
+def _carla_env(env):
+    """The CarlaEnv under the wrapper stack (it has no gym `unwrapped`)."""
+    e = env
+    while hasattr(e, "env"):
+        e = e.env
+    return e
+
+
+def run_trace(env, agent, pxr, server, out_root):
+    """An EXPLORE-mode trace of one town for map building.
+
+    The design is the v13/v43 traces' (user-approved then), ported to this torch
+    arm so the trace runs through the same env, observations and actions as the
+    eval:
+      * EXPLORE MODE, no 100 m explore arrival: an episode runs until a fault
+        ends it (the eval's _fault: collision, off-road, a painted crossing
+        outside a junction) or the explore cap truncates it.
+      * CONTINUATION (the user's rule): the next episode starts at the nearest
+        drivable waypoint 3 m ahead of where the last one stopped, so the trace
+        walks the town instead of sampling disconnected islands. If 4 restarts
+        in a row land within 5 m (a corner the policy keeps failing), the
+        restart jumps 25 m on, recorded per segment as `jumped`.
+      * SAMPLED ACTIONS: a deterministic policy restarted at the same spot
+        repeats the same failure. Torch is seeded per segment, so it repeats.
+      * KEPT EVERY TRACE_SPACING_M metres: the frame the policy saw
+        (info["debit_cur"]), true pose and yaw, speed, action, reward, and
+        act_with_stats's policy entropy and critic-ensemble mean/spread -- the
+        signals entropy maps are placed on.
+      * RESUMABLE: one .npz per segment plus index.json after every segment, so
+        a killed job continues where it stopped instead of starting over.
+    """
+    import json
+    import random as _random
+    import torch
+    import carla
+    from vae_nav.explore_trace import CoverageGrid, StuckDetector
+
+    tag = os.path.basename(os.path.normpath(EVAL_FROM))
+    out = os.path.join(out_root, f"trace_{tag}")
+    os.makedirs(out, exist_ok=True)
+    base = _carla_env(env)
+    if not hasattr(base, "set_start_transform"):
+        raise RuntimeError(f"{type(base).__name__} has no set_start_transform: "
+                           f"the continuation rule needs CarlaEnv")
+    core = base.core
+    box = env.action_space
+    wps = np.array([[w.transform.location.x, w.transform.location.y]
+                    for w in core.map.generate_waypoints(2.0)], np.float64)
+    np.save(os.path.join(out, "map_waypoints.npy"), wps)
+    cov = CoverageGrid(wps, radius=5.0)
+    idx_path = os.path.join(out, "index.json")
+    index = (json.load(open(idx_path)) if os.path.exists(idx_path) else
+             {"town": TOWNS[0], "checkpoint": EVAL_FROM, "spacing_m": TRACE_SPACING_M,
+              "segments": []})
+    total_m = steps = 0.0
+    for sg in index["segments"]:            # resume: coverage and budget so far
+        with np.load(os.path.join(out, sg["file"])) as z:
+            for xy in z["pos"]:
+                cov.add(xy)
+        total_m += sg["metres"]
+        steps += sg["steps"]
+    restart = index["segments"][-1]["stop_xy"] if index["segments"] else None
+    stuck = StuckDetector(radius=5.0, limit=4)
+    seg_i = len(index["segments"])
+    print(f"=== TRACE {EVAL_FROM} | {TOWNS[0]} | explore mode, SAMPLED actions, "
+          f"keep every {TRACE_SPACING_M:g} m | stop at coverage {TRACE_COVERAGE:.0%} "
+          f"or {TRACE_DIST_M:g} m or {TRACE_MAX_STEPS} steps | {len(wps)} map waypoints"
+          + (f" | RESUMING at segment {seg_i}, {total_m:.0f} m, coverage "
+             f"{cov.fraction():.1%}" if seg_i else "") + f" -> {out}", flush=True)
+
+    while (total_m < TRACE_DIST_M and cov.fraction() < TRACE_COVERAGE
+           and steps < TRACE_MAX_STEPS):
+        jumped = False
+        if restart is not None:
+            wp = core.map.get_waypoint(carla.Location(x=float(restart[0]), y=float(restart[1]),
+                                                      z=0.0),
+                                       project_to_road=True, lane_type=carla.LaneType.Driving)
+            ahead = 3.0
+            if stuck.restart(restart):
+                ahead, jumped = 25.0, True
+            nxt = wp.next(ahead)
+            wp = nxt[0] if nxt else wp
+            dst = wp.next(30.0)
+            base.set_start_transform(wp.transform.location)
+            base.set_destination_transform((dst[0] if dst else wp).transform.location)
+        _random.seed(SEED + seg_i)
+        np.random.seed(SEED + seg_i)
+        torch.manual_seed(SEED + seg_i)
+        obs, info = env.reset(seed=SEED + seg_i)
+        mode = int(round(float(np.asarray(obs["mode"]).ravel()[0])))
+        if mode != 0:
+            raise RuntimeError(f"trace episode is in mode {mode}: set EVAL_FORCE_MODE=0")
+        hidden = agent.reset_hidden(1)
+        goal_blk = pxr.goal_block(info["debit_goal"])
+        start = np.asarray(info.get("hero_pos", (0.0, 0.0)), np.float64)
+        rec = {k: [] for k in ("frame", "pos", "yaw", "speed", "action", "reward",
+                               "entropy", "q_mean", "q_std", "t")}
+        prev, last_kept, metres, t, end = start.copy(), None, 0.0, 0, None
+        while end is None:
+            row = pxr.mono_row(info["debit_cur"], obs["mode"], obs["binoc"])
+            action, hidden, st = agent.act_with_stats(row, hidden, goal=goal_blk,
+                                                      noise_scale=1.0)
+            a_env = to_env(np.asarray(action, np.float32), box)
+            obs, r, term, trunc, info = env.step(a_env)
+            t += 1
+            pos = np.asarray(info.get("hero_pos", prev), np.float64)
+            metres += float(np.linalg.norm(pos - prev))
+            prev = pos
+            if last_kept is None or np.linalg.norm(pos - last_kept) >= TRACE_SPACING_M:
+                last_kept = pos
+                rec["frame"].append(np.asarray(info["debit_cur"], np.uint8))
+                rec["pos"].append(pos[:2])
+                rec["yaw"].append(float(info.get("hero_yaw", 0.0) or 0.0))
+                rec["speed"].append(float(info.get("speed_kmh", 0.0) or 0.0))
+                rec["action"].append(np.asarray(a_env, np.float32))
+                rec["reward"].append(float(r))
+                rec["entropy"].append(st["entropy"])
+                rec["q_mean"].append(st["q_mean"])
+                rec["q_std"].append(st["q_std"])
+                rec["t"].append(t)
+                cov.add(pos)
+            end = _fault(info)
+            if end is None and (term or trunc):
+                end = str(info.get("explore_end", "cap"))
+            if end is None and steps + t >= TRACE_MAX_STEPS:
+                end = "budget"
+        fname = f"seg_{seg_i:05d}.npz"
+        arrays = {k: np.asarray(v) for k, v in rec.items()}
+        np.savez(os.path.join(out, fname), **arrays)
+        index["segments"].append({
+            "seg": seg_i, "file": fname, "start_xy": start[:2].round(2).tolist(),
+            "stop_xy": prev[:2].round(2).tolist(), "end": end, "steps": t,
+            "metres": round(metres, 2), "kept": len(rec["t"]), "jumped": jumped,
+            "coverage": round(cov.fraction(), 4)})
+        tmp = idx_path + ".tmp"
+        with open(tmp, "w") as fh:
+            json.dump(index, fh, indent=1)
+        os.replace(tmp, idx_path)
+        total_m += metres
+        steps += t
+        restart = prev[:2].tolist()
+        print(f"[Trace {seg_i:4d}] end={end} steps={t} {metres:.0f} m kept={len(rec['t'])}"
+              f"{' JUMPED' if jumped else ''} | total {total_m:.0f} m, {int(steps)} steps, "
+              f"coverage {cov.fraction():.1%}", flush=True)
+        seg_i += 1
+    kept = sum(sg["kept"] for sg in index["segments"])
+    print(f"[TraceDone] {TOWNS[0]}: {seg_i} segments, {total_m:.0f} m, {int(steps)} steps, "
+          f"{kept} samples, coverage {cov.fraction():.1%} -> {out}", flush=True)
+    env.close()
 
 
 def run_eval(env, agent, pxr, server, out_root):
@@ -615,6 +777,8 @@ def main():
     agent.compress_targ.load_state_dict(agent.compress.state_dict())
     if EVAL_FROM:
         agent.load(EVAL_FROM)          # strict: every module, name and shape
+        if EVAL_TRACE:
+            return run_trace(env, agent, pxr, server, OUT)
         return run_eval(env, agent, pxr, server, OUT)
     buf = DeviceEpisodeBuffer(row_dim, ACT_DIM, 1000 if EVAL_FROM else CAPACITY, DEVICE, seed=SEED,
                               goal_dim=pxr.PIX,

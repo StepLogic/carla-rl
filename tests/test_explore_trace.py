@@ -150,3 +150,28 @@ def test_the_trace_reads_its_noise_scale_and_stall_settings():
     assert "deterministic=TRACE_NOISE_SCALE <= 0" in body
     assert "nearest_uncovered(" in body and "TRACE_STALL_M" in body
     assert "limit=TRACE_STUCK_LIMIT" in body
+
+
+# ---- crossings do not end a trace segment (user 2026-11-01: "yes") ----------
+# Lane crossings ended 102 of the deterministic Town02 trace's 134 segments,
+# only because the trace inherited the eval's fault rule. Nothing is scored in
+# a trace, so with TRACE_END_ON_CROSSING=0 a crossing is counted and the car
+# drives on; off-road and collisions still end the segment. The environment
+# must also stop terminating on crossings, which slurm/trace_nocross.env does.
+
+def test_the_trace_can_drive_through_crossings():
+    src = _trainer_src()
+    assert 'TRACE_END_ON_CROSSING = os.environ.get("TRACE_END_ON_CROSSING", "1") == "1"' in src
+    body = src.split("def run_trace(")[1].split("\ndef run_eval(")[0]
+    assert 'if fault == "crossing" and not TRACE_END_ON_CROSSING:' in body
+    assert '"crossings": n_cross' in body          # still counted per segment
+
+
+def test_the_nocross_overlay_keeps_the_policy_inputs():
+    """Only termination changes: the base overlay (the checkpoint's own) is
+    sourced first, and nothing that shapes an observation is overridden."""
+    ov = open(os.path.join(ROOT, "slurm", "trace_nocross.env")).read()
+    assert 'slurm/v30_overlay.env' in ov
+    assert "EXPLORE_LANE_MODE=penalise" in ov
+    for shape_key in ("MONO_HEAD", "ENV_IMAGE_SIZE", "INCREMENTAL_ACTIONS", "MAX_STEER"):
+        assert f"export {shape_key}" not in ov

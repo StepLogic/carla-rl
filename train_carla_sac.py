@@ -141,6 +141,10 @@ TRACE_MAX_STEPS = env_int("TRACE_MAX_STEPS", 60000)
 TRACE_NOISE_SCALE = env_float("TRACE_NOISE_SCALE", 1.0)
 TRACE_STUCK_LIMIT = env_int("TRACE_STUCK_LIMIT", 4)
 TRACE_STALL_M = env_float("TRACE_STALL_M", 1500.0)
+# TRACE_END_ON_CROSSING=0 (user 2026-11-01): a lane crossing is COUNTED and the
+# car drives on; off-road and collisions still end the segment. Pair it with
+# slurm/trace_nocross.env, which stops the ENV terminating on crossings too.
+TRACE_END_ON_CROSSING = os.environ.get("TRACE_END_ON_CROSSING", "1") == "1"
 
 
 def use_parallel(parallel_towns: bool, eval_from: str, n_towns: int) -> bool:
@@ -324,7 +328,9 @@ def run_trace(env, agent, pxr, server, out_root):
              else f"SAMPLED actions at noise x{TRACE_NOISE_SCALE:g}")
           + f", stuck after {TRACE_STUCK_LIMIT} restarts, stall jump after "
           f"{TRACE_STALL_M:g} m without coverage, "
-          f"keep every {TRACE_SPACING_M:g} m | stop at coverage {TRACE_COVERAGE:.0%} "
+          + ("crossings END a segment, " if TRACE_END_ON_CROSSING
+             else "crossings are COUNTED and do not end a segment, ")
+          + f"keep every {TRACE_SPACING_M:g} m | stop at coverage {TRACE_COVERAGE:.0%} "
           f"or {TRACE_DIST_M:g} m or {TRACE_MAX_STEPS} steps | {len(wps)} map waypoints"
           + (f" | RESUMING at segment {seg_i}, {total_m:.0f} m, coverage "
              f"{cov.fraction():.1%}" if seg_i else "") + f" -> {out}", flush=True)
@@ -362,6 +368,7 @@ def run_trace(env, agent, pxr, server, out_root):
         rec = {k: [] for k in ("frame", "pos", "yaw", "speed", "action", "reward",
                                "entropy", "q_mean", "q_std", "t")}
         prev, last_kept, metres, t, end = start.copy(), None, 0.0, 0, None
+        n_cross = 0
         while end is None:
             row = pxr.mono_row(info["debit_cur"], obs["mode"], obs["binoc"])
             action, hidden, st = agent.act_with_stats(
@@ -386,7 +393,13 @@ def run_trace(env, agent, pxr, server, out_root):
                 rec["q_std"].append(st["q_std"])
                 rec["t"].append(t)
                 cov.add(pos)
-            end = _fault(info)
+            fault = _fault(info)
+            if fault == "crossing" and not TRACE_END_ON_CROSSING:
+                # Counted, not fatal: a trace scores nothing, and ending here
+                # is what kept segments at ~11 m.
+                n_cross += 1
+                fault = None
+            end = fault
             if end is None and (term or trunc):
                 end = str(info.get("explore_end", "cap"))
             if end is None and steps + t >= TRACE_MAX_STEPS:
@@ -398,6 +411,7 @@ def run_trace(env, agent, pxr, server, out_root):
             "seg": seg_i, "file": fname, "start_xy": start[:2].round(2).tolist(),
             "stop_xy": prev[:2].round(2).tolist(), "end": end, "steps": t,
             "metres": round(metres, 2), "kept": len(rec["t"]), "jumped": jumped,
+            "crossings": n_cross,
             "coverage": round(cov.fraction(), 4)})
         tmp = idx_path + ".tmp"
         with open(tmp, "w") as fh:
@@ -410,6 +424,7 @@ def run_trace(env, agent, pxr, server, out_root):
         stall_m = 0.0 if now > last_cov + 1e-9 else stall_m + metres
         last_cov = now
         print(f"[Trace {seg_i:4d}] end={end} steps={t} {metres:.0f} m kept={len(rec['t'])}"
+              f"{f' crossings={n_cross}' if not TRACE_END_ON_CROSSING else ''}"
               f"{f' JUMPED({jumped})' if jumped else ''} | total {total_m:.0f} m, {int(steps)} steps, "
               f"coverage {cov.fraction():.1%}", flush=True)
         seg_i += 1

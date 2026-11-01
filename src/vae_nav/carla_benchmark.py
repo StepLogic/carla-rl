@@ -68,8 +68,16 @@ def select_episodes(probes, per_bin=100, bins=tuple(b[0] for b in BINS)):
         seen.add(key)
         if p["town"] not in towns:
             towns.append(p["town"])
+        band = p.get("band")
+        if band is not None and band not in {n for n, _, _ in BINS}:
+            raise ValueError(f"unknown band {band!r} for seed {key[1]} in {key[0]}")
         b = assign_bin(p.get("route_m"))
         if b is None or b not in bins:
+            continue
+        # A probe GENERATED for a band counts only if its route lands in that
+        # band's bin: an 'easy' seed that routes to 12 m is neither a clean easy
+        # episode nor a medium one (it was drawn from the wrong distribution).
+        if band is not None and band != b:
             continue
         by_cell.setdefault((p["town"], b), []).append(p)
     out = []
@@ -80,10 +88,15 @@ def select_episodes(probes, per_bin=100, bins=tuple(b[0] for b in BINS)):
                 raise ValueError(f"{town} {b}: only {len(got)} probed episodes, "
                                  f"need {per_bin} -- probe more seeds")
             for p in got[:per_bin]:
-                out.append({"town": town, "seed": int(p["seed"]), "bin": b,
-                            "route_m": round(float(p["route_m"]), 2),
-                            "euclid_m": round(float(p["euclid_m"]), 2),
-                            "kind": path_kind(p["route_m"], p["euclid_m"])})
+                e = {"town": town, "seed": int(p["seed"]), "bin": b,
+                     "route_m": round(float(p["route_m"]), 2),
+                     "euclid_m": round(float(p["euclid_m"]), 2),
+                     "kind": path_kind(p["route_m"], p["euclid_m"])}
+                if p.get("band") is not None:
+                    # The generator band is PART OF THE EPISODE: the eval must
+                    # replay the seed under the same band (slurm/bench_<band>.env).
+                    e["band"] = p["band"]
+                out.append(e)
     return out
 
 

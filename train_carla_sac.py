@@ -111,6 +111,11 @@ EVAL_WRONG_GOAL = os.environ.get("WRONG_GOAL_MODE", "0") == "1"
 EVAL_PROBE = os.environ.get("EVAL_PROBE", "0") == "1"
 EVAL_EPISODES_FILE = os.environ.get("EVAL_EPISODES_FILE", "")
 EVAL_VIDEO_EVERY = env_int("EVAL_VIDEO_EVERY", 1)
+# BENCH_BAND (easy|medium|hard): which generator band this process runs
+# under (set by slurm/bench_<band>.env with its GOAL_DIST_MIN/MAX). Probes
+# record it; an episode-file eval replays only that band's episodes, since a
+# seed replayed under a different band is a different episode.
+BENCH_BAND = os.environ.get("BENCH_BAND") or None
 
 
 def use_parallel(parallel_towns: bool, eval_from: str, n_towns: int) -> bool:
@@ -232,9 +237,11 @@ def run_eval(env, agent, pxr, server, out_root):
     from vae_nav.carla_benchmark import EpisodeTracker
     if EVAL_EPISODES_FILE:
         with open(EVAL_EPISODES_FILE) as fh:
-            episodes = [e for e in json.load(fh) if e["town"] == TOWNS[0]]
+            episodes = [e for e in json.load(fh) if e["town"] == TOWNS[0]
+                        and (BENCH_BAND is None or e.get("band") == BENCH_BAND)]
         if not episodes:
-            raise RuntimeError(f"{EVAL_EPISODES_FILE} lists no episodes for {TOWNS[0]}")
+            raise RuntimeError(f"{EVAL_EPISODES_FILE} lists no episodes for "
+                               f"{TOWNS[0]} band {BENCH_BAND}")
     else:
         episodes = [{"seed": EVAL_SEED + k} for k in range(EVAL_EPISODES)]
     n_eps = len(episodes)
@@ -276,7 +283,7 @@ def run_eval(env, agent, pxr, server, out_root):
             p1 = np.asarray(inf1.get("hero_pos", p0), np.float64)
             rem = inf1.get("route_remaining_m")
             probes.append({
-                "town": TOWNS[0], "seed": seed,
+                "town": TOWNS[0], "seed": seed, "band": BENCH_BAND,
                 "route_m": (None if rem is None
                             else round(float(rem) + float(np.linalg.norm(p1 - p0)), 3)),
                 "euclid_m": (None if g0 is None else round(float(np.linalg.norm(
@@ -373,7 +380,7 @@ def run_eval(env, agent, pxr, server, out_root):
         two = (tracker.finish(reached=reached, t_end=t, route_m=ell)
                if tracker is not None else {"reached_2m": reached, "spl_2m": spl_i})
         rows.append({"episode": k, "seed": seed, "town": TOWNS[0], "end": end,
-                     **{key: ep[key] for key in ("bin", "kind") if key in ep},
+                     **{key: ep[key] for key in ("bin", "kind", "band") if key in ep},
                      "reached_2m": bool(two["reached_2m"]),
                      "spl_2m": float(two["spl_2m"]),
                      "steps": t, "return": round(ret, 2), "reached": reached,

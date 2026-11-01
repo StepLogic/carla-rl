@@ -210,3 +210,31 @@ def test_failures_score_zero_spl():
     tr.step((3.0, 0.0), 5.0)
     r = tr.finish(reached=False, t_end=1, route_m=10.0)
     assert r["spl"] == 0.0 and r["spl_2m"] == 0.0
+
+
+# ---- per-band generation (2026-11-01) ----------------------------------------
+# The probe found our 5-25 m goals are almost all ~20-25 m: 85% of origins sit
+# before a junction and GOAL_PAST_JUNCTION keeps only distances >= 15 m past
+# it. So each difficulty is GENERATED from its own band (as Mezghani's set was
+# generated per difficulty), and an episode belongs to a bin only if its ROUTE
+# distance also lands in that bin. The band is part of the episode: replaying
+# a seed under a different band would be a different episode.
+
+def test_a_banded_probe_counts_only_in_its_own_bin():
+    probes = [dict(_probe(1, 7.0), band="easy"),        # in band -> kept
+              dict(_probe(2, 12.0), band="easy"),       # routed long -> dropped
+              dict(_probe(3, 12.0), band="medium")]
+    eps = cb.select_episodes(probes, per_bin=1, bins=("easy", "medium"))
+    assert [(e["seed"], e["bin"], e["band"]) for e in eps] == [
+        (1, "easy", "easy"), (3, "medium", "medium")]
+
+
+def test_unbanded_probes_still_bin_by_route():
+    eps = cb.select_episodes([_probe(1, 12.0)], per_bin=1, bins=("medium",))
+    assert eps[0]["bin"] == "medium" and "band" not in eps[0]
+
+
+def test_bands_must_be_known_bins():
+    with pytest.raises(ValueError, match="band"):
+        cb.select_episodes([dict(_probe(1, 7.0), band="extra")], per_bin=1,
+                           bins=("easy",))

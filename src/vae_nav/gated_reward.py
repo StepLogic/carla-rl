@@ -355,6 +355,32 @@ if ROUTE_PROGRESS_POSITIVE:
     ROUTE_RETREAT_SCALE = 0.0
 if not 0.0 <= ROUTE_RETREAT_SCALE <= 1.0:
     raise ValueError(f"ROUTE_RETREAT_SCALE={ROUTE_RETREAT_SCALE:g} is not in [0, 1]")
+
+# ROUTE_PROGRESS_RATCHET (v33, 2026-11-01): pay route progress ONLY ON NEW
+# GROUND -- max(0, best - d), best = the closest the car has been to the goal
+# this episode -- and nothing for driving away.
+#
+# WHY. A discounted retreat (ROUTE_RETREAT_SCALE < 1) turned out to be
+# FARMABLE, and the guard below rested on a false premise: circling a BLOCK
+# approaches the goal and leaves it again through LEGAL junction turns, so no
+# painted line is crossed and the episode never ends. v32 at 200k scored 0.000
+# on Town02 with 13/40 episodes driving ~240 m for the whole clock and
+# returning up to +95 WITHOUT ARRIVING, on goals ~20 m away; at its 300k peak
+# v30 already had crossing episodes returning +41 on 25 m routes.
+# Under the ratchet the total progress pay is <= the starting distance however
+# many laps, so arriving always beats circling by at least the arrival bonus;
+# it is never negative, so a lost car's value cannot sink into cheap
+# termination (v27); and only getting CLOSER THAN EVER pays, so the direction
+# still matters -- the goal image's job.
+#
+# A drop of more than ROUTE_RATCHET_MAX_STEP_M in one step is a replan or a
+# planner snap, not driving: the best is re-anchored without paying it.
+ROUTE_PROGRESS_RATCHET = os.environ.get("ROUTE_PROGRESS_RATCHET", "0") == "1"
+ROUTE_RATCHET_MAX_STEP_M = float(os.environ.get("ROUTE_RATCHET_MAX_STEP_M", 5.0))
+if ROUTE_PROGRESS_RATCHET and ROUTE_RETREAT_SCALE != 1.0:
+    raise ValueError(
+        f"ROUTE_PROGRESS_RATCHET=1 replaces the retreat charge; "
+        f"ROUTE_RETREAT_SCALE={ROUTE_RETREAT_SCALE:g} would be ignored -- set it to 1")
 if GOAL_ROUTE_ONLY and not POTENTIAL_K:
     raise ValueError("GOAL_ROUTE_ONLY=1 with POTENTIAL_K=0 leaves goal mode no "
                      "positive dense term at all; set POTENTIAL_K (1 = one per "
@@ -945,7 +971,11 @@ LANE_CAR_HALF_WIDTH = float(os.environ.get("LANE_CAR_HALF_WIDTH", 0.74))
 EXPLORE_LANE_MODE = os.environ.get("EXPLORE_LANE_MODE", "terminal")
 if EXPLORE_LANE_MODE not in ("penalise", "terminal"):
     raise ValueError(f"EXPLORE_LANE_MODE={EXPLORE_LANE_MODE!r}: penalise|terminal")
-# A DISCOUNTED RETREAT IS ONLY FARM-PROOF WHILE A CROSSING ENDS THE EPISODE.
+# A DISCOUNTED RETREAT IS NOT FARM-PROOF EVEN WITH TERMINAL CROSSINGS: circling
+# a block approaches and retreats through legal junction turns (v32, 200k).
+# Kept only so the v29/v30/v32 settings reproduce; use ROUTE_PROGRESS_RATCHET.
+# The check below still refuses the worse case, where crossings are not even
+# terminal and a U-turn alone would farm it.
 # Any scale below 1 gives up part of the potential (Ng et al.), so an
 # approach-retreat cycle returns to the same state having netted
 # (1 - scale) per metre, every time round -- a loop the agent can farm. What
@@ -1230,6 +1260,7 @@ class GatedReward(Wrapper):
                   f"{self.max_steps} (shared with explore); "
                   + (f"GOAL_ROUTE_ONLY: goal mode drops forward progress and is "
                      f"paid {POTENTIAL_K:g}/m of ROUTE progress only"
+                     + (" on NEW GROUND (ratchet)" if ROUTE_PROGRESS_RATCHET else "")
                      + (", retreat FREE" if not ROUTE_RETREAT_SCALE else
                         f", retreat x{ROUTE_RETREAT_SCALE:g}"
                         if ROUTE_RETREAT_SCALE != 1.0 else "") + "; "
@@ -1335,6 +1366,11 @@ class GatedReward(Wrapper):
         self._j_steps = 0
         self._j_last_m = -np.inf
         self._j_count = 0
+        # ROUTE_PROGRESS_RATCHET: the closest to the goal so far this episode,
+        # seeded from the reset frame when the planner reports one there (it
+        # does not reliably), so the first step's progress is not dropped.
+        _r0 = info.get("route_remaining_m", None)
+        self._best_remaining = None if _r0 is None else float(_r0)
         self._prev = np.asarray(info.get("hero_pos", (0.0, 0.0)), np.float64)
         self._start = self._prev.copy()
         # The potential is a DIFFERENCE, so step 1 has nothing to difference
@@ -1477,7 +1513,21 @@ class GatedReward(Wrapper):
             # inexact.
             _rem = info.get("route_remaining_m", None)
             _shaped = 0.0
-            if POTENTIAL_K and not (terminated or truncated):
+            if (ROUTE_PROGRESS_RATCHET and POTENTIAL_K and _rem is not None
+                    and not (terminated or truncated)):
+                # NEW GROUND ONLY (see ROUTE_PROGRESS_RATCHET).
+                _r = float(_rem)
+                if self._best_remaining is None:
+                    self._best_remaining = _r
+                _gain = self._best_remaining - _r
+                if _gain > ROUTE_RATCHET_MAX_STEP_M:
+                    self._best_remaining = _r              # replan: re-anchor, unpaid
+                elif _gain > 0.0 and not (GOAL_ROUTE_ONLY and not _pays_progress(
+                        float(info.get("speed_factor", 0.0) or 0.0))):
+                    _shaped = POTENTIAL_K * _gain
+                    self._best_remaining = _r
+                reward += _shaped
+            elif POTENTIAL_K and not (terminated or truncated):
                 if _rem is not None and self._prev_remaining is not None:
                     _g = _BILL_GAMMA if SHAPING_DISCOUNTED else 1.0
                     _shaped = POTENTIAL_K * (self._prev_remaining - _g * float(_rem))

@@ -82,7 +82,8 @@ def _clean_modules():
     import vae_nav.lane_explore_reward as ler
     import vae_nav.gated_reward as gr
     for k in ("GOAL_ROUTE_ONLY", "EXPLORE_JUNCTION_BONUS", "STEER_CHANGE_SCALE",
-              "ROUTE_PROGRESS_POSITIVE", "ROUTE_RETREAT_SCALE"):
+              "ROUTE_PROGRESS_POSITIVE", "ROUTE_RETREAT_SCALE",
+              "ROUTE_PROGRESS_RATCHET"):
         os.environ.pop(k, None)
     importlib.reload(ler)
     importlib.reload(gr)
@@ -433,3 +434,67 @@ def test_out_of_range_is_refused(monkeypatch):
     for bad in (-0.1, 1.5):
         with pytest.raises(ValueError, match="ROUTE_RETREAT_SCALE"):
             _gr(monkeypatch, GOAL_ROUTE_ONLY=1, ROUTE_RETREAT_SCALE=bad)
+
+
+# ---- ratchet progress (v33, user 2026-11-01: "ok") ---------------------------
+# ROUTE_RETREAT_SCALE=0.3 was FARMABLE: circling a block approaches the goal
+# and leaves it again through LEGAL junction turns, so no painted line is
+# crossed and the episode never ends. v32 at 200k scored 0.000 on Town02 with
+# 13/40 episodes driving ~240 m for the full clock and returning up to +95
+# without arriving, on goals ~20 m away. ROUTE_PROGRESS_RATCHET pays only for
+# getting CLOSER THAN EVER BEFORE this episode: max(0, best - d), best = min.
+# Total pay <= the starting distance however many laps; never negative.
+
+def _ratchet(monkeypatch, route, **kw):
+    gr = _gr(monkeypatch, GOAL_ROUTE_ONLY=1, ROUTE_PROGRESS_RATCHET=1,
+             ROUTE_RETREAT_SCALE=1, **kw)
+    moving = _rewards(gr, Road(route=route), gr.GOAL, len(route) - 1)
+    still = _rewards(gr, Road(route=[route[0]] * len(route)), gr.GOAL, len(route) - 1)
+    return [m[0] - s[0] for m, s in zip(moving, still)], moving
+
+
+def test_circling_pays_only_the_first_approach(monkeypatch):
+    # approach 20 -> 14, leave to 20, approach to 14 again, leave, ...
+    lap = [20.0, 18.0, 16.0, 14.0, 16.0, 18.0, 20.0]
+    route = lap + lap[1:] + lap[1:]
+    pay, _ = _ratchet(monkeypatch, route)
+    assert sum(pay) == pytest.approx(6.0)          # 20 -> 14, once
+    assert min(pay) >= -1e-9                       # never charged
+
+
+def test_new_ground_pays_metre_for_metre(monkeypatch):
+    route = [20.0, 18.0, 19.0, 17.0, 15.0, 16.0, 12.0]
+    pay, _ = _ratchet(monkeypatch, route)
+    # best 20 -> 18 (+2), 19 no, 17 (+1), 15 (+2), 16 no, 12 (+3)
+    assert pay == pytest.approx([2.0, 0.0, 1.0, 2.0, 0.0, 3.0])
+
+
+def test_a_replan_jump_is_not_paid(monkeypatch):
+    """A route distance that drops more than ROUTE_RATCHET_MAX_STEP_M in one
+    step is a replan or a planner snap, not driving."""
+    route = [40.0, 39.0, 20.0, 19.0]
+    pay, _ = _ratchet(monkeypatch, route)
+    assert pay == pytest.approx([1.0, 0.0, 1.0])
+
+
+def test_the_ratchet_resets_each_episode(monkeypatch):
+    gr = _gr(monkeypatch, GOAL_ROUTE_ONLY=1, ROUTE_PROGRESS_RATCHET=1,
+             ROUTE_RETREAT_SCALE=1)
+    route = [20.0, 18.0, 16.0, 14.0]
+    w = gr.GatedReward(Road(route=route), force_mode=gr.GOAL, max_steps=50, seed=0)
+    w.reset()
+    first = [w.step(np.zeros(2, np.float32))[1] for _ in range(3)]
+    w.reset()
+    second = [w.step(np.zeros(2, np.float32))[1] for _ in range(3)]
+    assert first == pytest.approx(second)
+
+
+def test_ratchet_and_a_retreat_scale_are_exclusive(monkeypatch):
+    with pytest.raises(ValueError, match="ROUTE_PROGRESS_RATCHET"):
+        _gr(monkeypatch, GOAL_ROUTE_ONLY=1, ROUTE_PROGRESS_RATCHET=1,
+            ROUTE_RETREAT_SCALE=0.3)
+
+
+def test_hindsight_rows_use_no_retreat_charge_under_the_ratchet():
+    src = open(os.path.join(ROOT, "train_carla_sac.py")).read()
+    assert "0.0 if _G.ROUTE_PROGRESS_RATCHET else _G.ROUTE_RETREAT_SCALE" in src

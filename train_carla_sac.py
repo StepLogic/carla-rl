@@ -382,6 +382,12 @@ def run_trace(env, agent, pxr, server, out_root):
             pos = np.asarray(info.get("hero_pos", prev), np.float64)
             metres += float(np.linalg.norm(pos - prev))
             prev = pos
+            # THIS step's fault, before the sample is kept: the sample records
+            # whether the car is on a line NOW (computing it after the keep
+            # block referenced a value from no step at all on the first one).
+            fault = _fault(info)
+            on_line = fault == "crossing"
+            crossing.update(on_line)
             if last_kept is None or np.linalg.norm(pos - last_kept) >= TRACE_SPACING_M:
                 last_kept = pos
                 rec["frame"].append(np.asarray(info["debit_cur"], np.uint8))
@@ -396,9 +402,6 @@ def run_trace(env, agent, pxr, server, out_root):
                 rec["t"].append(t)
                 rec["on_line"].append(on_line)
                 cov.add(pos)
-            fault = _fault(info)
-            on_line = fault == "crossing"
-            crossing.update(on_line)
             if on_line and not TRACE_END_ON_CROSSING:
                 # Counted, not fatal: a trace scores nothing, and ending here
                 # is what kept segments at ~11 m.

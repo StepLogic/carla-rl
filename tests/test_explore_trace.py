@@ -203,3 +203,12 @@ def test_the_trace_uses_the_event_counter():
     body = _trainer_src().split("def run_trace(")[1].split("\ndef run_eval(")[0]
     assert "CrossingCounter()" in body
     assert '"crossings": crossing.events, "line_steps": crossing.steps' in body
+
+
+def test_the_on_line_flag_is_computed_before_a_sample_records_it():
+    """Regression: the flag was recorded in the keep-sample block BEFORE the
+    step's fault check ran, so the first step of every segment raised
+    UnboundLocalError (it killed the step_800000 exploration test)."""
+    body = _trainer_src().split("def run_trace(")[1].split("\ndef run_eval(")[0]
+    assert body.index('on_line = fault == "crossing"') < body.index('rec["on_line"].append(on_line)')
+    assert body.index("crossing.update(on_line)") < body.index('rec["on_line"].append(on_line)')

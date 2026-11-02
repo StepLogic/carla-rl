@@ -101,8 +101,22 @@ def main():
     ap.add_argument("--z", type=float, default=1.0)
     ap.add_argument("--window-m", type=float, default=110.0)
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--sgm", action="store_true",
+                    help="build only the SGM map from <out>/sgm_pairs_<Town>.npz")
+    ap.add_argument("--sgm-gate-m", type=float, default=10.0)
+    ap.add_argument("--sgm-cutoff", type=float, default=5.0)
     a = ap.parse_args()
     rows = []
+    if a.sgm:
+        for town in a.towns:
+            tr = im.load_trace(trace_dir(a.trace_root, a.trace_fmt, town))
+            z = np.load(os.path.join(a.out, f"sgm_pairs_{town}.npz"))
+            keep, st = im.sgm_place(z["cand"], z["pairs"], z["q"], z["xy"], z["yaw"],
+                                    gate_m=a.sgm_gate_m, cutoff=a.sgm_cutoff)
+            rows.append(save(a.out, "sgm", town, tr, keep, st))
+        with open(os.path.join(a.out, "maps_summary_sgm.json"), "w") as fh:
+            json.dump(rows, fh, indent=1)
+        return
     for town in a.towns:
         tr = im.load_trace(trace_dir(a.trace_root, a.trace_fmt, town))
         ent, st = im.place_entropy(tr, z=a.z, window_m=a.window_m, return_stats=True)

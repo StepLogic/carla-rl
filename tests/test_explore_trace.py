@@ -163,8 +163,8 @@ def test_the_trace_can_drive_through_crossings():
     src = _trainer_src()
     assert 'TRACE_END_ON_CROSSING = os.environ.get("TRACE_END_ON_CROSSING", "1") == "1"' in src
     body = src.split("def run_trace(")[1].split("\ndef run_eval(")[0]
-    assert 'if fault == "crossing" and not TRACE_END_ON_CROSSING:' in body
-    assert '"crossings": n_cross' in body          # still counted per segment
+    assert 'if on_line and not TRACE_END_ON_CROSSING:' in body
+    assert '"crossings": crossing.events' in body  # still counted per segment
 
 
 def test_the_nocross_overlay_keeps_the_policy_inputs():
@@ -175,3 +175,31 @@ def test_the_nocross_overlay_keeps_the_policy_inputs():
     assert "EXPLORE_LANE_MODE=penalise" in ov
     for shape_key in ("MONO_HEAD", "ENV_IMAGE_SIZE", "INCREMENTAL_ACTIONS", "MAX_STEER"):
         assert f"export {shape_key}" not in ov
+
+
+# ---- crossing EVENTS, not steps (2026-11-01) ---------------------------------
+# The first counter added one per step on a line, and the lane sensor keeps
+# firing while the wheels are over a marking: Town02's segments came out at 4
+# and 8 "crossings" (23 and 11 of 69 segments), about four steps per line, so
+# 5.5 per 100 m overstated the rate ~4x.
+
+def test_one_crossing_held_for_several_steps_counts_once():
+    from vae_nav.explore_trace import CrossingCounter
+    c = CrossingCounter()
+    for on in (False, True, True, True, True, False, False):
+        c.update(on)
+    assert c.events == 1 and c.steps == 4
+
+
+def test_separate_crossings_count_separately():
+    from vae_nav.explore_trace import CrossingCounter
+    c = CrossingCounter()
+    for on in (True, True, False, True, False, False, True):
+        c.update(on)
+    assert c.events == 3 and c.steps == 4
+
+
+def test_the_trace_uses_the_event_counter():
+    body = _trainer_src().split("def run_trace(")[1].split("\ndef run_eval(")[0]
+    assert "CrossingCounter()" in body
+    assert '"crossings": crossing.events, "line_steps": crossing.steps' in body

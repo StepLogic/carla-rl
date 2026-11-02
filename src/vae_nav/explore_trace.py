@@ -67,3 +67,24 @@ class StuckDetector:
             self.anchor, self.count = None, 0
             return True
         return False
+
+
+class CrossingCounter:
+    """Lane-crossing EVENTS and steps-on-a-line for one trace segment.
+
+    The lane sensor keeps firing while the wheels are over a marking, so
+    counting steps overstates crossings: the first Town02 trace showed 4 and 8
+    per segment, about four steps per physical crossing. An event is the step
+    the car comes ONTO a line; the steps spent on it are kept separately.
+    """
+
+    def __init__(self):
+        self.events, self.steps, self._on = 0, 0, False
+
+    def update(self, on_line):
+        on_line = bool(on_line)
+        if on_line:
+            self.steps += 1
+            if not self._on:
+                self.events += 1
+        self._on = on_line

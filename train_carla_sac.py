@@ -293,7 +293,7 @@ def run_trace(env, agent, pxr, server, out_root):
     import random as _random
     import torch
     import carla
-    from vae_nav.explore_trace import CoverageGrid, StuckDetector
+    from vae_nav.explore_trace import CoverageGrid, CrossingCounter, StuckDetector
 
     tag = os.path.basename(os.path.normpath(EVAL_FROM))
     out = os.path.join(out_root, f"trace_{tag}")
@@ -366,9 +366,11 @@ def run_trace(env, agent, pxr, server, out_root):
         goal_blk = pxr.goal_block(info["debit_goal"])
         start = np.asarray(info.get("hero_pos", (0.0, 0.0)), np.float64)
         rec = {k: [] for k in ("frame", "pos", "yaw", "speed", "action", "reward",
-                               "entropy", "q_mean", "q_std", "t")}
+                               "entropy", "q_mean", "q_std", "t", "on_line")}
         prev, last_kept, metres, t, end = start.copy(), None, 0.0, 0, None
-        n_cross = 0
+        # CROSSING EVENTS, not steps (see CrossingCounter): the first count put
+        # Town02's segments at 4 and 8 "crossings", about four steps a line.
+        crossing = CrossingCounter()
         while end is None:
             row = pxr.mono_row(info["debit_cur"], obs["mode"], obs["binoc"])
             action, hidden, st = agent.act_with_stats(
@@ -392,12 +394,14 @@ def run_trace(env, agent, pxr, server, out_root):
                 rec["q_mean"].append(st["q_mean"])
                 rec["q_std"].append(st["q_std"])
                 rec["t"].append(t)
+                rec["on_line"].append(on_line)
                 cov.add(pos)
             fault = _fault(info)
-            if fault == "crossing" and not TRACE_END_ON_CROSSING:
+            on_line = fault == "crossing"
+            crossing.update(on_line)
+            if on_line and not TRACE_END_ON_CROSSING:
                 # Counted, not fatal: a trace scores nothing, and ending here
                 # is what kept segments at ~11 m.
-                n_cross += 1
                 fault = None
             end = fault
             if end is None and (term or trunc):
@@ -411,7 +415,7 @@ def run_trace(env, agent, pxr, server, out_root):
             "seg": seg_i, "file": fname, "start_xy": start[:2].round(2).tolist(),
             "stop_xy": prev[:2].round(2).tolist(), "end": end, "steps": t,
             "metres": round(metres, 2), "kept": len(rec["t"]), "jumped": jumped,
-            "crossings": n_cross,
+            "crossings": crossing.events, "line_steps": crossing.steps,
             "coverage": round(cov.fraction(), 4)})
         tmp = idx_path + ".tmp"
         with open(tmp, "w") as fh:
@@ -424,7 +428,7 @@ def run_trace(env, agent, pxr, server, out_root):
         stall_m = 0.0 if now > last_cov + 1e-9 else stall_m + metres
         last_cov = now
         print(f"[Trace {seg_i:4d}] end={end} steps={t} {metres:.0f} m kept={len(rec['t'])}"
-              f"{f' crossings={n_cross}' if not TRACE_END_ON_CROSSING else ''}"
+              f"{f' crossings={crossing.events}' if not TRACE_END_ON_CROSSING else ''}"
               f"{f' JUMPED({jumped})' if jumped else ''} | total {total_m:.0f} m, {int(steps)} steps, "
               f"coverage {cov.fraction():.1%}", flush=True)
         seg_i += 1

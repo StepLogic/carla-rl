@@ -34,7 +34,9 @@ def test_the_state_block_is_the_MODE_BIT_AND_NOTHING_ELSE():
     feedback path a policy can latch onto -- and the run that collapsed sat at
     full left lock for 800k steps."""
     s = src()
-    assert 'pxr.mono_row(i["debit_cur"], o["mode"], o["binoc"])' in s
+    # The mode goes through _net_mode (HIDE_MODE_BIT, v34): still the mode bit
+    # and nothing else, now optionally held at 1 for the network.
+    assert 'pxr.mono_row(i["debit_cur"], _net_mode(o["mode"]), o["binoc"])' in s
     assert 'o["vector"]' not in s and 'o["state"]' not in s
     assert "mode_index=0" in s
 

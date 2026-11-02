@@ -134,6 +134,19 @@ BENCH_BAND = os.environ.get("BENCH_BAND") or None
 # TRACE_COVERAGE of the town's drivable waypoints lie within 5 m of a sample,
 # or TRACE_DIST_M metres are driven, or TRACE_MAX_STEPS steps. See run_trace.
 EVAL_TRACE = os.environ.get("EVAL_TRACE", "0") == "1"
+# HIDE_MODE_BIT (v34, user 2026-11-02): the NETWORK always sees mode = 1. With
+# FOREIGN_GOAL_EXPLORE, explore episodes carry another town's goal image, so the
+# image -- not the bit -- has to say whether the goal is reachable here. The
+# TRUE mode still drives the reward, the replay flag and HER: they read it from
+# the observation and info, never from the row. Rows built in training, eval
+# and traces all go through _net_mode, so a v34 checkpoint never sees a mode
+# value it was not trained on.
+HIDE_MODE_BIT = os.environ.get("HIDE_MODE_BIT", "0") == "1"
+
+
+def _net_mode(mode):
+    """The mode value the network sees: 1 when HIDE_MODE_BIT, else the true one."""
+    return np.ones_like(np.asarray(mode, np.float32)) if HIDE_MODE_BIT else mode
 TRACE_DIST_M = env_float("TRACE_DIST_M", 6000.0)
 TRACE_COVERAGE = env_float("TRACE_COVERAGE", 0.90)
 TRACE_SPACING_M = env_float("TRACE_SPACING_M", 2.0)
@@ -383,7 +396,7 @@ def run_trace(env, agent, pxr, server, out_root):
         # Town02's segments at 4 and 8 "crossings", about four steps a line.
         crossing = CrossingCounter()
         while end is None:
-            row = pxr.mono_row(info["debit_cur"], obs["mode"], obs["binoc"])
+            row = pxr.mono_row(info["debit_cur"], _net_mode(obs["mode"]), obs["binoc"])
             action, hidden, st = agent.act_with_stats(
                 row, hidden, goal=goal_blk, deterministic=TRACE_NOISE_SCALE <= 0,
                 noise_scale=max(TRACE_NOISE_SCALE, 0.0))
@@ -560,7 +573,7 @@ def run_eval(env, agent, pxr, server, out_root):
             os.environ.get("GOAL_ARRIVAL_MAX_SPEED", 10.0)), radius=GOAL_RADIUS_M,
             radius_2m=2.0) if gpos is not None else None)
         while end is None:
-            row = pxr.mono_row(info["debit_cur"], obs["mode"], obs["binoc"])
+            row = pxr.mono_row(info["debit_cur"], _net_mode(obs["mode"]), obs["binoc"])
             action, hidden = agent.act(row, hidden, goal=goal_blk,
                                        deterministic=EVAL_NOISE_SCALE <= 0,
                                        noise_scale=EVAL_NOISE_SCALE)
@@ -938,7 +951,7 @@ def main():
             raise RuntimeError(
                 "info['binoc_encoded'] is False: the env wrapper has no DEBiT "
                 "encoder, so the binoc column would be zeros.")
-        return pxr.mono_row(i["debit_cur"], o["mode"], o["binoc"])
+        return pxr.mono_row(i["debit_cur"], _net_mode(o["mode"]), o["binoc"])
 
     if parallel:
         from torch_rl.parallel_loop import run_parallel

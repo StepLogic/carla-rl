@@ -31,6 +31,7 @@ WRONG_GOAL_MIN_M of route distance away, with the episode seed otherwise
 identical, so SR(true) - SR(wrong) is a paired measurement over the same episodes.
 """
 import os
+import threading
 from collections import deque
 from typing import Optional
 
@@ -57,6 +58,40 @@ def _as_uint8_rgb(frame) -> np.ndarray:
             "the /255 itself, so a pre-normalised frame would be encoded as near "
             "black.")
     return a
+
+
+# FOREIGN GOALS FOR EXPLORE EPISODES (v34, user 2026-11-02). With
+# FOREIGN_GOAL_EXPLORE=1 an explore episode is shown the goal view of a
+# DIFFERENT training town -- an unreachable goal -- while it is rewarded for
+# driving forward in any direction and paid the goal reward at 100 m. With the
+# mode bit hidden from the network (HIDE_MODE_BIT in train_carla_sac), the image
+# alone says whether to navigate and stop or to keep driving: the pressure v29
+# and v33 lacked (both learned to ignore the image).
+#
+# One pool per town, shared by every wrapper in the PROCESS: ThreadedVecEnv
+# steps the training towns on threads, so a dict guarded by a lock is enough.
+# Pools only ever hold views the training envs themselves rendered, so no
+# held-out eval scenery reaches training.
+FOREIGN_GOAL_EXPLORE = os.environ.get("FOREIGN_GOAL_EXPLORE", "0") == "1"
+FOREIGN_POOL = {}
+_FOREIGN_LOCK = threading.Lock()
+_FOREIGN_CAP = 256
+
+
+def _pool_add(town, frame):
+    with _FOREIGN_LOCK:
+        FOREIGN_POOL.setdefault(str(town), deque(maxlen=_FOREIGN_CAP)).append(
+            _as_uint8_rgb(frame).copy())
+
+
+def _pool_pick_foreign(town, rng):
+    """A frame from some OTHER town's pool, or None if none has one yet."""
+    with _FOREIGN_LOCK:
+        others = [p for t, p in FOREIGN_POOL.items() if t != str(town) and len(p)]
+        if not others:
+            return None
+        pool = others[int(rng.integers(len(others)))]
+        return pool[int(rng.integers(len(pool)))]
 
 
 class WrongGoalBank:
@@ -104,7 +139,7 @@ class DebitGoalWrapper(Wrapper):
 
     def __init__(self, env, encoder=None, state_keys=("vector",),
                  wrong_goal: bool = False, wrong_goal_min_m: float = None,
-                 seed: int = 0) -> None:
+                 seed: int = 0, town: str = None) -> None:
         # state_keys DEFAULTS TO ("vector",), the env's proprioceptive block:
         # [steer/max_steer, throttle/max_throttle, speed/target_speed, mask flag].
         # NOT "state" -- that key holds the env's own 5400-d MobileNet features,
@@ -125,6 +160,9 @@ class DebitGoalWrapper(Wrapper):
         self._rng = np.random.default_rng(int(seed))
         self._goal_frame = None
         self._served_wrong = False
+        self.town = town
+        self._served_foreign = False
+        self._foreign_fallback = False
         base = getattr(env, "observation_space", None)
         # ONLY the state keys survive, plus binoc and the mode. The env's own
         # "state" and "goal" entries are 5400-d MobileNet features this arm does
@@ -166,6 +204,23 @@ class DebitGoalWrapper(Wrapper):
                 self._served_wrong = True
         if not self._served_wrong:
             self._goal_frame = true_frame
+        # FOREIGN GOAL in an explore episode (FOREIGN_GOAL_EXPLORE). info["mode"]
+        # is GatedReward's draw for this episode (0 = explore).
+        self._served_foreign = self._foreign_fallback = False
+        if (FOREIGN_GOAL_EXPLORE and self.town is not None
+                and int(round(float(info.get("mode", 1)))) == 0):
+            far = _pool_pick_foreign(self.town, self._rng)
+            if far is not None:
+                self._goal_frame, self._served_foreign = far, True
+            else:
+                # No other town has contributed yet (the first resets): an
+                # own-town view >= WRONG_GOAL_MIN_M away, flagged and counted.
+                near = self.bank.pick(goal_pos, self._rng) if goal_pos is not None else None
+                if near is not None:
+                    self._goal_frame = near
+                self._foreign_fallback = True
+        if FOREIGN_GOAL_EXPLORE and self.town is not None:
+            _pool_add(self.town, true_frame)
         # The TRUE frame always enters the bank, so later episodes have honest
         # distractors even in a wrong-goal run.
         if goal_pos is not None:
@@ -176,6 +231,8 @@ class DebitGoalWrapper(Wrapper):
         cur, goal = self._frames(info)
         info[CUR_KEY], info[GOAL_KEY] = cur, goal
         info["served_wrong_goal"] = bool(self._served_wrong)
+        info["served_foreign_goal"] = bool(self._served_foreign)
+        info["foreign_goal_fallback"] = bool(self._foreign_fallback)
         out = {k: np.asarray(obs[k], np.float32) for k in self.state_keys
                if k in obs}
         missing = [k for k in self.state_keys if k not in obs]

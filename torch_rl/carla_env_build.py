@@ -152,7 +152,7 @@ def build_env(town: str, seed: int, encoder=None, port: int = 2000,
     env = DebitGoalWrapper(
         env, encoder=encoder, state_keys=tuple(state_keys),
         wrong_goal=(os.environ.get("WRONG_GOAL_MODE", "0") == "1"),
-        seed=seed)
+        seed=seed, town=town)
     cap = int(max_episode_steps if max_episode_steps is not None
               else os.environ.get("MAX_EPISODE_STEPS", 2000))
     return TimeLimit(env, max_episode_steps=cap)

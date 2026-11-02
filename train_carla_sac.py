@@ -997,7 +997,9 @@ def main():
             burn_in=BURN_IN, ckpt_every=CKPT_EVERY, out_dir=OUT,
             log_every=LOG_EVERY, vids=vids, her=her,
             log=lambda m: print(m, flush=True),
-            det_frac=DET_EPISODE_FRAC, det_seed=SEED, junction_ramp=ramp)
+            det_frac=DET_EPISODE_FRAC, det_seed=SEED, junction_ramp=ramp,
+            # A warm start refills the empty buffer with its OWN policy.
+            random_warmup=not INIT_FROM)
         venv.close()
         for srv in servers:
             srv.stop()

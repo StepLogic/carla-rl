@@ -31,7 +31,7 @@ def run_parallel(venv, agent, buf, row_of, box, *, to_env, to_actor, goal_block,
                  max_steps, learning_starts, update_every, updates_per,
                  chunk_b, chunk_t, burn_in, ckpt_every, out_dir, log_every,
                  vids=None, her=None, log=print, on_episode=None,
-                 det_frac=0.0, det_seed=0, junction_ramp=None):
+                 det_frac=0.0, det_seed=0, junction_ramp=None, random_warmup=True):
     """Train until `max_steps` transitions. Returns (steps, episodes).
 
     `det_frac` (user 2026-10-25): the share of episodes, drawn per env at each
@@ -74,7 +74,11 @@ def run_parallel(venv, agent, buf, row_of, box, *, to_env, to_actor, goal_block,
     t0 = time.time()
 
     while step < max_steps:
-        if step < learning_starts:
+        # RANDOM actions before learning starts -- unless this is a warm start
+        # (random_warmup=False), where the loaded policy must refill the buffer
+        # itself: training it on random-action data is the distribution shift
+        # the refill exists to avoid.
+        if step < learning_starts and random_warmup:
             actions = np.stack([to_actor(box.sample().astype(np.float32), box)
                                 for _ in range(n)]).astype(np.float32)
         else:

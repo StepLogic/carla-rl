@@ -77,6 +77,17 @@ def main():
                   f"| {m2 / n:.3f} | {b2 / n:.3f} |")
 
     block("ALL episodes (unroutable = failure)", lambda p: keys)
+    # THE PEER'S CONVENTION (Gibson conf2): an unroutable episode runs MAPLESS
+    # and counts normally. Evals are deterministic and an unroutable episode
+    # was never driven, so its mapless result IS what that run would give.
+    fb = {p: {k: (base[k] if r[k]["end"] == "unroutable" else r[k]) for k in keys}
+          for p, r in arms.items()}
+    saved = dict(arms)
+    arms.clear()
+    arms.update(fb)
+    block("ALL episodes, unroutable driven MAPLESS (peer's convention)", lambda p: keys)
+    arms.clear()
+    arms.update(saved)
     block("ROUTABLE by that placement", lambda p: routable[p])
     block(f"COMMON: routable by every placement (n={len(common)})", lambda p: common)
     for band in BANDS:

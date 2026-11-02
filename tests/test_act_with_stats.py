@@ -79,3 +79,15 @@ def test_hidden_state_advances_like_act():
     _, h1 = agent.act(row, agent.reset_hidden(1), deterministic=True)
     _, h2, _ = agent.act_with_stats(row, agent.reset_hidden(1), deterministic=True)
     assert torch.allclose(h1, h2)
+
+
+def test_q_batch_matches_the_deterministic_single_step_value():
+    """SGM reads the critic between trace frames with q_batch; row i of the
+    batch must equal act_with_stats' q_mean at the deterministic action."""
+    agent = GatedRecurrentSAC(_cfg())
+    rows = np.stack([_row(agent, seed=s) for s in range(3)])
+    q = agent.q_batch(rows)
+    assert q.shape == (3,)
+    for i in range(3):
+        _, _, st = agent.act_with_stats(rows[i], agent.reset_hidden(1), deterministic=True)
+        assert q[i] == pytest.approx(st["q_mean"], rel=1e-4, abs=1e-4)

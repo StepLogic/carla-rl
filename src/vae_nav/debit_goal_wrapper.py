@@ -262,6 +262,26 @@ class DebitGoalWrapper(Wrapper):
             info["binoc_encoded"] = True
         return out
 
+    def retarget(self, frame, info):
+        """MAP ARMS (vae_nav.image_map): replace the latched goal mid-episode
+        with a subgoal view and return the binocular vector for the CURRENT
+        frame against it, so the observation already in hand is not left
+        encoding the old goal for a step. info[GOAL_KEY] is updated too."""
+        frame = _as_uint8_rgb(frame)
+        if self._goal_frame is not None and frame.shape != self._goal_frame.shape:
+            raise ValueError(f"subgoal frame {frame.shape} != goal frame "
+                             f"{self._goal_frame.shape}: the map was built at "
+                             "another image size")
+        self._goal_frame = frame.copy()
+        info[GOAL_KEY] = self._goal_frame
+        if self.encoder is None:
+            return np.zeros(BINOC_DIM, np.float32)
+        return np.asarray(self.encoder.encode(info[CUR_KEY], self._goal_frame),
+                          np.float32).reshape(-1)
+
+    def latched_goal(self):
+        return None if self._goal_frame is None else self._goal_frame.copy()
+
     def reset(self, **kwargs):
         obs, info = self.env.reset(**kwargs)
         self._latch_goal(info)

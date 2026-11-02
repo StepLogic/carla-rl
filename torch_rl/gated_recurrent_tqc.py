@@ -830,6 +830,20 @@ class GatedRecurrentTQC:
             a = self.actor.sample(inp, noise_scale=ns)[0]
         return a.cpu().numpy(), hidden
 
+    @torch.no_grad()
+    def q_batch(self, rows, goal=None) -> np.ndarray:
+        """Goal-critic value of N one-step contexts: zero hidden (a fresh
+        episode), the actor's deterministic action, Q_g averaged over critics
+        and quantiles -> (N,). Used offline to read the critic as a value
+        between trace frames (SGM map placement), never in training."""
+        x = torch.as_tensor(rows, dtype=torch.float32, device=self.device)
+        g = self._goal_input(goal, x.shape[0])
+        s, _h = self.core.step(self._embed(self.compress, self.act_embed, x, g),
+                               self.reset_hidden(x.shape[0]))
+        state = self._state(x)
+        a = self.actor.deterministic(torch.cat([s, state], dim=-1))
+        return self.goal_q(s, state, a).mean(dim=-1).mean(dim=0).float().cpu().numpy()
+
     @staticmethod
     def zero_hidden_columns(hidden: torch.Tensor, env_ids) -> torch.Tensor:
         """Zero hidden[:, env_ids, :] IN PLACE and return `hidden` for chaining.

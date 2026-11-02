@@ -285,3 +285,27 @@ def test_the_proprioceptive_block_carries_no_goal_bearing():
     env = DebitGoalWrapper(_Env(), encoder=_Enc())
     obs, _info = env.reset()
     assert obs["vector"].shape == (4,)
+
+
+# ------------------------------------------------------------ map subgoals --
+def test_retarget_swaps_the_goal_now_and_for_later_steps():
+    """Map arms: a subgoal must reach the CURRENT observation (returned binoc)
+    and every later step, and the final goal must be recoverable."""
+    enc = _Enc()
+    env = DebitGoalWrapper(_Env(goal_fill=200), encoder=enc)
+    _obs, info = env.reset()
+    final = env.latched_goal()
+    binoc = env.retarget(_frame(77), info)
+    assert binoc[0] == 77.0 and int(info[GOAL_KEY][0, 0, 0]) == 77
+    obs, _r, _t, _tr, info = env.step(np.zeros(2, np.float32))
+    assert obs["binoc"][0] == 77.0
+    env.retarget(final, info)
+    obs, _r, _t, _tr, info = env.step(np.zeros(2, np.float32))
+    assert obs["binoc"][0] == 200.0
+
+
+def test_retarget_refuses_a_frame_of_another_size():
+    env = DebitGoalWrapper(_Env(), encoder=_Enc())
+    _obs, info = env.reset()
+    with pytest.raises(ValueError, match="image size"):
+        env.retarget(_frame(5, size=64), info)

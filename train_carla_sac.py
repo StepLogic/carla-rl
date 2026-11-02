@@ -134,6 +134,28 @@ BENCH_BAND = os.environ.get("BENCH_BAND") or None
 # TRACE_COVERAGE of the town's drivable waypoints lie within 5 m of a sample,
 # or TRACE_DIST_M metres are driven, or TRACE_MAX_STEPS steps. See run_trace.
 EVAL_TRACE = os.environ.get("EVAL_TRACE", "0") == "1"
+# MAP ARMS (user 2026-11-02; vae_nav.image_map). EVAL_MAP_DIR holds
+# <Town>.json + <Town>_frames.npy built from an exploration trace. Each episode
+# is localised by TRUE POSE: start node = nearest aligned node within
+# EVAL_MAP_START_M, goal node = the reachable node within EVAL_MAP_GOAL_M of the
+# true goal minimising route + remaining distance. The policy is shown each
+# subgoal node's frame in turn, switching within EVAL_MAP_SWITCH_M, and the
+# episode's own goal image after the goal node. An episode with no start node,
+# no goal node or no route is recorded end="unroutable" (a failure) without
+# being driven. EVAL_MAP_RESET_HIDDEN=1 resets the GRU at each switch.
+EVAL_MAP_DIR = os.environ.get("EVAL_MAP_DIR", "")
+# SGM PAIRS (map arm 4): EVAL_SGM_TRACE=<trace dir> reads the goal critic
+# between trace frames instead of driving -- candidates every EVAL_SGM_CAND_M
+# (directional uniform thinning), every aligned (<90 deg) ordered pair within
+# EVAL_SGM_PAIR_M -- and writes EVAL_SGM_OUT (.npz). See run_sgm_pairs.
+EVAL_SGM_TRACE = os.environ.get("EVAL_SGM_TRACE", "")
+EVAL_SGM_OUT = os.environ.get("EVAL_SGM_OUT", "")
+EVAL_SGM_CAND_M = float(os.environ.get("EVAL_SGM_CAND_M", 4.0))
+EVAL_SGM_PAIR_M = float(os.environ.get("EVAL_SGM_PAIR_M", 25.0))
+EVAL_MAP_SWITCH_M = float(os.environ.get("EVAL_MAP_SWITCH_M", 4.0))
+EVAL_MAP_START_M = float(os.environ.get("EVAL_MAP_START_M", 8.0))
+EVAL_MAP_GOAL_M = float(os.environ.get("EVAL_MAP_GOAL_M", 8.0))
+EVAL_MAP_RESET_HIDDEN = os.environ.get("EVAL_MAP_RESET_HIDDEN", "0") == "1"
 # HIDE_MODE_BIT (v34, user 2026-11-02): the NETWORK always sees mode = 1. With
 # FOREIGN_GOAL_EXPLORE, explore episodes carry another town's goal image, so the
 # image -- not the bit -- has to say whether the goal is reachable here. The
@@ -465,6 +487,50 @@ def run_trace(env, agent, pxr, server, out_root):
     env.close()
 
 
+def run_sgm_pairs(agent, enc, pxr):
+    """Q_g(view i, goal view j) for SGM placement, offline from a trace.
+
+    Each pair is a one-step context exactly as an eval's first step builds it:
+    row = mono_row(frame_i, goal-mode bit, DEBiT binoc(frame_i, frame_j)), zero
+    GRU state, the actor's deterministic action. Also Q(i, i) for every
+    candidate (the arrived value)."""
+    import time
+    from vae_nav import image_map
+    tr = image_map.load_trace(EVAL_SGM_TRACE)
+    cand = image_map.place_uniform(tr, EVAL_SGM_CAND_M)
+    xy, yaw = tr["pos"][cand], tr["yaw"][cand]
+    frames = image_map.node_frames(tr, cand)
+    pairs = []
+    for a in range(len(cand)):
+        d = np.hypot(*(xy - xy[a]).T)
+        ok = (d <= EVAL_SGM_PAIR_M) & image_map._aligned(yaw, yaw[a], np.radians(90.0))
+        pairs.extend((a, int(b)) for b in np.flatnonzero(ok))   # includes (a, a)
+    pairs = np.asarray(pairs, int)
+    mode = _net_mode(np.ones(1, np.float32))
+    q = np.empty(len(pairs), np.float32)
+    t0, B = time.time(), 256
+    for k in range(0, len(pairs), B):
+        pa = pairs[k:k + B]
+        binoc = enc.encode_batch(frames[pa[:, 0]], frames[pa[:, 1]])
+        rows = np.stack([pxr.mono_row(frames[i], mode, b) for i, b in zip(pa[:, 0], binoc)])
+        q[k:k + B] = agent.q_batch(rows)
+        if (k // B) % 200 == 0:
+            print(f"[SGMPairs] {k + len(pa)}/{len(pairs)} pairs, {time.time() - t0:.0f}s", flush=True)
+    os.makedirs(os.path.dirname(os.path.abspath(EVAL_SGM_OUT)), exist_ok=True)
+    np.savez(EVAL_SGM_OUT, cand=cand, pairs=pairs, q=q, xy=xy, yaw=yaw,
+             cand_m=EVAL_SGM_CAND_M, pair_m=EVAL_SGM_PAIR_M, trace=EVAL_SGM_TRACE)
+    print(f"[SGMPairsDone] {len(cand)} candidates, {len(pairs)} pairs, q "
+          f"[{q.min():.1f}, {np.median(q):.1f}, {q.max():.1f}] -> {EVAL_SGM_OUT}", flush=True)
+
+
+def _poses(info):
+    """Start pose and goal position at reset, for offline map analysis."""
+    hp, gp = info.get("hero_pos"), info.get("goal_pos")
+    return {"start_xy": None if hp is None else [round(float(v), 3) for v in np.asarray(hp)[:2]],
+            "start_yaw": round(float(info.get("hero_yaw", 0.0) or 0.0), 4),
+            "goal_xy": None if gp is None else [round(float(v), 3) for v in np.asarray(gp)[:2]]}
+
+
 def run_eval(env, agent, pxr, server, out_root):
     """EVAL_EPISODES goal episodes, deterministic actions, faults terminal,
     every episode recorded. Writes eval.json next to the videos."""
@@ -474,8 +540,27 @@ def run_eval(env, agent, pxr, server, out_root):
 
     tag = os.path.basename(os.path.normpath(EVAL_FROM))
     out = os.path.join(out_root, f"eval_{tag}"
-                       + _eval_tag_suffix(EVAL_NOISE_SCALE, EVAL_EXPLORE, EVAL_WRONG_GOAL))
+                       + _eval_tag_suffix(EVAL_NOISE_SCALE, EVAL_EXPLORE, EVAL_WRONG_GOAL)
+                       + (f"_map-{os.path.basename(os.path.normpath(EVAL_MAP_DIR))}"
+                          if EVAL_MAP_DIR else ""))
     from vae_nav.carla_benchmark import EpisodeTracker
+    gmap = map_frames = goal_wrapper = None
+    if EVAL_MAP_DIR:
+        from vae_nav import image_map
+        from vae_nav.debit_goal_wrapper import DebitGoalWrapper
+        gmap = image_map.Graph.load(os.path.join(EVAL_MAP_DIR, f"{TOWNS[0]}.json"))
+        map_frames = np.load(os.path.join(EVAL_MAP_DIR, f"{TOWNS[0]}_frames.npy"))
+        if len(map_frames) != len(gmap.nodes):
+            raise RuntimeError(f"{EVAL_MAP_DIR}: {len(map_frames)} frames for "
+                               f"{len(gmap.nodes)} nodes")
+        goal_wrapper = env
+        while not isinstance(goal_wrapper, DebitGoalWrapper):
+            goal_wrapper = goal_wrapper.env
+        print(f"[Map] {EVAL_MAP_DIR} {TOWNS[0]}: {len(gmap.nodes)} nodes, "
+              f"{len(gmap.edges)} edges, placement={gmap.meta.get('placement')} | "
+              f"start<= {EVAL_MAP_START_M:g} m, goal<= {EVAL_MAP_GOAL_M:g} m, "
+              f"switch {EVAL_MAP_SWITCH_M:g} m, reset_hidden={EVAL_MAP_RESET_HIDDEN}",
+              flush=True)
     if EVAL_EPISODES_FILE:
         with open(EVAL_EPISODES_FILE) as fh:
             episodes = [e for e in json.load(fh) if e["town"] == TOWNS[0]
@@ -525,6 +610,7 @@ def run_eval(env, agent, pxr, server, out_root):
             rem = inf1.get("route_remaining_m")
             probes.append({
                 "town": TOWNS[0], "seed": seed, "band": BENCH_BAND,
+                **_poses(info),
                 "route_m": (None if rem is None
                             else round(float(rem) + float(np.linalg.norm(p1 - p0)), 3)),
                 "euclid_m": (None if g0 is None else round(float(np.linalg.norm(
@@ -554,6 +640,39 @@ def run_eval(env, agent, pxr, server, out_root):
                 f"{0 if EVAL_EXPLORE else 1} for {'an explore' if EVAL_EXPLORE else 'a goal'} eval")
         hidden = agent.reset_hidden(1)
         goal_blk = pxr.goal_block(info["debit_goal"])
+        start_poses = _poses(info)
+        nav = map_row = None
+        if gmap is not None:
+            hp = np.asarray(info.get("hero_pos", (0.0, 0.0)), np.float64)[:2]
+            hy = float(info.get("hero_yaw", 0.0) or 0.0)
+            s_node = gmap.nearest(hp, hy, radius=EVAL_MAP_START_M)
+            g_node = (gmap.goal_node(s_node, info["goal_pos"], radius=EVAL_MAP_GOAL_M)
+                      if info.get("goal_pos") is not None else None)
+            route = gmap.path(s_node, g_node)
+            map_row = {"map_start_node": s_node, "map_goal_node": g_node,
+                       "map_hops": None if route is None else len(route) - 1,
+                       "map_route_m": None if route is None else round(gmap.length(route), 2)}
+            if route is None:
+                why = ("no start node" if s_node is None else "no goal node"
+                       if g_node is None else "no route")
+                rows.append({"episode": k, "seed": seed, "town": TOWNS[0],
+                             "end": "unroutable", "unroutable": why, **start_poses,
+                             **{key: ep[key] for key in ("bin", "kind", "band") if key in ep},
+                             "reached": False, "reached_2m": False, "spl": 0.0,
+                             "spl_2m": 0.0, "steps": 0, "return": 0.0,
+                             "shortest_m": None, "shortest_src": "none",
+                             "straight_m": None, "path_m": 0.0, "video": None,
+                             **map_row})
+                print(f"[Eval {k + 1:3d}/{n_eps}] seed={seed} UNROUTABLE ({why})", flush=True)
+                continue
+            final_frame = goal_wrapper.latched_goal()
+            nav = image_map.Navigator(gmap, route, switch_m=EVAL_MAP_SWITCH_M)
+
+            def _aim():
+                f = final_frame if nav.final else map_frames[nav.current()]
+                obs["binoc"] = goal_wrapper.retarget(f, info)
+                return pxr.goal_block(info["debit_goal"])
+            goal_blk = _aim()
         vid.start(k)
         ret, t, end = 0.0, 0, None
         # SPL bookkeeping. p = metres actually driven; l = the shortest ROUTE
@@ -596,6 +715,10 @@ def run_eval(env, agent, pxr, server, out_root):
             pos = np.asarray(info.get("hero_pos", prev_pos), np.float64)
             if tracker is not None:
                 tracker.step(pos, float(info.get("speed_kmh", 0.0) or 0.0))
+            if nav is not None and nav.update(pos, float(info.get("hero_yaw", 0.0) or 0.0)):
+                goal_blk = _aim()
+                if EVAL_MAP_RESET_HIDDEN:
+                    hidden = agent.reset_hidden(1)
             moved = float(np.linalg.norm(pos - prev_pos))
             path_m += moved
             prev_pos = pos
@@ -621,6 +744,7 @@ def run_eval(env, agent, pxr, server, out_root):
         two = (tracker.finish(reached=reached, t_end=t, route_m=ell)
                if tracker is not None else {"reached_2m": reached, "spl_2m": spl_i})
         rows.append({"episode": k, "seed": seed, "town": TOWNS[0], "end": end,
+                     **start_poses,
                      **{key: ep[key] for key in ("bin", "kind", "band") if key in ep},
                      "reached_2m": bool(two["reached_2m"]),
                      "spl_2m": float(two["spl_2m"]),
@@ -628,7 +752,9 @@ def run_eval(env, agent, pxr, server, out_root):
                      "shortest_m": None if ell is None else round(ell, 2),
                      "shortest_src": "route" if l_route is not None else "straight",
                      "straight_m": None if l_straight is None else round(l_straight, 2),
-                     "path_m": round(path_m, 2), "spl": spl_i, "video": path})
+                     "path_m": round(path_m, 2), "spl": spl_i, "video": path,
+                     **({} if nav is None else {**map_row, "map_switches": nav.switches,
+                                                "map_final": bool(nav.final)})})
         sr = np.mean([x["reached"] for x in rows])
         spl = np.nanmean([x["spl"] for x in rows])
         print(f"[Eval {k + 1:3d}/{n_eps}] seed={seed} end={end} "
@@ -661,6 +787,8 @@ def run_eval(env, agent, pxr, server, out_root):
                "spl": spl, "spl_shortest_from_route": n_route,
                "arrival_radius_m": GOAL_RADIUS_M, "success_rate_2m": sr_2m,
                "episodes_file": EVAL_EPISODES_FILE or None,
+               "map_dir": EVAL_MAP_DIR or None,
+               "unroutable": sum(1 for x in rows if x["end"] == "unroutable"),
                "wilson95": [round(centre - half, 3), round(centre + half, 3)],
                "ends": ends, "fault_ends": "crossing/off_road/collision",
                "deterministic": EVAL_NOISE_SCALE <= 0,
@@ -856,6 +984,11 @@ def main():
     agent.compress_targ.load_state_dict(agent.compress.state_dict())
     if EVAL_FROM:
         agent.load(EVAL_FROM)          # strict: every module, name and shape
+        if EVAL_SGM_TRACE:
+            run_sgm_pairs(agent, enc, pxr)
+            env.close()
+            server.stop()
+            return
         if EVAL_TRACE:
             return run_trace(env, agent, pxr, server, OUT)
         return run_eval(env, agent, pxr, server, OUT)

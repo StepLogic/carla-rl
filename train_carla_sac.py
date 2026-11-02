@@ -77,6 +77,17 @@ REPLAY_DEVICE = os.environ.get("REPLAY_DEVICE", "cuda")
 # crossing on open road, off-road, or a collision -- the same crossing rule the
 # training reward fines, so "crossing" means the same thing in both.
 EVAL_FROM = os.environ.get("EVAL_FROM", "")
+# INIT_FROM (user 2026-11-01, "resume v30 and train for longer"): start TRAINING
+# from a checkpoint -- every module and target, both temperatures, all four
+# optimisers and the update counter. The replay buffer is NOT in a checkpoint,
+# and updating at once on a near-empty buffer destroyed goal steering in an
+# earlier warm start (corr 0.57 -> 0.04 by 50k), so INIT_FROM requires
+# LEARNING_STARTS >= INIT_MIN_LEARNING_STARTS: the loaded policy refills the
+# buffer before the first update.
+INIT_FROM = os.environ.get("INIT_FROM", "")
+INIT_MIN_LEARNING_STARTS = env_int("INIT_MIN_LEARNING_STARTS", 20_000)
+if INIT_FROM and EVAL_FROM:
+    raise ValueError("INIT_FROM (resume training) and EVAL_FROM (evaluate) are exclusive")
 EVAL_EPISODES = env_int("EVAL_EPISODES", 40)
 EVAL_SEED = env_int("EVAL_SEED", 10_000)
 # EVAL_STOCHASTIC=1 samples actions from the policy (training noise) instead
@@ -835,6 +846,19 @@ def main():
         if EVAL_TRACE:
             return run_trace(env, agent, pxr, server, OUT)
         return run_eval(env, agent, pxr, server, OUT)
+    if INIT_FROM:
+        # After load_debit_mono above, so the checkpoint's trained encoder wins.
+        if LEARNING_STARTS < INIT_MIN_LEARNING_STARTS:
+            raise ValueError(
+                f"INIT_FROM={INIT_FROM} with LEARNING_STARTS={LEARNING_STARTS}: the "
+                f"replay buffer starts empty, and updating on a near-empty one "
+                f"destroyed goal steering before. Set LEARNING_STARTS >= "
+                f"{INIT_MIN_LEARNING_STARTS} so the loaded policy refills it first.")
+        agent.load(INIT_FROM)
+        print(f"  WARM START from {INIT_FROM}: modules, targets, temperatures, "
+              f"optimisers and update counter restored; replay buffer EMPTY, so no "
+              f"update until {LEARNING_STARTS} transitions from the loaded policy",
+              flush=True)
     buf = DeviceEpisodeBuffer(row_dim, ACT_DIM, 1000 if EVAL_FROM else CAPACITY, DEVICE, seed=SEED,
                               goal_dim=pxr.PIX,
                               goal_batch_frac=env_float("GOAL_BATCH_FRAC", 0.5),

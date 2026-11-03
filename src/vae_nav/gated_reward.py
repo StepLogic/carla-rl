@@ -1426,12 +1426,13 @@ class GatedReward(Wrapper):
         return obs, info
 
     def reset(self, **kwargs):
-        out = None
+        out, soft = None, False
         if self._chain_continue:
             self._chain_continue = False
             out = self._soft_reset()
             if out is not None:
                 self._chain_goals += 1
+                soft = True
         if out is None:
             if self.chain and getattr(self, "_chain_seen", False):
                 # One line per chain: how many goals it reached and how far it drove.
@@ -1451,7 +1452,14 @@ class GatedReward(Wrapper):
             self._zone.reset()
         # DRAWN ONCE PER EPISODE, never mid-episode: the critics are per-mode, so
         # a transition's mode must be constant for its whole return.
-        self.mode = (int(self.force_mode) if self.force_mode is not None
+        #
+        # A CHAIN CONTINUATION STAYS A GOAL EPISODE. The car is mid-chain with a
+        # goal just drawn for it, so redrawing here would hand a share of the
+        # continuations to the explore arm, which has no goal at all. Harmless
+        # while EXPLORE_PROB=0 (v35, v36) and wrong the moment explore episodes
+        # exist, which is v30's 50/50 mix.
+        self.mode = (GOAL if soft
+                     else int(self.force_mode) if self.force_mode is not None
                      else (EXPLORE if self._rng.random() < self.explore_prob else GOAL))
         self._t = 0
         self._offroad_steps = 0

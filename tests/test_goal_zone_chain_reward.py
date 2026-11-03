@@ -193,3 +193,24 @@ def test_a_fault_still_wins_over_the_stall_clock(monkeypatch):
     _w, out = _run(gr, Road(junction=[False] * 10, route=[10.0] * 12, speed=0.0,
                             collide_at=2), 10)
     assert out[-1][1] and out[-1][3].get("goal_end") != "stalled"
+
+
+def test_a_chain_continuation_stays_a_goal_episode(monkeypatch):
+    """With explore episodes in the mix, redrawing the mode on a soft reset
+    would hand continuations to the explore arm, which has no goal."""
+    gr = _gr(monkeypatch, GOAL_ZONE_M=0, GOAL_CHAIN_M=200)
+    env = Road(junction=[False] * 10, route=[10.0] * 12)
+    w = gr.GatedReward(env, explore_prob=1.0, max_steps=500, seed=0, chain=True)
+    w.reset()
+    w._chain_continue = True
+    w._soft_reset = lambda: (np.zeros(4, np.float32), dict(env._info()))
+    w.reset()
+    assert w.mode == gr.GOAL
+
+
+def test_an_ordinary_reset_still_draws_the_mode(monkeypatch):
+    gr = _gr(monkeypatch, GOAL_ZONE_M=0, GOAL_CHAIN_M=200)
+    w = gr.GatedReward(Road(junction=[False] * 10, route=[10.0] * 12),
+                       explore_prob=1.0, max_steps=500, seed=0, chain=True)
+    w.reset()
+    assert w.mode == gr.EXPLORE

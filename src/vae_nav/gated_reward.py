@@ -413,6 +413,10 @@ GOAL_CHAIN_M = float(os.environ.get("GOAL_CHAIN_M", 0.0) or 0.0)
 GOAL_CHAIN_MIN_M = float(os.environ.get("GOAL_CHAIN_MIN_M", 10.0))
 GOAL_CHAIN_MAX_M = float(os.environ.get("GOAL_CHAIN_MAX_M", 30.0))
 GOAL_CHAIN_LOOKAHEAD_M = float(os.environ.get("GOAL_CHAIN_LOOKAHEAD_M", 60.0))
+# GOAL_STEP_PENALTY (user 2026-11-03: "add small per step penalty and remove
+# idle"): a flat cost on EVERY goal-mode step of GATED_GOAL_REWARD=explore, so
+# a car that lane-follows past its goal pays for the time. 0 = off.
+GOAL_STEP_PENALTY = float(os.environ.get("GOAL_STEP_PENALTY", 0.0) or 0.0)
 if GOAL_ZONE_M > 0.0 and ROUTE_PROGRESS_RATCHET:
     raise ValueError("GOAL_ZONE_M uses the plain route potential with "
                      "ROUTE_RETREAT_SCALE; ROUTE_PROGRESS_RATCHET=1 is not supported with it")
@@ -1581,6 +1585,7 @@ class GatedReward(Wrapper):
                 info["goal_zone"] = bool(in_zone)
             reward, terminated, truncated, arrived = goal_reward_explore(
                 info, _NO_DISP if in_zone else disp, self._t, self.max_steps)
+            reward -= GOAL_STEP_PENALTY
             info["is_success"] = arrived
             if self.chain and arrived:
                 self._chain_m += float(self._path_m)

@@ -28,7 +28,7 @@ def _clean_modules():
     import vae_nav.gated_reward as gr
     for k in ("GOAL_ZONE_M", "GOAL_CHAIN_M", "ROUTE_RETREAT_SCALE", "GOAL_ROUTE_ONLY",
               "GOAL_ARRIVAL_MAX_SPEED", "EXPLORE_LANE_MODE",
-              "EXPLORE_COLLISION_FATAL"):
+              "EXPLORE_COLLISION_FATAL", "GOAL_STEP_PENALTY"):
         os.environ.pop(k, None)
     importlib.reload(ler)
     importlib.reload(gr)
@@ -152,3 +152,11 @@ def test_a_fault_resets_the_chain(monkeypatch):
     w, out = _run(gr, Road(junction=[False] * 10, route=[10.0] * 12, collide_at=3), 10,
                   chain=True)
     assert out[-1][1] and not out[-1][3]["chain_continue"]
+
+
+def test_the_step_penalty_is_charged_on_every_goal_step(monkeypatch):
+    gr0 = _gr(monkeypatch, GOAL_ZONE_M=0)
+    _w, base = _run(gr0, Road(junction=[False] * 10, route=[10.0] * 12), 5)
+    gr1 = _gr(monkeypatch, GOAL_ZONE_M=0, GOAL_STEP_PENALTY=0.02)
+    _w, pen = _run(gr1, Road(junction=[False] * 10, route=[10.0] * 12), 5)
+    assert [round(a[0] - b[0], 6) for a, b in zip(base, pen)] == [0.02] * len(base)

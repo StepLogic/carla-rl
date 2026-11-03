@@ -123,7 +123,10 @@ def test_the_env_action_space_grows_a_third_dimension():
     src = open(os.path.join(ROOT, "src", "configs",
                             "train_env_config_v4_image_goal.py")).read()
     assert 'os.environ.get("STOP_ACTION", "0") == "1"' in src
-    assert "[-self.max_steer, 0.0, -1.0]" in src
+    # The throttle floor is lo_thr (MIN_THROTTLE, default 0.0) since
+    # 2026-11-03; it was the literal 0.0 before.
+    assert "[-self.max_steer, lo_thr, -1.0]" in src
+    assert 'lo_thr = getattr(self, "min_throttle", 0.0)' in src
     assert "[self.max_steer, self.max_throttle, 1.0]" in src
     assert 'self.info["stop_action"] = float(action[2]) if len(action) > 2 else 0.0' in src
 

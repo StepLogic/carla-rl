@@ -28,7 +28,8 @@ def _clean_modules():
     import vae_nav.gated_reward as gr
     for k in ("GOAL_ZONE_M", "GOAL_CHAIN_M", "ROUTE_RETREAT_SCALE", "GOAL_ROUTE_ONLY",
               "GOAL_ARRIVAL_MAX_SPEED", "EXPLORE_LANE_MODE",
-              "EXPLORE_COLLISION_FATAL", "GOAL_STEP_PENALTY"):
+              "EXPLORE_COLLISION_FATAL", "GOAL_STEP_PENALTY",
+              "STALL_TRUNCATE_STEPS", "STALL_SPEED_KMH"):
         os.environ.pop(k, None)
     importlib.reload(ler)
     importlib.reload(gr)
@@ -160,3 +161,35 @@ def test_the_step_penalty_is_charged_on_every_goal_step(monkeypatch):
     gr1 = _gr(monkeypatch, GOAL_ZONE_M=0, GOAL_STEP_PENALTY=0.02)
     _w, pen = _run(gr1, Road(junction=[False] * 10, route=[10.0] * 12), 5)
     assert [round(a[0] - b[0], 6) for a, b in zip(base, pen)] == [0.02] * len(base)
+
+
+# ---- stall truncation (STALL_TRUNCATE_STEPS, 2026-11-03) -------------------
+
+def test_a_stationary_car_truncates_instead_of_running_the_clock(monkeypatch):
+    gr = _gr(monkeypatch, GOAL_ZONE_M=0, STALL_TRUNCATE_STEPS=3, STALL_SPEED_KMH=0.5)
+    _w, out = _run(gr, Road(junction=[False] * 10, route=[10.0] * 12, speed=0.0), 10)
+    assert len(out) == 3
+    r, term, trunc, info = out[-1]
+    assert trunc and not term
+    assert info["goal_end"] == "stalled" and info["stalled"]
+
+
+def test_a_moving_car_is_never_stalled_and_the_counter_resets(monkeypatch):
+    gr = _gr(monkeypatch, GOAL_ZONE_M=0, STALL_TRUNCATE_STEPS=3, STALL_SPEED_KMH=0.5)
+    _w, out = _run(gr, Road(junction=[False] * 10, route=[10.0] * 12, speed=10.0), 6)
+    assert len(out) == 6 and not any(o[2] for o in out)
+    assert all(o[3]["stall_steps"] == 0 for o in out)
+
+
+def test_stall_truncation_is_off_by_default(monkeypatch):
+    gr = _gr(monkeypatch, GOAL_ZONE_M=0)
+    _w, out = _run(gr, Road(junction=[False] * 10, route=[10.0] * 12, speed=0.0), 6)
+    assert len(out) == 6 and not any(o[2] for o in out)
+
+
+def test_a_fault_still_wins_over_the_stall_clock(monkeypatch):
+    gr = _gr(monkeypatch, GOAL_ZONE_M=0, STALL_TRUNCATE_STEPS=2, STALL_SPEED_KMH=0.5,
+             EXPLORE_COLLISION_FATAL=1)
+    _w, out = _run(gr, Road(junction=[False] * 10, route=[10.0] * 12, speed=0.0,
+                            collide_at=2), 10)
+    assert out[-1][1] and out[-1][3].get("goal_end") != "stalled"

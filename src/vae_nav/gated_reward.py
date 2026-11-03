@@ -417,6 +417,17 @@ GOAL_CHAIN_LOOKAHEAD_M = float(os.environ.get("GOAL_CHAIN_LOOKAHEAD_M", 60.0))
 # idle"): a flat cost on EVERY goal-mode step of GATED_GOAL_REWARD=explore, so
 # a car that lane-follows past its goal pays for the time. 0 = off.
 GOAL_STEP_PENALTY = float(os.environ.get("GOAL_STEP_PENALTY", 0.0) or 0.0)
+# STALL TRUNCATION (2026-11-03). Below ~0.11 throttle this vehicle does not
+# move at all (scripts/throttle_probe.py), so a policy whose action lands in
+# that dead zone cannot change its own state and the episode is a thousand
+# steps of nothing: v36 at 600k sat still for the whole clock in 29 of 40
+# Town02 eval episodes. Once the car has been below STALL_SPEED_KMH for
+# STALL_TRUNCATE_STEPS consecutive steps the episode is TRUNCATED (a clock,
+# not a failure -- the critic must still bootstrap). 0 = off, i.e. every
+# earlier run. The real fix for the dead zone is MIN_THROTTLE; this is the
+# safety net that keeps one stuck state from eating an episode.
+STALL_TRUNCATE_STEPS = int(os.environ.get("STALL_TRUNCATE_STEPS", 0) or 0)
+STALL_SPEED_KMH = float(os.environ.get("STALL_SPEED_KMH", 0.5) or 0.5)
 if GOAL_ZONE_M > 0.0 and ROUTE_PROGRESS_RATCHET:
     raise ValueError("GOAL_ZONE_M uses the plain route potential with "
                      "ROUTE_RETREAT_SCALE; ROUTE_PROGRESS_RATCHET=1 is not supported with it")
@@ -1194,6 +1205,7 @@ class GatedReward(Wrapper):
         self._chain_m = 0.0
         self._chain_goals = 0
         self._zone = None
+        self._stall_steps = 0
         if GOAL_ZONE_M > 0.0:
             from vae_nav.goal_chain import JunctionZone
             self._zone = JunctionZone(GOAL_ZONE_M)
@@ -1434,6 +1446,7 @@ class GatedReward(Wrapper):
         obs, info = out if isinstance(out, tuple) else (out, {})
         info["chain_m"] = float(self._chain_m)
         info["chain_goals"] = int(self._chain_goals)
+        self._stall_steps = 0
         if self._zone is not None:
             self._zone.reset()
         # DRAWN ONCE PER EPISODE, never mid-episode: the critics are per-mode, so
@@ -1760,6 +1773,19 @@ class GatedReward(Wrapper):
                     else "crossing")
             elif truncated:
                 info["explore_end"] = "cap"
+
+        # STALL TRUNCATION: see STALL_TRUNCATE_STEPS.
+        if STALL_TRUNCATE_STEPS:
+            if float(info.get("speed_kmh", 0.0) or 0.0) < STALL_SPEED_KMH:
+                self._stall_steps += 1
+            else:
+                self._stall_steps = 0
+            if (self._stall_steps >= STALL_TRUNCATE_STEPS
+                    and not (terminated or truncated)):
+                truncated = True
+                info["stalled"] = True
+                info["goal_end" if self.mode == GOAL else "explore_end"] = "stalled"
+            info["stall_steps"] = int(self._stall_steps)
 
         if LANE_SHAPING:
             gamma = LANE_GAMMA_GOAL if self.mode == GOAL else LANE_GAMMA_EXPLORE

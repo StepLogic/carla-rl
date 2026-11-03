@@ -138,3 +138,43 @@ def test_warmup_samples_round_trip_into_actor_space():
     a = t.to_actor(e, _Box)
     assert a.min() >= -1 - 1e-6 and a.max() <= 1 + 1e-6
     np.testing.assert_allclose(t.to_env(a, _Box), e, atol=1e-6)
+
+
+# ---- MIN_THROTTLE: the measured dead zone (2026-11-03) ----------------------
+# scripts/throttle_probe.py: from a standstill this vehicle covers 0.00 m at
+# throttle 0.05/0.08/0.10 and 11.4 m at 0.15, so the bottom of the range is a
+# no-op and a deterministic policy that lands there is stuck for the whole
+# episode. MIN_THROTTLE lifts the box floor so no action is inert.
+
+class _ExpMin(_Exp):
+    min_throttle = 0.12
+
+
+def test_the_box_floor_follows_min_throttle(cls):
+    sp = cls.get_action_space(_ExpMin())
+    assert float(sp.low[1]) == pytest.approx(0.12)
+    assert float(sp.high[1]) == pytest.approx(1.0)
+
+
+def test_no_commanded_throttle_can_fall_into_the_dead_zone(cls):
+    for a in np.linspace(-1.5, 1.5, 31):
+        c = cls.compute_action(_ExpMin(), np.array([0.0, float(a)], np.float32), None)
+        assert c.throttle >= 0.12 - 1e-6, a
+
+
+def test_the_floor_is_off_by_default_so_earlier_runs_are_unchanged(cls):
+    assert float(_space(cls).low[1]) == pytest.approx(0.0)
+    assert _control(cls, 0.0, 0.0).throttle == pytest.approx(0.0)
+
+
+def test_the_actor_range_is_rescaled_onto_the_floored_box():
+    """to_env spreads [-1, 1] over the box, so with a floor the actor's most
+    negative throttle is the creep, not a stall."""
+    sys.path.insert(0, ROOT)
+    from train_carla_sac import to_env
+
+    class _B:
+        low = np.array([-1.0, 0.12], np.float32)
+        high = np.array([1.0, 1.0], np.float32)
+    assert to_env(np.array([0.0, -1.0], np.float32), _B())[1] == pytest.approx(0.12)
+    assert to_env(np.array([0.0, 1.0], np.float32), _B())[1] == pytest.approx(1.0)

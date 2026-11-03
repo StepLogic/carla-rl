@@ -263,6 +263,16 @@ class STBL3Experiment(BaseExperiment):
         else:
             self.max_steer = float(os.environ.get("MAX_STEER", 1.0))
             self.max_throttle = float(os.environ.get("MAX_THROTTLE", 1.0))
+        # MIN_THROTTLE: THE DEAD ZONE (measured 2026-11-03, scripts/throttle_probe.py).
+        # From a standstill this vehicle does not move at all below ~0.11
+        # throttle: 0.05, 0.08 and 0.10 all give 0.00 m and 0.0 km/h over 200
+        # steps, while 0.15 drives 11.4 m. So the bottom fifth of the actor's
+        # throttle range is a no-op, and a deterministic policy that lands
+        # there cannot change its own state -- v36 at 600k sat still for the
+        # full 1000 steps in 29 of 40 Town02 episodes. With MIN_THROTTLE set,
+        # the actor's range is rescaled onto [min, max] so no action is inert.
+        # Default 0.0: every earlier run is unchanged.
+        self.min_throttle = float(os.environ.get("MIN_THROTTLE", 0.0))
         # One action = one step of this size on the control.
         self.steer_step = float(os.environ.get("STEER_STEP", 0.01))
         self.throttle_step = float(os.environ.get("THROTTLE_STEP", 0.01))
@@ -522,13 +532,17 @@ class STBL3Experiment(BaseExperiment):
         # DECLARES it has arrived, as Habitat's imagenav STOP action does. It
         # drives nothing -- compute_action ignores it and the reward wrapper
         # reads info["stop_action"] -- so the vehicle control is unchanged.
+        # The throttle floor is part of the BOX, so the trainer's rescaling
+        # (to_env) spreads the actor's range over [min_throttle, max_throttle]
+        # and no action is a no-op. See MIN_THROTTLE in __init__.
+        lo_thr = getattr(self, "min_throttle", 0.0)
         if os.environ.get("STOP_ACTION", "0") == "1":
             return Box(
-                low=np.array([-self.max_steer, 0.0, -1.0], np.float32),
+                low=np.array([-self.max_steer, lo_thr, -1.0], np.float32),
                 high=np.array([self.max_steer, self.max_throttle, 1.0], np.float32),
                 dtype=np.float32)
         return Box(
-            low=np.array([-self.max_steer, 0.0], np.float32),
+            low=np.array([-self.max_steer, lo_thr], np.float32),
             high=np.array([self.max_steer, self.max_throttle], np.float32),
             dtype=np.float32
         )
@@ -597,7 +611,8 @@ class STBL3Experiment(BaseExperiment):
         # THROTTLE IS FORWARD-ONLY: the action IS the throttle, in [0, max]
         # (user 2026-10-19). Out-of-box values are clipped. No reverse.
         vehicle_control.reverse = False
-        vehicle_control.throttle = float(np.clip(throttle_brake, 0.0,
+        vehicle_control.throttle = float(np.clip(throttle_brake,
+                                                 getattr(self, "min_throttle", 0.0),
                                                  self.max_throttle))
         vehicle_control.brake = 0.0
         vehicle_control.hand_brake = False

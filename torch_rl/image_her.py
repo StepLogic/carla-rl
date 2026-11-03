@@ -40,7 +40,8 @@ class ImageGoalHER:
                  max_m=25.0, radius=2.0, max_speed=10.0, goal_bonus=50.0,
                  explore_bonus=10.0, potential_k=1.0, lane_fault=None,
                  env_id_offset=1000, relabel_explore=True, seed=0,
-                 speed_gate_kmh=None, positive=False, retreat_scale=None):
+                 speed_gate_kmh=None, positive=False, retreat_scale=None,
+                 zone_only=False):
         self.buf, self.enc, self.pxr = buf, encoder, pxr
         self.n_relabel, self.min_m, self.max_m = int(n_relabel), float(min_m), float(max_m)
         self.radius, self.max_speed = float(radius), float(max_speed)
@@ -58,6 +59,9 @@ class ImageGoalHER:
         if retreat_scale is None:
             retreat_scale = 0.0 if positive else 1.0
         self.retreat_scale = float(retreat_scale)
+        # GOAL_ZONE_M (gated_reward): route progress is paid only on steps in
+        # the junction zone, so a hindsight row earns it only there too.
+        self.zone_only = bool(zone_only)
         self.lane_fault = lane_fault or (lambda info: False)
         self.offset = int(env_id_offset)
         self.relabel_explore = bool(relabel_explore)
@@ -73,7 +77,7 @@ class ImageGoalHER:
         self._ep[env_id] = {"mode": int(mode), "rows": [], "next_rows": [],
                             "actions": [], "base": [], "frames": [],
                             "next_frames": [], "pos": [], "speed": [],
-                            "dirty": [], "lane_tail": []}
+                            "dirty": [], "lane_tail": [], "zone": []}
 
     def record(self, env_id, row, action, reward, term, trunc, next_row,
                info_t, info_next):
@@ -104,6 +108,7 @@ class ImageGoalHER:
         # env's row was not terminal, but the hindsight arrival row is, where
         # c(s') must be 0 -- so that one row adds gamma c(s') back (_add_leg).
         e["lane_tail"].append(float(info_next.get("lane_shaping_tail", 0.0) or 0.0))
+        e["zone"].append(bool(info_next.get("goal_zone", False)))
 
     # ---- flushing -------------------------------------------------------
     def flush(self, env_id, terminated=False, truncated=False):
@@ -191,6 +196,8 @@ class ImageGoalHER:
                 d_prev = cum[g] - (cum[t - 1] if t > 0 else 0.0)
                 d_now = cum[g] - cum[t]
                 prog = self._progress(self.k * (d_prev - d_now))
+                if self.zone_only and not e["zone"][t]:
+                    prog = 0.0
                 if (self.speed_gate is not None and prog > 0.0
                         and e["speed"][t] >= self.speed_gate):
                     prog = 0.0

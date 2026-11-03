@@ -1061,7 +1061,14 @@ class STBL3Experiment(BaseExperiment):
             self.passed_chckp = True
             self.checkpoint_count += 1
             print("Checkppoint Passed")
-            core.resample_goal()
+            # GOAL_KEEP_ON_PASS=1 (goal chaining, user 2026-11-02): arrival is
+            # still flagged, but the goal does NOT move here. The image-goal
+            # wrapper latches its frame at reset, so a resample here (a pass
+            # through the radius too fast to count) moved the planner's goal
+            # away from the image the policy was being shown. GatedReward
+            # draws chained goals itself, at a soft reset.
+            if os.environ.get("GOAL_KEEP_ON_PASS", "0") != "1":
+                core.resample_goal()
         # WRONG-DIRECTION TERMINATION, env-var gated and OFF by default.
         #
         # It fires when heading alignment to the goal drops below -0.8 inside a

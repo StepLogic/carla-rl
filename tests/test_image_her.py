@@ -37,7 +37,7 @@ def _frame(t):
 
 
 def _drive(her, speeds, *, dirty_at=None, mode=1, shaping=0.3, step_m=0.5,
-           end_reached_at=None, truncated=False):
+           end_reached_at=None, truncated=False, zone=None):
     """Feed one straight-line episode: step t moves step_m metres."""
     her.begin(0, {}, mode)
     n = len(speeds)
@@ -45,6 +45,8 @@ def _drive(her, speeds, *, dirty_at=None, mode=1, shaping=0.3, step_m=0.5,
         info_t = {"debit_cur": _frame(t)}
         info_n = {"debit_cur": _frame(t + 1), "hero_pos": np.array([step_m * (t + 1), 0.0]),
                   "speed_kmh": speeds[t], "gated_shaping": shaping}
+        if zone is not None:
+            info_n["goal_zone"] = bool(zone[t])
         if dirty_at is not None and t == dirty_at:
             info_n["collision"] = True
         r = -0.1 + shaping
@@ -241,3 +243,30 @@ def test_hindsight_retreat_uses_the_same_scale():
     assert full._progress(-2.0) == pytest.approx(-2.0)
     free = ImageGoalHER(None, None, None, potential_k=1.0, retreat_scale=0.0)
     assert free._progress(-2.0) == 0.0
+
+
+# ---- junction-zone goal reward (GOAL_ZONE_M, user 2026-11-02) ----
+
+def test_zone_only_pays_hindsight_progress_only_on_zone_steps():
+    """Live goal rows earn route progress only inside the junction zone, so a
+    hindsight row must too: off-zone rows keep just their base reward."""
+    speeds = [30.0] * 12 + [5.0] * 6
+    zone = [t % 2 == 0 for t in range(len(speeds))]
+    buf, her = _her(potential_k=1.0, zone_only=True)
+    _drive(her, speeds, shaping=0.0, step_m=1.0, zone=zone)
+    ref, her_ref = _her(potential_k=1.0)
+    _drive(her_ref, speeds, shaping=0.0, step_m=1.0, zone=zone)
+    a, b = _rewards_of(buf), _rewards_of(ref)
+    assert len(a) == len(b) > 0
+    diff = sorted({round(y - x, 6) for x, y in zip(a, b)})
+    assert diff[0] == 0.0 and set(diff) <= {0.0, 1.0} and 1.0 in diff
+
+
+def test_zone_only_off_by_default_ignores_the_flag():
+    speeds = [30.0] * 12 + [5.0] * 6
+    zone = [False] * len(speeds)
+    a, her_a = _her(potential_k=1.0)
+    _drive(her_a, speeds, shaping=0.0, step_m=1.0, zone=zone)
+    b, her_b = _her(potential_k=1.0)
+    _drive(her_b, speeds, shaping=0.0, step_m=1.0)
+    assert _rewards_of(a) == _rewards_of(b)

@@ -28,6 +28,8 @@ LANE_GEOM = (OBS_PRIV
              or float(os.environ.get("LANE_CENTRE_K", 0.0) or 0.0) > 0.0
              or float(os.environ.get("LANE_HEADING_K", 0.0) or 0.0) > 0.0)
 
+GOAL_ZONE_M = float(os.environ.get("GOAL_ZONE_M", 0.0) or 0.0)
+
 import numpy as np
 
 try:
@@ -105,6 +107,12 @@ class CoreStateWrapper(Wrapper):
             bb = getattr(hero, "bounding_box", None)
             info["hero_half_width"] = (float(bb.extent.y) if bb is not None
                                        else None)
+        # JUNCTION ZONE (GOAL_ZONE_M > 0, vae_nav.goal_chain): metres along the
+        # lane to the next junction, None beyond the zone. Off by default.
+        if GOAL_ZONE_M > 0.0:
+            from vae_nav.goal_chain import junction_ahead_m
+            info["junction_ahead_m"] = junction_ahead_m(
+                getattr(core, "map", None), tf.location, GOAL_ZONE_M)
         info["goal_pos"] = np.array([goal_loc.x, goal_loc.y], np.float64)
         info["goal_location"] = goal_loc          # the expert oracle wants the
                                                   # carla.Location itself

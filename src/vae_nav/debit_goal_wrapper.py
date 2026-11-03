@@ -196,6 +196,17 @@ class DebitGoalWrapper(Wrapper):
                 "goal camera (sensor.goal). Without it there is no image goal.")
         true_frame = _as_uint8_rgb(info["goal_rgb"]).copy()
         goal_pos = info.get("goal_pos")
+        if info.get("chain_soft_reset"):
+            # GOAL CHAINING proof: the new goal's view must differ from the last.
+            n = getattr(self, "_chain_logged", 0)
+            if n < 5 and self._goal_frame is not None:
+                self._chain_logged = n + 1
+                diff = float(np.abs(true_frame.astype(np.int16)
+                                    - self._goal_frame.astype(np.int16)).mean())
+                print(f"[ChainGoal] soft reset {n + 1}: new goal at "
+                      f"{np.round(np.asarray(goal_pos), 1).tolist() if goal_pos is not None else None}, "
+                      f"{info.get('chain_goal_stats')}, goal-frame change {diff:.1f}/255",
+                      flush=True)
         self._served_wrong = False
         if self.wrong_goal and goal_pos is not None:
             swap = self.bank.pick(goal_pos, self._rng)

@@ -148,6 +148,8 @@ def build_env(town: str, seed: int, encoder=None, port: int = 2000,
                     if eval_mode else None),
         max_steps=int(os.environ.get("GATED_EXPLORE_MAX_STEPS", 1000)),
         freeze_steps=0 if eval_mode else None,
+        # GOAL_CHAIN_M: chained goals in TRAINING only; an eval episode is one goal.
+        chain=not eval_mode,
         seed=seed)
     env = DebitGoalWrapper(
         env, encoder=encoder, state_keys=tuple(state_keys),

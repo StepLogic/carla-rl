@@ -398,6 +398,24 @@ EXPLORE_JUNCTION_BONUS = float(os.environ.get("EXPLORE_JUNCTION_BONUS", 0.0))
 EXPLORE_JUNCTION_MIN_STEPS = int(os.environ.get("EXPLORE_JUNCTION_MIN_STEPS", 5))
 EXPLORE_JUNCTION_MIN_GAP_M = float(os.environ.get("EXPLORE_JUNCTION_MIN_GAP_M", 10.0))
 _NO_DISP = np.zeros(2, np.float64)
+# JUNCTION-ZONE GOAL REWARD and GOAL CHAINING (user 2026-11-02; see
+# vae_nav.goal_chain). GOAL_ZONE_M > 0, GATED_GOAL_REWARD=explore: goal mode is
+# paid LANE FOLLOWING (explore's forward progress, fines, lane shaping)
+# everywhere, and inside the junction zone the forward progress is REPLACED by
+# route progress toward the goal (POTENTIAL_K, ROUTE_RETREAT_SCALE) -- the one
+# place where which way the car goes depends on the goal. GOAL_CHAIN_M > 0
+# (training envs only): an arrival with less than GOAL_CHAIN_M driven in the
+# chain makes the next reset SOFT -- the car stays, a new goal is drawn
+# GOAL_CHAIN_MIN_M..GOAL_CHAIN_MAX_M past the next junction -- so each goal is
+# still its own episode for the replay, HER and the GRU.
+GOAL_ZONE_M = float(os.environ.get("GOAL_ZONE_M", 0.0) or 0.0)
+GOAL_CHAIN_M = float(os.environ.get("GOAL_CHAIN_M", 0.0) or 0.0)
+GOAL_CHAIN_MIN_M = float(os.environ.get("GOAL_CHAIN_MIN_M", 10.0))
+GOAL_CHAIN_MAX_M = float(os.environ.get("GOAL_CHAIN_MAX_M", 30.0))
+GOAL_CHAIN_LOOKAHEAD_M = float(os.environ.get("GOAL_CHAIN_LOOKAHEAD_M", 60.0))
+if GOAL_ZONE_M > 0.0 and ROUTE_PROGRESS_RATCHET:
+    raise ValueError("GOAL_ZONE_M uses the plain route potential with "
+                     "ROUTE_RETREAT_SCALE; ROUTE_PROGRESS_RATCHET=1 is not supported with it")
 STEP_COST = float(os.environ.get("STEP_COST", 1.0))
 
 # PROGRESS_SPEED_GATE (user 2026-10-14: "remove speed gating"). The progress
@@ -1165,8 +1183,16 @@ class GatedReward(Wrapper):
                  max_steps=1000, delta_mode="positive", seed=0,
                  goal_kind=GOAL_REWARD_KIND, goal_max_steps=GOAL_MAX_STEPS,
                  step_cost=STEP_COST, wedge_truncate=WEDGE_TRUNCATE,
-                 freeze_steps=None):
+                 freeze_steps=None, chain=False):
         super().__init__(env)
+        self.chain = bool(chain) and GOAL_CHAIN_M > 0.0
+        self._chain_continue = False
+        self._chain_m = 0.0
+        self._chain_goals = 0
+        self._zone = None
+        if GOAL_ZONE_M > 0.0:
+            from vae_nav.goal_chain import JunctionZone
+            self._zone = JunctionZone(GOAL_ZONE_M)
         # None = GOAL_FREEZE_STEPS; the trainer passes 0 for eval envs, whose
         # episodes end at the first fault (EVAL_FAULT_ENDS) anyway.
         self.freeze_steps = int(GOAL_FREEZE_STEPS if freeze_steps is None
@@ -1348,9 +1374,64 @@ class GatedReward(Wrapper):
             return float(np.linalg.norm(self._prev - start))
         return float(self._path_m)
 
+    def _soft_reset(self):
+        """Keep the car where it arrived, draw the next goal past the next
+        junction, take one coasting tick so the goal camera renders it.
+        -> (obs, info) or None to fall back to a full reset."""
+        from vae_nav.goal_chain import goal_past_next_junction
+        base = getattr(self.env, "unwrapped", self.env)
+        core = getattr(base, "core", None)
+        if core is None or getattr(core, "hero", None) is None:
+            return None
+        loc = core.hero.get_transform().location
+        wp, st = goal_past_next_junction(core.map, loc, self._rng,
+                                         GOAL_CHAIN_MIN_M, GOAL_CHAIN_MAX_M,
+                                         lookahead_m=GOAL_CHAIN_LOOKAHEAD_M)
+        if wp is None:
+            return None
+        import carla
+        dest = carla.Transform(carla.Location(wp.transform.location.x,
+                                              wp.transform.location.y,
+                                              wp.transform.location.z + 2.0),
+                               wp.transform.rotation)
+        core.destination = dest
+        for sensor in getattr(core, "sensors", ()):
+            if hasattr(sensor, "update_location"):
+                sensor.update_location(dest)
+        core.world.tick()
+        box = self.env.action_space
+        zero = np.clip(np.zeros(box.shape, np.float32), box.low, box.high)
+        obs, _r, te, tr, info = self.env.step(zero)
+        if te or bool(info.get("collision")) or bool(info.get("off_road")):
+            return None
+        info = dict(info)
+        info["chain_soft_reset"] = True
+        info["chain_goal_stats"] = st
+        return obs, info
+
     def reset(self, **kwargs):
-        out = self.env.reset(**kwargs)
+        out = None
+        if self._chain_continue:
+            self._chain_continue = False
+            out = self._soft_reset()
+            if out is not None:
+                self._chain_goals += 1
+        if out is None:
+            if self.chain and getattr(self, "_chain_seen", False):
+                # One line per chain: how many goals it reached and how far it drove.
+                print(f"[Chain] {self._chain_arrivals} goals reached, "
+                      f"{self._chain_total_m:.0f} m driven"
+                      + (" COMPLETE" if self._chain_total_m >= GOAL_CHAIN_M
+                         and self._chain_arrivals else ""), flush=True)
+            out = self.env.reset(**kwargs)
+            self._chain_m, self._chain_goals = 0.0, 0
+            self._chain_arrivals, self._chain_total_m = 0, 0.0
+            self._chain_seen = True
         obs, info = out if isinstance(out, tuple) else (out, {})
+        info["chain_m"] = float(self._chain_m)
+        info["chain_goals"] = int(self._chain_goals)
+        if self._zone is not None:
+            self._zone.reset()
         # DRAWN ONCE PER EPISODE, never mid-episode: the critics are per-mode, so
         # a transition's mode must be constant for its whole return.
         self.mode = (int(self.force_mode) if self.force_mode is not None
@@ -1492,9 +1573,23 @@ class GatedReward(Wrapper):
             self._crossing_steps += int(goal_lane_fault(info))
             # THE EXPLORE CAP, not goal_max_steps: the two modes share one
             # setup and differ only in what counts as arriving.
+            in_zone = False
+            if self._zone is not None:
+                in_zone = self._zone.update(
+                    self._path_m, bool(info.get("in_junction", False)),
+                    info.get("junction_ahead_m"))
+                info["goal_zone"] = bool(in_zone)
             reward, terminated, truncated, arrived = goal_reward_explore(
-                info, disp, self._t, self.max_steps)
+                info, _NO_DISP if in_zone else disp, self._t, self.max_steps)
             info["is_success"] = arrived
+            if self.chain and arrived:
+                self._chain_m += float(self._path_m)
+                self._chain_arrivals = getattr(self, "_chain_arrivals", 0) + 1
+                self._chain_continue = self._chain_m < GOAL_CHAIN_M
+            self._chain_total_m = float(self._chain_m + (0.0 if arrived else self._path_m))
+            info["chain_m"] = float(self._chain_m + (0.0 if arrived else self._path_m))
+            info["chain_goals"] = int(self._chain_goals)
+            info["chain_continue"] = bool(self._chain_continue)
             # A DENSE GOAL TERM, GOAL MODE ONLY (POTENTIAL_K; 0 = off, which is
             # v52 and the default). My decision 2026-10-14 under the user's
             # reward delegation, after v6: the explore reward is identical in
@@ -1528,15 +1623,18 @@ class GatedReward(Wrapper):
                     self._best_remaining = _r
                 reward += _shaped
             elif POTENTIAL_K and not (terminated or truncated):
-                if _rem is not None and self._prev_remaining is not None:
+                # GOAL_ZONE_M: route progress is paid only in the junction zone.
+                if (_rem is not None and self._prev_remaining is not None
+                        and (self._zone is None or in_zone)):
                     _g = _BILL_GAMMA if SHAPING_DISCOUNTED else 1.0
                     _shaped = POTENTIAL_K * (self._prev_remaining - _g * float(_rem))
                     # THE SPEED GATE (v27). Under GOAL_ROUTE_ONLY this term IS
                     # goal mode's progress, so PROGRESS_SPEED_GATE gates it like
                     # explore's -- but only what it PAYS. Moving away is charged
                     # at any speed, or "approach slowly, retreat fast" would be
-                    # a loop that earns.
-                    if (GOAL_ROUTE_ONLY and _shaped > 0.0 and not _pays_progress(
+                    # a loop that earns. In the junction zone it replaces the
+                    # lane progress, so it is gated the same way.
+                    if ((GOAL_ROUTE_ONLY or in_zone) and _shaped > 0.0 and not _pays_progress(
                             float(info.get("speed_factor", 0.0) or 0.0))):
                         _shaped = 0.0
                     if _shaped < 0.0 and ROUTE_RETREAT_SCALE != 1.0:

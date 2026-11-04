@@ -45,7 +45,15 @@ stand **as my calls**, open to correction:
   (`logs/bench_long_episodes.json`). Their numbers must be reported as
   training-town numbers from now on.
 - **Success bar** (section 6).
-- **Operating speed:** pending the user's answer.
+- **Operating speed: 15 km/h (user, 2026-11-04).** The expert's target speed
+  while recording and in the M0 benchmark. The actor is not given its speed,
+  so the clone copies the expert's. 15 km/h matches v30's measured eval speed
+  (~14 km/h at 300k), which keeps lane-keeping comparisons fair. It also leaves
+  a no-brake coast of about 3 m down to the 10 km/h arrival limit.
+  - The final approach to the goal stays at the expert's own 6 km/h
+    (`BasicAgentExpert.FINAL_APPROACH_KMH`).
+  - The M5 fine-tune may raise speed where it is safe; the reward pays
+    progress up to 20 km/h.
 
 Fixed by the user earlier, and unchanged here:
 - Encoder: frozen DEBiT-tiny binocular plus the trained monocular ResNet.

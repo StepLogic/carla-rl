@@ -309,3 +309,72 @@ def test_retarget_refuses_a_frame_of_another_size():
     _obs, info = env.reset()
     with pytest.raises(ValueError, match="image size"):
         env.retarget(_frame(5, size=64), info)
+
+
+# ---- the goal frame follows a goal the env moved (GOAL_RELATCH_ON_MOVE) ----
+# The env resamples the goal when the car passes it too fast; in v30 that left
+# the policy rewarded for a place that did not match the image it was shown.
+
+class _MovingGoal(_Env):
+    """Moves its goal (and the view it renders) at step `move_at`."""
+
+    def __init__(self, move_at=2, **kw):
+        super().__init__(**kw)
+        self.move_at = int(move_at)
+
+    def _obs_info(self):
+        obs, info = super()._obs_info()
+        if self.t >= self.move_at:
+            info["goal_pos"] = np.asarray([50.0, 0.0])
+            info["goal_rgb"] = _frame(77)
+        return obs, info
+
+
+def _reload(monkeypatch, **env):
+    import importlib
+    for k, v in env.items():
+        monkeypatch.setenv(k, str(v))
+    import vae_nav.debit_goal_wrapper as m
+    return importlib.reload(m)
+
+
+def test_the_frame_follows_a_goal_the_env_moved(monkeypatch):
+    m = _reload(monkeypatch, GOAL_RELATCH_ON_MOVE=1)
+    env = m.DebitGoalWrapper(_MovingGoal(move_at=2, goal_fill=200), encoder=_Enc())
+    _obs, info = env.reset()
+    assert int(info[m.GOAL_KEY][0, 0, 0]) == 200
+    for _ in range(3):
+        obs, _r, _t, _tr, info = env.step(np.zeros(2, np.float32))
+    assert int(info[m.GOAL_KEY][0, 0, 0]) == 77
+    assert info["goal_relatched"] == 1 and obs["binoc"][0] == 77.0
+
+
+def test_a_goal_that_does_not_move_is_never_relatched(monkeypatch):
+    m = _reload(monkeypatch, GOAL_RELATCH_ON_MOVE=1)
+    env = m.DebitGoalWrapper(_Env(drift=True, goal_fill=200), encoder=_Enc())
+    env.reset()
+    for _ in range(4):
+        _o, _r, _t, _tr, info = env.step(np.zeros(2, np.float32))
+    assert int(info[m.GOAL_KEY][0, 0, 0]) == 200 and info["goal_relatched"] == 0
+
+
+def test_relatching_is_off_by_default(monkeypatch):
+    m = _reload(monkeypatch)
+    env = m.DebitGoalWrapper(_MovingGoal(move_at=1, goal_fill=200), encoder=_Enc())
+    env.reset()
+    for _ in range(3):
+        _o, _r, _t, _tr, info = env.step(np.zeros(2, np.float32))
+    assert int(info[m.GOAL_KEY][0, 0, 0]) == 200 and info["goal_relatched"] == 0
+
+
+def test_a_wrong_goal_episode_is_never_relatched(monkeypatch):
+    """The mismatch IS the control: following the goal would destroy it."""
+    m = _reload(monkeypatch, GOAL_RELATCH_ON_MOVE=1)
+    env = m.DebitGoalWrapper(_MovingGoal(move_at=2, goal_fill=200), encoder=_Enc(),
+                             wrong_goal=True)
+    env.bank.add(_frame(9), np.array([900.0, 900.0]))
+    _o, info = env.reset()
+    assert info["served_wrong_goal"] and int(info[m.GOAL_KEY][0, 0, 0]) == 9
+    for _ in range(3):
+        _o, _r, _t, _tr, info = env.step(np.zeros(2, np.float32))
+    assert int(info[m.GOAL_KEY][0, 0, 0]) == 9 and info["goal_relatched"] == 0

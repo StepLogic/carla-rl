@@ -73,6 +73,17 @@ def _as_uint8_rgb(frame) -> np.ndarray:
 # Pools only ever hold views the training envs themselves rendered, so no
 # held-out eval scenery reaches training.
 FOREIGN_GOAL_EXPLORE = os.environ.get("FOREIGN_GOAL_EXPLORE", "0") == "1"
+# GOAL_RELATCH_ON_MOVE (2026-11-03). The env resamples the goal when the car
+# passes within the arrival radius too fast to count (carla_core.resample_goal),
+# which in v30 happened in roughly one goal episode in two. The goal FRAME was
+# latched at reset and never followed, so for the rest of such an episode the
+# policy was rewarded for driving to a place that did not match the image it
+# was shown -- label noise on exactly the signal this arm is meant to learn.
+# With this on, the frame is re-latched whenever the goal moves more than
+# RELATCH_MIN_M, so image and planner agree. Never in a wrong-goal or
+# foreign-goal episode: there the mismatch IS the control. Default off.
+GOAL_RELATCH_ON_MOVE = os.environ.get("GOAL_RELATCH_ON_MOVE", "0") == "1"
+RELATCH_MIN_M = float(os.environ.get("GOAL_RELATCH_MIN_M", 1.0))
 FOREIGN_POOL = {}
 _FOREIGN_LOCK = threading.Lock()
 _FOREIGN_CAP = 256
@@ -159,6 +170,8 @@ class DebitGoalWrapper(Wrapper):
         self.bank = WrongGoalBank(min_m=float(wrong_goal_min_m))
         self._rng = np.random.default_rng(int(seed))
         self._goal_frame = None
+        self._goal_pos = None            # pose the frame was latched for
+        self._relatched = 0
         self._served_wrong = False
         self.town = town
         self._served_foreign = False
@@ -174,6 +187,22 @@ class DebitGoalWrapper(Wrapper):
         self.observation_space = spaces.Dict(inner)
 
     # ----------------------------------------------------------------- frames --
+    def _maybe_relatch(self, info):
+        """Follow a goal the env moved mid-episode (GOAL_RELATCH_ON_MOVE)."""
+        if not GOAL_RELATCH_ON_MOVE or self._served_wrong or self._served_foreign:
+            return False
+        gp = info.get("goal_pos")
+        if gp is None or self._goal_pos is None or "goal_rgb" not in info:
+            return False
+        if float(np.linalg.norm(np.asarray(gp, np.float64)[:2] - self._goal_pos)) < RELATCH_MIN_M:
+            return False
+        self._goal_frame = _as_uint8_rgb(info["goal_rgb"]).copy()
+        self._goal_pos = np.asarray(gp, np.float64)[:2].copy()
+        self._relatched += 1
+        # The new view is a real goal view, so it is an honest distractor later.
+        self.bank.add(self._goal_frame, gp)
+        return True
+
     def _frames(self, info):
         """(current, goal) uint8 frames for this step.
 
@@ -208,6 +237,8 @@ class DebitGoalWrapper(Wrapper):
                       f"{info.get('chain_goal_stats')}, goal-frame change {diff:.1f}/255",
                       flush=True)
         self._served_wrong = False
+        self._goal_pos = (None if goal_pos is None
+                          else np.asarray(goal_pos, np.float64)[:2].copy())
         if self.wrong_goal and goal_pos is not None:
             swap = self.bank.pick(goal_pos, self._rng)
             if swap is not None:
@@ -239,11 +270,13 @@ class DebitGoalWrapper(Wrapper):
 
     # ------------------------------------------------------------ observation --
     def _observation(self, obs, info):
+        self._maybe_relatch(info)
         cur, goal = self._frames(info)
         info[CUR_KEY], info[GOAL_KEY] = cur, goal
         info["served_wrong_goal"] = bool(self._served_wrong)
         info["served_foreign_goal"] = bool(self._served_foreign)
         info["foreign_goal_fallback"] = bool(self._foreign_fallback)
+        info["goal_relatched"] = int(self._relatched)
         out = {k: np.asarray(obs[k], np.float32) for k in self.state_keys
                if k in obs}
         missing = [k for k in self.state_keys if k not in obs]
@@ -295,6 +328,7 @@ class DebitGoalWrapper(Wrapper):
 
     def reset(self, **kwargs):
         obs, info = self.env.reset(**kwargs)
+        self._relatched = 0
         self._latch_goal(info)
         return self._observation(obs, info), info
 

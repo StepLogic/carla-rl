@@ -361,10 +361,12 @@ class BasicAgentExpert(ExpertOracle):
         self._agent.ignore_vehicles(True)
         self._goal_loc = None
         self._planned = False
+        self._explore = False            # set_explore_plan sets it, reset clears it
 
     def reset(self, goal_location):
         self.last_plan_error = None
         self._goal_loc = goal_location
+        self._explore = False
         try:
             # PLAN FROM WHERE THE CAR IS NOW, NOT WHERE THE PLANNER LAST WAS.
             # BasicAgent.set_destination(goal) with no start_location traces
@@ -398,17 +400,7 @@ class BasicAgentExpert(ExpertOracle):
                           f"by a lane-following one ({len(lf)} waypoints)",
                           flush=True)
             self._agent.set_global_plan(route, clean_queue=True)
-            # PID memories are per-episode too: the derivative/integral
-            # buffers otherwise carry the last episode's final error into the
-            # first steps of this one.
-            # (0.9.15 names them differently: longitudinal _error_buffer,
-            # lateral _e_buffer.)
-            ctrl = lp._vehicle_controller
-            for c in (ctrl._lon_controller, ctrl._lat_controller):
-                for attr in ("_error_buffer", "_e_buffer"):
-                    buf = getattr(c, attr, None)
-                    if buf is not None:
-                        buf.clear()
+            self._clear_pid()
             n = len(lp._waypoints_queue)
         except Exception as e:  # noqa: BLE001
             self.last_plan_error = f"{type(e).__name__}: {e}"
@@ -438,11 +430,73 @@ class BasicAgentExpert(ExpertOracle):
             self.last_plan_error = "BasicAgent produced an empty route"
         return n
 
+    def _clear_pid(self):
+        """PID memories are per-episode too: the derivative/integral buffers
+        otherwise carry the last episode's final error into the first steps of
+        this one. (0.9.15 names them differently: longitudinal _error_buffer,
+        lateral _e_buffer.)"""
+        ctrl = self._agent.get_local_planner()._vehicle_controller
+        for c in (ctrl._lon_controller, ctrl._lat_controller):
+            for attr in ("_error_buffer", "_e_buffer"):
+                buf = getattr(c, attr, None)
+                if buf is not None:
+                    buf.clear()
+
+    def set_explore_plan(self, waypoints):
+        """EXPLORE MODE (imitation-first plan, 2026-11-04): follow `waypoints`
+        (from expert_route.explore_route) as a lane-following plan. There is no
+        goal, so no final approach: act() returns None once the plan is done.
+        Returns the queue length."""
+        from agents.navigation.local_planner import RoadOption
+        self.last_plan_error = None
+        self._goal_loc = None
+        self._explore = True
+        try:
+            self._agent.set_global_plan(
+                [(w, RoadOption.LANEFOLLOW) for w in waypoints], clean_queue=True)
+            self._clear_pid()
+            n = len(self._agent.get_local_planner()._waypoints_queue)
+        except Exception as e:  # noqa: BLE001
+            self.last_plan_error = f"{type(e).__name__}: {e}"
+            n = 0
+        self._planned = n > 0
+        if not self._planned and self.last_plan_error is None:
+            self.last_plan_error = "empty explore plan"
+        return n
+
+    def replan_if_off_route(self, max_off_m=3.0):
+        """DAgger relabelling (imitation-first plan): BasicAgent only plans at
+        reset and then follows that plan, so when the POLICY drives and drifts
+        more than `max_off_m` from it, the expert replans from the car's actual
+        pose -- the goal again in goal mode, the same branch rule for the
+        remaining distance in explore mode. A finished plan is left alone.
+        Returns whether it replanned."""
+        from vae_nav.expert_route import explore_route, needs_replan
+        if not self._planned:
+            return False
+        q = self._agent.get_local_planner()._waypoints_queue
+        if not len(q):
+            return False
+        xy = np.array([[w.transform.location.x, w.transform.location.y]
+                       for w, _ in q], np.float64).reshape(-1, 2)
+        loc = self._vehicle.get_location()
+        if not needs_replan(xy, (loc.x, loc.y), max_off_m):
+            return False
+        if getattr(self, "_explore", False):
+            remaining = max(SAMPLING_RESOLUTION_M * len(q), SAMPLING_RESOLUTION_M)
+            self.set_explore_plan(explore_route(self._map.get_waypoint(loc), remaining))
+        else:
+            self.reset(self._goal_loc)
+        return True
+
     def act(self):
         if not self._planned:
             return None
         if not self._agent.done():
             return self._to_action(self._agent.run_step())
+        if self._goal_loc is None:
+            # An explore plan has no goal to approach: it is simply finished.
+            return None
 
         # ROUTE END REACHED, GOAL NOT. The planner snaps the route's end to a
         # node up to one sampling step short of the goal, so crawl the last

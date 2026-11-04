@@ -31,6 +31,13 @@ def episode_plan(seed):
     return {"mode": 1 if seed % 2 == 0 else 0, "sigma": SIGMAS[(seed // 2) % len(SIGMAS)]}
 
 
+def effective_sigma(sigma, dry):
+    """The recovery-noise level actually applied. A dry run is the M0 gate,
+    which measures the expert itself, so it runs without noise: in the first
+    diagnostic (job 463139) every fault came from a sigma=0.2 episode."""
+    return 0.0 if dry else float(sigma)
+
+
 def dart_action(a_env, sigma, rng, low, high):
     """The executed action: N(0, sigma) added to the steering (index 0) only,
     clipped to the env box. A copy, and exactly `a_env` when sigma == 0."""

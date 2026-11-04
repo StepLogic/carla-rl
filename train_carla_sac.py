@@ -156,6 +156,23 @@ EVAL_MAP_SWITCH_M = float(os.environ.get("EVAL_MAP_SWITCH_M", 4.0))
 EVAL_MAP_START_M = float(os.environ.get("EVAL_MAP_START_M", 8.0))
 EVAL_MAP_GOAL_M = float(os.environ.get("EVAL_MAP_GOAL_M", 8.0))
 EVAL_MAP_RESET_HIDDEN = os.environ.get("EVAL_MAP_RESET_HIDDEN", "0") == "1"
+# EXPERT RECORDING (imitation-first plan, 2026-11-04; see run_record and
+# torch_rl.expert_record). EXPERT_RECORD=1 drives CARLA's BasicAgent (or, with
+# EXPERT_DRIVER=policy and EVAL_FROM, the policy, relabelled by the expert:
+# DAgger) through the unchanged env stack, one .npz per episode under
+# EXPERT_RECORD_ROOT/<town>/. EXPERT_RECORD_DRY=1 records nothing and only
+# reports the M0 gate (arrivals, metres between failures).
+EXPERT_RECORD = os.environ.get("EXPERT_RECORD", "0") == "1"
+EXPERT_DRIVER = os.environ.get("EXPERT_DRIVER", "expert")
+EXPERT_RECORD_DRY = os.environ.get("EXPERT_RECORD_DRY", "0") == "1"
+EXPERT_RECORD_EPISODES = env_int("EXPERT_RECORD_EPISODES", 200)
+EXPERT_SEED0 = env_int("EXPERT_SEED0", 100000)
+EXPERT_TARGET_KMH = env_float("EXPERT_TARGET_KMH", 15.0)
+EXPERT_EXPLORE_MIN_M = env_float("EXPERT_EXPLORE_MIN_M", 100.0)
+EXPERT_EXPLORE_MAX_M = env_float("EXPERT_EXPLORE_MAX_M", 200.0)
+EXPERT_REPLAN_M = env_float("EXPERT_REPLAN_M", 3.0)
+EXPERT_RECORD_ROOT = os.environ.get(
+    "EXPERT_RECORD_ROOT", os.path.expanduser("~/carla-rl/checkpoints/il_data"))
 # HIDE_MODE_BIT (v34, user 2026-11-02): the NETWORK always sees mode = 1. With
 # FOREIGN_GOAL_EXPLORE, explore episodes carry another town's goal image, so the
 # image -- not the bit -- has to say whether the goal is reachable here. The
@@ -191,6 +208,15 @@ TRACE_STALL_M = env_float("TRACE_STALL_M", 1500.0)
 # car drives on; off-road and collisions still end the segment. Pair it with
 # slurm/trace_nocross.env, which stops the ENV terminating on crossings too.
 TRACE_END_ON_CROSSING = os.environ.get("TRACE_END_ON_CROSSING", "1") == "1"
+
+
+def ramp_needs_parallel(ramp_start, parallel, eval_from, expert_record) -> bool:
+    """True when a junction-goal ramp is configured for a TRAINING run that is
+    not on the parallel loop, the only loop that implements it. Eval and
+    expert recording keep the overlay's fixed junction fraction, so they are
+    exempt (recording tripped this in its first smoke, job 463137)."""
+    return (ramp_start is not None and not parallel and not eval_from
+            and not expert_record)
 
 
 def use_parallel(parallel_towns: bool, eval_from: str, n_towns: int) -> bool:
@@ -523,6 +549,165 @@ def run_sgm_pairs(agent, enc, pxr):
           f"[{q.min():.1f}, {np.median(q):.1f}, {q.max():.1f}] -> {EVAL_SGM_OUT}", flush=True)
 
 
+def run_record(env, agent, pxr, server, out_root):
+    """Record expert (or DAgger) episodes for imitation; see EXPERT_RECORD.
+
+    Each episode: the mode and recovery-noise level come from episode_plan(seed);
+    goal episodes drive to the env's own goal, explore episodes follow
+    expert_route.explore_route for EXPERT_EXPLORE_MIN_M..MAX_M metres. Every
+    step stores the 128 px frame and binoc the policy would see, the executed
+    action and the expert's label (actor space), the reward, speed and pose.
+    An episode ends on the first eval-rule fault, an arrival, the env's own
+    end, or (explore) the expert's plan running out. Writes record_summary.json
+    (per-episode list + this town's M0 gate) and prints [RecordDone]."""
+    import json
+    import random as _random
+    import torch
+    from torch_rl.expert_data import save_episode
+    from torch_rl.expert_record import (assert_recordable_town, effective_sigma,
+                                        episode_plan, gate_report, keep_episode,
+                                        record_step)
+    from vae_nav.expert_oracle import BasicAgentExpert
+    from vae_nav.expert_route import explore_route
+    from vae_nav.gated_reward import GatedReward
+
+    town = TOWNS[0]
+    assert_recordable_town(town)
+    if EXPERT_DRIVER not in ("expert", "policy"):
+        raise ValueError(f"EXPERT_DRIVER must be expert|policy, got {EXPERT_DRIVER!r}")
+    gated = env
+    while not isinstance(gated, GatedReward):
+        gated = gated.env
+    core = getattr(env, "unwrapped", env).core
+    box = env.action_space
+    low, high = box.low.astype(np.float32), box.high.astype(np.float32)
+    root = os.path.join(EXPERT_RECORD_ROOT, town)
+    rng = np.random.default_rng(EXPERT_SEED0)
+    print(f"=== RECORD {town} | driver={EXPERT_DRIVER} | {EXPERT_RECORD_EPISODES} episodes "
+          f"from seed {EXPERT_SEED0} | expert {EXPERT_TARGET_KMH:g} km/h, explore "
+          f"{EXPERT_EXPLORE_MIN_M:g}-{EXPERT_EXPLORE_MAX_M:g} m | "
+          + ("DRY (gate only)" if EXPERT_RECORD_DRY else f"-> {root}"), flush=True)
+
+    expert, hero_id = None, None
+    episodes, total, kept = [], 0, 0
+    for k in range(EXPERT_RECORD_EPISODES):
+        seed = EXPERT_SEED0 + k
+        plan = episode_plan(seed)
+        sigma = effective_sigma(plan["sigma"], EXPERT_RECORD_DRY)
+        gated.force_mode = int(plan["mode"])
+        _random.seed(seed)
+        np.random.seed(seed)
+        torch.manual_seed(seed)
+        obs, info = env.reset(seed=seed)
+        mode = int(gated.mode)
+        if expert is None or core.hero.id != hero_id:
+            expert = BasicAgentExpert(core.hero, core.map, box,
+                                      target_speed_kmh=EXPERT_TARGET_KMH)
+            hero_id = core.hero.id
+        if mode == 1:
+            expert.reset(info["goal_location"])
+        else:
+            length = float(rng.uniform(EXPERT_EXPLORE_MIN_M, EXPERT_EXPLORE_MAX_M))
+            expert.set_explore_plan(explore_route(
+                core.map.get_waypoint(core.hero.get_location()), length))
+        hidden = goal_blk = None
+        if EXPERT_DRIVER == "policy":
+            hidden = agent.reset_hidden(1)
+            goal_blk = pxr.goal_block(info["debit_goal"])
+        rec = {"frames": [pxr.to_frame(info["debit_cur"], pxr.MONO_IMG).astype(np.uint8)],
+               "binoc": [np.asarray(obs["binoc"], np.float16)],
+               "act_exec": [], "act_label": [], "reward": [], "speed": [], "pos": []}
+        goal_frame = info["debit_goal"]
+        prev = np.asarray(info.get("hero_pos", (0.0, 0.0)), np.float64)[:2]
+        path_m, end, terminal, truncated = 0.0, None, False, False
+        # Goal episodes: how close the expert got and how fast it was going there
+        # (the same EpisodeTracker the eval uses) -- the M0 gate's diagnosis.
+        tracker = None
+        if mode == 1 and info.get("goal_pos") is not None:
+            from vae_nav.carla_benchmark import EpisodeTracker
+            tracker = EpisodeTracker(info["goal_pos"], prev, max_speed=float(
+                os.environ.get("GOAL_ARRIVAL_MAX_SPEED", 10.0)),
+                radius=GOAL_RADIUS_M, radius_2m=2.0)
+        while end is None:
+            if EXPERT_DRIVER == "policy":
+                expert.replan_if_off_route(EXPERT_REPLAN_M)
+            a_exp = expert.act()
+            if a_exp is None:
+                end = "route_done" if (mode == 0 and rec["act_exec"]) else "no_plan"
+                truncated = True
+                break
+            a_pol = None
+            if EXPERT_DRIVER == "policy":
+                row = pxr.mono_row(info["debit_cur"], _net_mode(obs["mode"]), obs["binoc"])
+                a_act, hidden = agent.act(row, hidden, goal=goal_blk, deterministic=True)
+                a_pol = to_env(np.asarray(a_act, np.float32), box)
+            a_exec, a_label = record_step(EXPERT_DRIVER, a_pol, a_exp, sigma,
+                                          rng, low, high)
+            obs, r, term, trunc, info = env.step(a_exec)
+            pos = np.asarray(info.get("hero_pos", prev), np.float64)[:2]
+            path_m += float(np.linalg.norm(pos - prev))
+            prev = pos
+            if tracker is not None:
+                tracker.step(pos, float(info.get("speed_kmh", 0.0) or 0.0))
+            rec["act_exec"].append(to_actor(a_exec, box))
+            rec["act_label"].append(to_actor(a_label, box))
+            rec["reward"].append(float(r))
+            rec["speed"].append(float(info.get("speed_kmh", 0.0) or 0.0))
+            rec["pos"].append(pos.astype(np.float32))
+            rec["frames"].append(pxr.to_frame(info["debit_cur"], pxr.MONO_IMG).astype(np.uint8))
+            rec["binoc"].append(np.asarray(obs["binoc"], np.float16))
+            fault = _fault(info)
+            if fault:
+                end, terminal = fault, True
+            elif info.get("is_success") or info.get("goal_end") == "reached":
+                end, terminal = "reached", True
+            elif term:
+                end = str(info.get("goal_end") or info.get("explore_end") or "term")
+                terminal = True
+            elif trunc:
+                end, truncated = "clock", True
+        n = len(rec["act_exec"])
+        total += n
+        approach = {}
+        if tracker is not None:
+            fin = tracker.finish(reached=end == "reached", t_end=n, route_m=None)
+            approach = {k: fin[k] for k in ("closest_m", "speed_at_closest_kmh",
+                                            "entry_speed_kmh", "min_speed_inside_kmh")}
+        episodes.append({"seed": seed, "mode": mode, "sigma": sigma, "end": end,
+                         "path_m": round(path_m, 2), "steps": n, **approach})
+        if keep_episode(n) and not EXPERT_RECORD_DRY:
+            save_episode(os.path.join(root, f"ep_{seed}.npz"), {
+                "frames": np.stack(rec["frames"]), "binoc": np.stack(rec["binoc"]),
+                "act_exec": np.asarray(rec["act_exec"], np.float32),
+                "act_label": np.asarray(rec["act_label"], np.float32),
+                "reward": np.asarray(rec["reward"], np.float32),
+                "speed": np.asarray(rec["speed"], np.float32),
+                "pos": np.asarray(rec["pos"], np.float32).reshape(-1, 2),
+                "mode": np.int8(mode), "terminal": terminal, "truncated": truncated,
+                "goal": pxr.goal_block(goal_frame), "sigma": np.float32(sigma),
+                "driver": EXPERT_DRIVER, "end": end, "town": town, "seed": np.int64(seed)})
+            kept += n
+        print(f"[Record {k + 1}/{EXPERT_RECORD_EPISODES}] seed={seed} "
+              f"{'goal' if mode == 1 else 'explore'} sigma={sigma:g} end={end} "
+              f"steps={n} driven={path_m:.1f} m"
+              + (f" closest={approach['closest_m']} m at {approach['speed_at_closest_kmh']} km/h"
+                 f" entry={approach['entry_speed_kmh']}" if approach else "")
+              + f" | total {total} steps", flush=True)
+
+    gate = gate_report([e for e in episodes if e["mode"] == 1],
+                       [e for e in episodes if e["mode"] == 0])
+    summary = {"town": town, "driver": EXPERT_DRIVER, "dry": EXPERT_RECORD_DRY,
+               "seed0": EXPERT_SEED0, "target_kmh": EXPERT_TARGET_KMH,
+               "steps": total, "kept_steps": kept, "gate": gate, "episodes": episodes}
+    os.makedirs(out_root, exist_ok=True)
+    with open(os.path.join(out_root, "record_summary.json"), "w") as fh:
+        json.dump(summary, fh, indent=1)
+    print("[RecordDone] " + json.dumps({"town": town, "steps": total, "kept_steps": kept,
+                                        "gate": gate}), flush=True)
+    env.close()
+    server.stop()
+
+
 def _poses(info):
     """Start pose and goal position at reset, for offline map analysis."""
     hp, gp = info.get("hero_pos"), info.get("goal_pos")
@@ -811,108 +996,18 @@ def run_eval(env, agent, pxr, server, out_root):
     server.stop()
 
 
-def main():
-    import torch
-
+def build_agent(binoc_dim, act_dim):
+    """The learner exactly as main() configures it, with DEBiT's pretrained
+    monocular trunk loaded into both the online and the target encoder.
+    Factored out of main() (2026-11-04, imitation-first plan) so behaviour
+    cloning can build the same network without starting CARLA. The trunk
+    load report is attached as agent.mono_report for the preflight line."""
     from torch_rl import pixel_rows as pxr
-    from torch_rl.carla_env_build import build_env
-    from torch_rl.carla_server import CarlaServer
-    from torch_rl.debit_encoder import DebitTinyEncoder
-    from torch_rl.debit_mono import describe_load, load_debit_mono
-    from torch_rl.debit_visual import IMG
-    from torch_rl.episode_buffer import DeviceEpisodeBuffer
-    from torch_rl.episode_video import EpisodeVideo
+    from torch_rl.debit_mono import load_debit_mono
     from torch_rl.gated_recurrent_sac import (GatedRecurrentSAC,
                                               GatedRecurrentSACConfig)
-
-    if DEVICE == "cuda" and not torch.cuda.is_available():
-        raise SystemExit("no CUDA: this arm is GPU-resident, so this is fatal")
-    os.makedirs(OUT, exist_ok=True)
-
-    # DEBiT IS FROZEN (user 2026-10-14), so no adapters are added and its 3136-d
-    # binocular output is a fixed function of (view, goal). That lets the ENV
-    # compute it once per step and store it in the row, instead of the learner
-    # re-encoding the whole chunk twice per update at 209 ms. The trainable
-    # visual path is the monocular ResNet, from scratch, which is why the row
-    # still carries pixels.
-    enc = DebitTinyEncoder(TINY, device=DEVICE, half=False)
-
-    # THE TRAINER OWNS THE SIMULATOR, so a town change can restart it. Closing
-    # the env and rebuilding against a live server leaves the old sensors'
-    # streams dangling and the next client cannot attach (job 453315: the first
-    # map change worked, the next rebuild hung while the server flooded "Invalid
-    # session: no stream available"). A restart cannot inherit that state.
-    town_i = 0
-    parallel = use_parallel(PARALLEL_TOWNS, EVAL_FROM, len(TOWNS))
-    # JUNCTION RAMP (torch_rl.junction_ramp) lives in the parallel loop only,
-    # and never in eval, whose goal set must stay at the overlay's fraction.
-    if JUNCTION_RAMP_START is not None and not parallel and not EVAL_FROM:
-        raise ValueError("JUNCTION_RAMP_START needs PARALLEL_TOWNS=1: the "
-                         "serial loop has no junction ramp")
-    ports = [PORT + 50 * i for i in range(len(TOWNS))] if parallel else [PORT]
-    servers = []
-
-    def _start_server(i, port):
-        srv = CarlaServer(port, quality=os.environ.get("CARLA_QUALITY", "Epic"),
-                          log_dir=os.path.join(OUT, "carla", TOWNS[i]))
-        srv.start()
-        print(f"  carla[{TOWNS[i]}]: {srv.describe()} ready in "
-              f"{srv.wait_ready():.0f}s", flush=True)
-        servers.append(srv)
-        return srv
-
-    if not parallel:
-        _start_server(0, ports[0])
-    server = servers[0] if servers else None
-    venv = None
-    if parallel:
-        import threading
-        from vae_nav.vec_env import ThreadedVecEnv
-        # BUILT ONE AT A TIME, STEPPED TOGETHER. ThreadedVecEnv constructs its
-        # envs concurrently; with two Epic servers that made one env's first
-        # sensor read time out while the other map was still loading (job
-        # 455086, "A sensor took too long to send their data"). The lock
-        # serialises construction -- and any later rebuild -- while the steps
-        # still overlap on threads.
-        _build_lock = threading.Lock()
-
-        # EACH SERVER STARTS RIGHT BEFORE ITS ENV, inside the lock (job 455090).
-        # A server with no client renders its default map free-running at Epic
-        # until an env connects and puts it in synchronous mode; started all
-        # up front, the idle second server starved the first of GPU and its
-        # first sensor read missed rlib's 10 s timeout. Every single-server
-        # smoke (Town05/Town01, either goal camera) passed. The JAX trainer
-        # also started each server inside its env factory, staggered.
-        def _make(t, p, k):
-            with _build_lock:
-                if not any(sv.port == p for sv in servers):
-                    _start_server(k, p)
-                return build_env(t, seed=SEED + k, encoder=enc, port=p,
-                                 state_keys=())
-        venv = ThreadedVecEnv(
-            [(lambda t=t, p=p, k=k: _make(t, p, k))
-             for k, (t, p) in enumerate(zip(TOWNS, ports))],
-            names=list(TOWNS))
-        env = venv.envs[0]
-        server = servers[0]
-    else:
-        env = build_env(TOWNS[town_i], seed=SEED, encoder=enc, port=PORT,
-                        state_keys=(), eval_mode=bool(EVAL_FROM))
-    obs, info = env.reset(seed=SEED)
-    # THE STATE BLOCK IS THE MODE BIT AND THE BINOC, NOTHING ELSE (user
-    # 2026-10-14: "get rid of all state vectors except mode bit"). No steer, no
-    # throttle, no speed: the actor used to receive its own last steer and
-    # throttle, a feedback path a policy can latch onto, and the run that
-    # collapsed sat at full left lock for 800k steps.
-    binoc_dim = int(np.shape(obs["binoc"])[0])
     state_dim = pxr.mono_state_dim(binoc_dim)
-    row_dim = pxr.mono_row_dim(binoc_dim)
-
-    # THE ACTOR AND THE REPLAY ARE SIZED FROM THE ENV (STOP_ACTION adds a third
-    # dimension). The defaults were 2 in both places; a simulator probe hit the
-    # first ("shapes (2,) (3,)") and the smoke run the second ("the expanded
-    # size of the tensor (2) must match the existing size (3)").
-    ACT_DIM = int(env.action_space.shape[0])
+    ACT_DIM = int(act_dim)
     cfg = GatedRecurrentSACConfig(
         # THE BINOCULAR + MONOCULAR STACK. The trainable visual path is a
         # half-width ResNet-18 from scratch over the 128 px frame
@@ -987,6 +1082,120 @@ def main():
     # target encoding with random weights.
     mono_report = load_debit_mono(agent.compress, TINY)
     agent.compress_targ.load_state_dict(agent.compress.state_dict())
+    agent.mono_report = mono_report
+    return agent
+
+
+def main():
+    import torch
+
+    from torch_rl import pixel_rows as pxr
+    from torch_rl.carla_env_build import build_env
+    from torch_rl.carla_server import CarlaServer
+    from torch_rl.debit_encoder import DebitTinyEncoder
+    from torch_rl.debit_mono import describe_load, load_debit_mono
+    from torch_rl.debit_visual import IMG
+    from torch_rl.episode_buffer import DeviceEpisodeBuffer
+    from torch_rl.episode_video import EpisodeVideo
+    from torch_rl.gated_recurrent_sac import (GatedRecurrentSAC,
+                                              GatedRecurrentSACConfig)
+
+    if DEVICE == "cuda" and not torch.cuda.is_available():
+        raise SystemExit("no CUDA: this arm is GPU-resident, so this is fatal")
+    os.makedirs(OUT, exist_ok=True)
+
+    # DEBiT IS FROZEN (user 2026-10-14), so no adapters are added and its 3136-d
+    # binocular output is a fixed function of (view, goal). That lets the ENV
+    # compute it once per step and store it in the row, instead of the learner
+    # re-encoding the whole chunk twice per update at 209 ms. The trainable
+    # visual path is the monocular ResNet, from scratch, which is why the row
+    # still carries pixels.
+    enc = DebitTinyEncoder(TINY, device=DEVICE, half=False)
+
+    # THE TRAINER OWNS THE SIMULATOR, so a town change can restart it. Closing
+    # the env and rebuilding against a live server leaves the old sensors'
+    # streams dangling and the next client cannot attach (job 453315: the first
+    # map change worked, the next rebuild hung while the server flooded "Invalid
+    # session: no stream available"). A restart cannot inherit that state.
+    town_i = 0
+    parallel = use_parallel(PARALLEL_TOWNS, EVAL_FROM, len(TOWNS)) and not EXPERT_RECORD
+    # JUNCTION RAMP (torch_rl.junction_ramp) lives in the parallel loop only,
+    # and never in eval, whose goal set must stay at the overlay's fraction.
+    if ramp_needs_parallel(JUNCTION_RAMP_START, parallel, EVAL_FROM, EXPERT_RECORD):
+        raise ValueError("JUNCTION_RAMP_START needs PARALLEL_TOWNS=1: the "
+                         "serial loop has no junction ramp")
+    ports = [PORT + 50 * i for i in range(len(TOWNS))] if parallel else [PORT]
+    servers = []
+
+    def _start_server(i, port):
+        srv = CarlaServer(port, quality=os.environ.get("CARLA_QUALITY", "Epic"),
+                          log_dir=os.path.join(OUT, "carla", TOWNS[i]))
+        srv.start()
+        print(f"  carla[{TOWNS[i]}]: {srv.describe()} ready in "
+              f"{srv.wait_ready():.0f}s", flush=True)
+        servers.append(srv)
+        return srv
+
+    if not parallel:
+        _start_server(0, ports[0])
+    server = servers[0] if servers else None
+    venv = None
+    if parallel:
+        import threading
+        from vae_nav.vec_env import ThreadedVecEnv
+        # BUILT ONE AT A TIME, STEPPED TOGETHER. ThreadedVecEnv constructs its
+        # envs concurrently; with two Epic servers that made one env's first
+        # sensor read time out while the other map was still loading (job
+        # 455086, "A sensor took too long to send their data"). The lock
+        # serialises construction -- and any later rebuild -- while the steps
+        # still overlap on threads.
+        _build_lock = threading.Lock()
+
+        # EACH SERVER STARTS RIGHT BEFORE ITS ENV, inside the lock (job 455090).
+        # A server with no client renders its default map free-running at Epic
+        # until an env connects and puts it in synchronous mode; started all
+        # up front, the idle second server starved the first of GPU and its
+        # first sensor read missed rlib's 10 s timeout. Every single-server
+        # smoke (Town05/Town01, either goal camera) passed. The JAX trainer
+        # also started each server inside its env factory, staggered.
+        def _make(t, p, k):
+            with _build_lock:
+                if not any(sv.port == p for sv in servers):
+                    _start_server(k, p)
+                return build_env(t, seed=SEED + k, encoder=enc, port=p,
+                                 state_keys=())
+        venv = ThreadedVecEnv(
+            [(lambda t=t, p=p, k=k: _make(t, p, k))
+             for k, (t, p) in enumerate(zip(TOWNS, ports))],
+            names=list(TOWNS))
+        env = venv.envs[0]
+        server = servers[0]
+    else:
+        env = build_env(TOWNS[town_i], seed=SEED, encoder=enc, port=PORT,
+                        state_keys=(), eval_mode=bool(EVAL_FROM) or EXPERT_RECORD)
+    obs, info = env.reset(seed=SEED)
+    # THE STATE BLOCK IS THE MODE BIT AND THE BINOC, NOTHING ELSE (user
+    # 2026-10-14: "get rid of all state vectors except mode bit"). No steer, no
+    # throttle, no speed: the actor used to receive its own last steer and
+    # throttle, a feedback path a policy can latch onto, and the run that
+    # collapsed sat at full left lock for 800k steps.
+    binoc_dim = int(np.shape(obs["binoc"])[0])
+    state_dim = pxr.mono_state_dim(binoc_dim)
+    row_dim = pxr.mono_row_dim(binoc_dim)
+
+    # THE ACTOR AND THE REPLAY ARE SIZED FROM THE ENV (STOP_ACTION adds a third
+    # dimension). The defaults were 2 in both places; a simulator probe hit the
+    # first ("shapes (2,) (3,)") and the smoke run the second ("the expanded
+    # size of the tensor (2) must match the existing size (3)").
+    ACT_DIM = int(env.action_space.shape[0])
+    agent = build_agent(binoc_dim, ACT_DIM)
+    mono_report = agent.mono_report
+    if EXPERT_RECORD:
+        if EXPERT_DRIVER == "policy":
+            if not EVAL_FROM:
+                raise ValueError("EXPERT_DRIVER=policy needs EVAL_FROM: the policy to drive")
+            agent.load(EVAL_FROM)
+        return run_record(env, agent, pxr, server, OUT)
     if EVAL_FROM:
         agent.load(EVAL_FROM)          # strict: every module, name and shape
         if EVAL_SGM_TRACE:

@@ -79,3 +79,12 @@ def test_gate_needs_enough_explore_driving():
                       [{"end": "cap", "path_m": 150}] * 6)          # 900 m, no faults
     assert rep["m_between"] == float("inf")
     assert not rep["pass"] and "insufficient" in rep["reason"]
+
+
+def test_dry_benchmark_runs_the_expert_without_noise():
+    """The M0 gate measures the expert itself: in the first diagnostic every
+    fault came from a sigma=0.2 noise episode (job 463139)."""
+    from torch_rl.expert_record import effective_sigma
+    assert effective_sigma(0.2, dry=True) == 0.0
+    assert effective_sigma(0.2, dry=False) == 0.2
+    assert effective_sigma(0.0, dry=False) == 0.0

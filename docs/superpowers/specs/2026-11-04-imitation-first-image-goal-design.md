@@ -45,6 +45,7 @@ stand **as my calls**, open to correction:
   (`logs/bench_long_episodes.json`). Their numbers must be reported as
   training-town numbers from now on.
 - **Success bar** (section 6).
+- **Operating speed:** pending the user's answer.
 
 Fixed by the user earlier, and unchanged here:
 - Encoder: frozen DEBiT-tiny binocular plus the trained monocular ResNet.
@@ -56,7 +57,8 @@ Fixed by the user earlier, and unchanged here:
 ## 3. Goals, non-goals, anti-goals
 
 **Goals**
-1. A policy that keeps its lane on held-out towns for ≥200 m between failures.
+1. A policy that keeps its lane on held-out towns for ≥300 m between failures
+   (section 6 explains the number).
 2. On held-out towns it reaches image goals 5-25 m away, and does so because of
    the image (the paired wrong-goal control).
 3. It chains goals to 200 m.
@@ -94,9 +96,11 @@ Fixed by the user earlier, and unchanged here:
   `_to_action` folds brake into negative throttle, which today's env clips to
   0, so the expert can only coast.
 - Benchmark it, recording nothing, on the training towns: 5-25 m goals and
-  100-200 m drives.
-- **Gate:** ≥95% arrivals on 5-25 m goals, and ≥200 m mean between failures.
-  If it fails, stop and report; a brake decision is the user's.
+  100-200 m drives, at the operating speed in section 2.
+- **Gate (my call, raised after review):** ≥95% arrivals on 5-25 m goals, and
+  ≥1 km mean between failures. The expert must clear the student's own bar
+  (≥300 m, section 6) with a wide margin, or a marginal expert caps the clone
+  below it. If it fails, stop and report; a brake decision is the user's.
 
 ### M1. Record expert demonstrations
 - A new recording mode in `train_carla_sac.py` (alongside `EVAL_TRACE` /
@@ -112,10 +116,17 @@ Fixed by the user earlier, and unchanged here:
 - **Both modes, about 50/50, as v30 trains:**
   - Goal mode (mode bit 1): the env's own 5-25 m goal, junction fraction
     0.85, the latched goal image.
-  - Explore mode (mode bit 0): the expert drives 100-200 m along lanes to a
-    destination unrelated to the latched goal image. This teaches long lane
-    keeping, and it makes the lane-keeping metric measurable with the same
-    deterministic explore traces used for v30.
+  - Explore mode (mode bit 0): the expert drives 100-200 m along lanes,
+    unrelated to the latched goal image. This teaches long lane keeping, and
+    it makes the lane-keeping metric measurable with the same deterministic
+    explore traces used for v30.
+  - **Explore-mode branches follow a fixed rule (my call, from review):** at
+    each junction, take the exit with the smallest heading change; where
+    there is no straight exit (a T-junction), turn right. Random branches
+    would give the clone conflicting labels at the same view, mode bit and
+    image. A tanh-Gaussian actor fits the average of conflicting labels, and
+    at a T-junction left/right average to straight into the kerb. v30's
+    explore reward pays any exit, so a fixed rule is compatible with it.
 - **Recovery data (my call, builder may tune):** per episode, a steering noise
   level σ ∈ {0, 0.1, 0.2} is added to the EXECUTED action, while the stored
   label is always the expert's clean action at that state. This puts "how to
@@ -140,27 +151,62 @@ Fixed by the user earlier, and unchanged here:
   not be degenerate for the SAC stage. Sync the target copies after cloning.
 
 ### M3. Measure (decision point)
-- Lane keeping: deterministic explore traces (`EVAL_TRACE=1`,
+- **Fix two eval rules first** (verified in code during review). They inflate
+  long episodes, which is exactly what this pipeline is meant to produce:
+  - **The 200 m cap counts as arriving.** `MAX_DISTANCE_M` (default 200, set
+    nowhere) makes the env flag `is_success` after 200 m of driving
+    (`train_env_config_v4_image_goal.py` `done_dist`). `goal_reward_explore`
+    counts that as an arrival at ≤10 km/h, and the counter is not reset across
+    a chain's soft resets. Set `MAX_DISTANCE_M` out of reach in every new
+    overlay, training and eval.
+  - **The moved goal.** A too-fast pass moves the env's goal while the image
+    stays latched, and arriving at the moved goal scores as success. Set
+    `GOAL_KEEP_ON_PASS=1` in **eval overlays only**, so success is judged
+    against the original goal. Training keeps v30's behaviour.
+  - **Re-score v30 under the fixed rules** and report its old and new numbers
+    side by side, so "beats v30" is like for like.
+- **Checkpoint choice never uses Town02/03 (my call, from review).** v30's 0.56
+  is the best of a Town02 checkpoint sweep (0.10 / 0.55 / 0.43 / 0.25 at
+  200k-500k), so it is optimistic. New checkpoints are chosen on
+  held-out-seed episodes in the training towns, with a wrong-goal arm. Town02
+  and Town03 are evaluated only at the chosen checkpoint and the final one.
+- **Lane keeping:** deterministic explore traces (`EVAL_TRACE=1`,
   `EVAL_FORCE_MODE=0`, `TRACE_NOISE_SCALE=0`, `TRACE_END_ON_CROSSING=1`) on
   Town02 and Town03. Mean metres between failures, against v30's 31.7 and
-  12.2 m.
-- Navigation: `run_eval` on Town02 and Town03, n=100, true goal and
-  `WRONG_GOAL_MODE=1`, paired McNemar (`~/paired_wrong.py`). Also the approach
+  12.2 m. Report the policy's speed alongside: lane keeping is easier slower.
+- **Navigation:** `run_eval` on Town02 and Town03, n=100, true goal and
+  `WRONG_GOAL_MODE=1`, paired McNemar (`~/paired_wrong.py`), plus the approach
   fields now in `eval.json`.
 - Goes to M4 if lane keeping misses the bar, otherwise to M5.
 
 ### M4. Correct the drift (only if M3 misses lane keeping)
-- One or two DAgger rounds. The cloned policy drives; at every visited state
-  `BasicAgentExpert.act()` supplies the label (it replans from the car's
-  actual pose).
+- One or two DAgger rounds: the cloned policy drives and the expert labels
+  every visited state.
+- **Relabel rule (my call; corrects an earlier claim).** `BasicAgentExpert.act()`
+  does NOT replan: only `reset()` plans a route, and `run_step()` then follows
+  it. So DAgger labels need one added rule: replan the expert's route from the
+  car's actual pose whenever the car is more than 3 m from it. In explore
+  mode the same fixed branch rule as M1 applies.
 - Add the new data, retrain, re-measure.
+- **If lane keeping is still below the bar after two rounds** (my call): stop
+  and report to the user before M5. M5 is the most expensive stage and should
+  not start on a clone that cannot drive.
 
 ### M5. Reinforcement fine-tune
 - SAC with v30's reward and launch settings, `INIT_FROM` the clone.
-- The expert data stays as a second replay, with a cloning loss on the actor
-  so the policy does not forget how to drive. This is new learner code. Weight
-  and decay are the builder's call. Warm starts without this have destroyed
-  goal steering before.
+- **Protect the cloned encoder (my call, from review).** In this SAC the
+  visual encoder and GRU are trained only by the critic: `opt_critic` holds
+  them and the actor reads detached features
+  (`torch_rl/gated_recurrent_tqc.py`). After cloning the critics are
+  untrained, so their first updates would rewrite the encoder the clone
+  depends on. That is the warm-start failure seen before.
+  1. Preload the expert episodes into the replay, so the critic learns from
+     expert data as well.
+  2. Warm up the critic with the encoder and GRU frozen.
+  3. Unfreeze, with the cloning loss applied to the encoder and GRU as well as
+     the actor, decaying over training.
+  This is new learner code. Warm-up length, weight and decay are the
+  builder's call.
 - **Goal chaining to 200 m:** use `GOAL_CHAIN_M=200` with chained goals drawn
   **5-25 m ahead**, inside the image's range. Today's 10-30 m past the next
   junction gives 40-90 m goals, which I suspect, but have not shown, taught
@@ -178,15 +224,23 @@ Fixed by the user earlier, and unchanged here:
   reports with `policy=`.
 - Never edit a running bash script.
 
-## 6. Success bar (my proposal)
+## 6. Success bar (my proposal, made consistent after review)
+If failures arrive at a constant rate, a car averaging μ metres between
+failures finishes a 200 m drive with probability exp(−200/μ). μ = 200 m gives
+only 37%, so the chain target of ≥50% needs μ ≥ 290 m, before counting the
+arrivals along the way. The lane-keeping bar is set to 300 m for that reason.
+
 | Measure | Today (v30) | Target |
 |---|---|---|
-| Mean metres between failures, Town02 / Town03 | 31.7 / 12.2 | ≥200 / ≥200 |
+| Mean metres between failures, Town02 / Town03 | 31.7 / 12.2 | ≥300 / ≥300 |
 | Town02 success, 5-25 m, n=100 | 0.56 | ≥0.80 |
 | Town02 wrong-goal success | 0.03 | ≤0.10 (p<0.001) |
 | Town03 success, 5-25 m | 0.35 | ≥0.60 |
 | 200 m chains completed, Town02 | ~0 | ≥50% |
 | Seeds for the final recipe | 1 | 2 |
+
+v30's column is its published, Town02-selected numbers. They are re-scored
+under the fixed eval rules (M3) before any comparison.
 
 ## 7. Risks
 - **The expert without a brake** (M0 gate).

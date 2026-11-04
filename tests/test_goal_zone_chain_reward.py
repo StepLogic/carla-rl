@@ -214,3 +214,25 @@ def test_an_ordinary_reset_still_draws_the_mode(monkeypatch):
                        explore_prob=1.0, max_steps=500, seed=0, chain=True)
     w.reset()
     assert w.mode == gr.EXPLORE
+
+
+def test_an_explore_episode_does_not_log_a_chain(monkeypatch, capsys):
+    """Under a mixed mode draw, explore episodes printed "[Chain] 0 goals, 0 m",
+    half of all [Chain] lines in v37-v39."""
+    gr = _gr(monkeypatch, GOAL_ZONE_M=0, GOAL_CHAIN_M=200)
+    w = gr.GatedReward(Road(junction=[False] * 10, route=[10.0] * 12),
+                       explore_prob=1.0, max_steps=500, seed=0, chain=True)
+    for _ in range(3):
+        w.reset()
+        w.step(np.zeros(2, np.float32))
+    assert "[Chain]" not in capsys.readouterr().out
+
+
+def test_a_goal_episode_still_logs_its_chain(monkeypatch, capsys):
+    gr = _gr(monkeypatch, GOAL_ZONE_M=0, GOAL_CHAIN_M=200)
+    w = gr.GatedReward(Road(junction=[False] * 10, route=[10.0] * 12),
+                       explore_prob=0.0, max_steps=500, seed=0, chain=True)
+    for _ in range(3):
+        w.reset()
+        w.step(np.zeros(2, np.float32))
+    assert "[Chain]" in capsys.readouterr().out

@@ -1434,7 +1434,11 @@ class GatedReward(Wrapper):
                 self._chain_goals += 1
                 soft = True
         if out is None:
-            if self.chain and getattr(self, "_chain_seen", False):
+            # self.mode is still the FINISHED episode's: an explore episode has
+            # no chain, and logging it printed a bogus "0 goals, 0 m" line --
+            # half of all [Chain] lines under v30's 50/50 mix (v37-v39).
+            if (self.chain and getattr(self, "_chain_seen", False)
+                    and self.mode == GOAL):
                 # One line per chain: how many goals it reached and how far it drove.
                 print(f"[Chain] {self._chain_arrivals} goals reached, "
                       f"{self._chain_total_m:.0f} m driven"

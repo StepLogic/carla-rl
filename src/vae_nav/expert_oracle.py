@@ -25,8 +25,31 @@ replay buffer and the HER relabeller cannot tell them apart, which is what
 makes them usable.
 """
 import os
+import sys
 
 import numpy as np
+
+
+def carla_agents_path():
+    """Where CARLA's `agents` package (BasicAgent, LocalPlanner) is imported from.
+
+    CARLA_AGENTS_PATH if set, else the copy vendored from the 0.9.16 server
+    image into dependencies/carla_agents. It used to be a hard-coded local
+    0.9.15 install path, which does not exist on the cluster, whose client env
+    has no `agents` package at all (2026-11-04)."""
+    env = os.environ.get("CARLA_AGENTS_PATH")
+    if env:
+        return env
+    repo = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    return os.path.join(repo, "dependencies", "carla_agents")
+
+
+def _ensure_agents_on_path():
+    """Prepend carla_agents_path() to sys.path once, so `import agents...` works."""
+    p = carla_agents_path()
+    if p not in sys.path:
+        sys.path.insert(0, p)
+
 
 # Replan when the vehicle drifts this far from its planned route: the PID can
 # be pushed off-course by traffic, and following a stale route afterwards
@@ -275,10 +298,7 @@ def lane_following_route(start_wp, goal_location, step_m=2.0, reach_m=3.0,
     straight-line distance times `stretch` plus `slack_m` of path (a route
     through a turn is much longer than the straight line), so it stays small:
     branches exist only at junctions and a 200 m goal crosses a handful."""
-    import sys
-    _p = "/home/robotlab/Apps/CARLA_0.9.15/PythonAPI/carla"
-    if _p not in sys.path:
-        sys.path.append(_p)
+    _ensure_agents_on_path()
     from agents.navigation.local_planner import RoadOption
     gx, gy = goal_location.x, goal_location.y
 
@@ -330,10 +350,7 @@ class BasicAgentExpert(ExpertOracle):
 
     def __init__(self, vehicle, world_map, action_space, **kw):
         super().__init__(vehicle, world_map, action_space, **kw)
-        import sys
-        _p = "/home/robotlab/Apps/CARLA_0.9.15/PythonAPI/carla"
-        if _p not in sys.path:
-            sys.path.append(_p)
+        _ensure_agents_on_path()
         from agents.navigation.basic_agent import BasicAgent
         self._agent = BasicAgent(vehicle, target_speed=self.target_speed,
                                  map_inst=world_map)

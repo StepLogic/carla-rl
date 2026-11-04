@@ -348,6 +348,39 @@ class BasicAgentExpert(ExpertOracle):
 
     FINAL_APPROACH_KMH = 6.0
 
+    # THE APPROACH SLOWS BEFORE THE GOAL, not after the route ends (M0
+    # benchmark, jobs 463141-463144): driving the whole route at the cruise
+    # speed, the car entered the 2 m arrival circle at a median 11.6 km/h and
+    # was at 9.7 km/h at its closest point -- arrival hung on coasting the last
+    # metre under the 10 km/h limit -- and where the snapped route end lay at
+    # or past the goal it drove through at 12-14 km/h (5 of 8 goal failures).
+    # The target falls linearly with the straight-line distance to the goal:
+    # cruise until APPROACH_SLOW_FROM_M, FINAL_APPROACH_KMH from
+    # APPROACH_FINAL_AT_M in. The action space has no brake, so the car slows
+    # by coasting (~1.8 m/s^2 measured); from 15 km/h the ramp asks <= 1.5.
+    APPROACH_SLOW_FROM_M = 10.0
+    APPROACH_FINAL_AT_M = 3.0
+
+    @classmethod
+    def approach_speed_kmh(cls, dist_m, cruise_kmh, final_kmh=None):
+        """Target speed at `dist_m` (straight line) from the goal; never above
+        the cruise speed."""
+        cruise = float(cruise_kmh)
+        final = min(cls.FINAL_APPROACH_KMH if final_kmh is None else float(final_kmh), cruise)
+        lo, hi = cls.APPROACH_FINAL_AT_M, cls.APPROACH_SLOW_FROM_M
+        frac = min(1.0, max(0.0, (float(dist_m) - lo) / (hi - lo)))
+        return final + (cruise - final) * frac
+
+    def _target_speed_now(self):
+        """The approach profile in a goal episode; the cruise speed on an
+        explore plan (set every step: the expert outlives episodes, so a goal
+        episode's slow target must not leak into the next drive)."""
+        if self._goal_loc is None:
+            return self.target_speed
+        loc = self._vehicle.get_location()
+        return self.approach_speed_kmh(
+            float(np.hypot(self._goal_loc.x - loc.x, self._goal_loc.y - loc.y)), self.target_speed)
+
     def __init__(self, vehicle, world_map, action_space, **kw):
         super().__init__(vehicle, world_map, action_space, **kw)
         _ensure_agents_on_path()
@@ -493,6 +526,7 @@ class BasicAgentExpert(ExpertOracle):
         if not self._planned:
             return None
         if not self._agent.done():
+            self._agent.set_target_speed(self._target_speed_now())
             return self._to_action(self._agent.run_step())
         if self._goal_loc is None:
             # An explore plan has no goal to approach: it is simply finished.

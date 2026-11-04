@@ -1104,6 +1104,13 @@ def main():
         raise SystemExit("no CUDA: this arm is GPU-resident, so this is fatal")
     os.makedirs(OUT, exist_ok=True)
 
+    # BEHAVIOUR CLONING (imitation-first plan, Task 6): BC_TRAIN=1 clones the
+    # recorded expert into this learner and returns. No simulator and no DEBiT
+    # encoder: the frozen binocular features are already in the shards.
+    if os.environ.get("BC_TRAIN", "0") == "1":
+        from torch_rl.bc_trainer import run_bc_train
+        return run_bc_train(OUT, make_agent=build_agent)
+
     # DEBiT IS FROZEN (user 2026-10-14), so no adapters are added and its 3136-d
     # binocular output is a fixed function of (view, goal). That lets the ENV
     # compute it once per step and store it in the row, instead of the learner

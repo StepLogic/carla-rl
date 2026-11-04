@@ -1,0 +1,184 @@
+"""Behaviour cloning of the recurrent SAC learner (imitation-first plan, Task 6).
+
+M2 of docs/superpowers/specs/2026-11-04-imitation-first-image-goal-design.md:
+clone CARLA's autopilot (the recorded episodes of torch_rl/expert_record.py)
+into the very network SAC later fine-tunes -- the trainable monocular encoder,
+the GRU and the actor -- so the fine-tune starts from a policy that already
+keeps its lane instead of one that fails every 12-32 m.
+
+THE LOSS is the pre-tanh Gaussian negative log-likelihood of the expert's
+action. The actor is a tanh-squashed Gaussian; its density is evaluated where it
+is a plain Gaussian, at u = atanh(a), with the label clipped to +-0.995 so the
+expert's full-lock and full-brake actions (a = +-1, u = +-inf) stay finite. The
+row alignment is exactly the SAC update's (_update_impl): core states s_t of the
+trained window paired with action t, burn-in rows giving the hidden state only.
+Gradients reach the encoder and the GRU, not just the actor head: learning to
+see the road is the point.
+
+Rows the buffer marks invalid (padding past an episode's end) count for
+nothing, even if their action is garbage.
+"""
+import json
+import os
+import time
+
+import numpy as np
+import torch
+
+from torch_rl import pixel_rows as pxr
+from torch_rl.expert_data import episode_paths, fill_buffer, load_episode, split_by_episode
+from torch_rl.expert_record import assert_recordable_town
+
+TRAINING_TOWNS = ("Town01", "Town04", "Town05", "Town10HD")
+LOG_EVERY = 250
+VAL_CHUNKS = 8
+
+
+def _env_int(name, default):
+    return int(os.environ.get(name, default))
+
+
+def bc_modules(agent):
+    """The online modules cloning trains: encoder, action embedding (when the
+    config has one), GRU and actor. Never a critic, a target or a temperature."""
+    mods = [agent.compress]
+    if agent.act_embed is not None:
+        mods.append(agent.act_embed)
+    return mods + [agent.core, agent.actor]
+
+
+def bc_loss(agent, chunk, clip=0.995):
+    """(loss, stats) for one sampled chunk (the buffer's _CHUNK_KEYS). The loss
+    is the valid-row mean of the pre-tanh Gaussian NLL, summed over action
+    dimensions; stats are floats: bc_nll (the loss), bc_mae (mean |tanh(mean) -
+    label|, the deterministic action's error) and bc_log_std."""
+    cfg, dev = agent.cfg, agent.device
+    obs, keep, actions, valid = (chunk[k].to(device=dev, dtype=torch.float32)
+                                 for k in ("obs", "keep", "actions", "valid"))
+    goal = chunk["goal"].to(device=dev, dtype=torch.float32) if cfg.goal_tokens else None
+    K = int(cfg.burn_in)
+    B, T = valid.shape
+    N, A = B * T, int(cfg.action_dim)
+
+    s_all = agent._roll(agent.compress, agent.act_embed, agent.core, obs, keep, goal)
+    s = s_all[:, :-1].reshape(N, cfg.hidden)
+    st = agent._state(obs[:, K:-1]).reshape(N, cfg.state_dim)
+    mean, log_std = agent._actor_forward(torch.cat([s, st], -1))
+    a = actions.reshape(N, A)
+    u = torch.atanh(a.clamp(-clip, clip))
+    nll = (0.5 * ((u - mean) / log_std.exp()) ** 2 + log_std).sum(-1)
+    v = valid.reshape(N) > 0
+    n = v.sum().clamp_min(1)
+    # where(), not a multiply: a padded row's NaN or inf must not leak in as NaN * 0.
+    loss = torch.where(v, nll, torch.zeros_like(nll)).sum() / n
+    with torch.no_grad():
+        mae = torch.where(v, (torch.tanh(mean) - a).abs().mean(-1), torch.zeros_like(nll)).sum() / n
+        ls = torch.where(v, log_std.mean(-1), torch.zeros_like(nll)).sum() / n
+        vals = torch.stack([loss.detach(), mae, ls]).tolist()
+    return loss, dict(zip(("bc_nll", "bc_mae", "bc_log_std"), vals))
+
+
+def make_bc_optimizer(agent, lr=3e-4):
+    """Adam over the cloned modules' trainable parameters only."""
+    return torch.optim.Adam([p for m in bc_modules(agent) for p in m.parameters()
+                             if p.requires_grad], lr=float(lr))
+
+
+def sync_targets(agent):
+    """Copy the online encoder, action embedding and GRU into their targets.
+    Cloning never touches the targets, so a checkpoint saved without this would
+    hand the fine-tune's critic a target encoder that is still the init."""
+    with torch.no_grad():
+        agent.compress_targ.load_state_dict(agent.compress.state_dict())
+        if agent.act_embed is not None:
+            agent.act_embed_targ.load_state_dict(agent.act_embed.state_dict())
+        agent.core_targ.load_state_dict(agent.core.state_dict())
+
+
+def bc_step(agent, opt, chunk, weight=1.0):
+    """One cloning update; returns bc_loss's stats (before the step)."""
+    loss, stats = bc_loss(agent, chunk)
+    opt.zero_grad(set_to_none=True)
+    (loss * float(weight)).backward()
+    opt.step()
+    return stats
+
+
+def _episode_rows(path):
+    """Buffer rows an episode occupies (T transitions + 1), read from the one
+    small array so the frames are not decompressed twice."""
+    with np.load(path) as z:
+        return int(z["act_exec"].shape[0]) + 1
+
+
+def _buffer(paths, act_dim, device, seed):
+    from torch_rl.episode_buffer import DeviceEpisodeBuffer
+    cap = max(1, sum(_episode_rows(p) for p in paths))
+    # goal_dim 0: cloning reads the goal through the frozen binocular features
+    # in the row, never the stored goal image.
+    buf = DeviceEpisodeBuffer(pxr.mono_row_dim(pxr.BINOC_DIM), act_dim, cap, device,
+                              seed=seed, store_device=os.environ.get("REPLAY_DEVICE", "cuda"),
+                              u8_cols=pxr.MONO_PIX)
+    added = fill_buffer(buf, paths, which="label")
+    if buf.size != added:
+        raise RuntimeError(f"buffer evicted episodes: holds {buf.size} of {added} transitions")
+    return buf, added
+
+
+def run_bc_train(out_root, make_agent=None):
+    """The BC_TRAIN=1 mode: clone the recorded expert, checkpointing to
+    <out_root>/step_<n>/. `make_agent(binoc_dim, act_dim)` builds the learner;
+    the trainer passes its build_agent (default: imported from train_carla_sac)."""
+    root = os.environ.get("BC_DATA_ROOT", "")
+    if not root:
+        raise SystemExit("BC_TRAIN=1 needs BC_DATA_ROOT (the expert recording root)")
+    towns = os.environ.get("BC_TOWNS", " ".join(TRAINING_TOWNS)).split()
+    for t in towns:
+        assert_recordable_town(t)                 # never clone a held-out town
+    updates = _env_int("BC_UPDATES", 20000)
+    n_chunks = _env_int("BC_CHUNKS", 32)
+    length = _env_int("BC_LEN", 40)
+    save_every = _env_int("BC_SAVE_EVERY", 2500)
+    init_from = os.environ.get("BC_INIT_FROM", "")
+
+    train, val = split_by_episode(episode_paths(root, towns))
+    if not train or not val:
+        raise SystemExit(f"BC needs >= 2 episodes under {root} for {towns}: "
+                         f"{len(train)} train, {len(val)} val")
+    os.makedirs(out_root, exist_ok=True)
+    with open(os.path.join(out_root, "bc_split.json"), "w") as fh:
+        json.dump({"data_root": root, "towns": towns, "train": train, "val": val}, fh, indent=1)
+
+    if make_agent is None:
+        from train_carla_sac import build_agent as make_agent
+    act_dim = int(load_episode(train[0])["act_label"].shape[1])
+    agent = make_agent(pxr.BINOC_DIM, act_dim)
+    if init_from:
+        agent.load(init_from)
+    K = int(agent.cfg.burn_in)
+    t0 = time.time()
+    train_buf, n_train = _buffer(train, act_dim, agent.device, seed=0)
+    val_buf, n_val = _buffer(val, act_dim, agent.device, seed=1)
+    # One fixed validation batch, so val_nll is comparable across steps.
+    val_chunk = val_buf.sample_chunks(VAL_CHUNKS, length + K, K)
+    print(f"[BC] data {root} towns={towns}: train {len(train)} episodes / {n_train} steps, "
+          f"val {len(val)} / {n_val}; loaded in {time.time() - t0:.0f} s; "
+          f"init={init_from or 'build_agent'}; {updates} updates x {n_chunks} chunks "
+          f"x {length} (+{K} burn-in)", flush=True)
+
+    opt = make_bc_optimizer(agent)
+    window, t0 = [], time.time()
+    for step in range(1, updates + 1):
+        window.append(bc_step(agent, opt, train_buf.sample_chunks(n_chunks, length + K, K)))
+        if step % LOG_EVERY == 0 or step == updates:
+            with torch.no_grad():
+                _, vs = bc_loss(agent, val_chunk)
+            tr = {k: float(np.mean([w[k] for w in window])) for k in window[0]}
+            print(f"[BC] step={step} train_nll={tr['bc_nll']:.4f} val_nll={vs['bc_nll']:.4f} "
+                  f"mae={vs['bc_mae']:.4f} train_mae={tr['bc_mae']:.4f} "
+                  f"log_std={tr['bc_log_std']:.3f} ({len(window) / (time.time() - t0):.2f} upd/s)",
+                  flush=True)
+            window, t0 = [], time.time()
+        if step % save_every == 0 or step == updates:
+            sync_targets(agent)
+            print(f"[BC] saved {agent.save(os.path.join(out_root, f'step_{step}'))}", flush=True)

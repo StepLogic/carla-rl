@@ -198,6 +198,13 @@ class EpisodeTracker:
         self.path_m = 0.0
         self.reach2_step = None
         self.path_at_reach2 = None
+        # APPROACH (2026-11-04: "why does it blow past it?"). Distances are to
+        # the goal the episode STARTED with -- the env may resample its own goal
+        # on a too-fast pass, and that is exactly the event being measured.
+        self.min_d = float("inf")
+        self.speed_at_min_d = None
+        self.entry_speed = None          # speed on first entering radius_2m
+        self.min_speed_inside = None     # slowest while inside radius_2m
 
     def step(self, pos, speed_kmh):
         np = self._np
@@ -205,9 +212,18 @@ class EpisodeTracker:
         self.path_m += float(np.linalg.norm(p - self.prev))
         self.prev = p
         self.t += 1
+        d = float(np.linalg.norm(self.goal - p))
+        v = float(speed_kmh)
+        if d < self.min_d:
+            self.min_d, self.speed_at_min_d = d, v
+        if d < self.radius_2m:
+            if self.entry_speed is None:
+                self.entry_speed = v
+            self.min_speed_inside = (v if self.min_speed_inside is None
+                                     else min(self.min_speed_inside, v))
         if (self.reach2_step is None
-                and float(np.linalg.norm(self.goal - p)) < self.radius_2m
-                and float(speed_kmh) <= self.max_speed):
+                and d < self.radius_2m
+                and v <= self.max_speed):
             self.reach2_step = self.t
             self.path_at_reach2 = self.path_m
 
@@ -227,4 +243,11 @@ class EpisodeTracker:
                 "path_m": round(self.path_m, 3),
                 "spl": spl(reached, self.radius, self.path_m),
                 "spl_2m": spl(reached_2m, self.radius_2m, p2),
-                "reach2_step": self.reach2_step}
+                "reach2_step": self.reach2_step,
+                "closest_m": (None if self.min_d == float("inf") else round(self.min_d, 3)),
+                "speed_at_closest_kmh": (None if self.speed_at_min_d is None
+                                         else round(self.speed_at_min_d, 2)),
+                "entry_speed_kmh": (None if self.entry_speed is None
+                                    else round(self.entry_speed, 2)),
+                "min_speed_inside_kmh": (None if self.min_speed_inside is None
+                                         else round(self.min_speed_inside, 2))}

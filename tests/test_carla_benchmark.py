@@ -238,3 +238,41 @@ def test_bands_must_be_known_bins():
     with pytest.raises(ValueError, match="band"):
         cb.select_episodes([dict(_probe(1, 15.0), band="extra")], per_bin=1,
                            bins=("easy",))
+
+
+# ---- approach statistics ("why does it blow past it?", 2026-11-04) ----------
+
+def test_a_fast_pass_records_its_entry_speed_and_closest_approach():
+    """Straight through the goal at 18 km/h: it enters the 2 m radius, is
+    never slow enough to count, and the closest approach is the pass."""
+    tr = cb.EpisodeTracker((10.0, 0.0), (0.0, 0.0), max_speed=10.0, radius=1.0,
+                           radius_2m=2.0)
+    for x in range(1, 21):
+        tr.step((float(x), 0.3), 18.0)
+    out = tr.finish(reached=False, t_end=20, route_m=10.0)
+    assert out["closest_m"] == pytest.approx(0.3)
+    assert out["entry_speed_kmh"] == pytest.approx(18.0)
+    assert out["min_speed_inside_kmh"] == pytest.approx(18.0)
+    assert not out["reached_2m"]
+
+
+def test_a_slow_arrival_records_the_slowdown():
+    tr = cb.EpisodeTracker((10.0, 0.0), (0.0, 0.0), max_speed=10.0, radius=1.0,
+                           radius_2m=2.0)
+    for x, v in zip((2, 4, 6, 8, 9, 9.5), (20, 20, 18, 14, 9, 4)):
+        tr.step((float(x), 0.0), float(v))
+    out = tr.finish(reached=True, t_end=6, route_m=10.0)
+    # At x=8 the car is exactly 2.0 m out; the radius test is strict, so it
+    # first enters at x=9, at 9 km/h.
+    assert out["entry_speed_kmh"] == pytest.approx(9.0)
+    assert out["min_speed_inside_kmh"] == pytest.approx(4.0)
+    assert out["reached_2m"]
+
+
+def test_an_episode_that_never_gets_near_has_no_entry():
+    tr = cb.EpisodeTracker((50.0, 0.0), (0.0, 0.0), max_speed=10.0)
+    for x in range(1, 6):
+        tr.step((float(x), 0.0), 15.0)
+    out = tr.finish(reached=False, t_end=5, route_m=50.0)
+    assert out["entry_speed_kmh"] is None and out["min_speed_inside_kmh"] is None
+    assert out["closest_m"] == pytest.approx(45.0)

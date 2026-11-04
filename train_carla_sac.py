@@ -747,6 +747,11 @@ def run_eval(env, agent, pxr, server, out_root):
                      **start_poses,
                      **{key: ep[key] for key in ("bin", "kind", "band") if key in ep},
                      "reached_2m": bool(two["reached_2m"]),
+                     # APPROACH: how close it got to the episode's goal and how
+                     # fast it was going there (EpisodeTracker; None if absent).
+                     **{key: two.get(key) for key in (
+                         "closest_m", "speed_at_closest_kmh", "entry_speed_kmh",
+                         "min_speed_inside_kmh")},
                      "spl_2m": float(two["spl_2m"]),
                      "steps": t, "return": round(ret, 2), "reached": reached,
                      "shortest_m": None if ell is None else round(ell, 2),

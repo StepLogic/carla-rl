@@ -97,6 +97,53 @@ def test_fill_buffer_skips_empty_episodes(tmp_path):
     assert buf.episodes == 1
 
 
+def _stop_tail_ep(T=30, cut=10, kmh=12.0):
+    """A goal episode whose expert label turns into the final-approach stop
+    (steer 0, throttle 0 env = actor [0, -1]) at row `cut` while the car keeps
+    driving -- what DAgger recorded once the clone had passed the goal."""
+    ep = _ep(T=T)
+    ep["act_label"][cut:] = np.array([0.0, -1.0], np.float32)
+    ep["speed"][:] = np.float32(kmh)
+    ep["terminal"], ep["truncated"] = False, True
+    return ep
+
+
+def test_label_fill_cuts_a_stop_forever_tail(tmp_path):
+    """DAgger r1: 9 episodes held 98% of the stop labels, ~950 rows each, all
+    given while the clone drove on past the goal -- they taught it to crawl."""
+    p = str(tmp_path / "ep_300000.npz")
+    save_episode(p, _stop_tail_ep(T=30, cut=10))
+    buf = _buf()
+    assert fill_buffer(buf, [p], which="label") == 10
+    ch = buf.sample_chunks(8, 6, 2)
+    a, v = ch["actions"].numpy(), ch["valid"].numpy() > 0
+    assert v.any() and not np.any(np.all(a[v] == [0.0, -1.0], axis=-1))
+
+
+def test_isolated_stop_labels_are_kept(tmp_path):
+    """A single stop at the goal or at a route's end is a real label."""
+    ep = _ep(T=12)
+    ep["act_label"][5] = np.array([0.0, -1.0], np.float32)
+    ep["act_label"][11] = np.array([0.0, -1.0], np.float32)
+    p = str(tmp_path / "ep_300001.npz")
+    save_episode(p, ep)
+    assert fill_buffer(_buf(), [p], which="label") == 12
+
+
+def test_a_stopped_car_keeps_its_stop_labels(tmp_path):
+    """The cut needs the car MOVING: at a standstill a stop label is no lie."""
+    p = str(tmp_path / "ep_300002.npz")
+    save_episode(p, _stop_tail_ep(T=20, cut=5, kmh=0.0))
+    assert fill_buffer(_buf(), [p], which="label") == 20
+
+
+def test_replay_fill_keeps_every_executed_step(tmp_path):
+    """The cut is a LABEL fix: the transitions themselves stay valid for replay."""
+    p = str(tmp_path / "ep_300003.npz")
+    save_episode(p, _stop_tail_ep(T=30, cut=10))
+    assert fill_buffer(_buf(), [p], which="exec") == 30
+
+
 def test_episode_paths_are_sorted_per_town(tmp_path):
     for town, seeds in (("Town05", (3, 1)), ("Town01", (2,))):
         os.makedirs(tmp_path / town, exist_ok=True)

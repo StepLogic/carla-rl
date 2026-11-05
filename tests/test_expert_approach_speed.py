@@ -67,6 +67,44 @@ def test_a_goal_episode_slows_by_distance_to_the_goal():
     assert e._agent.speeds[0] < 15.0
 
 
+class _DoneAgent(_Agent):
+    def done(self):
+        return True
+
+
+def _spent_expert(goal_xy, car=(0.0, 0.0)):
+    """Route finished; the car at `car` facing +x."""
+    e = _expert(SimpleNamespace(x=goal_xy[0], y=goal_xy[1]), car)
+    e._agent = _DoneAgent()
+    e._vehicle = SimpleNamespace(
+        get_location=lambda: SimpleNamespace(x=car[0], y=car[1]),
+        get_transform=lambda: SimpleNamespace(
+            location=SimpleNamespace(x=car[0], y=car[1]),
+            get_forward_vector=lambda: SimpleNamespace(x=1.0, y=0.0)))
+    return e
+
+
+def test_a_goal_behind_a_spent_route_gives_no_label():
+    """DAgger round 1: when the clone drove past the goal the expert answered
+    'stop' on every remaining step (~950 rows per overshoot, at 14-18 km/h) and
+    the retrained clone learned to crawl. With the goal behind there is no
+    correction to give, so there is no label: the recording ends there."""
+    assert _spent_expert((-6.0, 0.5)).act() is None
+    assert _spent_expert((0.0, 3.0)).act() is None          # beside, out of reach
+
+
+def test_at_the_goal_the_label_is_still_stop():
+    assert _spent_expert((0.6, 0.0)).act() == (0.0, 0.0)    # within FINAL_APPROACH_STOP_M
+
+
+def test_record_end_names_a_passed_goal():
+    import train_carla_sac as T
+    assert T.no_label_end(mode=1, steps=40) == "passed_goal"
+    assert T.no_label_end(mode=0, steps=40) == "route_done"
+    assert T.no_label_end(mode=1, steps=0) == "no_plan"
+    assert T.no_label_end(mode=0, steps=0) == "no_plan"
+
+
 def test_an_explore_plan_drives_at_the_cruise_speed():
     """Also undoes a previous goal episode's slow target: the expert outlives episodes."""
     e = _expert(None)

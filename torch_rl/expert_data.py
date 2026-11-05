@@ -105,10 +105,40 @@ def split_by_episode(paths, val_frac=0.05, seed=0):
             [p for i, p in enumerate(paths) if i in val])
 
 
+STOP_RUN = 5          # consecutive stop labels that mark a stop-forever tail
+STOP_MIN_KMH = 2.0    # ... starting while the car still moves
+
+
+def stop_cut(act_label, speed, run=STOP_RUN, min_kmh=STOP_MIN_KMH):
+    """Rows of an episode worth CLONING: all of them, unless the label turns
+    into the expert's final-approach stop (steer 0, throttle 0 env = actor
+    [0, -1]) for `run` consecutive steps starting while the car moves faster
+    than `min_kmh` -- then everything before that run.
+
+    That run is what DAgger recorded once the clone had driven PAST the goal:
+    the expert's route was spent and its only answer, every step until the
+    episode ended, was "stop" (9 round-1 episodes held 98% of all stop labels,
+    ~950 rows each, given at 14-18 km/h). Those rows taught the clone to crawl
+    (2-5 km/h). A single stop at the goal or at a route's end is a real label
+    and stays."""
+    lab = np.asarray(act_label)
+    sp = np.asarray(speed)
+    T = len(lab)
+    if T < run:
+        return T
+    st = (np.abs(lab[:, 0]) < 1e-6) & (lab[:, 1] <= -0.999)
+    full = np.convolve(st.astype(np.int32), np.ones(run, np.int32), mode="valid") == run
+    n = T - run + 1
+    cand = np.flatnonzero(full & st[:n] & (sp[:n] > min_kmh))
+    return int(cand[0]) if len(cand) else T
+
+
 def fill_buffer(buf, paths, which="label", env_id=0):
     """Load episodes into a DeviceEpisodeBuffer exactly as the trainer would
     have added them. `which`: "label" (cloning) or "exec" (replay). Returns the
-    number of transitions added; empty episodes are skipped."""
+    number of transitions added; empty episodes are skipped. For cloning, an
+    episode is cut before a stop-forever label tail (stop_cut) and the cut
+    episode counts as truncated; replay keeps every executed step."""
     if which not in ("label", "exec"):
         raise ValueError(f"which must be 'label' or 'exec', got {which!r}")
     key = "act_label" if which == "label" else "act_exec"
@@ -116,6 +146,10 @@ def fill_buffer(buf, paths, which="label", env_id=0):
     for path in paths:
         ep = load_episode(path)
         T = len(ep["act_exec"])
+        cut = False
+        if which == "label":
+            keep = stop_cut(ep["act_label"], ep["speed"])
+            cut, T = keep < T, keep
         if T == 0:
             continue
         mode = int(ep["mode"])
@@ -123,7 +157,7 @@ def fill_buffer(buf, paths, which="label", env_id=0):
         # raises numpy's array-to-scalar DeprecationWarning (same row either way).
         rows = [pxr.mono_row(ep["frames"][t], float(mode), ep["binoc"][t].astype(np.float32))
                 for t in range(T + 1)]
-        term, trunc = bool(ep["terminal"]), bool(ep["truncated"])
+        term, trunc = (False, True) if cut else (bool(ep["terminal"]), bool(ep["truncated"]))
         for t in range(T):
             last = t == T - 1
             buf.add(rows[t], ep[key][t], float(ep["reward"][t]), term and last,

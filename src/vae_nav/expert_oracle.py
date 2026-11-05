@@ -547,6 +547,15 @@ class BasicAgentExpert(ExpertOracle):
             (tf.get_forward_vector().x, tf.get_forward_vector().y),
             (self._goal_loc.x, self._goal_loc.y))
         if not go:
+            # AT the goal (within FINAL_APPROACH_STOP_M): stop is the answer.
+            # Goal BESIDE or BEHIND the car: the route is spent and the car is
+            # past it -- there is no correction to give, so no label (None): a
+            # recording ends there. Answering "stop" every step was what DAgger
+            # round 1 recorded after each overshoot (~950 rows each, at
+            # 14-18 km/h), and it taught the retrained clone to crawl.
+            gx, gy = self._goal_loc.x - tf.location.x, self._goal_loc.y - tf.location.y
+            if float(np.hypot(gx, gy)) >= self.FINAL_APPROACH_STOP_M:
+                return None
             return self._to_action((0.0, 0.0))
         import carla
         from types import SimpleNamespace

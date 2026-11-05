@@ -210,6 +210,16 @@ TRACE_STALL_M = env_float("TRACE_STALL_M", 1500.0)
 TRACE_END_ON_CROSSING = os.environ.get("TRACE_END_ON_CROSSING", "1") == "1"
 
 
+def no_label_end(mode, steps) -> str:
+    """Why a recording ended when the expert gave no label: an explore plan ran
+    out ("route_done"), the car passed a goal episode's goal so the spent route
+    has no correction left ("passed_goal"), or there was never a plan
+    ("no_plan", nothing recorded)."""
+    if int(steps) <= 0:
+        return "no_plan"
+    return "route_done" if int(mode) == 0 else "passed_goal"
+
+
 def ramp_needs_parallel(ramp_start, parallel, eval_from, expert_record) -> bool:
     """True when a junction-goal ramp is configured for a TRAINING run that is
     not on the parallel loop, the only loop that implements it. Eval and
@@ -633,7 +643,7 @@ def run_record(env, agent, pxr, server, out_root):
                 expert.replan_if_off_route(EXPERT_REPLAN_M)
             a_exp = expert.act()
             if a_exp is None:
-                end = "route_done" if (mode == 0 and rec["act_exec"]) else "no_plan"
+                end = no_label_end(mode, len(rec["act_exec"]))
                 truncated = True
                 break
             a_pol = None

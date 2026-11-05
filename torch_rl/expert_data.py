@@ -153,9 +153,15 @@ def fill_buffer(buf, paths, which="label", env_id=0):
         if T == 0:
             continue
         mode = int(ep["mode"])
+        # The speed each frame was taken at (used only under SPEED_OBS): frame
+        # t+1 was recorded with speed[t] from the same step, frame 0 is the
+        # reset frame, taken at rest -- the pairing live rows read from
+        # info["speed_kmh"].
+        frame_kmh = np.concatenate([[0.0], np.asarray(ep["speed"], np.float32)])
         # A plain float: mono_row does float(mode), which on a 1-element array
         # raises numpy's array-to-scalar DeprecationWarning (same row either way).
-        rows = [pxr.mono_row(ep["frames"][t], float(mode), ep["binoc"][t].astype(np.float32))
+        rows = [pxr.mono_row(ep["frames"][t], float(mode), ep["binoc"][t].astype(np.float32),
+                             speed_kmh=float(frame_kmh[t]))
                 for t in range(T + 1)]
         term, trunc = (False, True) if cut else (bool(ep["terminal"]), bool(ep["truncated"]))
         for t in range(T):

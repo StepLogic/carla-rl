@@ -173,3 +173,20 @@ def test_run_bc_train_refuses_a_held_out_town(tmp_path, monkeypatch):
     _bc_env(monkeypatch, tmp_path, BC_TOWNS="Town05 Town02")
     with pytest.raises(ValueError, match="held out"):
         run_bc_train(str(tmp_path / "out"), make_agent=_small_pixel_agent)
+
+
+def test_bc_max_seed_keeps_only_the_expert_episodes(tmp_path, monkeypatch):
+    """The DAgger rounds write into the same data root (seeds 300000+); a
+    round-0 clone must train on the expert's own episodes (seeds 1xxxxx) only."""
+    import json
+    from torch_rl.bc_trainer import run_bc_train
+    _shards(tmp_path / "data", n=3)                       # seeds 100000-100002
+    import shutil
+    for i in range(2):                                    # two 'DAgger' episodes
+        shutil.copy(tmp_path / "data" / "Town05" / f"ep_{100000 + i}.npz",
+                    tmp_path / "data" / "Town05" / f"ep_{300000 + i}.npz")
+    _bc_env(monkeypatch, tmp_path / "data", BC_MAX_SEED="199999")
+    run_bc_train(str(tmp_path / "out"), make_agent=_small_pixel_agent)
+    split = json.loads((tmp_path / "out" / "bc_split.json").read_text())
+    used = split["train"] + split["val"]
+    assert len(used) == 3 and not any("ep_3" in os.path.basename(p) for p in used)

@@ -22,6 +22,7 @@ goal camera is already 112x112; DEBiT wants 112. Resizing on the way into the
 replay keeps the row width fixed and the per-update cost zero, and it means the
 stored frame is exactly what the encoder will see.
 """
+import os
 from typing import Tuple
 
 import numpy as np
@@ -132,8 +133,27 @@ def to_frame(frame: np.ndarray, size: int) -> np.ndarray:
     return a.astype(np.float32)
 
 
-def mono_row(frame: np.ndarray, mode, binoc) -> np.ndarray:
-    """One replay row for the binocular+monocular arm: [frame | mode | binoc].
+# SPEED IN THE OBSERVATION (user 2026-11-05, "add speed"), SPEED_OBS=1: the row
+# becomes [frame | mode | speed/SPEED_SCALE_KMH | binoc]. Without it the policy
+# cannot tell a standstill from cruising in one frame, and imitation labels
+# that depend on speed (the expert's speed controller: brake just above its
+# target, full throttle just below) contradict each other on identical-looking
+# frames -- DAgger round 1's clone averaged them into a crawl. Read at call time,
+# so tests can switch it; off by default, so every earlier checkpoint keeps its
+# layout (and a mismatched one fails its strict load on the state width).
+SPEED_OBS = os.environ.get("SPEED_OBS", "0") == "1"
+SPEED_SCALE_KMH = 20.0
+
+
+def n_extra_state() -> int:
+    """State columns between the mode bit and the binoc: 1 with SPEED_OBS."""
+    return 1 if SPEED_OBS else 0
+
+
+def mono_row(frame: np.ndarray, mode, binoc, speed_kmh=None) -> np.ndarray:
+    """One replay row for the binocular+monocular arm: [frame | mode | binoc],
+    or [frame | mode | speed | binoc] with SPEED_OBS (speed_kmh then required:
+    the car's speed when the frame was taken, info["speed_kmh"]).
 
     NO PREVIOUS ACTION (user 2026-10-14: "remove prev action from obs space").
     That closes the last feedback path from the policy's own output back into
@@ -156,13 +176,21 @@ def mono_row(frame: np.ndarray, mode, binoc) -> np.ndarray:
             f"binoc must be {BINOC_DIM}-d (DEBiT's output), got {b.size}. An "
             "unencoded zero vector here would train the policy goal-blind.")
     m = np.asarray([float(mode)], np.float32)
-    return np.concatenate([pix, m, b]).astype(np.float32)
+    parts = [pix, m]
+    if SPEED_OBS:
+        if speed_kmh is None:
+            raise ValueError("SPEED_OBS=1: mono_row needs speed_kmh (info['speed_kmh']); "
+                             "a row without it would mislead the policy about the car's speed")
+        parts.append(np.asarray([float(speed_kmh) / SPEED_SCALE_KMH], np.float32))
+    parts.append(b)
+    return np.concatenate(parts).astype(np.float32)
 
 
 def mono_state_dim(binoc_dim: int = BINOC_DIM) -> int:
-    """mode + binoc. The learner's mode_index is 0 and core_state_cols is the
-    rest, so the GRU reads the binoc and the critic reads the mode."""
-    return 1 + int(binoc_dim)
+    """mode (+ speed with SPEED_OBS) + binoc. The learner's mode_index is 0 and
+    core_state_cols is the rest, so the GRU reads speed and binoc and the
+    critic reads the mode."""
+    return 1 + n_extra_state() + int(binoc_dim)
 
 
 def mono_row_dim(binoc_dim: int = BINOC_DIM) -> int:
@@ -171,5 +199,6 @@ def mono_row_dim(binoc_dim: int = BINOC_DIM) -> int:
 
 
 def mono_core_state_cols(binoc_dim: int = BINOC_DIM):
-    """The binoc columns inside the state block: everything after the mode bit."""
-    return tuple(range(1, 1 + int(binoc_dim)))
+    """The GRU's state columns: everything after the mode bit (speed with
+    SPEED_OBS, then the binoc)."""
+    return tuple(range(1, 1 + n_extra_state() + int(binoc_dim)))

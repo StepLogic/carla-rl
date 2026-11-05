@@ -181,7 +181,11 @@ class ImageGoalHER:
             row = e["rows"][t].astype(np.float32).copy()
             nrow = e["next_rows"][t].astype(np.float32).copy()
             row[P], nrow[P] = 1.0, 1.0                    # goal mode
-            row[P + 1:], nrow[P + 1:] = b_cur[k], b_nxt[k]
+            # The binoc is the row's TAIL; anything between it and the mode bit
+            # (the car's speed under SPEED_OBS) belongs to the car, not the
+            # goal, and is kept.
+            B = b_cur.shape[1]
+            row[-B:], nrow[-B:] = b_cur[k], b_nxt[k]
             last = t == j
             if last:
                 # STOP_ACTION: the leg's last row is relabelled as an arrival,

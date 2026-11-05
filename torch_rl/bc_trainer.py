@@ -141,7 +141,15 @@ def run_bc_train(out_root, make_agent=None):
     save_every = _env_int("BC_SAVE_EVERY", 2500)
     init_from = os.environ.get("BC_INIT_FROM", "")
 
-    train, val = split_by_episode(episode_paths(root, towns))
+    paths = episode_paths(root, towns)
+    # BC_MAX_SEED: keep episodes whose seed (ep_<seed>.npz) is at most this --
+    # the DAgger rounds write into the same root from seed 300000, so a round-0
+    # clone sets 199999 to train on the expert's own episodes only.
+    max_seed = os.environ.get("BC_MAX_SEED", "")
+    if max_seed:
+        paths = [p for p in paths
+                 if int(os.path.basename(p)[3:-4]) <= int(max_seed)]
+    train, val = split_by_episode(paths)
     if not train or not val:
         raise SystemExit(f"BC needs >= 2 episodes under {root} for {towns}: "
                          f"{len(train)} train, {len(val)} val")

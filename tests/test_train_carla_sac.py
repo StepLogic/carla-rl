@@ -36,7 +36,7 @@ def test_the_state_block_is_the_MODE_BIT_AND_NOTHING_ELSE():
     s = src()
     # The mode goes through _net_mode (HIDE_MODE_BIT, v34): still the mode bit
     # and nothing else, now optionally held at 1 for the network.
-    assert 'pxr.mono_row(i["debit_cur"], _net_mode(o["mode"]), o["binoc"])' in s
+    assert 'pxr.mono_row(i["debit_cur"], _net_mode(o["mode"]), o["binoc"],\n                            speed_kmh=_speed_kmh(i))' in s
     assert 'o["vector"]' not in s and 'o["state"]' not in s
     assert "mode_index=0" in s
 

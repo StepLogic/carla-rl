@@ -317,6 +317,13 @@ def to_actor(e, box):
     return (2.0 * (np.asarray(e, np.float32) - lo) / (hi - lo) - 1.0).astype(np.float32)
 
 
+def _speed_kmh(info):
+    """The car's speed for the observation row (SPEED_OBS): info["speed_kmh"],
+    0 when absent -- at a reset the car stands still, which is also what the
+    recorded episodes pair with their first frame."""
+    return float(info.get("speed_kmh", 0.0) or 0.0)
+
+
 def _fault(info):
     """The eval fault rule: collision, off-road, or a lane crossing as the
     training reward reads one -- solid lines, curbs and grass anywhere, broken
@@ -454,7 +461,8 @@ def run_trace(env, agent, pxr, server, out_root):
         # Town02's segments at 4 and 8 "crossings", about four steps a line.
         crossing = CrossingCounter()
         while end is None:
-            row = pxr.mono_row(info["debit_cur"], _net_mode(obs["mode"]), obs["binoc"])
+            row = pxr.mono_row(info["debit_cur"], _net_mode(obs["mode"]), obs["binoc"],
+                               speed_kmh=_speed_kmh(info))
             action, hidden, st = agent.act_with_stats(
                 row, hidden, goal=goal_blk, deterministic=TRACE_NOISE_SCALE <= 0,
                 noise_scale=max(TRACE_NOISE_SCALE, 0.0))
@@ -548,7 +556,8 @@ def run_sgm_pairs(agent, enc, pxr):
     for k in range(0, len(pairs), B):
         pa = pairs[k:k + B]
         binoc = enc.encode_batch(frames[pa[:, 0]], frames[pa[:, 1]])
-        rows = np.stack([pxr.mono_row(frames[i], mode, b) for i, b in zip(pa[:, 0], binoc)])
+        rows = np.stack([pxr.mono_row(frames[i], mode, b, speed_kmh=0.0)   # first step: at rest
+                         for i, b in zip(pa[:, 0], binoc)])
         q[k:k + B] = agent.q_batch(rows)
         if (k // B) % 200 == 0:
             print(f"[SGMPairs] {k + len(pa)}/{len(pairs)} pairs, {time.time() - t0:.0f}s", flush=True)
@@ -648,7 +657,8 @@ def run_record(env, agent, pxr, server, out_root):
                 break
             a_pol = None
             if EXPERT_DRIVER == "policy":
-                row = pxr.mono_row(info["debit_cur"], _net_mode(obs["mode"]), obs["binoc"])
+                row = pxr.mono_row(info["debit_cur"], _net_mode(obs["mode"]), obs["binoc"],
+                               speed_kmh=_speed_kmh(info))
                 a_act, hidden = agent.act(row, hidden, goal=goal_blk, deterministic=True)
                 a_pol = to_env(np.asarray(a_act, np.float32), box)
             a_exec, a_label = record_step(EXPERT_DRIVER, a_pol, a_exp, sigma,
@@ -887,7 +897,8 @@ def run_eval(env, agent, pxr, server, out_root):
             os.environ.get("GOAL_ARRIVAL_MAX_SPEED", 10.0)), radius=GOAL_RADIUS_M,
             radius_2m=2.0) if gpos is not None else None)
         while end is None:
-            row = pxr.mono_row(info["debit_cur"], _net_mode(obs["mode"]), obs["binoc"])
+            row = pxr.mono_row(info["debit_cur"], _net_mode(obs["mode"]), obs["binoc"],
+                               speed_kmh=_speed_kmh(info))
             action, hidden = agent.act(row, hidden, goal=goal_blk,
                                        deterministic=EVAL_NOISE_SCALE <= 0,
                                        noise_scale=EVAL_NOISE_SCALE)
@@ -1315,7 +1326,8 @@ def main():
             raise RuntimeError(
                 "info['binoc_encoded'] is False: the env wrapper has no DEBiT "
                 "encoder, so the binoc column would be zeros.")
-        return pxr.mono_row(i["debit_cur"], _net_mode(o["mode"]), o["binoc"])
+        return pxr.mono_row(i["debit_cur"], _net_mode(o["mode"]), o["binoc"],
+                            speed_kmh=_speed_kmh(i))
 
     if parallel:
         from torch_rl.parallel_loop import run_parallel

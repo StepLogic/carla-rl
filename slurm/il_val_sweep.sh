@@ -24,7 +24,7 @@ for s in $STEPS; do
       exit 1
     fi
   done
-  OVERLAY=slurm/il_eval_val.env CKPT=$c TOWN=$TOWN RUN=${BC_RUN}_val_$TOWN N=40 PORT=$PORT \
+  OVERLAY=${VAL_OVERLAY:-slurm/il_eval_val.env} CKPT=$c TOWN=$TOWN RUN=${BC_RUN}_val_$TOWN N=40 PORT=$PORT \
     bash slurm/il_eval_pair.sh
 done
 echo "=== VAL_SWEEP DONE ==="

@@ -1273,6 +1273,7 @@ def main():
     ACT_DIM = int(env.action_space.shape[0])
     agent = build_agent(binoc_dim, ACT_DIM)
     mono_report = agent.mono_report
+    cfg = agent.cfg          # the banner and the [Ep] line read the learner's config
     if EXPERT_RECORD:
         if EXPERT_DRIVER == "policy":
             if not EVAL_FROM:

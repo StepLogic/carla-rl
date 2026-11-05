@@ -31,7 +31,8 @@ def run_parallel(venv, agent, buf, row_of, box, *, to_env, to_actor, goal_block,
                  max_steps, learning_starts, update_every, updates_per,
                  chunk_b, chunk_t, burn_in, ckpt_every, out_dir, log_every,
                  vids=None, her=None, log=print, on_episode=None,
-                 det_frac=0.0, det_seed=0, junction_ramp=None, random_warmup=True):
+                 det_frac=0.0, det_seed=0, junction_ramp=None, random_warmup=True,
+                 after_update=None):
     """Train until `max_steps` transitions. Returns (steps, episodes).
 
     `det_frac` (user 2026-10-25): the share of episodes, drawn per env at each
@@ -223,6 +224,8 @@ def run_parallel(venv, agent, buf, row_of, box, *, to_env, to_actor, goal_block,
                 for _ in range(updates_per):
                     chunk = buf.sample_chunks(chunk_b, chunk_t + burn_in, burn_in)
                     metrics = agent.update(chunk)
+                    if after_update is not None:
+                        after_update()       # e.g. the fine-tune's cloning step
             next_update += update_every
         while step >= next_ckpt:
             d = os.path.join(out_dir, f"step_{next_ckpt}")

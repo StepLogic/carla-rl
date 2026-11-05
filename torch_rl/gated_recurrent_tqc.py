@@ -452,6 +452,7 @@ class GatedRecurrentTQC:
         # must never set this -- CPU has no tensor cores, so CPU autocast buys
         # no speed and is not the deployment target for cfg.bf16.
         self._test_cpu_autocast = bool(_test_cpu_autocast)
+        self.warmup = False              # set_warmup: critic-only updates
         # Reseeds the GLOBAL torch RNG, as RecurrentTQC does: construction
         # order below is load-bearing for reproducibility.
         torch.manual_seed(cfg.seed)
@@ -572,6 +573,18 @@ class GatedRecurrentTQC:
         if self._test_cpu_autocast:
             return torch.autocast("cpu", dtype=torch.bfloat16)
         return contextlib.nullcontext()
+
+    def set_warmup(self, on: bool) -> None:
+        """Critic warm-up for a fine-tune from a clone (imitation-first plan,
+        Task 10). On: the encoder, action embedding and GRU stop taking
+        gradients and _update_impl skips the actor and temperature steps, so
+        only the critic heads learn -- the loaded clone's values, without the
+        clone moving. Off: everything trains again."""
+        self.warmup = bool(on)
+        for m in (self.compress, self.act_embed, self.core):
+            if m is not None:
+                for prm in m.parameters():
+                    prm.requires_grad_(not self.warmup)
 
     def _actor_forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         with self._autocast():
@@ -1010,67 +1023,77 @@ class GatedRecurrentTQC:
             # already returns fp32, so this is exact whatever cfg.bf16 is.
             mean_u, log_std = self._actor_forward(actor_in)
             entropy = log_std.sum(dim=-1) + cfg.action_dim * _HALF_LOG_2PI_E
-        new_a, logp = self._actor_sample(actor_in)
-        # SATURATION DIAGNOSTICS (2026-10-19, after v7/v8/v10 all locked one
-        # action at its limit while alpha_g fell to ~5e-4). Logged only; they
-        # change nothing. The temperature tunes against the SAMPLED, SQUASHED
-        # -log pi (neg_logp), not the base-Gaussian entropy above, so both are
-        # needed to tell "random enough" from "stuck at +-1 with a wide
-        # Gaussian behind it".
-        with torch.no_grad():
-            _a = new_a.detach()
-            diag = {
-                "neg_logp_g": _masked_mean(-logp.detach(), m_g),
-                "sat_steer": _masked_mean((_a[..., 0].abs() > 0.99).float(), m_g),
-                "sat_throttle": _masked_mean((_a[..., 1].abs() > 0.99).float(), m_g),
-                "mean_abs_u_steer": _masked_mean(mean_u[..., 0].abs(), m_g),
-                "mean_abs_u_throttle": _masked_mean(mean_u[..., 1].abs(), m_g),
-                "log_std_g": _masked_mean(log_std.mean(dim=-1), m_g),
-                # ENCODER HEALTH (2026-10-26): share of visual output units that
-                # vary across this batch's last frames. 0 = the camera is dead.
-                "enc_alive": self._enc_alive(obs),
-            }
-        per_row = zero
-        if has_g:
-            q_g = self._q(self.critics_g, s_d, st, self.goal_cols, new_a).mean(dim=(0, 2))
-            scale_g = self._actor_q_scale(q_g, m_g, self.q_scale_g, self.q_scale_init_g)
-            per_row = per_row + (alpha_g * logp - q_g / scale_g) * m_g
-        if has_e:
-            q_e = self._q(self.critics_e, s_d, st, self.explore_cols, new_a).mean(dim=(0, 2))
-            scale_e = self._actor_q_scale(q_e, m_e, self.q_scale_e, self.q_scale_init_e)
-            # v13 warm-up: the exploration critic trains alone for the first
-            # explore_actor_warmup updates. A tensor, so no per-update guard.
-            w_e = (self.n_updates >= cfg.explore_actor_warmup).to(logp.dtype)
-            per_row = per_row + w_e * (alpha_e * logp - q_e / scale_e) * m_e
-        if cfg.actor_pretanh_l2 > 0.0:
-            # A second actor forward WITH grad: the one above is no_grad.
-            mean_live, _ = self._actor_forward(actor_in)
-            pen = pretanh_penalty(mean_live, cfg.actor_pretanh_free)
-            per_row = per_row + cfg.actor_pretanh_l2 * pen * (m_g + m_e)
-            diag["pretanh_pen"] = _masked_mean(pen.detach(), m_g + m_e)
+        if self.warmup:
+            # CRITIC WARM-UP (imitation-first fine-tune, 2026-11-05): the critic
+            # learns the loaded clone's values while nothing the clone learned
+            # moves -- no actor step, no temperature step; set_warmup froze the
+            # encoder and the GRU, so the critic loss above trained the heads only.
+            actor_loss = temp_loss_g = temp_loss_e = zero
+            diag = {k: zero for k in ("neg_logp_g", "sat_steer", "sat_throttle",
+                                      "mean_abs_u_steer", "mean_abs_u_throttle",
+                                      "log_std_g", "enc_alive", "pretanh_pen")}
         else:
-            diag["pretanh_pen"] = zero
-        actor_loss = per_row.sum() / (m_g + m_e).sum().clamp_min(1.0)
-        self.opt_actor.zero_grad(set_to_none=True)
-        actor_loss.backward()
-        self.opt_actor.step()
-        # actor_loss flowed through the critics: clear those grads so critic
-        # grads are only ever from the critic loss (as in RecurrentTQC).
-        self.opt_critic.zero_grad(set_to_none=True)
+            new_a, logp = self._actor_sample(actor_in)
+            # SATURATION DIAGNOSTICS (2026-10-19, after v7/v8/v10 all locked one
+            # action at its limit while alpha_g fell to ~5e-4). Logged only; they
+            # change nothing. The temperature tunes against the SAMPLED, SQUASHED
+            # -log pi (neg_logp), not the base-Gaussian entropy above, so both are
+            # needed to tell "random enough" from "stuck at +-1 with a wide
+            # Gaussian behind it".
+            with torch.no_grad():
+                _a = new_a.detach()
+                diag = {
+                    "neg_logp_g": _masked_mean(-logp.detach(), m_g),
+                    "sat_steer": _masked_mean((_a[..., 0].abs() > 0.99).float(), m_g),
+                    "sat_throttle": _masked_mean((_a[..., 1].abs() > 0.99).float(), m_g),
+                    "mean_abs_u_steer": _masked_mean(mean_u[..., 0].abs(), m_g),
+                    "mean_abs_u_throttle": _masked_mean(mean_u[..., 1].abs(), m_g),
+                    "log_std_g": _masked_mean(log_std.mean(dim=-1), m_g),
+                    # ENCODER HEALTH (2026-10-26): share of visual output units that
+                    # vary across this batch's last frames. 0 = the camera is dead.
+                    "enc_alive": self._enc_alive(obs),
+                }
+            per_row = zero
+            if has_g:
+                q_g = self._q(self.critics_g, s_d, st, self.goal_cols, new_a).mean(dim=(0, 2))
+                scale_g = self._actor_q_scale(q_g, m_g, self.q_scale_g, self.q_scale_init_g)
+                per_row = per_row + (alpha_g * logp - q_g / scale_g) * m_g
+            if has_e:
+                q_e = self._q(self.critics_e, s_d, st, self.explore_cols, new_a).mean(dim=(0, 2))
+                scale_e = self._actor_q_scale(q_e, m_e, self.q_scale_e, self.q_scale_init_e)
+                # v13 warm-up: the exploration critic trains alone for the first
+                # explore_actor_warmup updates. A tensor, so no per-update guard.
+                w_e = (self.n_updates >= cfg.explore_actor_warmup).to(logp.dtype)
+                per_row = per_row + w_e * (alpha_e * logp - q_e / scale_e) * m_e
+            if cfg.actor_pretanh_l2 > 0.0:
+                # A second actor forward WITH grad: the one above is no_grad.
+                mean_live, _ = self._actor_forward(actor_in)
+                pen = pretanh_penalty(mean_live, cfg.actor_pretanh_free)
+                per_row = per_row + cfg.actor_pretanh_l2 * pen * (m_g + m_e)
+                diag["pretanh_pen"] = _masked_mean(pen.detach(), m_g + m_e)
+            else:
+                diag["pretanh_pen"] = zero
+            actor_loss = per_row.sum() / (m_g + m_e).sum().clamp_min(1.0)
+            self.opt_actor.zero_grad(set_to_none=True)
+            actor_loss.backward()
+            self.opt_actor.step()
+            # actor_loss flowed through the critics: clear those grads so critic
+            # grads are only ever from the critic loss (as in RecurrentTQC).
+            self.opt_critic.zero_grad(set_to_none=True)
 
-        # Temperatures: a mode absent from the batch takes no step at all.
-        lp = logp.detach()
-        temp_loss_g = temp_loss_e = zero
-        if has_g:
-            temp_loss_g = _masked_mean(self.log_alpha_g.exp() * (-lp - cfg.target_entropy), m_g)
-            self.opt_temp_g.zero_grad(set_to_none=True)
-            temp_loss_g.backward()
-            self.opt_temp_g.step()
-        if has_e:
-            temp_loss_e = _masked_mean(self.log_alpha_e.exp() * (-lp - cfg.target_entropy_e), m_e)
-            self.opt_temp_e.zero_grad(set_to_none=True)
-            temp_loss_e.backward()
-            self.opt_temp_e.step()
+            # Temperatures: a mode absent from the batch takes no step at all.
+            lp = logp.detach()
+            temp_loss_g = temp_loss_e = zero
+            if has_g:
+                temp_loss_g = _masked_mean(self.log_alpha_g.exp() * (-lp - cfg.target_entropy), m_g)
+                self.opt_temp_g.zero_grad(set_to_none=True)
+                temp_loss_g.backward()
+                self.opt_temp_g.step()
+            if has_e:
+                temp_loss_e = _masked_mean(self.log_alpha_e.exp() * (-lp - cfg.target_entropy_e), m_e)
+                self.opt_temp_e.zero_grad(set_to_none=True)
+                temp_loss_e.backward()
+                self.opt_temp_e.step()
 
         with torch.no_grad():
             self.n_updates.add_(1)

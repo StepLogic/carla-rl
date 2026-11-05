@@ -88,6 +88,21 @@ INIT_FROM = os.environ.get("INIT_FROM", "")
 INIT_MIN_LEARNING_STARTS = env_int("INIT_MIN_LEARNING_STARTS", 20_000)
 if INIT_FROM and EVAL_FROM:
     raise ValueError("INIT_FROM (resume training) and EVAL_FROM (evaluate) are exclusive")
+# IMITATION-FIRST FINE-TUNE (plan Task 10, 2026-11-05): with IL_PRELOAD_ROOT set, a
+# training run (normally INIT_FROM a clone) first fills its replay with the
+# recorded episodes' executed steps and an expert buffer with their labels,
+# warms the critic up for IL_CRITIC_WARMUP_UPDATES updates with the encoder, GRU
+# and actor frozen, then after every RL update takes one cloning step at a
+# weight fading from IL_BC_WEIGHT0 to 0 over IL_BC_DECAY_UPDATES
+# (torch_rl/bc_trainer.il_finetune_prepare). The online cloning batch is
+# IL_BC_CHUNKS x IL_BC_LEN, training-sized by default.
+IL_PRELOAD_ROOT = os.environ.get("IL_PRELOAD_ROOT", "")
+IL_PRELOAD_TOWNS = os.environ.get("IL_PRELOAD_TOWNS", "Town01 Town04 Town05 Town10HD").split()
+IL_CRITIC_WARMUP_UPDATES = env_int("IL_CRITIC_WARMUP_UPDATES", 5000)
+IL_BC_WEIGHT0 = env_float("IL_BC_WEIGHT0", 1.0)
+IL_BC_DECAY_UPDATES = env_int("IL_BC_DECAY_UPDATES", 10000)
+IL_BC_CHUNKS = env_int("IL_BC_CHUNKS", CHUNK_B)
+IL_BC_LEN = env_int("IL_BC_LEN", CHUNK_T)
 EVAL_EPISODES = env_int("EVAL_EPISODES", 40)
 EVAL_SEED = env_int("EVAL_SEED", 10_000)
 # EVAL_STOCHASTIC=1 samples actions from the policy (training noise) instead
@@ -1236,7 +1251,7 @@ def main():
         return run_eval(env, agent, pxr, server, OUT)
     if INIT_FROM:
         # After load_debit_mono above, so the checkpoint's trained encoder wins.
-        if LEARNING_STARTS < INIT_MIN_LEARNING_STARTS:
+        if LEARNING_STARTS < INIT_MIN_LEARNING_STARTS and not IL_PRELOAD_ROOT:
             raise ValueError(
                 f"INIT_FROM={INIT_FROM} with LEARNING_STARTS={LEARNING_STARTS}: the "
                 f"replay buffer starts empty, and updating on a near-empty one "
@@ -1329,6 +1344,21 @@ def main():
         return pxr.mono_row(i["debit_cur"], _net_mode(o["mode"]), o["binoc"],
                             speed_kmh=_speed_kmh(i))
 
+    il_hook = None
+    if IL_PRELOAD_ROOT:
+        from torch_rl.bc_trainer import il_finetune_prepare
+        il_aug = None
+        if os.environ.get("BC_AUG", "") == "1":
+            il_aug = {"gen": torch.Generator().manual_seed(SEED),
+                      "bright": env_float("BC_AUG_BRIGHT", 0.4),
+                      "contrast": env_float("BC_AUG_CONTRAST", 0.4),
+                      "color": env_float("BC_AUG_COLOR", 0.1)}
+        il_hook = il_finetune_prepare(
+            agent, buf, IL_PRELOAD_ROOT, IL_PRELOAD_TOWNS,
+            warmup_updates=IL_CRITIC_WARMUP_UPDATES, chunk_b=CHUNK_B, chunk_t=CHUNK_T,
+            w0=IL_BC_WEIGHT0, decay_updates=IL_BC_DECAY_UPDATES, bc_chunks=IL_BC_CHUNKS,
+            bc_len=IL_BC_LEN, aug=il_aug, log=lambda m: print(m, flush=True))
+
     if parallel:
         from torch_rl.parallel_loop import run_parallel
         print(f"  PARALLEL: {len(TOWNS)} envs at once, one server per town "
@@ -1393,7 +1423,7 @@ def main():
             log=lambda m: print(m, flush=True),
             det_frac=DET_EPISODE_FRAC, det_seed=SEED, junction_ramp=ramp,
             # A warm start refills the empty buffer with its OWN policy.
-            random_warmup=not INIT_FROM)
+            random_warmup=not INIT_FROM, after_update=il_hook)
         venv.close()
         for srv in servers:
             srv.stop()
@@ -1515,6 +1545,8 @@ def main():
             for _ in range(UPDATES_PER):
                 chunk = buf.sample_chunks(CHUNK_B, CHUNK_T + BURN_IN, BURN_IN)
                 metrics = agent.update(chunk)
+                if il_hook is not None:
+                    il_hook()
 
         if step % CKPT_EVERY == 0:
             d = os.path.join(OUT, f"step_{step}")

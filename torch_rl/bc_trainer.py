@@ -138,6 +138,73 @@ def bc_step(agent, opt, chunk, weight=1.0, aug=None):
     return stats
 
 
+def bc_weight(n_updates, w0, decay_updates):
+    """The fine-tune's cloning weight: w0 at the first update, falling linearly
+    to 0 at decay_updates and staying there."""
+    if decay_updates <= 0:
+        return 0.0
+    return float(w0) * max(0.0, 1.0 - float(n_updates) / float(decay_updates))
+
+
+def il_bc_hook(agent, opt, expert_buf, n_chunks, length, w0, decay_updates,
+               on_weight=None, aug=None):
+    """The fine-tune's per-update cloning step (imitation-first plan, Task 10):
+    a callable the online loop calls after every agent.update. Each call takes
+    one bc_step on an expert-label chunk (length + burn-in rows) at weight
+    bc_weight(calls so far); once the weight reaches 0 it does nothing.
+    `on_weight` (optional) receives each call's weight, for the log."""
+    count = [0]
+    K = int(agent.cfg.burn_in)
+
+    def hook():
+        w = bc_weight(count[0], w0, decay_updates)
+        count[0] += 1
+        if on_weight is not None:
+            on_weight(w)
+        if w <= 0.0:
+            return None
+        return bc_step(agent, opt, expert_buf.sample_chunks(n_chunks, length + K, K),
+                       weight=w, aug=aug)
+
+    return hook
+
+
+def il_finetune_prepare(agent, buf, root, towns, *, warmup_updates, chunk_b, chunk_t,
+                        w0, decay_updates, bc_chunks, bc_len, aug=None, log=print):
+    """Ready a clone for the RL fine-tune (imitation-first plan, Task 10), before
+    the first env step:
+      1. the recorded episodes fill the replay `buf` with their EXECUTED actions
+         and rewards (off-policy data the critic can learn from at once), and a
+         separate expert buffer with their LABELS (what the cloning loss copies);
+      2. the critic warms up: `warmup_updates` updates with set_warmup(True), so
+         it learns the clone's values while the clone itself stays put;
+      3. returns il_bc_hook -- the per-update cloning step, weight w0 fading to 0
+         over decay_updates -- for the online loop to call after every update.
+    The cloning optimiser lives in the hook, never in agent.save."""
+    for t in towns:
+        assert_recordable_town(t)                 # never a held-out town
+    paths = episode_paths(root, towns)
+    if not paths:
+        raise SystemExit(f"IL preload: no episodes under {root} for {towns}")
+    n_exec = fill_buffer(buf, paths, which="exec")
+    act_dim = int(load_episode(paths[0])["act_label"].shape[1])
+    expert_buf, n_lab = _buffer(paths, act_dim, agent.device, seed=1)
+    log(f"[IL] preload {root}: {len(paths)} episodes -> replay +{n_exec} executed steps, "
+        f"expert buffer {n_lab} labelled steps")
+    K = int(agent.cfg.burn_in)
+    t0 = time.time()
+    agent.set_warmup(True)
+    m = {}
+    for _ in range(int(warmup_updates)):
+        m = agent.update(buf.sample_chunks(chunk_b, chunk_t + K, K))
+    agent.set_warmup(False)
+    log(f"[IL] critic warm-up: {int(warmup_updates)} updates, encoder/GRU/actor frozen, "
+        f"q_g {m.get('q_g', float('nan')):.2f} critic_loss_g "
+        f"{m.get('critic_loss_g', float('nan')):.3f} ({time.time() - t0:.0f} s)")
+    return il_bc_hook(agent, make_bc_optimizer(agent), expert_buf, bc_chunks, bc_len, w0,
+                      decay_updates, aug=aug)
+
+
 def _episode_rows(path):
     """Buffer rows an episode occupies (T transitions + 1), read from the one
     small array so the frames are not decompressed twice."""

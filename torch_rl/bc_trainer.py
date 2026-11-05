@@ -95,8 +95,42 @@ def sync_targets(agent):
         agent.core_targ.load_state_dict(agent.core.state_dict())
 
 
-def bc_step(agent, opt, chunk, weight=1.0):
-    """One cloning update; returns bc_loss's stats (before the step)."""
+def augment_frames(obs, gen=None, bright=0.4, contrast=0.4, color=0.1):
+    """Photometric augmentation of the camera frame in sampled rows (B, L, D).
+
+    User 2026-11-05: augmentation for the ResNet to help Town03, whose faults
+    sit in a dark lamp-lit tunnel and on glare-washed roads -- lighting the
+    training towns never show. Per CHUNK (one lighting over a stretch of
+    driving, as the GRU sees it): per-colour gain 1 +- color, contrast about
+    each frame's mean 1 +- contrast, brightness 1 +- bright; clipped to [0, 1]
+    (the ResNet refuses anything else). Only the frame block changes -- mode,
+    speed and the frozen binoc stay as recorded. Works in either frame layout
+    (pixel_rows.MONO_CHW). Returns a new tensor; `obs` is not modified."""
+    P, S = pxr.MONO_PIX, pxr.MONO_IMG
+    B, L = obs.shape[0], obs.shape[1]
+
+    def u(*shape):
+        return (torch.rand(*shape, generator=gen) * 2.0 - 1.0).to(obs.device, obs.dtype)
+
+    pix = obs[..., :P]
+    x = (pix.reshape(B, L, 3, S * S) if pxr.MONO_CHW
+         else pix.reshape(B, L, S * S, 3).transpose(-1, -2))          # (B, L, 3, HW)
+    x = x * (1.0 + color * u(B, 1, 3, 1))
+    m = x.mean(dim=(2, 3), keepdim=True)
+    x = (x - m) * (1.0 + contrast * u(B, 1, 1, 1)) + m
+    x = (x * (1.0 + bright * u(B, 1, 1, 1))).clamp(0.0, 1.0)
+    back = x.reshape(B, L, P) if pxr.MONO_CHW else x.transpose(-1, -2).reshape(B, L, P)
+    out = obs.clone()
+    out[..., :P] = back
+    return out
+
+
+def bc_step(agent, opt, chunk, weight=1.0, aug=None):
+    """One cloning update; returns bc_loss's stats (before the step). `aug`:
+    augment_frames keyword arguments (gen, bright, contrast, color) to apply
+    to this batch's frames, or None."""
+    if aug is not None:
+        chunk = dict(chunk, obs=augment_frames(chunk["obs"].to(agent.device, torch.float32), **aug))
     loss, stats = bc_loss(agent, chunk)
     opt.zero_grad(set_to_none=True)
     (loss * float(weight)).backward()
@@ -175,9 +209,20 @@ def run_bc_train(out_root, make_agent=None):
           f"x {length} (+{K} burn-in)", flush=True)
 
     opt = make_bc_optimizer(agent)
+    # BC_AUG=1: photometric augmentation of every TRAINING batch's frames
+    # (augment_frames); the fixed validation batch is never augmented.
+    aug = None
+    if os.environ.get("BC_AUG", "") == "1":
+        aug = {"gen": torch.Generator().manual_seed(_env_int("SEED", 0)),
+               "bright": float(os.environ.get("BC_AUG_BRIGHT", 0.4)),
+               "contrast": float(os.environ.get("BC_AUG_CONTRAST", 0.4)),
+               "color": float(os.environ.get("BC_AUG_COLOR", 0.1))}
+        print(f"[BC] augmentation on: brightness +-{aug['bright']:g}, contrast "
+              f"+-{aug['contrast']:g}, colour gain +-{aug['color']:g} (per chunk)", flush=True)
     window, t0 = [], time.time()
     for step in range(1, updates + 1):
-        window.append(bc_step(agent, opt, train_buf.sample_chunks(n_chunks, length + K, K)))
+        window.append(bc_step(agent, opt, train_buf.sample_chunks(n_chunks, length + K, K),
+                              aug=aug))
         if step % LOG_EVERY == 0 or step == updates:
             with torch.no_grad():
                 _, vs = bc_loss(agent, val_chunk)

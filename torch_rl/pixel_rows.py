@@ -144,6 +144,15 @@ def to_frame(frame: np.ndarray, size: int) -> np.ndarray:
 SPEED_OBS = os.environ.get("SPEED_OBS", "0") == "1"
 SPEED_SCALE_KMH = 20.0
 
+# THE FRAME LAYOUT (2026-11-05), MONO_CHW=1: store the frame (3, s, s)
+# channels-first, the layout the learner reads (gated_recurrent_tqc: "(3, s, s)
+# C-order ... _embed's reshape yields (N, 3, s, s) pixels with no permute").
+# Off, the frame is stored (s, s, 3) and that reshape hands the ResNet three
+# horizontal bands of the picture as its "colours", RGB interleaved along each
+# row (a top-half-white frame reads 1.0 / 0.5 / 0.0 per plane). Every checkpoint
+# before this flag was trained on that layout, so it stays the default.
+MONO_CHW = os.environ.get("MONO_CHW", "0") == "1"
+
 
 def n_extra_state() -> int:
     """State columns between the mode bit and the binoc: 1 with SPEED_OBS."""
@@ -169,7 +178,8 @@ def mono_row(frame: np.ndarray, mode, binoc, speed_kmh=None) -> np.ndarray:
     failed at step 283. fp16 holds [0, 1] with far more precision than 8-bit
     pixels carry, so nothing is lost.
     """
-    pix = (to_frame(frame, MONO_IMG) / 255.0).reshape(-1)
+    img = to_frame(frame, MONO_IMG) / 255.0
+    pix = (img.transpose(2, 0, 1) if MONO_CHW else img).reshape(-1)
     b = np.asarray(binoc, np.float32).reshape(-1)
     if b.size != BINOC_DIM:
         raise ValueError(

@@ -19,7 +19,10 @@ import sys
 import numpy as np
 
 FAULTS = ("crossing", "off_road", "collision")
-DT_S = 0.05                                     # one env step at 20 Hz
+# One env step is 0.1 s (train_env_config_v4_image_goal "timestep": 0.1; the
+# recorded expert covers 0.38 m/step at 13.8 km/h). Not 0.05 s, which the plan
+# assumed: that doubled every speed.
+DT_S = 0.1
 
 
 def failure_stats(segments):

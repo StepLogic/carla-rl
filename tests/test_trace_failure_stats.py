@@ -37,6 +37,14 @@ def test_runs_are_taken_over_fault_ended_segments_only():
     assert r["longest"] == pytest.approx(70.0)
 
 
+def test_speed_uses_the_env_step_of_0_1_s():
+    """The env ticks at 0.1 s (train_env_config_v4_image_goal "timestep": 0.1;
+    recorded expert data: 0.38 m/step at 13.8 km/h). The plan's 0.05 s doubled
+    every speed: the 15 km/h expert would have read 30 km/h."""
+    from trace_failure_stats import mean_speed_kmh
+    assert mean_speed_kmh([{"metres": 41.67, "steps": 100}]) == pytest.approx(15.0, abs=0.01)
+
+
 def test_matches_the_published_v30_town02_figure():
     with open(os.path.join(ROOT, "tests", "fixtures", "trace_v30det_Town02_index.json")) as fh:
         idx = json.load(fh)

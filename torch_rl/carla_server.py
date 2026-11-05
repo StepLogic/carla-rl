@@ -58,6 +58,26 @@ def shader_cache_dir(port: int) -> str:
     return os.path.join(shader_cache_root(), f"carla_nvcache_{job}_{int(port)}")
 
 
+def connect_with_restarts(build, server, tries: int = 3, log=print):
+    """build() connects a new env to `server`; on CarlaCore's "Cannot connect to
+    server" the server is restarted and build() tried again, up to `tries`
+    builds in all. Even with the node-local shader cache about one start in
+    sixteen hung in the client's first load_world until UE4's watchdog killed
+    the server (2026-11-05); a restart costs about a minute where waiting the
+    hang out cost the job. Any other error is raised at once."""
+    for attempt in range(1, tries + 1):
+        try:
+            return build()
+        except Exception as e:      # CarlaCore raises a bare Exception
+            if (server is None or attempt == tries
+                    or "Cannot connect to server" not in str(e)):
+                raise
+            log(f"  carla[{server.port}]: no answer after start ({e}); "
+                f"restarting the server, build {attempt + 1} of {tries}", flush=True)
+            took = server.restart()
+            log(f"  carla[{server.port}]: restarted, ready in {took:.0f}s", flush=True)
+
+
 def port_open(port: int, host: str = "localhost", timeout: float = 1.0) -> bool:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.settimeout(timeout)

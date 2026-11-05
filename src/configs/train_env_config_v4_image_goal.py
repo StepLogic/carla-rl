@@ -1375,7 +1375,11 @@ config = {
             # the stall; collect_lane_data.py already uses the same env name.
             "timeout": float(os.environ.get("CARLA_CLIENT_TIMEOUT", 50.0)),
             "timestep": 0.1,
-            "retries_on_error": 25,
+            # CARLA_CLIENT_RETRIES (2026-11-05): a healthy start never needed a
+            # second load_world attempt; a hung one (UE4 watchdog) only ever
+            # failed all 25, 21 minutes against a dead port. Fail after a few;
+            # the trainer restarts the server (connect_with_restarts).
+            "retries_on_error": int(os.environ.get("CARLA_CLIENT_RETRIES", 3)),
             "resolution_x": 600,
             "resolution_y": 600,
             "quality_level": "Low",

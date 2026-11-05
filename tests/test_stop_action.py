@@ -145,7 +145,9 @@ def test_the_actor_is_sized_from_the_env_action_space():
     src = open(os.path.join(ROOT, "train_carla_sac.py")).read()
     assert "ACT_DIM = int(env.action_space.shape[0])" in src
     assert "action_dim=ACT_DIM," in src
-    i_env = min(src.index("venv = ThreadedVecEnv"), src.index("env = build_env"))
+    # The env is built through connect_with_restarts (a hung CARLA start is
+    # restarted, 2026-11-05), so that is where it first exists.
+    i_env = min(src.index("venv = ThreadedVecEnv"), src.index("env = connect_with_restarts("))
     assert src.index("ACT_DIM = int(env.action_space.shape[0])") > i_env
 
 

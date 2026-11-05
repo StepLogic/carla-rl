@@ -1164,7 +1164,7 @@ def main():
 
     from torch_rl import pixel_rows as pxr
     from torch_rl.carla_env_build import build_env
-    from torch_rl.carla_server import CarlaServer
+    from torch_rl.carla_server import CarlaServer, connect_with_restarts
     from torch_rl.debit_encoder import DebitTinyEncoder
     from torch_rl.debit_mono import describe_load, load_debit_mono
     from torch_rl.debit_visual import IMG
@@ -1242,8 +1242,10 @@ def main():
             with _build_lock:
                 if not any(sv.port == p for sv in servers):
                     _start_server(k, p)
-                return build_env(t, seed=SEED + k, encoder=enc, port=p,
-                                 state_keys=())
+                srv = next(sv for sv in servers if sv.port == p)
+                return connect_with_restarts(
+                    lambda: build_env(t, seed=SEED + k, encoder=enc, port=p, state_keys=()),
+                    srv)
         venv = ThreadedVecEnv(
             [(lambda t=t, p=p, k=k: _make(t, p, k))
              for k, (t, p) in enumerate(zip(TOWNS, ports))],
@@ -1251,8 +1253,9 @@ def main():
         env = venv.envs[0]
         server = servers[0]
     else:
-        env = build_env(TOWNS[town_i], seed=SEED, encoder=enc, port=PORT,
-                        state_keys=(), eval_mode=bool(EVAL_FROM) or EXPERT_RECORD)
+        env = connect_with_restarts(
+            lambda: build_env(TOWNS[town_i], seed=SEED, encoder=enc, port=PORT, state_keys=(), eval_mode=bool(EVAL_FROM) or EXPERT_RECORD),
+            server)
     obs, info = env.reset(seed=SEED)
     # THE STATE BLOCK IS THE MODE BIT AND THE BINOC, NOTHING ELSE (user
     # 2026-10-14: "get rid of all state vectors except mode bit"). No steer, no
@@ -1565,8 +1568,9 @@ def main():
                 town_i = (town_i + 1) % len(TOWNS)
                 env.close()
                 took = server.restart()
-                env = build_env(TOWNS[town_i], seed=SEED + episodes, port=PORT,
-                                encoder=enc, state_keys=())
+                env = connect_with_restarts(
+                    lambda: build_env(TOWNS[town_i], seed=SEED + episodes, port=PORT, encoder=enc, state_keys=()),
+                    server)
                 print(f"[Town] -> {TOWNS[town_i]} at episode {episodes} "
                       f"(server restarted in {took:.0f}s)", flush=True)
             obs, info = env.reset()

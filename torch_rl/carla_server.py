@@ -15,15 +15,23 @@ The local rule "start CARLA from Python" holds here too, but the mechanism
 differs: on the cluster the simulator lives in an apptainer image, so CarlaCore
 cannot spawn it (there is no host binary) and this does it instead.
 
-TWO LESSONS ARE BUILT IN. `apptainer run` FORKS, so the UE4 binary's pid is not
+THREE LESSONS ARE BUILT IN. `apptainer run` FORKS, so the UE4 binary's pid is not
 the wrapper's and killing the wrapper leaves the simulator running and holding
 GPU memory -- that orphan once had its memory credited to a different image. So
 the process is started in its own session and the whole group is signalled, then
-the binary is swept by name. And readiness is polled WHILE the server runs,
+the binary is swept by name. Readiness is polled WHILE the server runs,
 never by wrapping it in a timeout and judging the exit code, which is how a
-healthy 44-second start was once scored as a failure.
+healthy 44-second start was once scored as a failure. And the NVIDIA driver's
+shader disk cache is moved off the home directory: there it is
+~/.cache/nvidia/GLCache on CephFS, shared by every node, and a server with new
+shaders to compile stalled on it while the town loaded until UE4's watchdog
+killed it ("GameThread timed out waiting for RenderThread after 60.00 secs",
+reported as Signal 11). That was 7 of 13 starts on the RTX 2080 Ti nodes; with
+one node-local directory per server, 0 of 6 (2026-11-05, jobs 463306-463311).
 """
+import atexit
 import os
+import shutil
 import signal
 import socket
 import subprocess
@@ -33,6 +41,21 @@ from typing import Optional
 DEFAULT_SIF = os.path.expanduser("~/carla-cluster/carla0916nv.sif")
 ENTRY = "/workspace/CarlaUE4.sh"
 BINARY = "CarlaUE4-Linux-Shipping"
+# `apptainer run -e` (cleanenv) lets in only APPTAINERENV_-prefixed variables.
+SHADER_CACHE_KEY = "APPTAINERENV___GL_SHADER_DISK_CACHE_PATH"
+
+
+def shader_cache_root() -> str:
+    """Where the per-server shader caches live: node-local /tmp unless
+    CARLA_SHADER_CACHE_ROOT says otherwise. Never the (Ceph) home directory."""
+    return os.environ.get("CARLA_SHADER_CACHE_ROOT", "/tmp")
+
+
+def shader_cache_dir(port: int) -> str:
+    """One directory per server: the Slurm job and the RPC port (a job can run
+    several servers, one per port)."""
+    job = os.environ.get("SLURM_JOB_ID") or f"pid{os.getpid()}"
+    return os.path.join(shader_cache_root(), f"carla_nvcache_{job}_{int(port)}")
 
 
 def port_open(port: int, host: str = "localhost", timeout: float = 1.0) -> bool:
@@ -53,6 +76,7 @@ class CarlaServer:
         self.extra_args = list(extra_args)
         self.proc: Optional[subprocess.Popen] = None
         self.n_starts = 0
+        self._cache_dir: Optional[str] = None
         os.makedirs(log_dir, exist_ok=True)
 
     # ------------------------------------------------------------- lifecycle --
@@ -82,8 +106,24 @@ class CarlaServer:
         cmd = self._cmd()
         self.proc = subprocess.Popen(
             cmd, stdout=open(log, "w"), stderr=subprocess.STDOUT,
-            start_new_session=True)          # its own group, so it can be swept
+            start_new_session=True,          # its own group, so it can be swept
+            env=self._launch_env())
         self.n_starts += 1
+
+    def _launch_env(self) -> Optional[dict]:
+        """The server's environment. A local CARLA inherits the trainer's as is
+        (None). The apptainer image gets it plus a node-local shader cache,
+        created here, kept across restarts (a town change restarts the same
+        server) and removed when the trainer exits: /tmp is shared by every job
+        on a node and nothing else cleans it."""
+        if os.environ.get("CARLA_LOCAL_ROOT"):
+            return None
+        d = shader_cache_dir(self.port)
+        os.makedirs(d, exist_ok=True)
+        if self._cache_dir is None:
+            self._cache_dir = d
+            atexit.register(shutil.rmtree, d, True)
+        return dict(os.environ, **{SHADER_CACHE_KEY: d})
 
     def wait_ready(self, timeout: float = 240.0, poll: float = 1.0) -> float:
         """Block until the RPC port answers. Returns the seconds it took.

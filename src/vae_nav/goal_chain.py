@@ -44,6 +44,32 @@ def junction_ahead_m(world_map, location, lookahead_m):
     return None
 
 
+def goal_ahead(world_map, location, rng, min_m=5.0, max_m=25.0):
+    """-> (waypoint, stats). The next goal a distance drawn uniformly from
+    [min_m, max_m] along the lane ahead, a random branch at every fork; never
+    left inside a junction (a walk that lands in one continues out of it).
+    (None, stats) at a dead end.
+
+    Imitation-first plan, Task 11: the fine-tune chains goals 5-25 m AHEAD --
+    the band the clone was trained and measured on -- where goal_past_next_
+    junction put every goal 10-30 m beyond the next junction."""
+    wp = _wp(world_map, location)
+    stats = {"metres": 0.0, "through_junction": False}
+    if wp is None:
+        return None, stats
+    target = float(rng.uniform(min_m, max_m))
+    d = 0.0
+    while d < target or wp.is_junction:
+        nx = wp.next(STEP_M)
+        if not nx:
+            return None, stats
+        wp = nx[int(rng.integers(len(nx)))] if len(nx) > 1 else nx[0]
+        d += STEP_M
+        stats["through_junction"] = stats["through_junction"] or wp.is_junction
+    stats["metres"] = d
+    return wp, stats
+
+
 def goal_past_next_junction(world_map, location, rng, min_m=10.0, max_m=30.0,
                             lookahead_m=150.0):
     """-> (waypoint, stats). Walk forward to the next junction (a random branch

@@ -413,6 +413,24 @@ GOAL_CHAIN_M = float(os.environ.get("GOAL_CHAIN_M", 0.0) or 0.0)
 GOAL_CHAIN_MIN_M = float(os.environ.get("GOAL_CHAIN_MIN_M", 10.0))
 GOAL_CHAIN_MAX_M = float(os.environ.get("GOAL_CHAIN_MAX_M", 30.0))
 GOAL_CHAIN_LOOKAHEAD_M = float(os.environ.get("GOAL_CHAIN_LOOKAHEAD_M", 60.0))
+# GOAL_CHAIN_STYLE (imitation-first fine-tune, 2026-11-05): where a chained goal
+# goes. "past_junction" (default, v35-v39 unchanged): GOAL_CHAIN_MIN_M..MAX_M
+# beyond the next junction. "ahead": GOAL_CHAIN_MIN_M..MAX_M along the road from
+# the car, a random branch at forks (goal_chain.goal_ahead) -- the 5-25 m band
+# the clone was trained and measured on.
+GOAL_CHAIN_STYLE = os.environ.get("GOAL_CHAIN_STYLE", "past_junction")
+if GOAL_CHAIN_STYLE not in ("past_junction", "ahead"):
+    raise ValueError(f"GOAL_CHAIN_STYLE={GOAL_CHAIN_STYLE!r}: use 'past_junction' or 'ahead'")
+
+
+def chain_goal(world_map, location, rng):
+    """-> (waypoint, stats): the next chained goal from `location`, placed by
+    GOAL_CHAIN_STYLE; (None, stats) at a dead end."""
+    from vae_nav import goal_chain as gc
+    if GOAL_CHAIN_STYLE == "ahead":
+        return gc.goal_ahead(world_map, location, rng, GOAL_CHAIN_MIN_M, GOAL_CHAIN_MAX_M)
+    return gc.goal_past_next_junction(world_map, location, rng, GOAL_CHAIN_MIN_M,
+                                      GOAL_CHAIN_MAX_M, lookahead_m=GOAL_CHAIN_LOOKAHEAD_M)
 # GOAL_STEP_PENALTY (user 2026-11-03: "add small per step penalty and remove
 # idle"): a flat cost on EVERY goal-mode step of GATED_GOAL_REWARD=explore, so
 # a car that lane-follows past its goal pays for the time. 0 = off.
@@ -1394,15 +1412,12 @@ class GatedReward(Wrapper):
         """Keep the car where it arrived, draw the next goal past the next
         junction, take one coasting tick so the goal camera renders it.
         -> (obs, info) or None to fall back to a full reset."""
-        from vae_nav.goal_chain import goal_past_next_junction
         base = getattr(self.env, "unwrapped", self.env)
         core = getattr(base, "core", None)
         if core is None or getattr(core, "hero", None) is None:
             return None
         loc = core.hero.get_transform().location
-        wp, st = goal_past_next_junction(core.map, loc, self._rng,
-                                         GOAL_CHAIN_MIN_M, GOAL_CHAIN_MAX_M,
-                                         lookahead_m=GOAL_CHAIN_LOOKAHEAD_M)
+        wp, st = chain_goal(core.map, loc, self._rng)
         if wp is None:
             return None
         import carla

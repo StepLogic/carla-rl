@@ -236,3 +236,35 @@ def test_a_goal_episode_still_logs_its_chain(monkeypatch, capsys):
         w.reset()
         w.step(np.zeros(2, np.float32))
     assert "[Chain]" in capsys.readouterr().out
+
+
+def _spy_chain(monkeypatch):
+    import vae_nav.goal_chain as gc
+    calls = []
+    monkeypatch.setattr(gc, "goal_ahead",
+                        lambda m, loc, rng, lo, hi: calls.append(("ahead", lo, hi)) or (None, {}))
+    monkeypatch.setattr(gc, "goal_past_next_junction",
+                        lambda *a, **k: calls.append(("past",)) or (None, {}))
+    return calls
+
+
+def test_chain_style_ahead_is_used_on_soft_reset(monkeypatch):
+    """Imitation-first fine-tune (Task 11): chained goals 5-25 m AHEAD."""
+    gr = _gr(monkeypatch, GOAL_CHAIN_M=200, GOAL_CHAIN_STYLE="ahead",
+             GOAL_CHAIN_MIN_M=5, GOAL_CHAIN_MAX_M=25)
+    calls = _spy_chain(monkeypatch)
+    gr.chain_goal(object(), object(), np.random.default_rng(0))
+    assert calls == [("ahead", 5.0, 25.0)]
+
+
+def test_chain_style_defaults_to_past_the_junction(monkeypatch):
+    """v35-v39 unchanged: without GOAL_CHAIN_STYLE the goal goes past the junction."""
+    gr = _gr(monkeypatch, GOAL_CHAIN_M=200)
+    calls = _spy_chain(monkeypatch)
+    gr.chain_goal(object(), object(), np.random.default_rng(0))
+    assert calls == [("past",)]
+
+
+def test_an_unknown_chain_style_is_refused(monkeypatch):
+    with pytest.raises(ValueError, match="GOAL_CHAIN_STYLE"):
+        _gr(monkeypatch, GOAL_CHAIN_M=200, GOAL_CHAIN_STYLE="sideways")

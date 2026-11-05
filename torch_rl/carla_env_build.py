@@ -104,6 +104,13 @@ def check_cluster_env() -> None:
         raise SystemExit("this arm is the gated two-mode policy: set GATED=1")
 
 
+def chain_enabled(eval_mode) -> bool:
+    """Whether GatedReward chains goals: always in training, in eval only with
+    EVAL_CHAIN=1 (imitation-first plan, Task 11: one car driven goal after goal
+    to 200 m)."""
+    return (not eval_mode) or os.environ.get("EVAL_CHAIN", "0") == "1"
+
+
 def build_env(town: str, seed: int, encoder=None, port: int = 2000,
               eval_mode: bool = False, max_episode_steps: Optional[int] = None,
               env_factory: Optional[Callable] = None, base: Optional[dict] = None,
@@ -148,8 +155,9 @@ def build_env(town: str, seed: int, encoder=None, port: int = 2000,
                     if eval_mode else None),
         max_steps=int(os.environ.get("GATED_EXPLORE_MAX_STEPS", 1000)),
         freeze_steps=0 if eval_mode else None,
-        # GOAL_CHAIN_M: chained goals in TRAINING only; an eval episode is one goal.
-        chain=not eval_mode,
+        # GOAL_CHAIN_M: chained goals in TRAINING; an eval episode is one goal,
+        # unless EVAL_CHAIN=1 (the imitation-first chain eval).
+        chain=chain_enabled(eval_mode),
         seed=seed)
     env = DebitGoalWrapper(
         env, encoder=encoder, state_keys=tuple(state_keys),

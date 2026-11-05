@@ -133,7 +133,10 @@ def test_the_episode_is_ENDED_in_the_buffer_before_the_env_resets():
     """An episode left open is never sampleable, so the replay would fill with
     data the learner cannot use."""
     s = src()
-    i_end, i_reset = s.index("buf.end_episode()"), s.index("obs, info = env.reset()")
+    # The TRAINING loop, in main(): run_eval's chain eval resets the env too
+    # (a soft reset between chained goals), with no buffer involved.
+    m = s.index("def main(")
+    i_end, i_reset = s.index("buf.end_episode()", m), s.index("obs, info = env.reset()", m)
     assert i_end < i_reset
 
 

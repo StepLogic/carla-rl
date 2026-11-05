@@ -125,3 +125,32 @@ def test_zone_tracker_covers_before_inside_and_after():
     assert not z.update(path_m=26.0, in_junction=False, ahead_m=None)  # 11 m after
     z.reset()
     assert not z.update(path_m=0.0, in_junction=False, ahead_m=None)
+
+
+# ---------------------------------------------------- goals simply AHEAD --
+# (imitation-first plan, Task 11): the fine-tune chains goals 5-25 m along the
+# road, wherever that leads -- the band the clone was trained and measured on --
+# instead of past the next junction.
+def test_goal_ahead_lands_in_band_and_outside_junctions():
+    m, stem, east, north = _fork()
+    rng = np.random.default_rng(0)
+    for _ in range(20):
+        wp, st = gc.goal_ahead(m, _Loc(10, 0), rng, 5.0, 25.0)
+        assert wp is not None and not wp.is_junction
+        assert 5.0 <= st["metres"] <= 27.0        # 25 + the walk out of a junction
+
+
+def test_goal_ahead_draws_both_branches():
+    m, stem, east, north = _fork()
+    rng = np.random.default_rng(1)
+    names = set()
+    for _ in range(40):
+        wp, st = gc.goal_ahead(m, _Loc(16, 0), rng, 20.0, 25.0)
+        names.add("north" if wp in north else "east" if wp in east else "stem")
+    assert names == {"north", "east"}
+
+
+def test_goal_ahead_at_a_dead_end_is_none():
+    road = _road(np.arange(0, 8, 2.0))
+    wp, st = gc.goal_ahead(_Map(road), _Loc(0, 0), np.random.default_rng(0), 10.0, 20.0)
+    assert wp is None

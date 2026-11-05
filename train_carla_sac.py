@@ -104,6 +104,11 @@ IL_BC_DECAY_UPDATES = env_int("IL_BC_DECAY_UPDATES", 10000)
 IL_BC_CHUNKS = env_int("IL_BC_CHUNKS", CHUNK_B)
 IL_BC_LEN = env_int("IL_BC_LEN", CHUNK_T)
 EVAL_EPISODES = env_int("EVAL_EPISODES", 40)
+# EVAL_CHAIN=1 (imitation-first plan, Task 11): after each arrival the same car
+# gets the next goal (GatedReward's soft reset, GOAL_CHAIN_STYLE) until the chain
+# has driven GOAL_CHAIN_M, hits a fault or runs out of clock; each row records
+# chain_goals, chain_m, chain_end and chain_complete.
+EVAL_CHAIN = os.environ.get("EVAL_CHAIN", "0") == "1"
 EVAL_SEED = env_int("EVAL_SEED", 10_000)
 # EVAL_STOCHASTIC=1 samples actions from the policy (training noise) instead
 # of tanh(mean): measures how much of the train/eval gap is the noise alone.
@@ -223,6 +228,17 @@ TRACE_STALL_M = env_float("TRACE_STALL_M", 1500.0)
 # car drives on; off-road and collisions still end the segment. Pair it with
 # slurm/trace_nocross.env, which stops the ENV terminating on crossings too.
 TRACE_END_ON_CROSSING = os.environ.get("TRACE_END_ON_CROSSING", "1") == "1"
+
+
+def chain_summary(goals_reached, info, last_end, chain_m_target) -> dict:
+    """The chain eval's row fields: goals reached, metres the chain drove (the
+    reward wrapper's chain_m), how it ended ("complete" once chain_m reaches the
+    target, else the last leg's end), and whether it completed."""
+    m = float(info.get("chain_m", 0.0) or 0.0)
+    complete = m >= float(chain_m_target)
+    return {"chain_goals": int(goals_reached), "chain_m": round(m, 2),
+            "chain_end": "complete" if complete else last_end,
+            "chain_complete": bool(complete)}
 
 
 def no_label_end(mode, steps) -> str:
@@ -911,47 +927,65 @@ def run_eval(env, agent, pxr, server, out_root):
         tracker = (EpisodeTracker(gpos, pos0, max_speed=float(
             os.environ.get("GOAL_ARRIVAL_MAX_SPEED", 10.0)), radius=GOAL_RADIUS_M,
             radius_2m=2.0) if gpos is not None else None)
-        while end is None:
-            row = pxr.mono_row(info["debit_cur"], _net_mode(obs["mode"]), obs["binoc"],
-                               speed_kmh=_speed_kmh(info))
-            action, hidden = agent.act(row, hidden, goal=goal_blk,
-                                       deterministic=EVAL_NOISE_SCALE <= 0,
-                                       noise_scale=EVAL_NOISE_SCALE)
-            a_env = to_env(np.asarray(action, np.float32), box)
-            vid.add(info["debit_cur"], info["debit_goal"], t, mode, 0.0, a_env, ret)
-            obs, r, term, trunc, info = env.step(a_env)
-            ret += float(r)
-            t += 1
-            if EVAL_LANE_DEBUG and "lane_priv" in info:
-                lp = np.asarray(info["lane_priv"], np.float64)
-                cross = bool(info.get("lane_any", info.get("lane_invasion_any", False)))
-                if cross or t % 5 == 1:
-                    print(f"[Lane] ep={k} t={t} off={lp[0]:+.2f}m "
-                          f"lane_w={lp[4]:.2f} herr={np.degrees(np.arctan2(lp[2], lp[3])):+.0f}deg "
-                          f"junc={int(lp[11])} c={info.get('lane_potential', float('nan')):.3f} "
-                          f"F={info.get('lane_shaping', float('nan')):+.3f} "
-                          f"half_car={info.get('hero_half_width')} cross={int(cross)} "
-                          f"marks={[str(m).split('.')[-1] for m in (info.get('lane_marking_types') or [])]} "
-                          f"a=({a_env[0]:+.2f},{a_env[1]:.2f})", flush=True)
-            pos = np.asarray(info.get("hero_pos", prev_pos), np.float64)
-            if tracker is not None:
-                tracker.step(pos, float(info.get("speed_kmh", 0.0) or 0.0))
-            if nav is not None and nav.update(pos, float(info.get("hero_yaw", 0.0) or 0.0)):
-                goal_blk = _aim()
-                if EVAL_MAP_RESET_HIDDEN:
-                    hidden = agent.reset_hidden(1)
-            moved = float(np.linalg.norm(pos - prev_pos))
-            path_m += moved
-            prev_pos = pos
-            if t == 1 and info.get("route_remaining_m") is not None:
-                l_route = float(info["route_remaining_m"]) + moved
-            _end_key = "explore_end" if EVAL_EXPLORE else "goal_end"
-            if info.get("is_success") or info.get(_end_key) == "reached":
-                end = "reached"
-            else:
-                end = _fault(info)
-            if end is None and (term or trunc):
-                end = str(info.get(_end_key, "timeout"))
+        chain_goals = 0
+        while True:
+            while end is None:
+                row = pxr.mono_row(info["debit_cur"], _net_mode(obs["mode"]), obs["binoc"],
+                                   speed_kmh=_speed_kmh(info))
+                action, hidden = agent.act(row, hidden, goal=goal_blk,
+                                           deterministic=EVAL_NOISE_SCALE <= 0,
+                                           noise_scale=EVAL_NOISE_SCALE)
+                a_env = to_env(np.asarray(action, np.float32), box)
+                vid.add(info["debit_cur"], info["debit_goal"], t, mode, 0.0, a_env, ret)
+                obs, r, term, trunc, info = env.step(a_env)
+                ret += float(r)
+                t += 1
+                if EVAL_LANE_DEBUG and "lane_priv" in info:
+                    lp = np.asarray(info["lane_priv"], np.float64)
+                    cross = bool(info.get("lane_any", info.get("lane_invasion_any", False)))
+                    if cross or t % 5 == 1:
+                        print(f"[Lane] ep={k} t={t} off={lp[0]:+.2f}m "
+                              f"lane_w={lp[4]:.2f} herr={np.degrees(np.arctan2(lp[2], lp[3])):+.0f}deg "
+                              f"junc={int(lp[11])} c={info.get('lane_potential', float('nan')):.3f} "
+                              f"F={info.get('lane_shaping', float('nan')):+.3f} "
+                              f"half_car={info.get('hero_half_width')} cross={int(cross)} "
+                              f"marks={[str(m).split('.')[-1] for m in (info.get('lane_marking_types') or [])]} "
+                              f"a=({a_env[0]:+.2f},{a_env[1]:.2f})", flush=True)
+                pos = np.asarray(info.get("hero_pos", prev_pos), np.float64)
+                if tracker is not None:
+                    tracker.step(pos, float(info.get("speed_kmh", 0.0) or 0.0))
+                if nav is not None and nav.update(pos, float(info.get("hero_yaw", 0.0) or 0.0)):
+                    goal_blk = _aim()
+                    if EVAL_MAP_RESET_HIDDEN:
+                        hidden = agent.reset_hidden(1)
+                moved = float(np.linalg.norm(pos - prev_pos))
+                path_m += moved
+                prev_pos = pos
+                if t == 1 and info.get("route_remaining_m") is not None:
+                    l_route = float(info["route_remaining_m"]) + moved
+                _end_key = "explore_end" if EVAL_EXPLORE else "goal_end"
+                if info.get("is_success") or info.get(_end_key) == "reached":
+                    end = "reached"
+                else:
+                    end = _fault(info)
+                if end is None and (term or trunc):
+                    end = str(info.get(_end_key, "timeout"))
+            if EVAL_CHAIN and end == "reached" and info.get("chain_continue"):
+                chain_goals += 1
+                arrived_info = info
+                obs, info = env.reset()   # soft reset: the same car, the next goal
+                if not info.get("chain_soft_reset"):
+                    # No goal could be placed and the wrapper reset fully, which
+                    # also zeroed its chain_m: report the chain as it stood.
+                    end, info = "dead_end", arrived_info
+                    break
+                hidden = agent.reset_hidden(1)   # a chained goal is a new episode
+                goal_blk = pxr.goal_block(info["debit_goal"])
+                end = None
+                continue
+            if EVAL_CHAIN and end == "reached":
+                chain_goals += 1                 # the arrival that completed the chain
+            break
         path = vid.save(end)
         ell = l_route if l_route is not None else l_straight
         reached = end == "reached"
@@ -980,7 +1014,10 @@ def run_eval(env, agent, pxr, server, out_root):
                      "straight_m": None if l_straight is None else round(l_straight, 2),
                      "path_m": round(path_m, 2), "spl": spl_i, "video": path,
                      **({} if nav is None else {**map_row, "map_switches": nav.switches,
-                                                "map_final": bool(nav.final)})})
+                                                "map_final": bool(nav.final)}),
+                     **(chain_summary(chain_goals, info, end,
+                                      float(os.environ.get("GOAL_CHAIN_M", 200.0) or 200.0))
+                        if EVAL_CHAIN else {})})
         sr = np.mean([x["reached"] for x in rows])
         spl = np.nanmean([x["spl"] for x in rows])
         print(f"[Eval {k + 1:3d}/{n_eps}] seed={seed} end={end} "

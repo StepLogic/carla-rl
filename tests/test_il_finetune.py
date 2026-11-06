@@ -149,6 +149,54 @@ def test_trainer_wires_the_preload_warmup_and_hook():
     assert "if LEARNING_STARTS < INIT_MIN_LEARNING_STARTS and not IL_PRELOAD_ROOT:" in s
 
 
+def test_a_frozen_trunk_keeps_encoder_and_gru_but_trains_the_heads():
+    """TRUNK FREEZE (user 2026-11-05, after two collapsed fine-tunes): the
+    encoder, action embedding and GRU take no gradient from any loss, while
+    the actor head, the critic heads and the temperature keep learning."""
+    agent = GatedRecurrentSAC(_cfg())
+    agent.set_trunk_frozen(True)
+    before = _snap(agent)
+    a0 = float(agent.log_alpha_g.detach())
+    agent.update(_chunk(agent.cfg, [1, 0]))
+    assert not _moved(before, agent, "compress")
+    assert not _moved(before, agent, "core")
+    assert _moved(before, agent, "actor")
+    assert _moved(before, agent, "critics_g")
+    assert float(agent.log_alpha_g.detach()) != a0
+
+
+def test_ending_the_warmup_leaves_a_frozen_trunk_frozen():
+    """The online freeze ends with set_warmup(False), which used to switch every
+    trunk gradient back on."""
+    agent = GatedRecurrentSAC(_cfg())
+    agent.set_trunk_frozen(True)
+    agent.set_warmup(True)
+    agent.set_warmup(False)
+    assert not any(p.requires_grad for p in agent.compress.parameters())
+    assert not any(p.requires_grad for p in agent.core.parameters())
+
+
+def test_cloning_with_a_frozen_trunk_moves_only_the_actor():
+    from torch_rl.bc_trainer import bc_step, make_bc_optimizer
+    agent = GatedRecurrentSAC(_cfg())
+    agent.set_trunk_frozen(True)
+    opt = make_bc_optimizer(agent)
+    before = _snap(agent)
+    bc_step(agent, opt, _chunk(agent.cfg, [1, 0]), weight=1.0)
+    assert not _moved(before, agent, "compress")
+    assert not _moved(before, agent, "core")
+    assert _moved(before, agent, "actor")
+
+
+def test_trainer_freezes_the_trunk_on_request():
+    s = open(os.path.join(ROOT, "train_carla_sac.py")).read()
+    assert 'IL_FREEZE_TRUNK = os.environ.get("IL_FREEZE_TRUNK", "0") == "1"' in s
+    assert "agent.set_trunk_frozen(True)" in s
+    # after the warm start's load, before the preload's warm-up
+    assert s.index("agent.set_trunk_frozen(True)") > s.index("agent.load(INIT_FROM)")
+    assert s.index("agent.set_trunk_frozen(True)") < s.index("il_hook = il_finetune_prepare(")
+
+
 class _ChunkBuf:
     def __init__(self, agent):
         self.agent = agent

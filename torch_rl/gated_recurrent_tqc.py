@@ -453,6 +453,7 @@ class GatedRecurrentTQC:
         # no speed and is not the deployment target for cfg.bf16.
         self._test_cpu_autocast = bool(_test_cpu_autocast)
         self.warmup = False              # set_warmup: critic-only updates
+        self.trunk_frozen = False        # set_trunk_frozen: encoder + GRU fixed
         # Reseeds the GLOBAL torch RNG, as RecurrentTQC does: construction
         # order below is load-bearing for reproducibility.
         torch.manual_seed(cfg.seed)
@@ -579,12 +580,25 @@ class GatedRecurrentTQC:
         Task 10). On: the encoder, action embedding and GRU stop taking
         gradients and _update_impl skips the actor and temperature steps, so
         only the critic heads learn -- the loaded clone's values, without the
-        clone moving. Off: everything trains again."""
+        clone moving. Off: everything trains again -- except a trunk that
+        set_trunk_frozen holds."""
         self.warmup = bool(on)
+        self._apply_trunk_grad()
+
+    def set_trunk_frozen(self, on: bool) -> None:
+        """Fine-tune with the trunk fixed (user 2026-11-05, after two collapsed
+        fine-tunes): the encoder, action embedding and GRU take no gradient from
+        any loss -- critic, actor or cloning -- while the actor head, the critic
+        heads and the temperature keep training. Survives set_warmup(False)."""
+        self.trunk_frozen = bool(on)
+        self._apply_trunk_grad()
+
+    def _apply_trunk_grad(self) -> None:
+        train = not (self.warmup or self.trunk_frozen)
         for m in (self.compress, self.act_embed, self.core):
             if m is not None:
                 for prm in m.parameters():
-                    prm.requires_grad_(not self.warmup)
+                    prm.requires_grad_(train)
 
     def _actor_forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         with self._autocast():

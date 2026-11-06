@@ -108,6 +108,10 @@ IL_BC_LEN = env_int("IL_BC_LEN", CHUNK_T)
 # (bc_trainer.il_bc_hook). 0 = unfreeze at the first live update, which
 # collapsed fine-tune job 463440 (policy= 0.76 -> 0.10 within ~190 updates).
 IL_ONLINE_FREEZE_UPDATES = env_int("IL_ONLINE_FREEZE_UPDATES", 0)
+# IL_FREEZE_TRUNK=1 (user 2026-11-05): the encoder, action embedding and GRU stay
+# as loaded for the whole run; only the actor head, critic heads and temperature
+# learn (GatedRecurrentTQC.set_trunk_frozen).
+IL_FREEZE_TRUNK = os.environ.get("IL_FREEZE_TRUNK", "0") == "1"
 EVAL_EPISODES = env_int("EVAL_EPISODES", 40)
 # EVAL_CHAIN=1 (imitation-first plan, Task 11): after each arrival the same car
 # gets the next goal (GatedReward's soft reset, GOAL_CHAIN_STYLE) until the chain
@@ -1390,6 +1394,10 @@ def main():
         return pxr.mono_row(i["debit_cur"], _net_mode(o["mode"]), o["binoc"],
                             speed_kmh=_speed_kmh(i))
 
+    if IL_FREEZE_TRUNK:
+        agent.set_trunk_frozen(True)
+        print("  TRUNK FROZEN (IL_FREEZE_TRUNK=1): encoder, action embedding and GRU "
+              "take no gradient; actor head, critic heads and temperature train", flush=True)
     il_hook = None
     if IL_PRELOAD_ROOT:
         from torch_rl.bc_trainer import il_finetune_prepare

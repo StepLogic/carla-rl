@@ -1854,7 +1854,8 @@ def build_agent(binoc_dim, act_dim, critic_layer_norm=None):
         iql_beta=env_float("IQL_BETA", 3.0),
         iql_max_weight=env_float("IQL_MAX_WEIGHT", 100.0),
         # ACTOR_LOG_STD (2026-11-06): pin the actor's noise; only its mean trains.
-        actor_log_std=(float(os.environ["ACTOR_LOG_STD"])
+        # One value for every action, or one per action ("-3.70,-0.43").
+        actor_log_std=(tuple(float(v) for v in os.environ["ACTOR_LOG_STD"].split(","))
                        if os.environ.get("ACTOR_LOG_STD") else None))
     agent = GatedRecurrentSAC(cfg)
     # DEBiT'''S PRETRAINED MONOCULAR TRUNK (user 2026-10-14, "I want debit Mono +

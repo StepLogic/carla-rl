@@ -48,11 +48,43 @@ def test_the_config_refuses_a_pin_outside_the_actor_bounds():
         _cfg(actor_log_std=LOG_STD_MAX + 1.0)
 
 
-def test_the_training_script_reads_ACTOR_LOG_STD():
-    assert ('actor_log_std=(float(os.environ["ACTOR_LOG_STD"])\n'
+def test_a_per_action_pin_holds_each_dimension_at_its_own_value():
+    """c0's own log-std differs by action: about -3.70 steering, -0.43 throttle.
+    One scalar (their -2.0 average) gave run E 5x c0's steering noise, so the
+    pin must take one value per action."""
+    agent = GatedRecurrentSAC(_cfg(algo="iql", actor_log_std=(-3.7, -0.43)))
+    x = torch.randn(6, agent.cfg.hidden + agent.cfg.state_dim,
+                    generator=torch.Generator().manual_seed(1))
+    mean0, _ = agent._actor_forward(x)
+    for seed in range(3):
+        agent.update(_chunk(agent.cfg, [1, 0], seed=seed))
+    mean1, ls = agent._actor_forward(x)
+    assert torch.allclose(ls, torch.tensor([-3.7, -0.43]).expand_as(ls))
+    assert not torch.allclose(mean0, mean1)
+
+
+def test_a_per_action_pin_survives_a_config_round_trip_and_a_checkpoint(tmp_path):
+    import dataclasses
+    import json
+    cfg = _cfg(actor_log_std=[-3.7, -0.43])                # JSON gives a list
+    assert cfg.actor_log_std == (-3.7, -0.43)
+    again = type(cfg)(**json.loads(json.dumps(dataclasses.asdict(cfg))))
+    assert again.actor_log_std == (-3.7, -0.43)
+    GatedRecurrentSAC(_cfg()).save(str(tmp_path / "clone"))  # an unpinned clone loads
+    GatedRecurrentSAC(cfg).load(str(tmp_path / "clone"))
+
+
+def test_the_config_refuses_a_pin_of_the_wrong_length():
+    with pytest.raises(ValueError):
+        _cfg(actor_log_std=(-3.7, -0.43, -1.0))
+
+
+def test_the_training_script_reads_ACTOR_LOG_STD_as_one_value_or_a_list():
+    assert ('actor_log_std=(tuple(float(v) for v in os.environ["ACTOR_LOG_STD"].split(","))\n'
             '                       if os.environ.get("ACTOR_LOG_STD") else None)') in SRC
 
 
 def test_the_banner_says_the_noise_is_pinned():
     assert "PINNED" in GatedRecurrentSAC(_cfg(actor_log_std=-2.0)).describe()
+    assert "PINNED at -3.7, -0.43" in GatedRecurrentSAC(_cfg(actor_log_std=(-3.7, -0.43))).describe()
     assert "PINNED" not in GatedRecurrentSAC(_cfg()).describe()

@@ -268,9 +268,11 @@ class GatedRecurrentSAC(GatedRecurrentTQC):
 
     # ------------------------------------------------------------- telemetry --
     def describe(self) -> str:
-        pin = ("" if self.cfg.actor_log_std is None else
-               f" | actor log-std PINNED at {self.cfg.actor_log_std:g}: only the mean "
-               f"action trains")
+        p = self.cfg.actor_log_std
+        pin = ("" if p is None else
+               f" | actor log-std PINNED at "
+               f"{', '.join(f'{v:g}' for v in (p if isinstance(p, tuple) else (p,)))}"
+               f": only the mean action trains")
         return self._describe_learner() + pin
 
     def _describe_learner(self) -> str:

@@ -67,7 +67,7 @@ import dataclasses
 import json
 import math
 import os
-from typing import Dict, Optional, Sequence, Tuple
+from typing import Dict, Optional, Sequence, Tuple, Union
 
 import numpy as np
 import torch
@@ -233,9 +233,11 @@ class GatedRecurrentTQCConfig:
     critic_layer_norm: bool = False
     # ACTOR_LOG_STD (2026-11-06): pin the actor's log-std at this value (its
     # clamp becomes (v, v)), so a fine-tune trains only the mean action: every
-    # clone fine-tune collapsed with its action noise growing. None = the usual
-    # (LOG_STD_MIN, LOG_STD_MAX) clamp, every earlier run.
-    actor_log_std: Optional[float] = None
+    # clone fine-tune collapsed with its action noise growing. One float for
+    # every action, or one per action -- c0's own is about -3.70 steering and
+    # -0.43 throttle, so their -2.0 average gives 5x its steering noise. None =
+    # the usual (LOG_STD_MIN, LOG_STD_MAX) clamp, every earlier run.
+    actor_log_std: Optional[Union[float, Tuple[float, ...]]] = None
     discount: float = 0.99
     discount_e: float = 0.99
     tau: float = 0.005
@@ -373,10 +375,21 @@ class GatedRecurrentTQCConfig:
         problem = mono_encoder_problems(self.mono_encoder, self.embed_dim, self.grid)
         if problem:
             raise ValueError(problem)
-        if self.actor_log_std is not None and not (
-                LOG_STD_MIN <= float(self.actor_log_std) <= LOG_STD_MAX):
-            raise ValueError(f"actor_log_std={self.actor_log_std} outside the actor's "
-                             f"log-std bounds [{LOG_STD_MIN}, {LOG_STD_MAX}]")
+        if self.actor_log_std is not None:
+            # A float pins every action; a list/tuple (config.json gives a list)
+            # pins one value per action, and a single-element one is a float.
+            if np.ndim(self.actor_log_std) == 0:
+                pins = (float(self.actor_log_std),)
+            else:
+                pins = tuple(float(v) for v in self.actor_log_std)
+            if len(pins) not in (1, int(self.action_dim)):
+                raise ValueError(f"actor_log_std={self.actor_log_std}: give one value or "
+                                 f"{self.action_dim} (one per action)")
+            bad = [v for v in pins if not LOG_STD_MIN <= v <= LOG_STD_MAX]
+            if bad:
+                raise ValueError(f"actor_log_std={self.actor_log_std} outside the actor's "
+                                 f"log-std bounds [{LOG_STD_MIN}, {LOG_STD_MAX}]")
+            self.actor_log_std = pins[0] if len(pins) == 1 else pins
         # The ResNet reads one RGB frame; vc2's channel-stacked goal grid is VC-1 tokens.
         if self.mono_encoder == "resnet" and self.goal_tokens:
             raise ValueError("mono_encoder=resnet is debit-only: goal_tokens must be False")
@@ -489,7 +502,7 @@ class GatedRecurrentTQC:
         self.core = GRUCore(cfg.visual_dim + (cfg.action_emb if cfg.prev_action else 0)
                             + len(cfg.core_state_cols), cfg.hidden).to(dev)
         log_std_bounds = ((LOG_STD_MIN, LOG_STD_MAX) if cfg.actor_log_std is None
-                          else (float(cfg.actor_log_std),) * 2)
+                          else (cfg.actor_log_std, cfg.actor_log_std))
         self.actor = Actor(cfg.hidden + cfg.state_dim, cfg.action_dim, cfg.mlp,
                            log_std_bounds=log_std_bounds).to(dev)
         self.critics_g = QuantileCritics(cfg.hidden + len(cfg.goal_cols), cfg.action_dim,

@@ -47,11 +47,25 @@ class Actor(nn.Module):
                  log_std_bounds: Tuple[float, float] = (LOG_STD_MIN, LOG_STD_MAX)) -> None:
         super().__init__()
         self.action_dim = int(action_dim)
-        self.lo, self.hi = float(log_std_bounds[0]), float(log_std_bounds[1])
+        lo = torch.as_tensor(log_std_bounds[0], dtype=torch.float32)
+        hi = torch.as_tensor(log_std_bounds[1], dtype=torch.float32)
+        self.per_dim = bool(lo.dim() or hi.dim())
+        if not self.per_dim:
+            self.lo, self.hi = float(lo), float(hi)
+        else:
+            # One bound per action (ACTOR_LOG_STD="-3.70,-0.43"). Non-persistent
+            # buffers: they follow .to(device) but stay out of the state dict, so
+            # every checkpoint loads either way.
+            self.lo = self.hi = None
+            self.register_buffer("lo_t", lo.expand(self.action_dim).clone(), persistent=False)
+            self.register_buffer("hi_t", hi.expand(self.action_dim).clone(), persistent=False)
         self.trunk = _mlp(state_dim, hidden, 2 * self.action_dim)
 
     def forward(self, s: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         mean, log_std = self.trunk(s).chunk(2, dim=-1)
+        if self.per_dim:
+            return mean, torch.minimum(torch.maximum(log_std, self.lo_t.to(log_std.dtype)),
+                                       self.hi_t.to(log_std.dtype))
         return mean, log_std.clamp(self.lo, self.hi)
 
     def sample(self, s: torch.Tensor, noise_scale: float = 1.0

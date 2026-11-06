@@ -34,7 +34,11 @@ i=${SLURM_ARRAY_TASK_ID:?run as a Slurm array task}
 spec=${TASKS[$i]}
 town=${spec%%:*}
 arm=${spec##*:}
-PORT=$((6000 + 100 * i))
+# PORT_BASE: the other session's paired evals sit on 6500/6600 (+50) on the
+# same rtx2080 node; tasks 5-7 at 6000 + 100 i would land on them, and a job that
+# reuses a live port joins that server and kills both (823a646). The unbroken
+# benchmark runs at PORT_BASE=9000.
+PORT=$((${PORT_BASE:-6000} + 100 * i))
 echo "=== BENCH c0 single-trace task $i: $town $arm port $PORT maps $MAPROOT/$arm ==="
 if [ ! -f "$MAPROOT/$arm/$town.json" ]; then
   echo "=== no map $MAPROOT/$arm/$town.json: nothing to drive"; exit 1

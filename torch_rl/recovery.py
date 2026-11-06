@@ -43,6 +43,9 @@ class RecoveryGate:
     max_yaw_deg: float = 15.0    # ... aligned with the lane within this
     min_kmh: float = 5.0         # ... and moving at least this fast
     stall_steps: int = 50        # c0 standing still this long (5 s) is a fault
+    blocked_steps: int = 15      # the expert not moving for 1.5 s: it is blocked
+    backup_steps: int = 20       # ... so the car REVERSES for 2 s, then re-plans
+    max_backups: int = 5         # ... at most this many times per takeover
     wedged_steps: int = 300      # the expert unable to move for 30 s ends the drive
 
     driver: str = "c0"
@@ -50,10 +53,15 @@ class RecoveryGate:
     _since: int = 0
     _settled: int = 0
     _still: int = 0
+    _backing: int = 0
+    _backups: int = 0
 
     def update(self, t: int, fault: Optional[str], lat_m: float, yaw_err_deg: float,
                speed_kmh: float) -> Optional[str]:
-        """One step's measurements -> "takeover", "handback", "wedged" or None."""
+        """One step's measurements -> "takeover", "backup", "replan", "handback",
+        "wedged" or None. "backup": start reversing (the env has no reverse in its
+        action space, so the caller drives it, see `backing`); "replan": the
+        reverse is over, plan the expert's lane again from where the car is."""
         if self.driver == "none":
             return None
         moving = float(speed_kmh) >= 0.5
@@ -64,12 +72,24 @@ class RecoveryGate:
             if fault is None:
                 return None
             self.driver, self._since, self._settled, self._still = "expert", 0, 0, 0
-            self.events.append({"fault": fault, "t": int(t), "steps": 0, "end": None})
+            self._backing, self._backups = 0, 0
+            self.events.append({"fault": fault, "t": int(t), "steps": 0, "end": None,
+                                "backups": 0})
             return "takeover"
         # the expert has the wheel
         self._since += 1
         ev = self.events[-1]
         ev["steps"] = self._since
+        if self._backing:
+            # reversing out: neither settling nor stillness counts meanwhile
+            self._backing -= 1
+            self._still, self._settled = 0, 0
+            return "replan" if self._backing == 0 else None
+        if self._still >= self.blocked_steps and self._backups < self.max_backups:
+            self._backups += 1
+            ev["backups"] = self._backups
+            self._backing, self._still, self._settled = self.backup_steps, 0, 0
+            return "backup"
         if self._still >= self.wedged_steps:
             self.driver, ev["end"] = "none", "wedged"
             return "wedged"
@@ -83,10 +103,16 @@ class RecoveryGate:
             return "handback"
         return None
 
+    @property
+    def backing(self) -> bool:
+        """True while the car is reversing out of a block."""
+        return self._backing > 0
+
     def summary(self) -> Dict[str, object]:
         by: Dict[str, int] = {}
         for ev in self.events:
             by[ev["fault"]] = by.get(ev["fault"], 0) + 1
         return {"takeovers": len(self.events), "by_fault": by,
                 "expert_steps": int(sum(ev["steps"] for ev in self.events)),
+                "backups": int(sum(ev.get("backups", 0) for ev in self.events)),
                 "wedged": any(ev["end"] == "wedged" for ev in self.events)}

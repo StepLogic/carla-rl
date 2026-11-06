@@ -295,6 +295,10 @@ TRACE_RECOVER_YAW_DEG = env_float("TRACE_RECOVER_YAW_DEG", 15.0)
 TRACE_RECOVER_MIN_KMH = env_float("TRACE_RECOVER_MIN_KMH", 5.0)
 TRACE_STALL_STEPS = env_int("TRACE_STALL_STEPS", 50)
 TRACE_WEDGED_STEPS = env_int("TRACE_WEDGED_STEPS", 300)
+TRACE_BLOCKED_STEPS = env_int("TRACE_BLOCKED_STEPS", 15)
+TRACE_BACKUP_STEPS = env_int("TRACE_BACKUP_STEPS", 20)
+TRACE_MAX_BACKUPS = env_int("TRACE_MAX_BACKUPS", 5)
+TRACE_REVERSE_THROTTLE = env_float("TRACE_REVERSE_THROTTLE", 0.5)
 
 
 def chain_summary(goals_reached, info, last_end, chain_m_target) -> dict:
@@ -799,14 +803,18 @@ def run_unbroken_trace(env, agent, pxr, server, out_root):
         takes the wheel where the car is, on the lane it points along, and hands
         back to c0 (fresh GRU) once the car has been in that lane, aligned and
         moving for TRACE_RECOVER_SETTLE_STEPS (torch_rl.recovery.RecoveryGate).
-        A hop open at the fault is closed with it. A car the expert cannot move
-        for TRACE_WEDGED_STEPS ENDS the drive, reported as `wedged`.
+        A hop open at the fault is closed with it. BLOCKED (the expert has not
+        moved the car for TRACE_BLOCKED_STEPS -- job 464244 sat nose-first against
+        a wall at full throttle), the car REVERSES for TRACE_BACKUP_STEPS through
+        the env config's trace-only `trace_reverse` (the action space has none),
+        then the expert re-plans; up to TRACE_MAX_BACKUPS times per takeover. A car
+        still unmovable for TRACE_WEDGED_STEPS ENDS the drive, reported `wedged`.
       * EVERY STEP, the observation BEFORE the action: frame, pose, speed, the
         EXECUTED action, reward; `entropy` = c0's EXPLORE-mode entropy on every
         frame from one GRU carried along the drive (the placement signal, the
         name the map builder reads), `entropy_drive` = the driving pass's (goal
         mode in a hop, NaN while the expert drives); the mode bit fed, the hop
-        id, `driver` (0 c0, 1 expert), `fault` (_FAULT_CODE), and with
+        id, `driver` (0 c0, 1 expert, 2 reversing out), `fault` (_FAULT_CODE), and with
         TRACE_SAVE_BINOC the DEBiT binoc vector.
       * Ends at TRACE_DIST_M metres or TRACE_MAX_STEPS steps. A killed job resumes
         from its last chunk, which is necessarily a SECOND drive: printed loudly
@@ -906,8 +914,13 @@ def run_unbroken_trace(env, agent, pxr, server, out_root):
                         settle_steps=TRACE_RECOVER_SETTLE_STEPS,
                         max_lat_m=TRACE_RECOVER_LAT_M, max_yaw_deg=TRACE_RECOVER_YAW_DEG,
                         min_kmh=TRACE_RECOVER_MIN_KMH, stall_steps=TRACE_STALL_STEPS,
-                        wedged_steps=TRACE_WEDGED_STEPS)
+                        wedged_steps=TRACE_WEDGED_STEPS, blocked_steps=TRACE_BLOCKED_STEPS,
+                        backup_steps=TRACE_BACKUP_STEPS, max_backups=TRACE_MAX_BACKUPS)
     zero = np.clip(np.zeros(box.shape, np.float32), box.low, box.high)
+    exp_cfg = getattr(base, "experiment", None)
+    if exp_cfg is None:
+        raise RuntimeError("the unbroken trace's reverse-out needs the env's experiment config")
+    exp_cfg.trace_reverse = None
     m0 = writer.metres
     total_m, steps = writer.metres, writer.steps
     prev = np.asarray(info.get("hero_pos", (0.0, 0.0)), np.float64)[:2]
@@ -966,7 +979,7 @@ def run_unbroken_trace(env, agent, pxr, server, out_root):
         else:
             _a, h_exp, st_exp = agent.act_with_stats(row0, h_exp, goal=goal_blk,
                                                      deterministic=True)
-            a_env = expert.act()
+            a_env = zero if gate.backing else expert.act()
             if a_env is None:                       # plan driven out: plan on
                 lane, _l, _y = _settle_lane(core, carla, core.hero.get_transform().location,
                                             float(info.get("hero_yaw", 0.0) or 0.0))
@@ -980,7 +993,8 @@ def run_unbroken_trace(env, agent, pxr, server, out_root):
                   "action": np.asarray(a_env, np.float32), "entropy": st_exp["entropy"],
                   "entropy_drive": ent_drive, "q_mean": st_exp["q_mean"],
                   "q_std": st_exp["q_std"], "t": steps, "mode": bit if gate.driver == "c0" else 0,
-                  "hop": hop_id, "driver": 0 if gate.driver == "c0" else 1}
+                  "hop": hop_id,
+                  "driver": 0 if gate.driver == "c0" else (2 if gate.backing else 1)}
         if TRACE_SAVE_BINOC:
             sample["binoc"] = np.asarray(obs["binoc"], np.float32).reshape(-1)
         obs, r, term, trunc, info = env.step(a_env)
@@ -1003,11 +1017,24 @@ def run_unbroken_trace(env, agent, pxr, server, out_root):
                 hops.segment_end(t=t, reason=gate.events[-1]["fault"])
             if lane is not None:
                 plan_from(lane)
+        elif ev == "backup":
+            # BLOCKED: the expert has not moved the car for TRACE_BLOCKED_STEPS.
+            # The action space has no reverse, so the env config's trace-only
+            # `trace_reverse` backs the car out; straight first, then alternating
+            # lock so a repeat block is left a different way.
+            nb = gate.events[-1]["backups"]
+            exp_cfg.trace_reverse = ((0.0, 0.5, -0.5)[(nb - 1) % 3] if nb else 0.0,
+                                     TRACE_REVERSE_THROTTLE)
+        elif ev == "replan":
+            exp_cfg.trace_reverse = None
+            if lane is not None:
+                plan_from(lane)
         elif ev == "handback":
             hidden = agent.reset_hidden(1)          # c0 takes over with a fresh GRU
             if hops is not None:
                 hops.take_reset()
         elif ev == "wedged":
+            exp_cfg.trace_reverse = None
             end = "wedged"
         if end is None and (term or trunc):
             # Nothing should end this episode; if the env still did, the drive is
@@ -1023,6 +1050,7 @@ def run_unbroken_trace(env, agent, pxr, server, out_root):
             hs = hops.summary() if hops is not None else {"attempted": 0, "ends": {}}
             print(f"[Unbroken] {steps} steps, {total_m:.0f} m, coverage {cov.fraction():.1%} | "
                   f"driver {gate.driver}, {gs['takeovers']} takeovers {gs['by_fault']}, "
+                  f"{gs['backups']} reverse-outs, "
                   f"expert {gs['expert_steps']} steps | hops {hs['attempted']} asked, "
                   f"{hs['ends'].get('reached', 0)} reached | {spd:.1f} km/h", flush=True)
     writer.index["recovery"] = gate.summary()
@@ -1035,7 +1063,8 @@ def run_unbroken_trace(env, agent, pxr, server, out_root):
     print(f"[UnbrokenDone] {town}: end={end} | {steps} steps, {total_m:.0f} m "
           f"({total_m - m0:.0f} m this drive) in {n_drives} drive(s), coverage "
           f"{cov.fraction():.1%} | {gs['takeovers']} expert takeovers {gs['by_fault']}, "
-          f"{gs['expert_steps']} expert steps ({gs['expert_steps'] / max(steps, 1):.1%}) "
+          f"{gs['expert_steps']} expert steps ({gs['expert_steps'] / max(steps, 1):.1%}), "
+          f"{gs['backups']} reverse-outs "
           f"| hops {writer.index.get('hops')} -> {out}", flush=True)
     env.close()
     server.stop()

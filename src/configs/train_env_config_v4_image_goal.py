@@ -591,6 +591,23 @@ class STBL3Experiment(BaseExperiment):
             self.throttle = 0.0
             self.last_action = vehicle_control
             return vehicle_control
+        # TRACE_REVERSE (trace-only, 2026-11-06): the unbroken map trace's expert
+        # recovery sets `trace_reverse = (steer, throttle)` to BACK OUT of a block
+        # (job 464244: nose against a wall, full throttle, 30 s without moving --
+        # the action space has no reverse). The action is discarded while it is
+        # set. Never set by training: the attribute does not exist unless
+        # train_carla_sac.run_unbroken_trace creates it.
+        rev = getattr(self, "trace_reverse", None)
+        if rev is not None:
+            vehicle_control.steer = float(np.clip(rev[0], -self.max_steer, self.max_steer))
+            vehicle_control.throttle = float(np.clip(rev[1], 0.0, 1.0))
+            vehicle_control.brake = 0.0
+            vehicle_control.hand_brake = False
+            vehicle_control.reverse = True
+            self.steer = vehicle_control.steer
+            self.throttle = 0.0
+            self.last_action = vehicle_control
+            return vehicle_control
         if self.incremental_actions:
             # a in [-1, 1] scales one step of size STEER_STEP / THROTTLE_STEP.
             steer = self.steer + self.steer_step * np.clip(a0, -1.0, 1.0)

@@ -60,10 +60,33 @@ def test_settled_means_in_lane_aligned_moving_and_fault_free():
 
 
 def test_a_car_that_cannot_move_ends_the_drive_rather_than_jump():
-    g = RecoveryGate(wedged_steps=4)
+    g = RecoveryGate(wedged_steps=4, max_backups=0)
     g.update(t=0, **{**OK, "fault": "collision"})
     out = [g.update(t=t, **{**OK, "speed_kmh": 0.0}) for t in range(1, 5)]
     assert out == [None, None, None, "wedged"] and g.driver == "none"
+
+
+def test_a_blocked_expert_reverses_then_replans():
+    # job 464244: nose against a wall after leaving the road, full throttle, no
+    # reverse in the action space -> 30 s of nothing. Now it backs out first.
+    g = RecoveryGate(blocked_steps=2, backup_steps=3, max_backups=2, wedged_steps=50)
+    g.update(t=0, **{**OK, "fault": "collision"})
+    still = {**OK, "speed_kmh": 0.0}
+    assert [g.update(t=t, **still) for t in (1, 2)] == [None, "backup"]
+    assert g.backing
+    # reversing: moving or not, no settle and no new block until it is over
+    assert [g.update(t=t, **still) for t in (3, 4, 5)] == [None, None, "replan"]
+    assert not g.backing and g.events[-1]["backups"] == 1
+    assert [g.update(t=t, **still) for t in (6, 7)] == [None, "backup"]
+
+
+def test_backups_are_limited_then_the_wedged_clock_decides():
+    g = RecoveryGate(blocked_steps=1, backup_steps=1, max_backups=1, wedged_steps=3)
+    g.update(t=0, **{**OK, "fault": "off_road"})
+    still = {**OK, "speed_kmh": 0.0}
+    out = [g.update(t=t, **still) for t in range(1, 6)]
+    assert out == ["backup", "replan", None, None, "wedged"]
+    assert g.summary()["backups"] == 1 and g.summary()["wedged"]
 
 
 def test_summary_counts_takeovers_by_fault():

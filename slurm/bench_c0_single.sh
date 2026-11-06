@@ -21,7 +21,11 @@ set -u
 cd ~/carla-rl
 C=$HOME/carla-rl/checkpoints/il_bc_c0/step_15000
 EP=$HOME/carla-rl/logs/bench_long_episodes.json
-MAPROOT=$HOME/carla-rl/checkpoints/maps_c0step
+# MAPROOT / MAP_LABEL: which single-trace maps, and the label in the run names.
+# Default c0's segmented per-step trace; the unbroken drive (user 2026-11-06,
+# "i want one unbroke drive"): MAPROOT=$HOME/carla-rl/checkpoints/maps_c0unbroken MAP_LABEL=c0unbroken
+MAPROOT=${MAPROOT:-$HOME/carla-rl/checkpoints/maps_c0step}
+MAP_LABEL=${MAP_LABEL:-c0step}
 export BENCH_BASE_OVERLAY=slurm/il_eval_chw.env
 export GOAL_CAM_MATCH=1 EVAL_EPISODES_FILE=$EP
 TASKS=(Town02:entropy Town03:entropy Town02:uniform Town03:uniform
@@ -36,11 +40,11 @@ if [ ! -f "$MAPROOT/$arm/$town.json" ]; then
   echo "=== no map $MAPROOT/$arm/$town.json: nothing to drive"; exit 1
 fi
 for band in easy medium hard; do
-  out=checkpoints/bench_c0step_${arm}_${town}_${band}/eval_step_15000_map-${arm}
+  out=checkpoints/bench_${MAP_LABEL}_${arm}_${town}_${band}/eval_step_15000_map-${arm}
   if [ -f "$out/eval.json" ]; then echo "=== have $arm $town $band"; continue; fi
   echo "=== BENCHMAP c0 single $arm $town $band ==="
   EVAL_VIDEO_EVERY=20 REWARD_OVERLAY=slurm/bench_$band.env ENV_TOWNS=$town \
-    WRONG_GOAL_MODE=0 EVAL_MAP_DIR=$MAPROOT/$arm RUN_NAME=bench_c0step_${arm}_${town}_${band} \
+    WRONG_GOAL_MODE=0 EVAL_MAP_DIR=$MAPROOT/$arm RUN_NAME=bench_${MAP_LABEL}_${arm}_${town}_${band} \
     CARLA_PORT=$PORT EVAL_FROM=$C bash slurm/train_sac.sbatch
   echo "=== BENCHMAP c0 single $arm $town $band rc=$? ==="
 done

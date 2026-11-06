@@ -13,7 +13,7 @@ set -u
 cd ~/carla-rl
 PY=${CLUSTER_PY:-$HOME/carla-cluster/envs/carla310/bin/python}
 export PYTHONNOUSERSITE=1
-TRACE_FMT=${TRACE_FMT:-checkpoints/trace1step_il_bc_c0_s15000_{town}/trace_step_15000}
+TRACE_FMT=${TRACE_FMT:-"checkpoints/trace1step_il_bc_c0_s15000_{town}/trace_step_15000"}
 OUT=${MAP_OUT:-$HOME/carla-rl/checkpoints/maps_c0step}
 EXTRA=${SGM_STEP:+--sgm}
 for town in ${MAP_TOWNS:-Town02 Town03}; do

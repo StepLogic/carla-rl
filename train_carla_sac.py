@@ -1086,12 +1086,31 @@ def run_eval(env, agent, pxr, server, out_root):
     server.stop()
 
 
-def build_agent(binoc_dim, act_dim):
+def checkpoint_critic_layer_norm(ckpt_dir) -> bool:
+    """Whether a checkpoint's critics have LayerNorm, from its config.json;
+    False for one written before the field (or the rule) existed."""
+    import json
+    with open(os.path.join(ckpt_dir, "config.json")) as fh:
+        return bool(json.load(fh).get("critic_layer_norm", False))
+
+
+def require_critic_layernorm(layer_norm, training) -> None:
+    """USER RULE 2026-11-06, "MAKE IT A RULE TO USE LAYER NORM IN CRITIC": no
+    training run without it. Evals of checkpoints made before the rule build
+    whatever critic the checkpoint has (checkpoint_critic_layer_norm)."""
+    if training and not layer_norm:
+        raise SystemExit("CRITIC_LAYERNORM=0 in a training run: user rule 2026-11-06 is "
+                         "LayerNorm in the critic for every RL run")
+
+
+def build_agent(binoc_dim, act_dim, critic_layer_norm=None):
     """The learner exactly as main() configures it, with DEBiT's pretrained
     monocular trunk loaded into both the online and the target encoder.
     Factored out of main() (2026-11-04, imitation-first plan) so behaviour
     cloning can build the same network without starting CARLA. The trunk
-    load report is attached as agent.mono_report for the preflight line."""
+    load report is attached as agent.mono_report for the preflight line.
+    `critic_layer_norm` (None = CRITIC_LAYERNORM, default on): an eval passes
+    its checkpoint's own setting so a pre-rule checkpoint loads strictly."""
     from torch_rl import pixel_rows as pxr
     from torch_rl.debit_mono import load_debit_mono
     from torch_rl.gated_recurrent_sac import (GatedRecurrentSAC,
@@ -1145,7 +1164,9 @@ def build_agent(binoc_dim, act_dim):
         # a random subset) was already here; these two are what let the replay
         # ratio go up without the critic running away.
         critic_dropout=env_float("CRITIC_DROPOUT", 0.0),
-        critic_layer_norm=os.environ.get("CRITIC_LAYERNORM", "0") == "1",
+        # USER RULE 2026-11-06: LayerNorm in the critic, on by default.
+        critic_layer_norm=(os.environ.get("CRITIC_LAYERNORM", "1") == "1"
+                           if critic_layer_norm is None else bool(critic_layer_norm)),
         subset_size=env_int("SUBSET_SIZE", 2),
         discount=env_float("DISCOUNT", 0.99),
         discount_e=env_float("EXPLORE_DISCOUNT", 0.99),
@@ -1295,7 +1316,9 @@ def main():
     # first ("shapes (2,) (3,)") and the smoke run the second ("the expanded
     # size of the tensor (2) must match the existing size (3)").
     ACT_DIM = int(env.action_space.shape[0])
-    agent = build_agent(binoc_dim, ACT_DIM)
+    agent = build_agent(binoc_dim, ACT_DIM, critic_layer_norm=checkpoint_critic_layer_norm(EVAL_FROM) if EVAL_FROM else None)
+    require_critic_layernorm(agent.cfg.critic_layer_norm,
+                             training=not (EVAL_FROM or EXPERT_RECORD))
     mono_report = agent.mono_report
     cfg = agent.cfg          # the banner and the [Ep] line read the learner's config
     if EXPERT_RECORD:
@@ -1322,7 +1345,8 @@ def main():
                 f"replay buffer starts empty, and updating on a near-empty one "
                 f"destroyed goal steering before. Set LEARNING_STARTS >= "
                 f"{INIT_MIN_LEARNING_STARTS} so the loaded policy refills it first.")
-        agent.load(INIT_FROM)
+        # A pre-rule checkpoint (no critic LayerNorm) keeps fresh LN critics.
+        agent.load(INIT_FROM, fresh_critics_on_mismatch=True)
         print(f"  WARM START from {INIT_FROM}: modules, targets, temperatures, "
               f"optimisers and update counter restored; replay buffer EMPTY, so no "
               f"update until {LEARNING_STARTS} transitions from the loaded policy",

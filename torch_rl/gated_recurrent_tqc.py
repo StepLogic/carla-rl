@@ -1163,13 +1163,28 @@ class GatedRecurrentTQC:
             json.dump(dataclasses.asdict(self.cfg), fh, indent=1, default=str)
         return path
 
-    def load(self, in_dir: str) -> None:
+    _CRITIC_PARTS = ("critics_g", "critics_e", "critics_g_targ", "critics_e_targ", "opt_critic")
+
+    def load(self, in_dir: str, fresh_critics_on_mismatch: bool = False) -> None:
+        """`fresh_critics_on_mismatch` (warm starts and clone inits, 2026-11-06):
+        when the checkpoint's critics have a different architecture -- made
+        before the critic-LayerNorm rule -- the critics, their targets and the
+        critic optimiser keep their fresh initialisation and everything else
+        loads strictly. A clone's critics were never trained, so nothing is lost."""
         blob = torch.load(os.path.join(in_dir, "params.pt"), map_location=self.device,
                           weights_only=True)
+        skip = ()
+        if fresh_critics_on_mismatch and set(blob["critics_g"]) != set(self.critics_g.state_dict()):
+            skip = self._CRITIC_PARTS
+            print(f"  load {in_dir}: the checkpoint's critics differ in architecture "
+                  f"(critic LayerNorm now {'ON' if self.cfg.critic_layer_norm else 'OFF'}) -- "
+                  f"critics, critic targets and the critic optimiser start FRESH; every other "
+                  f"module loads strictly", flush=True)
         # Strict on names and shapes: a pose snapshot (D-channel compression,
         # an act_embed) refuses to load into an image-goal agent and vice versa.
         for n in self.modules_list + self._OPTIMISERS:
-            getattr(self, n).load_state_dict(blob[n])
+            if n not in skip:
+                getattr(self, n).load_state_dict(blob[n])
         # In place: the compiled update holds these very tensors.
         with torch.no_grad():
             for n in self._TENSORS:

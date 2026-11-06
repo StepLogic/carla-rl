@@ -258,8 +258,8 @@ class GatedRecurrentSAC(GatedRecurrentTQC):
                        os.path.join(out_dir, "iql_value.pt"))
         return path
 
-    def load(self, in_dir: str) -> None:
-        super().load(in_dir)
+    def load(self, in_dir: str, fresh_critics_on_mismatch: bool = False) -> None:
+        super().load(in_dir, fresh_critics_on_mismatch=fresh_critics_on_mismatch)
         p = os.path.join(in_dir, "iql_value.pt")
         if self.value_g is not None and os.path.exists(p):
             blob = torch.load(p, map_location=self.device, weights_only=True)

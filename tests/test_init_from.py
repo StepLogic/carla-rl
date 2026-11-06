@@ -22,7 +22,7 @@ def test_the_checkpoint_loads_after_the_pretrained_init():
     initialisation would let the pretrained weights overwrite it."""
     s = _src()
     assert s.index("mono_report = load_debit_mono(agent.compress, TINY)") < \
-        s.index("agent.load(INIT_FROM)")
+        s.index("agent.load(INIT_FROM")
 
 
 def test_a_short_refill_is_refused():

@@ -193,7 +193,7 @@ def test_trainer_freezes_the_trunk_on_request():
     assert 'IL_FREEZE_TRUNK = os.environ.get("IL_FREEZE_TRUNK", "0") == "1"' in s
     assert "agent.set_trunk_frozen(True)" in s
     # after the warm start's load, before the preload's warm-up
-    assert s.index("agent.set_trunk_frozen(True)") > s.index("agent.load(INIT_FROM)")
+    assert s.index("agent.set_trunk_frozen(True)") > s.index("agent.load(INIT_FROM")
     assert s.index("agent.set_trunk_frozen(True)") < s.index("il_hook = il_finetune_prepare(")
 
 
@@ -214,7 +214,7 @@ def test_trainer_sets_the_starting_temperature_after_the_warm_start():
     s = open(os.path.join(ROOT, "train_carla_sac.py")).read()
     assert 'IL_ALPHA0 = env_float("IL_ALPHA0", 0.0)' in s
     assert "agent.set_temperature(IL_ALPHA0)" in s
-    assert s.index("agent.set_temperature(IL_ALPHA0)") > s.index("agent.load(INIT_FROM)")
+    assert s.index("agent.set_temperature(IL_ALPHA0)") > s.index("agent.load(INIT_FROM")
 
 
 class _ChunkBuf:

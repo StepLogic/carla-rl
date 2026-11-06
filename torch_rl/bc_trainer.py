@@ -296,7 +296,9 @@ def run_bc_train(out_root, make_agent=None):
     act_dim = int(load_episode(train[0])["act_label"].shape[1])
     agent = make_agent(pxr.BINOC_DIM, act_dim)
     if init_from:
-        agent.load(init_from)
+        # A pre-rule clone (no critic LayerNorm) keeps fresh LN critics: cloning
+        # never trains the critics anyway.
+        agent.load(init_from, fresh_critics_on_mismatch=True)
     K = int(agent.cfg.burn_in)
     t0 = time.time()
     train_buf, n_train = _buffer(train, act_dim, agent.device, seed=0)

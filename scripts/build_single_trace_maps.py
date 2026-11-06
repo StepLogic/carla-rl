@@ -84,6 +84,20 @@ def c0_only(idx, tr):
     return idx[tr["driver"][idx] == 0]
 
 
+def with_gaps(idx, tr, gap_m):
+    """Key nodes + GAP NODES: every c0-driven frame then has an aligned node
+    within gap_m (image_map.place_uniform seeded with the key nodes). The same
+    rule for every placement, so arms still differ only in their key nodes."""
+    if not gap_m:
+        return np.asarray(idx, int), 0
+    view, k = c0_view(tr)
+    pos = {int(i): j for j, i in enumerate(k)}
+    seeds = [pos[int(i)] for i in idx if int(i) in pos]
+    out = k[im.place_uniform(view, gap_m, seed_nodes=seeds)]
+    return np.asarray(sorted(set(out.tolist()) | set(int(i) for i in idx)), int), \
+        int(len(set(out.tolist()) - set(int(i) for i in idx)))
+
+
 def c0_view(tr):
     """(sub-trace of c0-driven samples, their indices in the full trace)."""
     k = np.flatnonzero(tr["driver"] == 0)
@@ -107,6 +121,15 @@ def trace_stats(tr, index):
             "restart_gap_m_max": round(float(np.max(gaps)), 2) if gaps else None}
 
 
+def save_gap(a, name, town, tr, idx, meta):
+    idx, added = with_gaps(idx, tr, a.gap_m)
+    meta = {**meta, **({"gap_m": a.gap_m, "gap_nodes": added} if a.gap_m else {})}
+    if a.gap_m:
+        print(f"  {name}: +{added} gap nodes (no aligned node within {a.gap_m:g} m)",
+              flush=True)
+    return save(a.out, name, town, tr, idx, meta, max_turn_deg=a.max_turn_deg)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--trace-fmt", required=True,
@@ -116,6 +139,13 @@ def main():
     ap.add_argument("--z", type=float, default=1.0)
     ap.add_argument("--window-m", type=float, default=15.0)
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--gap-m", type=float, default=0.0,
+                    help="GAP NODES (Habitat peer, 2026-11-06), every placement equally: "
+                         "after the key nodes, add c0-driven trace frames wherever no "
+                         "aligned node lies within this many metres (0 = off)")
+    ap.add_argument("--max-turn-deg", type=float, default=None,
+                    help="no edge between nodes whose headings differ by more than this "
+                         "(the opposite-lane rule; default off)")
     ap.add_argument("--sgm", action="store_true",
                     help="build only sgm_matched from <out>/sgm_pairs_<Town>.npz")
     a = ap.parse_args()
@@ -141,10 +171,10 @@ def main():
             cut, keep, sst = im.sgm_match(z["cand"], z["pairs"], z["q"], z["xy"], z["yaw"],
                                           count=n, gate_m=None, iters=30)
             keep = c0_only(keep, tr)
-            rows.append(save(a.out, "sgm_matched", town, tr, keep,
+            rows.append(save_gap(a, "sgm_matched", town, tr, keep,
                              {**sst, "cand_m": float(z["cand_m"]), "pair_m": float(z["pair_m"])}))
             continue
-        rows.append(save(a.out, "entropy", town, tr, ent,
+        rows.append(save_gap(a, "entropy", town, tr, ent,
                          {"z": a.z, "window_m": a.window_m,
                           "window_samples": st["window_samples"],
                           "degenerate_window_frac": st["degenerate_window_frac"],
@@ -153,9 +183,9 @@ def main():
         view, k = c0_view(tr)
         spacing, uni = im.match_uniform(view, n)
         uni = k[uni]
-        rows.append(save(a.out, "uniform", town, tr, uni, {"spacing_m": round(spacing, 3)}))
+        rows.append(save_gap(a, "uniform", town, tr, uni, {"spacing_m": round(spacing, 3)}))
         rnd = k[im.place_random(view, n, seed=a.seed)]
-        rows.append(save(a.out, "random", town, tr, rnd, {"seed": a.seed}))
+        rows.append(save_gap(a, "random", town, tr, rnd, {"seed": a.seed}))
     name = f"maps_summary{'_sgm' if a.sgm else ''}_{'_'.join(a.towns)}.json"   # per town set
     with open(os.path.join(a.out, name), "w") as fh:
         json.dump(rows, fh, indent=1)

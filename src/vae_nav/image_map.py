@@ -272,9 +272,12 @@ class Graph:
 
 
 def build_graph(trace, indices, jumped_segs=None, visit_m=VISIT_M,
-                continue_m=CONTINUE_M, meta=None):
+                continue_m=CONTINUE_M, meta=None, max_turn_deg=None):
     """Nodes = trace[indices]; edges = successive node visits along the trace
-    (see the module note). `jumped_segs` defaults to the trace's own record."""
+    (see the module note). `jumped_segs` defaults to the trace's own record.
+    `max_turn_deg` (None = off, every earlier map): no edge between two nodes
+    whose headings differ by more than this -- the Habitat peer's opposite-lane
+    rule (2026-11-06), so a revisit of the other lane never becomes a shortcut."""
     pos, yaw, seg = trace["pos"], trace["yaw"], np.asarray(trace["seg"])
     jumped = set(trace.get("jumped", ())) if jumped_segs is None else set(jumped_segs)
     indices = [int(i) for i in indices]
@@ -318,6 +321,11 @@ def build_graph(trace, indices, jumped_segs=None, visit_m=VISIT_M,
             continue
         # among several nodes visited at once, keep the nearest as "the" visit
         k = vs[0] if i in own else min(vs, key=lambda k: np.hypot(*(pos[indices[k]] - pos[i])))
+        if (last is not None and k != last and max_turn_deg is not None
+                and not _aligned(yaw[indices[last]], yaw[indices[k]],
+                                 np.radians(max_turn_deg))):
+            last, since = k, 0.0              # the opposite lane: no edge
+            continue
         if last is not None and k != last:
             w = edges.get((last, k))
             edges[(last, k)] = since if w is None else min(w, since)

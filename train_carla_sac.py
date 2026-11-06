@@ -193,6 +193,14 @@ EVAL_MAP_SWITCH_M = float(os.environ.get("EVAL_MAP_SWITCH_M", 4.0))
 EVAL_MAP_START_M = float(os.environ.get("EVAL_MAP_START_M", 8.0))
 EVAL_MAP_GOAL_M = float(os.environ.get("EVAL_MAP_GOAL_M", 8.0))
 EVAL_MAP_RESET_HIDDEN = os.environ.get("EVAL_MAP_RESET_HIDDEN", "0") == "1"
+# EVAL_MAP_FALLBACK=mapless (user 2026-11-06 "proceed", the Habitat peer's rule):
+# an episode the map cannot route (no start node, no goal node, no route) is
+# DRIVEN MAPLESS with its real goal image and scored normally, never recorded as
+# a failure without driving; the row carries map_fallback=<why>. Default "" keeps
+# every earlier benchmark's rule (end="unroutable", a failure).
+EVAL_MAP_FALLBACK = os.environ.get("EVAL_MAP_FALLBACK", "")
+if EVAL_MAP_FALLBACK not in ("", "mapless"):
+    raise ValueError(f"EVAL_MAP_FALLBACK={EVAL_MAP_FALLBACK!r}: use '' or 'mapless'")
 # EXPERT RECORDING (imitation-first plan, 2026-11-04; see run_record and
 # torch_rl.expert_record). EXPERT_RECORD=1 drives CARLA's BasicAgent (or, with
 # EXPERT_DRIVER=policy and EVAL_FROM, the policy, relabelled by the expert:
@@ -1586,7 +1594,13 @@ def run_eval(env, agent, pxr, server, out_root):
             map_row = {"map_start_node": s_node, "map_goal_node": g_node,
                        "map_hops": None if route is None else len(route) - 1,
                        "map_route_m": None if route is None else round(gmap.length(route), 2)}
-            if route is None:
+            if route is None and EVAL_MAP_FALLBACK == "mapless":
+                why = ("no start node" if s_node is None else "no goal node"
+                       if g_node is None else "no route")
+                map_row["map_fallback"] = why
+                print(f"[Eval {k + 1:3d}/{n_eps}] seed={seed} no map route ({why}): "
+                      f"driven MAPLESS", flush=True)
+            elif route is None:
                 why = ("no start node" if s_node is None else "no goal node"
                        if g_node is None else "no route")
                 rows.append({"episode": k, "seed": seed, "town": TOWNS[0],
@@ -1599,14 +1613,15 @@ def run_eval(env, agent, pxr, server, out_root):
                              **map_row})
                 print(f"[Eval {k + 1:3d}/{n_eps}] seed={seed} UNROUTABLE ({why})", flush=True)
                 continue
-            final_frame = goal_wrapper.latched_goal()
-            nav = image_map.Navigator(gmap, route, switch_m=EVAL_MAP_SWITCH_M)
+            if route is not None:
+                final_frame = goal_wrapper.latched_goal()
+                nav = image_map.Navigator(gmap, route, switch_m=EVAL_MAP_SWITCH_M)
 
-            def _aim():
-                f = final_frame if nav.final else map_frames[nav.current()]
-                obs["binoc"] = goal_wrapper.retarget(f, info)
-                return pxr.goal_block(info["debit_goal"])
-            goal_blk = _aim()
+                def _aim():
+                    f = final_frame if nav.final else map_frames[nav.current()]
+                    obs["binoc"] = goal_wrapper.retarget(f, info)
+                    return pxr.goal_block(info["debit_goal"])
+                goal_blk = _aim()
         vid.start(k)
         ret, t, end = 0.0, 0, None
         # SPL bookkeeping. p = metres actually driven; l = the shortest ROUTE
@@ -1713,6 +1728,7 @@ def run_eval(env, agent, pxr, server, out_root):
                      "path_m": round(path_m, 2), "spl": spl_i, "video": path,
                      **({} if nav is None else {**map_row, "map_switches": nav.switches,
                                                 "map_final": bool(nav.final)}),
+                     **(map_row if nav is None and map_row is not None else {}),
                      **(chain_summary(chain_goals, info, end,
                                       float(os.environ.get("GOAL_CHAIN_M", 200.0) or 200.0))
                         if EVAL_CHAIN else {})})
@@ -1750,6 +1766,7 @@ def run_eval(env, agent, pxr, server, out_root):
                "episodes_file": EVAL_EPISODES_FILE or None,
                "map_dir": EVAL_MAP_DIR or None,
                "unroutable": sum(1 for x in rows if x["end"] == "unroutable"),
+               "map_fallback": sum(1 for x in rows if x.get("map_fallback")),
                "wilson95": [round(centre - half, 3), round(centre + half, 3)],
                "ends": ends, "fault_ends": "crossing/off_road/collision",
                "deterministic": EVAL_NOISE_SCALE <= 0,

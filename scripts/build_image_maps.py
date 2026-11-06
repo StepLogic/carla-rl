@@ -73,11 +73,14 @@ def largest_scc(g):
     return best
 
 
-def save(out, placement, town, trace, idx, meta):
+def save(out, placement, town, trace, idx, meta, max_turn_deg=None):
     d = os.path.join(out, placement)
     os.makedirs(d, exist_ok=True)
     g = im.build_graph(trace, idx, meta={"placement": placement, "town": town,
-                                         "trace": trace["dir"], **meta})
+                                         "trace": trace["dir"], **meta,
+                                         **({"max_turn_deg": max_turn_deg}
+                                            if max_turn_deg is not None else {})},
+                       max_turn_deg=max_turn_deg)
     g.save(os.path.join(d, f"{town}.json"))
     np.save(os.path.join(d, f"{town}_frames.npy"), im.node_frames(trace, idx))
     km = trace["meta"].get("total_m") or float(np.sum(np.hypot(*np.diff(trace["pos"], axis=0).T)))

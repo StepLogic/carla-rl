@@ -191,7 +191,7 @@ def il_bc_hook(agent, opt, expert_buf, n_chunks, length, w0, decay_updates,
 
 def il_finetune_prepare(agent, buf, root, towns, *, warmup_updates, chunk_b, chunk_t,
                         w0, decay_updates, bc_chunks, bc_len, aug=None, log=print,
-                        online_freeze_updates=0):
+                        online_freeze_updates=0, expert_replay=None):
     """Ready a clone for the RL fine-tune (imitation-first plan, Task 10), before
     the first env step:
       1. the recorded episodes fill the replay `buf` with their EXECUTED actions
@@ -207,7 +207,10 @@ def il_finetune_prepare(agent, buf, root, towns, *, warmup_updates, chunk_b, chu
     paths = episode_paths(root, towns)
     if not paths:
         raise SystemExit(f"IL preload: no episodes under {root} for {towns}")
-    n_exec = fill_buffer(buf, paths, which="exec")
+    # expert_replay (user 2026-11-05, mixed_replay.MixedReplay): the executed
+    # expert steps go to a replay of their own and the agent's `buf` starts empty.
+    replay = buf if expert_replay is None else expert_replay
+    n_exec = fill_buffer(replay, paths, which="exec")
     act_dim = int(load_episode(paths[0])["act_label"].shape[1])
     expert_buf, n_lab = _buffer(paths, act_dim, agent.device, seed=1)
     log(f"[IL] preload {root}: {len(paths)} episodes -> replay +{n_exec} executed steps, "
@@ -217,7 +220,7 @@ def il_finetune_prepare(agent, buf, root, towns, *, warmup_updates, chunk_b, chu
     agent.set_warmup(True)
     m = {}
     for _ in range(int(warmup_updates)):
-        m = agent.update(buf.sample_chunks(chunk_b, chunk_t + K, K))
+        m = agent.update(replay.sample_chunks(chunk_b, chunk_t + K, K))
     agent.set_warmup(False)
     log(f"[IL] critic warm-up: {int(warmup_updates)} updates, encoder/GRU/actor frozen, "
         f"q_g {m.get('q_g', float('nan')):.2f} critic_loss_g "
@@ -227,6 +230,12 @@ def il_finetune_prepare(agent, buf, root, towns, *, warmup_updates, chunk_b, chu
             f"the critic only, on the clone's own rollouts")
     return il_bc_hook(agent, make_bc_optimizer(agent), expert_buf, bc_chunks, bc_len, w0,
                       decay_updates, aug=aug, freeze_updates=online_freeze_updates, log=log)
+
+
+def expert_rows(root, towns):
+    """Buffer rows the recorded episodes under `root` occupy (T + 1 each): the
+    capacity a replay of their own needs (mixed_replay.MixedReplay)."""
+    return sum(_episode_rows(p) for p in episode_paths(root, towns))
 
 
 def _episode_rows(path):

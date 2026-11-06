@@ -112,6 +112,11 @@ IL_ONLINE_FREEZE_UPDATES = env_int("IL_ONLINE_FREEZE_UPDATES", 0)
 # as loaded for the whole run; only the actor head, critic heads and temperature
 # learn (GatedRecurrentTQC.set_trunk_frozen).
 IL_FREEZE_TRUNK = os.environ.get("IL_FREEZE_TRUNK", "0") == "1"
+# IL_EXPERT_FRAC in (0, 1) (user 2026-11-05, "keep expert buffer and rl buffer and
+# sample from both"): the recorded expert steps get a replay of their own and
+# every update draws this share of its chunks from it (mixed_replay.MixedReplay).
+# 0 = one shared replay, the expert steps preloaded into it.
+IL_EXPERT_FRAC = env_float("IL_EXPERT_FRAC", 0.0)
 EVAL_EPISODES = env_int("EVAL_EPISODES", 40)
 # EVAL_CHAIN=1 (imitation-first plan, Task 11): after each arrival the same car
 # gets the next goal (GatedReward's soft reset, GOAL_CHAIN_STYLE) until the chain
@@ -1407,12 +1412,27 @@ def main():
                       "bright": env_float("BC_AUG_BRIGHT", 0.4),
                       "contrast": env_float("BC_AUG_CONTRAST", 0.4),
                       "color": env_float("BC_AUG_COLOR", 0.1)}
+        xbuf = None
+        if IL_EXPERT_FRAC > 0:
+            from torch_rl.bc_trainer import expert_rows
+            # the expert replay has the agent replay's row layout, sized to the data
+            xbuf = DeviceEpisodeBuffer(
+                row_dim, ACT_DIM, expert_rows(IL_PRELOAD_ROOT, IL_PRELOAD_TOWNS), DEVICE,
+                seed=SEED + 1, goal_dim=pxr.PIX,
+                goal_batch_frac=env_float("GOAL_BATCH_FRAC", 0.5),
+                store_device=REPLAY_DEVICE, u8_cols=pxr.MONO_PIX if REPLAY_U8 else 0)
         il_hook = il_finetune_prepare(
             agent, buf, IL_PRELOAD_ROOT, IL_PRELOAD_TOWNS,
             warmup_updates=IL_CRITIC_WARMUP_UPDATES, chunk_b=CHUNK_B, chunk_t=CHUNK_T,
             w0=IL_BC_WEIGHT0, decay_updates=IL_BC_DECAY_UPDATES, bc_chunks=IL_BC_CHUNKS,
             bc_len=IL_BC_LEN, aug=il_aug, log=lambda m: print(m, flush=True),
-            online_freeze_updates=IL_ONLINE_FREEZE_UPDATES)
+            online_freeze_updates=IL_ONLINE_FREEZE_UPDATES, expert_replay=xbuf)
+        if xbuf is not None:
+            from torch_rl.mixed_replay import MixedReplay
+            buf = MixedReplay(buf, xbuf, IL_EXPERT_FRAC)
+            print(f"  MIXED REPLAY (IL_EXPERT_FRAC={IL_EXPERT_FRAC:g}): {xbuf.size} expert "
+                  f"steps in a replay of their own; every update draws "
+                  f"{IL_EXPERT_FRAC:.0%} of its chunks from it", flush=True)
 
     if parallel:
         from torch_rl.parallel_loop import run_parallel

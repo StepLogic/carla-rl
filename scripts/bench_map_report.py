@@ -34,21 +34,58 @@ def load(pattern):
     return rows
 
 
-def main():
+def parse_args(argv=None):
+    """The globs (relative to --root) default to v30's benchmark tree; the c0 tree
+    (slurm/bench_c0.sh, 2026-11-06) passes its own. {pl} is the placement."""
     ap = argparse.ArgumentParser()
     ap.add_argument("--root", default="checkpoints")
     ap.add_argument("--placements", nargs="+",
                     default=["entropy", "uniform", "random", "sgm", "sgm_matched"])
-    a = ap.parse_args()
-    base = load(os.path.join(a.root, "bench_long_true_*_*", "eval_step_300000", "eval.json"))
+    ap.add_argument("--mapless-glob", default="bench_long_true_*_*/eval_step_300000/eval.json")
+    ap.add_argument("--map-glob",
+                    default="bench_map_{pl}_*_*/eval_step_300000_map-{pl}/eval.json")
+    return ap.parse_args(argv)
+
+
+def spl(row):
+    """Success weighted by path length: reached * shortest / max(path, shortest);
+    an unroutable (never driven) episode is 0."""
+    if not row["reached"] or row["end"] == "unroutable":
+        return 0.0
+    s, p = float(row["shortest_m"]), float(row["path_m"])
+    return s / max(p, s) if s > 0 else 0.0
+
+
+def bins_table(base, arms, keys):
+    """SR at 1 m and 2 m and SPL per bin and pooled, ALL episodes (unroutable =
+    failure), for mapless and every placement, on the episodes every arm has."""
+    print("\n### Per bin, ALL episodes (unroutable = failure)")
+    print("| Arm | Bin | n | SR@1m | SR@2m | SPL |")
+    print("|---|---|---|---|---|---|")
+    for name, rows in [("mapless", base)] + list(arms.items()):
+        for band in BANDS + ("pooled",):
+            ks = [k for k in keys if band == "pooled" or base[k].get("band") == band]
+            if not ks:
+                continue
+            n = len(ks)
+            sr1 = sum(bool(rows[k]["reached"]) for k in ks) / n
+            sr2 = sum(bool(rows[k]["reached_2m"]) for k in ks) / n
+            print(f"| {name} | {band} | {n} | {sr1:.3f} | {sr2:.3f} | "
+                  f"{sum(spl(rows[k]) for k in ks) / n:.3f} |")
+
+
+def main(argv=None):
+    a = parse_args(argv)
+    base = load(os.path.join(a.root, a.mapless_glob))
     arms = {}
     for pl in a.placements:
-        r = load(os.path.join(a.root, f"bench_map_{pl}_*_*", f"eval_step_300000_map-{pl}", "eval.json"))
+        r = load(os.path.join(a.root, a.map_glob.format(pl=pl)))
         if r:
             arms[pl] = r
     keys = sorted(set(base).intersection(*[set(r) for r in arms.values()])) if arms else []
     print(f"mapless {len(base)} episodes; arms {[(p, len(r)) for p, r in arms.items()]}; "
           f"{len(keys)} episodes present in every arm")
+    bins_table(base, arms, keys)
     routable = {p: {k for k in keys if r[k]["end"] != "unroutable"} for p, r in arms.items()}
     common = set(keys).intersection(*routable.values()) if routable else set()
 

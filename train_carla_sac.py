@@ -210,6 +210,22 @@ EXPERT_EXPLORE_MAX_M = env_float("EXPERT_EXPLORE_MAX_M", 200.0)
 EXPERT_REPLAN_M = env_float("EXPERT_REPLAN_M", 3.0)
 EXPERT_RECORD_ROOT = os.environ.get(
     "EXPERT_RECORD_ROOT", os.path.expanduser("~/carla-rl/checkpoints/il_data"))
+# EXPERT TRACE (user 2026-11-06, "CAN YOU CREATE MAP FROM A SINGLE TRACE?" ->
+# "I am talking about evaluations"; see run_expert_trace, torch_rl.expert_trace
+# and vae_nav.coverage_tour). EXPERT_TRACE=1 with EVAL_FROM=<the clone> drives
+# ONE closed coverage tour of the town with CARLA's BasicAgent in a single
+# explore-mode episode, recording every step -- the frame, the pose and the
+# clone's entropy along the way -- for the single-trace EVALUATION maps. Written
+# to EXPERT_TRACE_ROOT/trace_expert_<town> in EXPERT_TRACE_CHUNK-step files;
+# trace-only, so the held-out towns are allowed. EXPERT_TRACE_MAX_STEPS and
+# EXPERT_TRACE_MAX_DRIVES are safety stops, reported if they ever fire.
+EXPERT_TRACE = os.environ.get("EXPERT_TRACE", "0") == "1"
+EXPERT_TRACE_ROOT = os.environ.get(
+    "EXPERT_TRACE_ROOT", os.path.expanduser("~/carla-rl/checkpoints/trace_expert"))
+EXPERT_TRACE_CHUNK = env_int("EXPERT_TRACE_CHUNK", 2000)
+EXPERT_TRACE_MAX_STEPS = env_int("EXPERT_TRACE_MAX_STEPS", 200000)
+EXPERT_TRACE_MAX_DRIVES = env_int("EXPERT_TRACE_MAX_DRIVES", 20)
+EXPERT_TRACE_STUCK_STEPS = env_int("EXPERT_TRACE_STUCK_STEPS", 300)
 # HIDE_MODE_BIT (v34, user 2026-11-02): the NETWORK always sees mode = 1. With
 # FOREIGN_GOAL_EXPLORE, explore episodes carry another town's goal image, so the
 # image -- not the bit -- has to say whether the goal is reachable here. The
@@ -614,6 +630,171 @@ def run_sgm_pairs(agent, enc, pxr):
              cand_m=EVAL_SGM_CAND_M, pair_m=EVAL_SGM_PAIR_M, trace=EVAL_SGM_TRACE)
     print(f"[SGMPairsDone] {len(cand)} candidates, {len(pairs)} pairs, q "
           f"[{q.min():.1f}, {np.median(q):.1f}, {q.max():.1f}] -> {EVAL_SGM_OUT}", flush=True)
+
+
+def run_expert_trace(env, agent, pxr, server, out_root):
+    """ONE closed coverage tour of the town, expert-driven, for the single-trace
+    EVALUATION maps; see EXPERT_TRACE.
+
+      * THE TOUR: every driving lane at least once in its legal direction, no
+        lane change (vae_nav.coverage_tour over GlobalRoutePlanner's lane
+        graph), started a few waypoints into the first lane. Deterministic, so a
+        resume plans the same tour.
+      * THE DRIVER: BasicAgentExpert following the tour as an explore plan at
+        EXPERT_TARGET_KMH, its clean action executed (no noise).
+      * ONE EPISODE, explore mode: the overlay lifts the explore cap, the 100 m
+        explore arrival and the crossing / off-road terminations, so nothing
+        should end it before the tour does. If the env still ends it (a
+        collision) or the car stops moving for EXPERT_TRACE_STUCK_STEPS, the
+        drive restarts at the tour waypoint reached as a NEW drive, which the
+        map builder treats as a new segment; the count is printed and recorded.
+      * EVERY STEP, the observation BEFORE the action: the frame the clone sees
+        (info["debit_cur"]), pose, speed, the executed action and its reward,
+        and the clone's act_with_stats along the drive -- `entropy` with its GRU
+        carried through the drive, `entropy_h0` from a zero GRU state (a
+        one-step context, for diagnosis) -- and the eval's crossing flag.
+      * TRACE-ONLY: the held-out guard's one documented bypass, and
+        expert_trace.trace_dir refuses any root where training data is read.
+    """
+    import random as _random
+    import torch
+    from torch_rl.expert_record import assert_recordable_town
+    from torch_rl.expert_trace import ChunkWriter, trace_dir
+    from vae_nav.coverage_tour import coverage_tour, lane_graph, tour_waypoints, walk_length
+    from vae_nav.expert_oracle import (SAMPLING_RESOLUTION_M, BasicAgentExpert,
+                                       _ensure_agents_on_path)
+    from vae_nav.gated_reward import GatedReward
+
+    town = TOWNS[0]
+    assert_recordable_town(town, trace_only=True)
+    out = trace_dir(EXPERT_TRACE_ROOT, town, record_root=EXPERT_RECORD_ROOT)
+    gated = env
+    while not isinstance(gated, GatedReward):
+        gated = gated.env
+    base = _carla_env(env)
+    core = base.core
+    box = env.action_space
+
+    _ensure_agents_on_path()
+    from agents.navigation.global_route_planner import GlobalRoutePlanner
+    grp = GlobalRoutePlanner(core.map, SAMPLING_RESOLUTION_M)
+    edges, req, wps = lane_graph(grp)
+    start = sorted(req)[0][0]
+    walk = coverage_tour(edges, req, start)
+    plan = tour_waypoints(walk, wps)
+    tour_m = walk_length(walk, edges)
+    lanes_m = sum(edges[e] for e in req)
+    writer = ChunkWriter(out, chunk=EXPERT_TRACE_CHUNK, meta={
+        "town": town, "checkpoint": EVAL_FROM, "spacing_m": None, "driver": "expert",
+        "target_kmh": EXPERT_TARGET_KMH, "tour_edges": len(walk), "tour_m": round(tour_m, 1),
+        "lanes": len(req), "lanes_m": round(lanes_m, 1), "plan_waypoints": len(plan),
+        "trace_only": True})
+    print(f"=== EXPERT TRACE {town} | tour {len(walk)} edges, {tour_m:.0f} m over "
+          f"{len(req)} lanes ({lanes_m:.0f} m), {len(plan)} waypoints, no lane change | "
+          f"expert {EXPERT_TARGET_KMH:g} km/h, clean actions | clone {EVAL_FROM} rides along "
+          f"(entropy, GRU carried) | every step, chunks of {EXPERT_TRACE_CHUNK} -> {out}"
+          + (f" | RESUMING drive {writer.drive} at tour waypoint {writer.resume_plan_index}, "
+             f"{writer.steps} steps, {writer.metres:.0f} m" if writer.steps else ""), flush=True)
+    if writer.done:
+        print(f"[ExpertTraceDone] {town}: already complete -> {out}", flush=True)
+        env.close()
+        server.stop()
+        return
+
+    k0 = max(writer.resume_plan_index, 2)    # a few waypoints into the first lane
+    jumped = False
+    drives = 0
+    expert, hero_id = None, None
+    faults = {"collision": 0, "off_road": 0, "crossing": 0}       # STEPS with each fault
+    total = writer.steps
+    end = None
+    while True:
+        drives += 1
+        wp0 = plan[k0]
+        base.set_start_transform(wp0.transform.location)
+        base.set_destination_transform(plan[min(k0 + 15, len(plan) - 1)].transform.location)
+        gated.force_mode = 0
+        seed = SEED + writer.drive
+        _random.seed(seed)
+        np.random.seed(seed)
+        torch.manual_seed(seed)
+        obs, info = env.reset(seed=seed)
+        if int(gated.mode) != 0:
+            raise RuntimeError(f"expert trace episode is in mode {gated.mode}, not explore")
+        if expert is None or core.hero.id != hero_id:
+            expert = BasicAgentExpert(core.hero, core.map, box,
+                                      target_speed_kmh=EXPERT_TARGET_KMH)
+            hero_id = core.hero.id
+        expert.set_explore_plan(plan[k0:])
+        lp = expert._agent.get_local_planner()
+        hp = np.asarray(info.get("hero_pos", (np.nan, np.nan)), np.float64)[:2]
+        l0 = wp0.transform.location
+        print(f"[ExpertTrace] drive {writer.drive} from tour waypoint {k0}/{len(plan)}: "
+              f"hero at ({hp[0]:.1f},{hp[1]:.1f}), {float(np.hypot(hp[0] - l0.x, hp[1] - l0.y)):.1f} m "
+              f"from it{' (JUMPED)' if jumped else ''}", flush=True)
+        hidden = agent.reset_hidden(1)
+        goal_blk = pxr.goal_block(info["debit_goal"])
+        still, t, end = 0, 0, None
+        while end is None:
+            row = pxr.mono_row(info["debit_cur"], _net_mode(obs["mode"]), obs["binoc"],
+                               speed_kmh=_speed_kmh(info))
+            _a, hidden, st = agent.act_with_stats(row, hidden, goal=goal_blk, deterministic=True)
+            _a0, _h0, st0 = agent.act_with_stats(row, agent.reset_hidden(1), goal=goal_blk,
+                                                 deterministic=True)
+            fault = _fault(info)
+            a_exp = expert.act()
+            if a_exp is None:
+                end = "route_end"
+                break
+            sample = {"frame": np.asarray(info["debit_cur"], np.uint8),
+                      "pos": np.asarray(info.get("hero_pos", (0.0, 0.0)), np.float64)[:2],
+                      "yaw": float(info.get("hero_yaw", 0.0) or 0.0),
+                      "speed": _speed_kmh(info), "action": np.asarray(a_exp, np.float32),
+                      "entropy": st["entropy"], "entropy_h0": st0["entropy"],
+                      "q_mean": st["q_mean"], "q_std": st["q_std"], "t": total,
+                      "on_line": fault == "crossing"}
+            obs, r, term, trunc, info = env.step(a_exp)
+            sample["reward"] = float(r)
+            writer.add(sample, plan_index=len(plan) - len(lp._waypoints_queue))
+            t += 1
+            total += 1
+            f_now = _fault(info)
+            if f_now:
+                faults[f_now] += 1
+            still = still + 1 if _speed_kmh(info) < 1.0 else 0
+            if term or trunc:
+                end = str(info.get("explore_end") or ("term" if term else "cap"))
+            elif still >= EXPERT_TRACE_STUCK_STEPS:
+                end = "stuck"
+            elif total >= EXPERT_TRACE_MAX_STEPS:
+                end = "budget"
+            if total % 1000 == 0:
+                print(f"[ExpertTrace] {total} steps, {writer.metres:.0f} m written, tour "
+                      f"waypoint {len(plan) - len(lp._waypoints_queue)}/{len(plan)}, "
+                      f"speed {_speed_kmh(info):.1f} km/h, entropy {st['entropy']:.2f} "
+                      f"(h0 {st0['entropy']:.2f}), fault steps {faults}", flush=True)
+        reached = len(plan) - len(lp._waypoints_queue)
+        print(f"[ExpertTrace] drive {writer.drive} ended: {end} after {t} steps at tour "
+              f"waypoint {reached}/{len(plan)}", flush=True)
+        if end == "route_end" or end == "budget" or drives >= EXPERT_TRACE_MAX_DRIVES:
+            break
+        # The env ended the episode or the car stopped: the next drive starts at
+        # the tour waypoint reached (the user's rule: resume at the crash). No
+        # progress since the last start means it would fail there again, so it
+        # starts one waypoint on and is marked JUMPED (never joined by an edge).
+        jumped = reached <= k0
+        k0 = min(max(reached, k0 + (1 if jumped else 0)), len(plan) - 1)
+        writer.new_drive(end=end, jumped=jumped)
+    done = end == "route_end"
+    writer.index["faults"] = faults
+    writer.close(end=end, done=done)
+    segs = writer.index["segments"]
+    n_drives = len({s["drive"] for s in segs})
+    print(f"[ExpertTraceDone] {town}: {'COMPLETE' if done else 'INCOMPLETE (' + str(end) + ')'} "
+          f"| {writer.steps} steps, {writer.metres:.0f} m in {n_drives} drive(s), "
+          f"{len(segs)} chunks | fault steps {faults} -> {out}", flush=True)
+    env.close()
+    server.stop()
 
 
 def run_record(env, agent, pxr, server, out_root):
@@ -1356,8 +1537,13 @@ def main():
                 raise ValueError("EXPERT_DRIVER=policy needs EVAL_FROM: the policy to drive")
             agent.load(EVAL_FROM)
         return run_record(env, agent, pxr, server, OUT)
+    if EXPERT_TRACE and not EVAL_FROM:
+        raise ValueError("EXPERT_TRACE needs EVAL_FROM: the clone whose entropy the "
+                         "single-trace map is placed on")
     if EVAL_FROM:
         agent.load(EVAL_FROM)          # strict: every module, name and shape
+        if EXPERT_TRACE:
+            return run_expert_trace(env, agent, pxr, server, OUT)
         if EVAL_SGM_TRACE:
             run_sgm_pairs(agent, enc, pxr)
             env.close()

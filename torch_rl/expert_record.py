@@ -26,9 +26,15 @@ FAULT_ENDS = ("crossing", "off_road", "collision")
 SIGMAS = tuple(float(x) for x in os.environ.get("EXPERT_SIGMAS", "0,0.1,0.2").split(","))
 
 
-def assert_recordable_town(town):
-    """Refuse to record in a held-out town: those towns are for evaluation only."""
-    if town in HELD_OUT_TOWNS:
+def assert_recordable_town(town, trace_only=False):
+    """Refuse to record in a held-out town: those towns are for evaluation only.
+
+    trace_only=True is the ONE documented bypass (user 2026-11-06, single-trace
+    evaluation maps): EXPERT_TRACE drives the held-out towns to build their
+    EVALUATION maps. Its trace is written in the map-trace format, which no
+    training loader reads, and expert_trace.trace_dir refuses any root where
+    training data lives, so nothing it records can become training data."""
+    if town in HELD_OUT_TOWNS and not trace_only:
         raise ValueError(f"{town} is held out for evaluation: no expert data may be "
                          f"recorded there (held out: {', '.join(HELD_OUT_TOWNS)})")
 

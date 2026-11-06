@@ -121,3 +121,54 @@ def test_summary_counts_hops_by_end_and_exit():
     assert out["attempted"] == 3 and out["ends"] == {"reached": 2, "collision": 1}
     assert out["planned_exits"] == {"straight": 1, "right": 1, "left": 1}
     assert out["reached_by_exit"] == {"straight": 1, "right": 1}
+
+
+# ---------------------------------------------------------------------------
+# The wiring in run_trace. The loop itself needs CARLA, so these pin the parts
+# that are easy to get wrong -- which GRU is reset, which mode bit is recorded,
+# that the goal camera is moved the way the chain's soft reset moves it -- in the
+# same source-reading style as tests/test_explore_trace.py.
+# ---------------------------------------------------------------------------
+def _trace_body():
+    src = open(os.path.join(ROOT, "train_carla_sac.py")).read()
+    return src.split("def run_trace(")[1].split("\ndef run_eval(")[0]
+
+
+def test_the_hop_is_off_by_default_so_a_no_hop_trace_is_unchanged():
+    src = open(os.path.join(ROOT, "train_carla_sac.py")).read()
+    assert 'TRACE_HOPS = os.environ.get("TRACE_HOPS", "0") == "1"' in src
+    assert 'TRACE_SAVE_BINOC = os.environ.get("TRACE_SAVE_BINOC", "0") == "1"' in src
+    body = _trace_body()
+    assert "if TRACE_HOPS else None" in body          # no schedule, no second GRU
+
+
+def test_the_hop_moves_the_destination_and_the_goal_camera_like_the_chain():
+    body = _trace_body()
+    assert "chain_goal(core.map, loc, hop_rng)" in body     # the random exit
+    assert "core.destination = dest" in body
+    assert "sensor.update_location(dest)" in body
+    assert "core.world.tick()" in body
+    assert "pxr.goal_block(info[\"debit_goal\"])" in body    # re-latched goal view
+
+
+def test_every_mode_switch_resets_the_driving_gru_and_only_it():
+    body = _trace_body()
+    i = body.index("hops.take_reset()")
+    j = body.index("hidden = agent.reset_hidden(1)", i)
+    assert body[i:j].count("h_exp") == 0            # the explore GRU is carried on
+    assert "h_exp = hidden" in body                 # in explore mode they are one pass
+
+
+def test_the_sample_records_the_mode_bit_the_network_was_fed():
+    body = _trace_body()
+    i = body.index("step_mode = 0 if hops is None else int(hops.mode_bit)")
+    j = body.index("obs, r, term, trunc, info = env.step(a_env)")
+    assert i < j                                     # captured BEFORE the step
+    assert 'rec["mode"].append(step_mode)' in body
+    assert 'rec["entropy_explore"].append(st_exp["entropy"])' in body
+
+
+def test_a_segment_end_closes_an_open_hop_with_the_segments_reason():
+    body = _trace_body()
+    assert 'hops.segment_end(t=t, reason=end or "cap")' in body
+    assert '**({"hops": hops.summary()} if hops is not None else {})' in body

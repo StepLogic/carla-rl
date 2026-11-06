@@ -261,6 +261,27 @@ TRACE_STALL_M = env_float("TRACE_STALL_M", 1500.0)
 # car drives on; off-road and collisions still end the segment. Pair it with
 # slurm/trace_nocross.env, which stops the ENV terminating on crossings too.
 TRACE_END_ON_CROSSING = os.environ.get("TRACE_END_ON_CROSSING", "1") == "1"
+# JUNCTION HOPS in the trace (user 2026-11-06: "Can we explicitly random actions
+# at junctions" -> "Goal hop per junction"). TRACE_HOPS=1: nearing a junction the
+# explore drive is handed a GOAL image 10-30 m past a RANDOMLY chosen exit
+# (gated_reward.chain_goal, i.e. goal_chain.goal_past_next_junction) and drives
+# there in GOAL mode with a fresh GRU, then explores again -- the schedule is
+# torch_rl.junction_hops.HopSchedule, tested without CARLA. The hop exists to
+# push the drive down exits the explore policy never takes; node placement still
+# uses the EXPLORE-mode entropy, which TRACE_HOPS records on every frame from a
+# second GRU carried along the whole segment (`entropy` stays the DRIVING pass's,
+# so a no-hop trace is byte-identical to one collected before this existed).
+TRACE_HOPS = os.environ.get("TRACE_HOPS", "0") == "1"
+TRACE_HOP_TRIGGER_M = env_float("TRACE_HOP_TRIGGER_M", 20.0)
+TRACE_HOP_ARRIVAL_M = env_float("TRACE_HOP_ARRIVAL_M", 4.0)
+TRACE_HOP_MISS_M = env_float("TRACE_HOP_MISS_M", 15.0)
+TRACE_HOP_MAX_STEPS = env_int("TRACE_HOP_MAX_STEPS", 600)
+TRACE_HOP_PENDING_STEPS = env_int("TRACE_HOP_PENDING_STEPS", 20)
+# TRACE_SAVE_BINOC=1 (the same user turn, "but save observations and entropy"):
+# keep the DEBiT binocular vector of every kept sample, so the row the policy saw
+# -- [frame/255 | mode | speed | binoc] -- can be rebuilt offline with no CARLA
+# and no encoder. The frame, mode, speed and action are kept anyway.
+TRACE_SAVE_BINOC = os.environ.get("TRACE_SAVE_BINOC", "0") == "1"
 
 
 def chain_summary(goals_reached, info, last_end, chain_m_target) -> dict:
@@ -441,12 +462,31 @@ def run_trace(env, agent, pxr, server, out_root):
         signals entropy maps are placed on.
       * RESUMABLE: one .npz per segment plus index.json after every segment, so
         a killed job continues where it stopped instead of starting over.
+      * JUNCTION HOPS (TRACE_HOPS=1, user 2026-11-06): nearing a junction the
+        drive is handed a goal 10-30 m past a RANDOM exit and drives there in
+        goal mode with a fresh GRU, then explores again -- so the trace turns
+        down exits the explore policy never takes. The sample keeps the mode bit
+        the network was fed, the hop id, and the EXPLORE-mode entropy of every
+        frame (a second GRU carried along the whole segment), which is the signal
+        the entropy placement reads; `entropy` stays the driving pass's, so a
+        trace collected with TRACE_HOPS=0 is exactly what it was before.
     """
     import json
     import random as _random
     import torch
     import carla
     from vae_nav.explore_trace import CoverageGrid, CrossingCounter, StuckDetector
+    from vae_nav.gated_reward import chain_goal
+    from vae_nav.goal_chain import junction_ahead_m
+    from torch_rl.junction_hops import Hop, HopSchedule
+    if TRACE_HOPS:
+        from vae_nav import debit_goal_wrapper as dgw
+        if not dgw.GOAL_RELATCH_ON_MOVE:
+            raise RuntimeError(
+                "TRACE_HOPS=1 needs GOAL_RELATCH_ON_MOVE=1: without it the DEBiT "
+                "wrapper keeps the goal frame latched at reset, so a hop would move "
+                "the planner's goal and the camera while the policy still saw the "
+                "OLD goal image -- a hop that looks collected and means nothing.")
 
     tag = os.path.basename(os.path.normpath(EVAL_FROM))
     out = os.path.join(out_root, f"trace_{tag}")
@@ -518,24 +558,106 @@ def run_trace(env, agent, pxr, server, out_root):
         hidden = agent.reset_hidden(1)
         goal_blk = pxr.goal_block(info["debit_goal"])
         start = np.asarray(info.get("hero_pos", (0.0, 0.0)), np.float64)
-        rec = {k: [] for k in ("frame", "pos", "yaw", "speed", "action", "reward",
-                               "entropy", "q_mean", "q_std", "t", "on_line")}
+        keys = ["frame", "pos", "yaw", "speed", "action", "reward",
+                "entropy", "q_mean", "q_std", "t", "on_line"]
+        if TRACE_HOPS:
+            # mode: the bit the network was fed THIS step (0 explore, 1 a hop).
+            # entropy_explore: the explore-mode policy's entropy on every frame,
+            # which is what the entropy placement reads; hop: -1 outside a hop,
+            # else the hop's id, so a later pass can drop or keep hop samples.
+            keys += ["mode", "entropy_explore", "hop"]
+        if TRACE_SAVE_BINOC:
+            keys.append("binoc")
+        rec = {k: [] for k in keys}
+        # JUNCTION HOPS. `h_exp` is a SECOND GRU state, fed the mode-0 row at
+        # every step and never reset mid-segment, so the explore entropy the map
+        # is placed on comes from one continuous explore pass even across a hop.
+        hops = (HopSchedule(trigger_m=TRACE_HOP_TRIGGER_M, arrival_m=TRACE_HOP_ARRIVAL_M,
+                            miss_m=TRACE_HOP_MISS_M, max_hop_steps=TRACE_HOP_MAX_STEPS,
+                            max_pending_steps=TRACE_HOP_PENDING_STEPS)
+                if TRACE_HOPS else None)
+        h_exp = agent.reset_hidden(1) if TRACE_HOPS else None
+        hop_rng = np.random.default_rng(SEED + seg_i)
+        next_hop_id, relatch0 = 0, 0
         prev, last_kept, metres, t, end = start.copy(), None, 0.0, 0, None
         # CROSSING EVENTS, not steps (see CrossingCounter): the first count put
         # Town02's segments at 4 and 8 "crossings", about four steps a line.
         crossing = CrossingCounter()
         while end is None:
-            row = pxr.mono_row(info["debit_cur"], _net_mode(obs["mode"]), obs["binoc"],
+            # ------------------------------------------------- a junction hop?
+            if hops is not None and hops.mode == "explore":
+                loc = core.hero.get_transform().location
+                ahead_m = junction_ahead_m(core.map, loc, TRACE_HOP_TRIGGER_M)
+                if hops.want_hop(ahead_m=ahead_m, in_junction=ahead_m == 0.0):
+                    wp_g, _st = chain_goal(core.map, loc, hop_rng)
+                    if wp_g is not None:
+                        gl = wp_g.transform.location
+                        dest = carla.Transform(
+                            carla.Location(gl.x, gl.y, gl.z + 2.0), wp_g.transform.rotation)
+                        # EXACTLY the chain's soft reset, minus the env reset: the
+                        # destination AND the goal camera move, then a world tick
+                        # lets the camera render the new view (gated_reward._soft_reset).
+                        core.destination = dest
+                        for sensor in getattr(core, "sensors", ()):
+                            if hasattr(sensor, "update_location"):
+                                sensor.update_location(dest)
+                        core.world.tick()
+                        relatch0 = int(info.get("goal_relatched", 0) or 0)
+                        hops.begin(Hop(next_hop_id, goal_xy=(gl.x, gl.y),
+                                       goal_yaw=float(wp_g.transform.rotation.yaw),
+                                       start_t=t, start_xy=tuple(prev[:2]),
+                                       start_yaw=float(info.get("hero_yaw", 0.0) or 0.0)))
+                        next_hop_id += 1
+            if hops is not None and hops.mode == "pending":
+                # The DEBiT wrapper re-latches its goal frame once the camera has
+                # moved (GOAL_RELATCH_ON_MOVE); until it has, the frame still shows
+                # the OLD goal, so the hop waits rather than drive a stale view.
+                gp = info.get("goal_pos")
+                if int(info.get("goal_relatched", 0) or 0) <= relatch0:
+                    gp = None                      # no new frame latched yet
+                if hops.goal_view_ready(
+                        goal_pos=None if gp is None
+                        else tuple(np.asarray(gp, np.float64)[:2])):
+                    goal_blk = pxr.goal_block(info["debit_goal"])
+            if hops is not None and hops.take_reset():
+                # A MODE SWITCH IS A SOFT RESET, as the goal chain's are: the car
+                # stays where it is, the GRU starts fresh (explore -> goal here,
+                # goal -> explore on the iteration after the hop closed).
+                hidden = agent.reset_hidden(1)
+            net_mode = _net_mode(obs["mode"])
+            if hops is not None:
+                net_mode = _net_mode(np.full_like(np.asarray(obs["mode"], np.float32),
+                                                  float(hops.mode_bit)))
+            row = pxr.mono_row(info["debit_cur"], net_mode, obs["binoc"],
                                speed_kmh=_speed_kmh(info))
             action, hidden, st = agent.act_with_stats(
                 row, hidden, goal=goal_blk, deterministic=TRACE_NOISE_SCALE <= 0,
                 noise_scale=max(TRACE_NOISE_SCALE, 0.0))
+            st_exp = st
+            if hops is not None:
+                # The placement signal: the explore policy's entropy on THIS frame,
+                # from its own continuously carried GRU. In explore mode the driving
+                # pass already is that pass, so the second one only runs in a hop.
+                if hops.mode_bit == 0:
+                    h_exp = hidden
+                else:
+                    row_exp = pxr.mono_row(info["debit_cur"],
+                                           _net_mode(np.zeros_like(np.asarray(obs["mode"], np.float32))),
+                                           obs["binoc"], speed_kmh=_speed_kmh(info))
+                    _a_exp, h_exp, st_exp = agent.act_with_stats(
+                        row_exp, h_exp, goal=goal_blk, deterministic=True)
+            step_mode = 0 if hops is None else int(hops.mode_bit)
+            step_hop = -1 if hops is None or hops.hop is None else int(hops.hop.id)
             a_env = to_env(np.asarray(action, np.float32), box)
             obs, r, term, trunc, info = env.step(a_env)
             t += 1
             pos = np.asarray(info.get("hero_pos", prev), np.float64)
             metres += float(np.linalg.norm(pos - prev))
             prev = pos
+            if hops is not None and hops.mode == "goal":
+                # reached / missed / timed out -> back to exploring next step
+                hops.step(t=t, pos=tuple(pos[:2]),
+                          yaw=float(info.get("hero_yaw", 0.0) or 0.0))
             # THIS step's fault, before the sample is kept: the sample records
             # whether the car is on a line NOW (computing it after the keep
             # block referenced a value from no step at all on the first one).
@@ -555,6 +677,12 @@ def run_trace(env, agent, pxr, server, out_root):
                 rec["q_std"].append(st["q_std"])
                 rec["t"].append(t)
                 rec["on_line"].append(on_line)
+                if TRACE_HOPS:
+                    rec["mode"].append(step_mode)
+                    rec["entropy_explore"].append(st_exp["entropy"])
+                    rec["hop"].append(step_hop)
+                if TRACE_SAVE_BINOC:
+                    rec["binoc"].append(np.asarray(obs["binoc"], np.float32).reshape(-1))
                 cov.add(pos)
             if on_line and not TRACE_END_ON_CROSSING:
                 # Counted, not fatal: a trace scores nothing, and ending here
@@ -565,6 +693,15 @@ def run_trace(env, agent, pxr, server, out_root):
                 end = str(info.get("explore_end", "cap"))
             if end is None and steps + t >= TRACE_MAX_STEPS:
                 end = "budget"
+        if hops is not None:
+            # A hop still open when the segment ended is closed with the segment's
+            # own reason (a fault, the explore cap or the step budget).
+            hops.segment_end(t=t, reason=end or "cap")
+        hop_txt = ""
+        if hops is not None:
+            hs = hops.summary()
+            hop_txt = (f" hops={hs['attempted']} reached={hs['ends'].get('reached', 0)}"
+                       if hs["attempted"] else " hops=0")
         fname = f"seg_{seg_i:05d}.npz"
         arrays = {k: np.asarray(v) for k, v in rec.items()}
         np.savez(os.path.join(out, fname), **arrays)
@@ -573,7 +710,8 @@ def run_trace(env, agent, pxr, server, out_root):
             "stop_xy": prev[:2].round(2).tolist(), "end": end, "steps": t,
             "metres": round(metres, 2), "kept": len(rec["t"]), "jumped": jumped,
             "crossings": crossing.events, "line_steps": crossing.steps,
-            "coverage": round(cov.fraction(), 4)})
+            "coverage": round(cov.fraction(), 4),
+            **({"hops": hops.summary()} if hops is not None else {})})
         tmp = idx_path + ".tmp"
         with open(tmp, "w") as fh:
             json.dump(index, fh, indent=1)
@@ -586,10 +724,22 @@ def run_trace(env, agent, pxr, server, out_root):
         last_cov = now
         print(f"[Trace {seg_i:4d}] end={end} steps={t} {metres:.0f} m kept={len(rec['t'])}"
               f"{f' crossings={crossing.events}' if not TRACE_END_ON_CROSSING else ''}"
-              f"{f' JUMPED({jumped})' if jumped else ''} | total {total_m:.0f} m, {int(steps)} steps, "
+              f"{f' JUMPED({jumped})' if jumped else ''}"
+              f"{hop_txt}"
+              f" | total {total_m:.0f} m, {int(steps)} steps, "
               f"coverage {cov.fraction():.1%}", flush=True)
         seg_i += 1
     kept = sum(sg["kept"] for sg in index["segments"])
+    if TRACE_HOPS:
+        att = sum(sg.get("hops", {}).get("attempted", 0) for sg in index["segments"])
+        rch = sum(sg.get("hops", {}).get("ends", {}).get("reached", 0)
+                  for sg in index["segments"])
+        exits = {}
+        for sg in index["segments"]:
+            for k, v in sg.get("hops", {}).get("planned_exits", {}).items():
+                exits[k] = exits.get(k, 0) + v
+        print(f"[TraceHops] {TOWNS[0]}: {att} hops asked, {rch} reached, "
+              f"exits asked {exits}", flush=True)
     print(f"[TraceDone] {TOWNS[0]}: {seg_i} segments, {total_m:.0f} m, {int(steps)} steps, "
           f"{kept} samples, coverage {cov.fraction():.1%} -> {out}", flush=True)
     env.close()

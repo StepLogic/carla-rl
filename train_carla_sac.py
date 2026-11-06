@@ -282,6 +282,19 @@ TRACE_HOP_PENDING_STEPS = env_int("TRACE_HOP_PENDING_STEPS", 20)
 # -- [frame/255 | mode | speed | binoc] -- can be rebuilt offline with no CARLA
 # and no encoder. The frame, mode, speed and action are kept anyway.
 TRACE_SAVE_BINOC = os.environ.get("TRACE_SAVE_BINOC", "0") == "1"
+# TRACE_UNBROKEN=1 (user 2026-11-06: "i want one unbroke drive" -> "Expert
+# recovers"): the map trace is ONE CARLA episode the car is never moved out of.
+# c0 drives (explore, with TRACE_HOPS); at a fault CARLA's BasicAgent takes the
+# wheel where the car is and hands back once it is settled in a lane
+# (torch_rl.recovery.RecoveryGate). See run_unbroken_trace.
+TRACE_UNBROKEN = os.environ.get("TRACE_UNBROKEN", "0") == "1"
+TRACE_RECOVER_MIN_STEPS = env_int("TRACE_RECOVER_MIN_STEPS", 20)
+TRACE_RECOVER_SETTLE_STEPS = env_int("TRACE_RECOVER_SETTLE_STEPS", 10)
+TRACE_RECOVER_LAT_M = env_float("TRACE_RECOVER_LAT_M", 0.6)
+TRACE_RECOVER_YAW_DEG = env_float("TRACE_RECOVER_YAW_DEG", 15.0)
+TRACE_RECOVER_MIN_KMH = env_float("TRACE_RECOVER_MIN_KMH", 5.0)
+TRACE_STALL_STEPS = env_int("TRACE_STALL_STEPS", 50)
+TRACE_WEDGED_STEPS = env_int("TRACE_WEDGED_STEPS", 300)
 
 
 def chain_summary(goals_reached, info, last_end, chain_m_target) -> dict:
@@ -744,6 +757,288 @@ def run_trace(env, agent, pxr, server, out_root):
           f"{kept} samples, coverage {cov.fraction():.1%} -> {out}", flush=True)
     env.close()
 
+
+
+# fault codes of the unbroken trace's `fault` column
+_FAULT_CODE = {None: 0, "crossing": 1, "off_road": 2, "collision": 3, "stalled": 4}
+
+
+def _settle_lane(core, carla, loc, yaw):
+    """-> (lane waypoint, lateral offset m, heading error deg) of the driving lane
+    the car points along: the nearest lane or its left/right neighbour, because
+    after a crossing the nearest one can be the opposite lane."""
+    import math
+    from torch_rl.recovery import best_lane, wrap_deg
+    wp = core.map.get_waypoint(loc, project_to_road=True, lane_type=carla.LaneType.Driving)
+    if wp is None:
+        return None, 99.0, 180.0
+    cands = [(wp.transform.rotation.yaw, wp)]
+    for nb in (wp.get_left_lane(), wp.get_right_lane()):
+        if nb is not None and nb.lane_type == carla.LaneType.Driving:
+            cands.append((nb.transform.rotation.yaw, nb))
+    lane = best_lane(yaw, cands)
+    c = lane.transform.location
+    return lane, math.hypot(loc.x - c.x, loc.y - c.y), wrap_deg(yaw - lane.transform.rotation.yaw)
+
+
+def run_unbroken_trace(env, agent, pxr, server, out_root):
+    """ONE UNBROKEN DRIVE of the town for the single-trace evaluation maps.
+
+    User 2026-11-06, in order: "NO drive with new policy" -> "c0 explores on its
+    own" -> "Goal hop per junction" -> "but save observations and entropy" ->
+    "i want one unbroke drive" -> "Expert recovers".
+
+      * ONE EPISODE. The overlay lifts every explore-mode end (the cap, the 100 m
+        arrival, crossings, off-road and -- EXPLORE_COLLISION_TERMINAL=0 -- a
+        collision), and the car is NEVER moved: no continuation restarts, no
+        stuck or stall jumps.
+      * c0 DRIVES, deterministic explore mode, with the junction hops of run_trace
+        (TRACE_HOPS: a goal 10-30 m past a random exit, goal mode, fresh GRU).
+      * EXPERT RECOVERY. At a fault -- a crossing outside a junction, off-road, a
+        collision, or c0 standing still for TRACE_STALL_STEPS -- BasicAgentExpert
+        takes the wheel where the car is, on the lane it points along, and hands
+        back to c0 (fresh GRU) once the car has been in that lane, aligned and
+        moving for TRACE_RECOVER_SETTLE_STEPS (torch_rl.recovery.RecoveryGate).
+        A hop open at the fault is closed with it. A car the expert cannot move
+        for TRACE_WEDGED_STEPS ENDS the drive, reported as `wedged`.
+      * EVERY STEP, the observation BEFORE the action: frame, pose, speed, the
+        EXECUTED action, reward; `entropy` = c0's EXPLORE-mode entropy on every
+        frame from one GRU carried along the drive (the placement signal, the
+        name the map builder reads), `entropy_drive` = the driving pass's (goal
+        mode in a hop, NaN while the expert drives); the mode bit fed, the hop
+        id, `driver` (0 c0, 1 expert), `fault` (_FAULT_CODE), and with
+        TRACE_SAVE_BINOC the DEBiT binoc vector.
+      * Ends at TRACE_DIST_M metres or TRACE_MAX_STEPS steps. A killed job resumes
+        from its last chunk, which is necessarily a SECOND drive: printed loudly
+        and recorded as a new drive, never joined to the first.
+    """
+    import random as _random
+    import torch
+    import carla
+    from torch_rl.expert_trace import ChunkWriter
+    from torch_rl.junction_hops import Hop, HopSchedule
+    from torch_rl.recovery import RecoveryGate
+    from vae_nav.expert_oracle import BasicAgentExpert, _ensure_agents_on_path
+    from vae_nav.expert_route import explore_route
+    from vae_nav.explore_trace import CoverageGrid
+    from vae_nav.gated_reward import EXPLORE_COLLISION_TERMINAL, GatedReward, chain_goal
+    from vae_nav.goal_chain import junction_ahead_m
+    if EXPLORE_COLLISION_TERMINAL:
+        raise RuntimeError("TRACE_UNBROKEN needs EXPLORE_COLLISION_TERMINAL=0: otherwise "
+                           "the first collision ends the episode and breaks the drive")
+    if TRACE_HOPS:
+        from vae_nav import debit_goal_wrapper as dgw
+        if not dgw.GOAL_RELATCH_ON_MOVE:
+            raise RuntimeError("TRACE_HOPS=1 needs GOAL_RELATCH_ON_MOVE=1 (see run_trace)")
+
+    town = TOWNS[0]
+    tag = os.path.basename(os.path.normpath(EVAL_FROM))
+    out = os.path.join(out_root, f"trace_{tag}")
+    fields = ["frame", "pos", "yaw", "speed", "action", "reward", "entropy",
+              "entropy_drive", "q_mean", "q_std", "t", "on_line", "mode", "hop",
+              "driver", "fault"] + (["binoc"] if TRACE_SAVE_BINOC else [])
+    gated = env
+    while not isinstance(gated, GatedReward):
+        gated = gated.env
+    base = _carla_env(env)
+    core = base.core
+    box = env.action_space
+    wps = np.array([[w.transform.location.x, w.transform.location.y]
+                    for w in core.map.generate_waypoints(2.0)], np.float64)
+    os.makedirs(out, exist_ok=True)
+    np.save(os.path.join(out, "map_waypoints.npy"), wps)
+    writer = ChunkWriter(out, chunk=EXPERT_TRACE_CHUNK, fields=fields, meta={
+        "town": town, "checkpoint": EVAL_FROM, "spacing_m": 0.0,
+        "driver": "c0 + expert recovery", "unbroken": True, "hops": TRACE_HOPS})
+    if writer.done:
+        print(f"[UnbrokenDone] {town}: already complete -> {out}", flush=True)
+        env.close()
+        server.stop()
+        return
+    cov = CoverageGrid(wps, radius=5.0)
+    for sg in writer.index["segments"]:
+        with np.load(os.path.join(out, sg["file"])) as z:
+            for xy in z["pos"]:
+                cov.add(xy)
+    resumed = writer.steps > 0
+    if resumed:
+        sxy = writer.index["segments"][-1]["stop_xy"]
+        wp = core.map.get_waypoint(carla.Location(x=float(sxy[0]), y=float(sxy[1]), z=0.0),
+                                   project_to_road=True, lane_type=carla.LaneType.Driving)
+        base.set_start_transform(wp.transform.location)
+        nx = wp.next(30.0)
+        base.set_destination_transform((nx[0] if nx else wp).transform.location)
+    print(f"=== UNBROKEN TRACE {EVAL_FROM} | {town} | ONE episode, the car is never moved "
+          f"| c0 deterministic explore{' + junction hops' if TRACE_HOPS else ''} | expert "
+          f"recovery at faults (settled {TRACE_RECOVER_SETTLE_STEPS} steps within "
+          f"{TRACE_RECOVER_LAT_M:g} m / {TRACE_RECOVER_YAW_DEG:g} deg at >= "
+          f"{TRACE_RECOVER_MIN_KMH:g} km/h after >= {TRACE_RECOVER_MIN_STEPS}), stall "
+          f"{TRACE_STALL_STEPS} steps, wedged {TRACE_WEDGED_STEPS} | stop at {TRACE_DIST_M:g} m "
+          f"or {TRACE_MAX_STEPS} steps | every step -> {out}"
+          + (f" | RESUMED AFTER A KILLED JOB: this is drive {writer.drive}, a SECOND drive "
+             f"from ({sxy[0]:.1f},{sxy[1]:.1f}); {writer.metres:.0f} m already written"
+             if resumed else ""), flush=True)
+
+    _ensure_agents_on_path()
+    seed = SEED + writer.drive
+    _random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    gated.force_mode = 0
+    obs, info = env.reset(seed=seed)
+    if int(round(float(np.asarray(obs["mode"]).ravel()[0]))) != 0:
+        raise RuntimeError("unbroken trace episode is not in explore mode: set EVAL_FORCE_MODE=0")
+    expert = BasicAgentExpert(core.hero, core.map, box, target_speed_kmh=EXPERT_TARGET_KMH)
+
+    def plan_from(lane):
+        nxt = lane.next(4.0)
+        expert.set_explore_plan(explore_route(nxt[0] if nxt else lane, 60.0))
+
+    hidden = agent.reset_hidden(1)
+    h_exp = hidden
+    goal_blk = pxr.goal_block(info["debit_goal"])
+    hops = (HopSchedule(trigger_m=TRACE_HOP_TRIGGER_M, arrival_m=TRACE_HOP_ARRIVAL_M,
+                        miss_m=TRACE_HOP_MISS_M, max_hop_steps=TRACE_HOP_MAX_STEPS,
+                        max_pending_steps=TRACE_HOP_PENDING_STEPS) if TRACE_HOPS else None)
+    hop_rng = np.random.default_rng(seed)
+    next_hop_id, relatch0 = 0, 0
+    gate = RecoveryGate(min_steps=TRACE_RECOVER_MIN_STEPS,
+                        settle_steps=TRACE_RECOVER_SETTLE_STEPS,
+                        max_lat_m=TRACE_RECOVER_LAT_M, max_yaw_deg=TRACE_RECOVER_YAW_DEG,
+                        min_kmh=TRACE_RECOVER_MIN_KMH, stall_steps=TRACE_STALL_STEPS,
+                        wedged_steps=TRACE_WEDGED_STEPS)
+    zero = np.clip(np.zeros(box.shape, np.float32), box.low, box.high)
+    m0 = writer.metres
+    total_m, steps = writer.metres, writer.steps
+    prev = np.asarray(info.get("hero_pos", (0.0, 0.0)), np.float64)[:2]
+    curve = writer.index.setdefault("coverage_curve", [])
+    end, t = None, 0
+    while end is None:
+        # ------------------------------------------------------ junction hops
+        if hops is not None and gate.driver == "c0" and hops.mode == "explore":
+            loc = core.hero.get_transform().location
+            ahead_m = junction_ahead_m(core.map, loc, TRACE_HOP_TRIGGER_M)
+            if hops.want_hop(ahead_m=ahead_m, in_junction=ahead_m == 0.0):
+                wp_g, _st = chain_goal(core.map, loc, hop_rng)
+                if wp_g is not None:
+                    gl = wp_g.transform.location
+                    dest = carla.Transform(carla.Location(gl.x, gl.y, gl.z + 2.0),
+                                           wp_g.transform.rotation)
+                    core.destination = dest
+                    for sensor in getattr(core, "sensors", ()):
+                        if hasattr(sensor, "update_location"):
+                            sensor.update_location(dest)
+                    core.world.tick()
+                    relatch0 = int(info.get("goal_relatched", 0) or 0)
+                    hops.begin(Hop(next_hop_id, goal_xy=(gl.x, gl.y),
+                                   goal_yaw=float(wp_g.transform.rotation.yaw), start_t=t,
+                                   start_xy=tuple(prev), start_yaw=float(info.get("hero_yaw", 0.0) or 0.0)))
+                    next_hop_id += 1
+        if hops is not None and hops.mode == "pending":
+            gp = info.get("goal_pos")
+            if int(info.get("goal_relatched", 0) or 0) <= relatch0:
+                gp = None
+            if hops.goal_view_ready(goal_pos=None if gp is None
+                                    else tuple(np.asarray(gp, np.float64)[:2])):
+                goal_blk = pxr.goal_block(info["debit_goal"])
+        if hops is not None and hops.take_reset():
+            hidden = agent.reset_hidden(1)          # a mode switch is a soft reset
+        # ------------------------------------------------------- the drivers
+        spd = _speed_kmh(info)
+        m_arr = np.asarray(obs["mode"], np.float32)
+        row0 = pxr.mono_row(info["debit_cur"], _net_mode(np.zeros_like(m_arr)), obs["binoc"],
+                            speed_kmh=spd)
+        bit = 0 if hops is None else int(hops.mode_bit)
+        hop_id = -1 if hops is None or hops.hop is None else int(hops.hop.id)
+        if gate.driver == "c0":
+            row = row0 if bit == 0 else pxr.mono_row(
+                info["debit_cur"], _net_mode(np.ones_like(m_arr)), obs["binoc"], speed_kmh=spd)
+            a, hidden, st_drive = agent.act_with_stats(
+                row, hidden, goal=goal_blk, deterministic=TRACE_NOISE_SCALE <= 0,
+                noise_scale=max(TRACE_NOISE_SCALE, 0.0))
+            if bit == 0:
+                h_exp, st_exp = hidden, st_drive
+            else:
+                _a, h_exp, st_exp = agent.act_with_stats(row0, h_exp, goal=goal_blk,
+                                                         deterministic=True)
+            a_env = to_env(np.asarray(a, np.float32), box)
+            ent_drive = st_drive["entropy"]
+        else:
+            _a, h_exp, st_exp = agent.act_with_stats(row0, h_exp, goal=goal_blk,
+                                                     deterministic=True)
+            a_env = expert.act()
+            if a_env is None:                       # plan driven out: plan on
+                lane, _l, _y = _settle_lane(core, carla, core.hero.get_transform().location,
+                                            float(info.get("hero_yaw", 0.0) or 0.0))
+                if lane is not None:
+                    plan_from(lane)
+                    a_env = expert.act()
+            a_env = zero if a_env is None else np.asarray(a_env, np.float32)
+            ent_drive = float("nan")
+        sample = {"frame": np.asarray(info["debit_cur"], np.uint8), "pos": prev.copy(),
+                  "yaw": float(info.get("hero_yaw", 0.0) or 0.0), "speed": spd,
+                  "action": np.asarray(a_env, np.float32), "entropy": st_exp["entropy"],
+                  "entropy_drive": ent_drive, "q_mean": st_exp["q_mean"],
+                  "q_std": st_exp["q_std"], "t": steps, "mode": bit if gate.driver == "c0" else 0,
+                  "hop": hop_id, "driver": 0 if gate.driver == "c0" else 1}
+        if TRACE_SAVE_BINOC:
+            sample["binoc"] = np.asarray(obs["binoc"], np.float32).reshape(-1)
+        obs, r, term, trunc, info = env.step(a_env)
+        t += 1
+        steps += 1
+        pos = np.asarray(info.get("hero_pos", prev), np.float64)[:2]
+        total_m += float(np.linalg.norm(pos - prev))
+        prev = pos
+        fault = _fault(info)
+        sample.update(reward=float(r), on_line=fault == "crossing", fault=_FAULT_CODE[fault])
+        writer.add(sample, plan_index=0)
+        cov.add(pos)
+        if hops is not None and gate.driver == "c0" and hops.mode == "goal":
+            hops.step(t=t, pos=tuple(pos), yaw=float(info.get("hero_yaw", 0.0) or 0.0))
+        lane, lat, yerr = _settle_lane(core, carla, core.hero.get_transform().location,
+                                       float(info.get("hero_yaw", 0.0) or 0.0))
+        ev = gate.update(t=t, fault=fault, lat_m=lat, yaw_err_deg=yerr, speed_kmh=_speed_kmh(info))
+        if ev == "takeover":
+            if hops is not None:
+                hops.segment_end(t=t, reason=gate.events[-1]["fault"])
+            if lane is not None:
+                plan_from(lane)
+        elif ev == "handback":
+            hidden = agent.reset_hidden(1)          # c0 takes over with a fresh GRU
+            if hops is not None:
+                hops.take_reset()
+        elif ev == "wedged":
+            end = "wedged"
+        if end is None and (term or trunc):
+            # Nothing should end this episode; if the env still did, the drive is
+            # broken here and the record says so.
+            end = "env_" + str(info.get("explore_end") or ("term" if term else "trunc"))
+        if end is None and total_m >= TRACE_DIST_M:
+            end = "budget"
+        if end is None and steps >= TRACE_MAX_STEPS:
+            end = "steps"
+        if steps % 1000 == 0 or end is not None:
+            curve.append([round(total_m, 1), round(cov.fraction(), 4), int(steps)])
+            gs = gate.summary()
+            hs = hops.summary() if hops is not None else {"attempted": 0, "ends": {}}
+            print(f"[Unbroken] {steps} steps, {total_m:.0f} m, coverage {cov.fraction():.1%} | "
+                  f"driver {gate.driver}, {gs['takeovers']} takeovers {gs['by_fault']}, "
+                  f"expert {gs['expert_steps']} steps | hops {hs['attempted']} asked, "
+                  f"{hs['ends'].get('reached', 0)} reached | {spd:.1f} km/h", flush=True)
+    writer.index["recovery"] = gate.summary()
+    writer.index["recovery_events"] = gate.events
+    if hops is not None:
+        writer.index["hops"] = hops.summary()
+    writer.close(end=end, done=end in ("budget", "steps"))
+    gs = gate.summary()
+    n_drives = len({sg["drive"] for sg in writer.index["segments"]})
+    print(f"[UnbrokenDone] {town}: end={end} | {steps} steps, {total_m:.0f} m "
+          f"({total_m - m0:.0f} m this drive) in {n_drives} drive(s), coverage "
+          f"{cov.fraction():.1%} | {gs['takeovers']} expert takeovers {gs['by_fault']}, "
+          f"{gs['expert_steps']} expert steps ({gs['expert_steps'] / max(steps, 1):.1%}) "
+          f"| hops {writer.index.get('hops')} -> {out}", flush=True)
+    env.close()
+    server.stop()
 
 def run_sgm_pairs(agent, enc, pxr):
     """Q_g(view i, goal view j) for SGM placement, offline from a trace.
@@ -1708,6 +2003,8 @@ def main():
             env.close()
             server.stop()
             return
+        if EVAL_TRACE and TRACE_UNBROKEN:
+            return run_unbroken_trace(env, agent, pxr, server, OUT)
         if EVAL_TRACE:
             return run_trace(env, agent, pxr, server, OUT)
         return run_eval(env, agent, pxr, server, OUT)

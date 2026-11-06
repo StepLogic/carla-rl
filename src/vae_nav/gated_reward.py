@@ -979,6 +979,13 @@ EXPLORE_LANE_PENALTY_NONE = float(
 # is unchanged; this only makes the episode end. Default off: earlier runs are
 # byte-identical.
 EXPLORE_COLLISION_FATAL = os.environ.get("EXPLORE_COLLISION_FATAL", "0") == "1"
+# EXPLORE_COLLISION_TERMINAL=0 (TRACE-ONLY, user 2026-11-06 "i want one unbroke
+# drive"): a collision in explore mode no longer ENDS the episode, so the
+# unbroken map trace (train_carla_sac.run_unbroken_trace) can hand the wheel to
+# the expert where the car is instead of respawning it. Default 1 = every run
+# before this, byte-identical. Never for training: a crash that does not end the
+# episode is a different task.
+EXPLORE_COLLISION_TERMINAL = os.environ.get("EXPLORE_COLLISION_TERMINAL", "1") == "1"
 EXPLORE_GOAL_DIST_M = float(os.environ.get("EXPLORE_GOAL_DIST_M", 100.0))
 # HOW EXPLORE "ARRIVAL" MEASURES DISTANCE (2026-10-19, after v8). "path" (the
 # default, v52) counts CUMULATIVE path, which a car driving tight loops also
@@ -1752,7 +1759,7 @@ class GatedReward(Wrapper):
             # re-derives it with the junction exemption, exactly as
             # LaneExploreReward does.
             _collided = bool(info.get("collision", False))
-            terminated = bool(_collided or fatal)
+            terminated = bool((_collided and EXPLORE_COLLISION_TERMINAL) or fatal)
             truncated = (not terminated) and self._t >= self.max_steps
             # What only explore pays, for HER: a relabelled explore episode
             # becomes GOAL rows, which must not carry it. Forward progress is

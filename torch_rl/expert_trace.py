@@ -45,8 +45,9 @@ class ChunkWriter:
     """index.json + seg_XXXXX.npz in run_trace's format, plus per chunk the
     drive id, the tour index reached (`plan_index`) and running totals."""
 
-    def __init__(self, out_dir, chunk=2000, meta=None):
+    def __init__(self, out_dir, chunk=2000, meta=None, fields=FIELDS):
         self.out, self.chunk = out_dir, int(chunk)
+        self.fields = tuple(fields)
         os.makedirs(out_dir, exist_ok=True)
         self.idx_path = os.path.join(out_dir, "index.json")
         if os.path.exists(self.idx_path):
@@ -60,7 +61,7 @@ class ChunkWriter:
         self.resume_plan_index = segs[-1]["plan_index"] if segs else 0
         self.steps = int(sum(s["steps"] for s in segs))
         self.metres = float(sum(s["metres"] for s in segs))
-        self._rec = {k: [] for k in FIELDS}
+        self._rec = {k: [] for k in self.fields}
         self._plan_index = self.resume_plan_index
         self._prev = None
         self._m = 0.0
@@ -72,7 +73,7 @@ class ChunkWriter:
         if self._prev is not None:
             self._m += float(np.linalg.norm(pos - self._prev))
         self._prev = pos
-        for k in FIELDS:
+        for k in self.fields:
             self._rec[k].append(sample[k])
         self._plan_index = int(plan_index)
         if len(self._rec["t"]) >= self.chunk:
@@ -101,7 +102,7 @@ class ChunkWriter:
         self._m = 0.0
         self._first_in_drive = False
         self._jump_next = False
-        self._rec = {k: [] for k in FIELDS}
+        self._rec = {k: [] for k in self.fields}
         self._write_index()
 
     def new_drive(self, end, jumped=False):

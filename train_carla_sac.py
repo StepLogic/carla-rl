@@ -419,6 +419,16 @@ def to_actor(e, box):
     return (2.0 * (np.asarray(e, np.float32) - lo) / (hi - lo) - 1.0).astype(np.float32)
 
 
+def _yaw_deg(info):
+    """The car's heading in DEGREES, CARLA's convention. info["hero_yaw"] is in
+    RADIANS (vae_nav.core_state), while every waypoint yaw is in degrees: the
+    hop's exit class and the recovery's lane alignment compare the two, and
+    mixing them made the hand-back fire only on roads heading east (yaw ~0 in
+    both units) -- pilot 464246, 632 of 1,426 steps driven by the expert."""
+    import math
+    return math.degrees(float(info.get("hero_yaw", 0.0) or 0.0))
+
+
 def _speed_kmh(info):
     """The car's speed for the observation row (SPEED_OBS): info["speed_kmh"],
     0 when absent -- at a reset the car stands still, which is also what the
@@ -623,7 +633,7 @@ def run_trace(env, agent, pxr, server, out_root):
                         hops.begin(Hop(next_hop_id, goal_xy=(gl.x, gl.y),
                                        goal_yaw=float(wp_g.transform.rotation.yaw),
                                        start_t=t, start_xy=tuple(prev[:2]),
-                                       start_yaw=float(info.get("hero_yaw", 0.0) or 0.0)))
+                                       start_yaw=_yaw_deg(info)))
                         next_hop_id += 1
             if hops is not None and hops.mode == "pending":
                 # The DEBiT wrapper re-latches its goal frame once the camera has
@@ -674,7 +684,7 @@ def run_trace(env, agent, pxr, server, out_root):
             if hops is not None and hops.mode == "goal":
                 # reached / missed / timed out -> back to exploring next step
                 hops.step(t=t, pos=tuple(pos[:2]),
-                          yaw=float(info.get("hero_yaw", 0.0) or 0.0))
+                          yaw=_yaw_deg(info))
             # THIS step's fault, before the sample is kept: the sample records
             # whether the car is on a line NOW (computing it after the keep
             # block referenced a value from no step at all on the first one).
@@ -945,7 +955,7 @@ def run_unbroken_trace(env, agent, pxr, server, out_root):
                     relatch0 = int(info.get("goal_relatched", 0) or 0)
                     hops.begin(Hop(next_hop_id, goal_xy=(gl.x, gl.y),
                                    goal_yaw=float(wp_g.transform.rotation.yaw), start_t=t,
-                                   start_xy=tuple(prev), start_yaw=float(info.get("hero_yaw", 0.0) or 0.0)))
+                                   start_xy=tuple(prev), start_yaw=_yaw_deg(info)))
                     next_hop_id += 1
         if hops is not None and hops.mode == "pending":
             gp = info.get("goal_pos")
@@ -982,7 +992,7 @@ def run_unbroken_trace(env, agent, pxr, server, out_root):
             a_env = zero if gate.backing else expert.act()
             if a_env is None:                       # plan driven out: plan on
                 lane, _l, _y = _settle_lane(core, carla, core.hero.get_transform().location,
-                                            float(info.get("hero_yaw", 0.0) or 0.0))
+                                            _yaw_deg(info))
                 if lane is not None:
                     plan_from(lane)
                     a_env = expert.act()
@@ -1008,9 +1018,9 @@ def run_unbroken_trace(env, agent, pxr, server, out_root):
         writer.add(sample, plan_index=0)
         cov.add(pos)
         if hops is not None and gate.driver == "c0" and hops.mode == "goal":
-            hops.step(t=t, pos=tuple(pos), yaw=float(info.get("hero_yaw", 0.0) or 0.0))
+            hops.step(t=t, pos=tuple(pos), yaw=_yaw_deg(info))
         lane, lat, yerr = _settle_lane(core, carla, core.hero.get_transform().location,
-                                       float(info.get("hero_yaw", 0.0) or 0.0))
+                                       _yaw_deg(info))
         ev = gate.update(t=t, fault=fault, lat_m=lat, yaw_err_deg=yerr, speed_kmh=_speed_kmh(info))
         if ev == "takeover":
             if hops is not None:

@@ -104,3 +104,19 @@ def test_wrap_and_best_lane_pick_the_lane_the_car_points_along():
     # candidates: (yaw, name); the car points at 178 deg -> the lane at -179
     assert best_lane(178.0, [(0.0, "a"), (-179.0, "b"), (90.0, "c")]) == "b"
     assert best_lane(10.0, []) is None
+
+
+def test_hops_and_recovery_compare_yaw_in_degrees():
+    # info["hero_yaw"] is radians; waypoint yaws are degrees (pilot 464246).
+    import math
+    src = open(os.path.join(ROOT, "train_carla_sac.py")).read()
+    assert 'math.degrees(float(info.get("hero_yaw", 0.0) or 0.0))' in src
+    for fn in ("def run_trace(", "def run_unbroken_trace("):
+        body = src.split(fn)[1].split("\ndef ")[0]
+        assert "start_yaw=_yaw_deg(info)" in body
+        assert "yaw=_yaw_deg(info))" in body
+    body = src.split("def run_unbroken_trace(")[1].split("\ndef ")[0]
+    assert body.count("_settle_lane(core, carla, core.hero.get_transform().location,\n") >= 2
+    assert "_yaw_deg(info))" in body
+    core_state = open(os.path.join(ROOT, "src", "vae_nav", "core_state.py")).read()
+    assert 'info["hero_yaw"] = math.radians(' in core_state

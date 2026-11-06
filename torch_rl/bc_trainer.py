@@ -147,18 +147,38 @@ def bc_weight(n_updates, w0, decay_updates):
 
 
 def il_bc_hook(agent, opt, expert_buf, n_chunks, length, w0, decay_updates,
-               on_weight=None, aug=None):
+               on_weight=None, aug=None, freeze_updates=0, log=None):
     """The fine-tune's per-update cloning step (imitation-first plan, Task 10):
     a callable the online loop calls after every agent.update. Each call takes
     one bc_step on an expert-label chunk (length + burn-in rows) at weight
     bc_weight(calls so far); once the weight reaches 0 it does nothing.
-    `on_weight` (optional) receives each call's weight, for the log."""
+    `on_weight` (optional) receives each call's weight, for the log.
+
+    ONLINE FREEZE (2026-11-05): with `freeze_updates` = N > 0 the clone stays
+    frozen (agent.set_warmup(True)) for the first N online updates -- the
+    critic learns from the clone's own rollouts while nothing the clone learned
+    moves -- and those calls take no cloning step. The N-th call unfreezes it,
+    and the cloning schedule starts from w0 at the call after. Unfreezing on the
+    first live update collapsed the fine-tune (job 463440: policy= 0.76 -> 0.10
+    within ~190 updates, the cloning loss at full weight)."""
     count = [0]
     K = int(agent.cfg.burn_in)
+    freeze = int(freeze_updates)
+    if freeze > 0:
+        agent.set_warmup(True)
 
     def hook():
-        w = bc_weight(count[0], w0, decay_updates)
+        n = count[0]
         count[0] += 1
+        if n < freeze:
+            if n == freeze - 1:
+                agent.set_warmup(False)          # the next update trains everything
+                if log is not None:
+                    log(f"[IL] online freeze over after {freeze} updates: encoder, GRU "
+                        f"and actor train from the next update; cloning weight {w0:g} "
+                        f"fading over {int(decay_updates)} updates")
+            return None
+        w = bc_weight(n - freeze, w0, decay_updates)
         if on_weight is not None:
             on_weight(w)
         if w <= 0.0:
@@ -170,7 +190,8 @@ def il_bc_hook(agent, opt, expert_buf, n_chunks, length, w0, decay_updates,
 
 
 def il_finetune_prepare(agent, buf, root, towns, *, warmup_updates, chunk_b, chunk_t,
-                        w0, decay_updates, bc_chunks, bc_len, aug=None, log=print):
+                        w0, decay_updates, bc_chunks, bc_len, aug=None, log=print,
+                        online_freeze_updates=0):
     """Ready a clone for the RL fine-tune (imitation-first plan, Task 10), before
     the first env step:
       1. the recorded episodes fill the replay `buf` with their EXECUTED actions
@@ -201,8 +222,11 @@ def il_finetune_prepare(agent, buf, root, towns, *, warmup_updates, chunk_b, chu
     log(f"[IL] critic warm-up: {int(warmup_updates)} updates, encoder/GRU/actor frozen, "
         f"q_g {m.get('q_g', float('nan')):.2f} critic_loss_g "
         f"{m.get('critic_loss_g', float('nan')):.3f} ({time.time() - t0:.0f} s)")
+    if online_freeze_updates:
+        log(f"[IL] online freeze: the first {int(online_freeze_updates)} RL updates train "
+            f"the critic only, on the clone's own rollouts")
     return il_bc_hook(agent, make_bc_optimizer(agent), expert_buf, bc_chunks, bc_len, w0,
-                      decay_updates, aug=aug)
+                      decay_updates, aug=aug, freeze_updates=online_freeze_updates, log=log)
 
 
 def _episode_rows(path):

@@ -149,6 +149,75 @@ def test_trainer_wires_the_preload_warmup_and_hook():
     assert "if LEARNING_STARTS < INIT_MIN_LEARNING_STARTS and not IL_PRELOAD_ROOT:" in s
 
 
+class _ChunkBuf:
+    def __init__(self, agent):
+        self.agent = agent
+
+    def sample_chunks(self, n, length, burn_in):
+        return _chunk(self.agent.cfg, [1, 0])
+
+
+def test_the_clone_stays_frozen_for_the_first_online_updates():
+    """ONLINE FREEZE (2026-11-05). Unfreezing the clone on the first live update
+    collapsed the fine-tune (job 463440: policy= 0.76 -> 0.10 within ~190
+    updates, cloning loss at full weight). With freeze_updates=N the first N
+    online updates train the critic only, on the clone's own rollouts, with no
+    cloning step; after the N-th everything trains, and the cloning weight
+    starts from w0 then."""
+    from torch_rl.bc_trainer import il_bc_hook, make_bc_optimizer
+    agent = GatedRecurrentSAC(_cfg())
+    weights = []
+    hook = il_bc_hook(agent, make_bc_optimizer(agent), _ChunkBuf(agent), n_chunks=2,
+                      length=8, w0=1.0, decay_updates=4, on_weight=weights.append,
+                      freeze_updates=2)
+    before = _snap(agent)
+    for _ in range(2):
+        agent.update(_chunk(agent.cfg, [1, 0]))
+        hook()
+    for m in ("compress", "core", "actor"):
+        assert not _moved(before, agent, m), m
+    assert _moved(before, agent, "critics_g")
+    assert weights == [] and agent.warmup is False   # the next update trains everything
+    agent.update(_chunk(agent.cfg, [1, 0]))
+    hook()
+    assert _moved(before, agent, "actor")
+    assert weights == [1.0]                           # the schedule starts after the freeze
+
+
+def test_the_freeze_end_is_logged():
+    from torch_rl.bc_trainer import il_bc_hook, make_bc_optimizer
+    agent = GatedRecurrentSAC(_cfg())
+    lines = []
+    hook = il_bc_hook(agent, make_bc_optimizer(agent), _ChunkBuf(agent), n_chunks=2,
+                      length=8, w0=1.0, decay_updates=4, freeze_updates=1,
+                      log=lines.append)
+    agent.update(_chunk(agent.cfg, [1, 0]))
+    hook()
+    assert any("online freeze over" in ln for ln in lines)
+
+
+def test_prepare_leaves_the_clone_frozen_for_an_online_freeze(tmp_path, monkeypatch):
+    from tests.test_bc_trainer import _shards, _small_pixel_agent
+    from torch_rl import pixel_rows as pxr
+    from torch_rl.bc_trainer import il_finetune_prepare
+    from torch_rl.episode_buffer import DeviceEpisodeBuffer
+    _shards(tmp_path / "data")
+    monkeypatch.setenv("REPLAY_DEVICE", "cpu")
+    agent = _small_pixel_agent(pxr.BINOC_DIM, 2)
+    buf = DeviceEpisodeBuffer(pxr.mono_row_dim(), 2, 200, "cpu", goal_dim=pxr.PIX)
+    il_finetune_prepare(agent, buf, str(tmp_path / "data"), ["Town05"],
+                        warmup_updates=2, chunk_b=2, chunk_t=4, w0=1.0, decay_updates=10,
+                        bc_chunks=2, bc_len=4, aug=None, log=lambda m: None,
+                        online_freeze_updates=5)
+    assert agent.warmup is True                       # the first online update is critic-only
+
+
+def test_trainer_passes_the_online_freeze():
+    s = open(os.path.join(ROOT, "train_carla_sac.py")).read()
+    assert 'IL_ONLINE_FREEZE_UPDATES = env_int("IL_ONLINE_FREEZE_UPDATES", 0)' in s
+    assert "online_freeze_updates=IL_ONLINE_FREEZE_UPDATES" in s
+
+
 def test_after_update_hook_takes_a_weighted_cloning_step():
     """il_bc_hook: the online loop's per-update cloning step, weight by schedule."""
     from torch_rl.bc_trainer import il_bc_hook, make_bc_optimizer

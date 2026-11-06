@@ -103,6 +103,11 @@ IL_BC_WEIGHT0 = env_float("IL_BC_WEIGHT0", 1.0)
 IL_BC_DECAY_UPDATES = env_int("IL_BC_DECAY_UPDATES", 10000)
 IL_BC_CHUNKS = env_int("IL_BC_CHUNKS", CHUNK_B)
 IL_BC_LEN = env_int("IL_BC_LEN", CHUNK_T)
+# IL_ONLINE_FREEZE_UPDATES (2026-11-05): the first N online RL updates train the
+# critic only, on the clone's own rollouts, before the clone may move
+# (bc_trainer.il_bc_hook). 0 = unfreeze at the first live update, which
+# collapsed fine-tune job 463440 (policy= 0.76 -> 0.10 within ~190 updates).
+IL_ONLINE_FREEZE_UPDATES = env_int("IL_ONLINE_FREEZE_UPDATES", 0)
 EVAL_EPISODES = env_int("EVAL_EPISODES", 40)
 # EVAL_CHAIN=1 (imitation-first plan, Task 11): after each arrival the same car
 # gets the next goal (GatedReward's soft reset, GOAL_CHAIN_STYLE) until the chain
@@ -1398,7 +1403,8 @@ def main():
             agent, buf, IL_PRELOAD_ROOT, IL_PRELOAD_TOWNS,
             warmup_updates=IL_CRITIC_WARMUP_UPDATES, chunk_b=CHUNK_B, chunk_t=CHUNK_T,
             w0=IL_BC_WEIGHT0, decay_updates=IL_BC_DECAY_UPDATES, bc_chunks=IL_BC_CHUNKS,
-            bc_len=IL_BC_LEN, aug=il_aug, log=lambda m: print(m, flush=True))
+            bc_len=IL_BC_LEN, aug=il_aug, log=lambda m: print(m, flush=True),
+            online_freeze_updates=IL_ONLINE_FREEZE_UPDATES)
 
     if parallel:
         from torch_rl.parallel_loop import run_parallel

@@ -160,3 +160,15 @@ def test_tour_waypoints_concatenates_edges_without_duplicate_joints():
     assert gaps.min() >= 0.5                                  # the shared joints are dropped
     assert xy[0].tolist() == [0.0, 0.0] and xy[-1].tolist() == [0.0, 0.0]
     assert len(plan) == 4 + 2 + 3                             # 11 points, 2 duplicate joints
+
+
+def test_the_drive_plan_closes_the_loop_past_its_own_start():
+    # The car starts a few waypoints into the tour; ending at the tour's last
+    # waypoint would stop short of the spawn point, leaving the first and last
+    # stretches unjoined. The drive plan runs past the spawn again.
+    plan = [_Wp(x, 0.0) for x in range(10)]
+    from vae_nav.coverage_tour import closed_drive_plan
+    drive, k0 = closed_drive_plan(plan, start_k=2, overlap=3)
+    xs = [w.transform.location.x for w in drive]
+    assert k0 == 2 and xs[:k0 + 1] == [0.0, 1.0, 2.0]
+    assert xs[len(plan):] == [1.0, 2.0, 3.0, 4.0, 5.0]  # past the spawn (2) by `overlap`

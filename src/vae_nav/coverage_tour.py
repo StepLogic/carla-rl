@@ -152,3 +152,15 @@ def tour_waypoints(walk, waypoints, min_gap_m=0.5):
             out.append(w)
             last = p
     return out
+
+
+def closed_drive_plan(plan, start_k=2, overlap=10):
+    """(drive plan, start index). The car spawns at plan[start_k], a few
+    waypoints into the tour (a lane's first waypoint sits on the junction's
+    edge), and a closed tour's last waypoint is its first. Ending there would
+    stop the trace `start_k` waypoints short of where it began, so its first and
+    last stretches would never be joined by a driven edge. The drive plan
+    appends plan[1 : start_k + overlap + 1]: the car drives past its own spawn
+    point by `overlap` waypoints, and the loop is closed in the TRACE."""
+    k = int(start_k)
+    return list(plan) + list(plan[1:k + int(overlap) + 1]), k

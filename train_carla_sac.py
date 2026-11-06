@@ -638,8 +638,10 @@ def run_expert_trace(env, agent, pxr, server, out_root):
 
       * THE TOUR: every driving lane at least once in its legal direction, no
         lane change (vae_nav.coverage_tour over GlobalRoutePlanner's lane
-        graph), started a few waypoints into the first lane. Deterministic, so a
-        resume plans the same tour.
+        graph), started a few waypoints into the first lane and driven past
+        that spawn point again at the end (coverage_tour.closed_drive_plan), so
+        the loop is closed in the trace itself. Deterministic, so a resume plans
+        the same tour.
       * THE DRIVER: BasicAgentExpert following the tour as an explore plan at
         EXPERT_TARGET_KMH, its clean action executed (no noise).
       * ONE EPISODE, explore mode: the overlay lifts the explore cap, the 100 m
@@ -660,7 +662,8 @@ def run_expert_trace(env, agent, pxr, server, out_root):
     import torch
     from torch_rl.expert_record import assert_recordable_town
     from torch_rl.expert_trace import ChunkWriter, trace_dir
-    from vae_nav.coverage_tour import coverage_tour, lane_graph, tour_waypoints, walk_length
+    from vae_nav.coverage_tour import (closed_drive_plan, coverage_tour, lane_graph,
+                                       tour_waypoints, walk_length)
     from vae_nav.expert_oracle import (SAMPLING_RESOLUTION_M, BasicAgentExpert,
                                        _ensure_agents_on_path)
     from vae_nav.gated_reward import GatedReward
@@ -681,16 +684,19 @@ def run_expert_trace(env, agent, pxr, server, out_root):
     edges, req, wps = lane_graph(grp)
     start = sorted(req)[0][0]
     walk = coverage_tour(edges, req, start)
-    plan = tour_waypoints(walk, wps)
+    tour = tour_waypoints(walk, wps)
+    plan, k_start = closed_drive_plan(tour, start_k=2, overlap=10)
     tour_m = walk_length(walk, edges)
     lanes_m = sum(edges[e] for e in req)
     writer = ChunkWriter(out, chunk=EXPERT_TRACE_CHUNK, meta={
         "town": town, "checkpoint": EVAL_FROM, "spacing_m": None, "driver": "expert",
         "target_kmh": EXPERT_TARGET_KMH, "tour_edges": len(walk), "tour_m": round(tour_m, 1),
-        "lanes": len(req), "lanes_m": round(lanes_m, 1), "plan_waypoints": len(plan),
+        "lanes": len(req), "lanes_m": round(lanes_m, 1), "tour_waypoints": len(tour),
+        "plan_waypoints": len(plan), "closing_waypoints": len(plan) - len(tour),
         "trace_only": True})
     print(f"=== EXPERT TRACE {town} | tour {len(walk)} edges, {tour_m:.0f} m over "
-          f"{len(req)} lanes ({lanes_m:.0f} m), {len(plan)} waypoints, no lane change | "
+          f"{len(req)} lanes ({lanes_m:.0f} m), {len(tour)} waypoints + {len(plan) - len(tour)} "
+          f"past the spawn point to close the loop, no lane change | "
           f"expert {EXPERT_TARGET_KMH:g} km/h, clean actions | clone {EVAL_FROM} rides along "
           f"(entropy, GRU carried) | every step, chunks of {EXPERT_TRACE_CHUNK} -> {out}"
           + (f" | RESUMING drive {writer.drive} at tour waypoint {writer.resume_plan_index}, "
@@ -701,7 +707,7 @@ def run_expert_trace(env, agent, pxr, server, out_root):
         server.stop()
         return
 
-    k0 = max(writer.resume_plan_index, 2)    # a few waypoints into the first lane
+    k0 = max(writer.resume_plan_index, k_start)    # a few waypoints into the first lane
     jumped = False
     drives = 0
     expert, hero_id = None, None

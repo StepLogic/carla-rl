@@ -1163,7 +1163,14 @@ def build_agent(binoc_dim, act_dim):
         # actions off the limits. User 2026-10-20, "try 2": v12 sets 0.
         target_entropy=env_float("TARGET_ENTROPY", -2.0),
         actor_pretanh_l2=env_float("ACTOR_PRETANH_L2", 0.0),
-        actor_pretanh_free=env_float("ACTOR_PRETANH_FREE", 1.5))
+        actor_pretanh_free=env_float("ACTOR_PRETANH_FREE", 1.5),
+        # ALGO=iql (user 2026-11-06, torch_rl/iql.py): critic and actor queried
+        # only at replay actions; the IQL_* settings are its expectile, its
+        # advantage temperature (on A / the running Q std) and its weight clip.
+        algo=os.environ.get("ALGO", "sac"),
+        iql_expectile=env_float("IQL_EXPECTILE", 0.7),
+        iql_beta=env_float("IQL_BETA", 3.0),
+        iql_max_weight=env_float("IQL_MAX_WEIGHT", 100.0))
     agent = GatedRecurrentSAC(cfg)
     # DEBiT'''S PRETRAINED MONOCULAR TRUNK (user 2026-10-14, "I want debit Mono +
     # binocular setup"). Loaded AFTER the learner builds the module and copied

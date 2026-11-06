@@ -18,7 +18,7 @@ for town in ${IL_TOWNS:-Town01 Town04 Town05 Town10HD}; do
     *) echo "=== il_record: $town is not a training town, skipped"; continue;;
   esac
   echo "=== IL_RECORD $town seeds from $((BASE + 10000 * i)) port 34${i}0 ==="
-  REWARD_OVERLAY=slurm/il_record.env ENV_TOWNS=$town EXPERT_SEED0=$((BASE + 10000 * i)) \
+  REWARD_OVERLAY=${RECORD_OVERLAY:-slurm/il_record.env} ENV_TOWNS=$town EXPERT_SEED0=$((BASE + 10000 * i)) \
     RUN_NAME=${RUN_PREFIX:-il_record}_$town CARLA_PORT=34${i}0 bash slurm/train_sac.sbatch
   echo "=== IL_RECORD $town rc=$? ==="
 done

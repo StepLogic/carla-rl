@@ -9,12 +9,21 @@ RECOVERY NOISE (DART). With the expert driving, the EXECUTED steering gets
 N(0, sigma) noise while the stored LABEL stays the expert's clean action, so
 the data shows how to come back from drifting: the expert's next action is
 computed from the perturbed state it was pushed into.
+
+COVERAGE (user 2026-11-06, "PERTURB EXPERT MORE SO WE HAVE COVERAGE DATA"). The
+critic had only ever seen small i.i.d. steering noise, so it had no evidence
+about the sustained hard steering the collapsed fine-tunes drifted into. All off
+by default: EXPERT_SIGMAS sets the steering levels, throttle_sigma adds throttle
+noise, and BurstPerturber holds one (steer, throttle) offset for several steps.
+The label stays the expert's clean action throughout.
 """
+import os
+
 import numpy as np
 
 HELD_OUT_TOWNS = ("Town02", "Town03")
 FAULT_ENDS = ("crossing", "off_road", "collision")
-SIGMAS = (0.0, 0.1, 0.2)
+SIGMAS = tuple(float(x) for x in os.environ.get("EXPERT_SIGMAS", "0,0.1,0.2").split(","))
 
 
 def assert_recordable_town(town):
@@ -38,21 +47,59 @@ def effective_sigma(sigma, dry):
     return 0.0 if dry else float(sigma)
 
 
-def dart_action(a_env, sigma, rng, low, high):
-    """The executed action: N(0, sigma) added to the steering (index 0) only,
-    clipped to the env box. A copy, and exactly `a_env` when sigma == 0."""
+def dart_action(a_env, sigma, rng, low, high, throttle_sigma=0.0):
+    """The executed action: N(0, sigma) added to the steering (index 0) and,
+    when throttle_sigma > 0, N(0, throttle_sigma) to the throttle (index 1),
+    clipped to the env box. A copy, and exactly `a_env` when both are 0."""
     out = np.array(a_env, dtype=np.float32, copy=True)
     if sigma > 0.0:
         out[0] += np.float32(rng.normal(0.0, sigma))
+    if throttle_sigma > 0.0:
+        out[1] += np.float32(rng.normal(0.0, throttle_sigma))
     return np.clip(out, low, high).astype(np.float32)
 
 
-def record_step(driver, a_policy, a_expert, sigma, rng, low, high):
+class BurstPerturber:
+    """Temporally correlated perturbation for coverage: with probability `prob`
+    per step (when no burst is running) start a burst of k steps, k uniform in
+    `steps`, during which one constant offset is added to the executed action --
+    steering magnitude uniform in `steer`, throttle magnitude in `throttle`,
+    each with a random sign -- clipped to the box. prob 0 = off."""
+
+    def __init__(self, prob=0.0, steps=(5, 15), steer=(0.3, 1.0), throttle=(0.0, 0.5)):
+        self.prob, self.steps = float(prob), (int(steps[0]), int(steps[1]))
+        self.steer, self.throttle = tuple(map(float, steer)), tuple(map(float, throttle))
+        self.left = 0
+        self.offset = np.zeros(2, np.float32)
+
+    def reset(self):
+        self.left = 0
+
+    def apply(self, a, rng, low, high):
+        if self.prob <= 0.0:
+            return a
+        if self.left == 0 and rng.random() < self.prob:
+            self.left = int(rng.integers(self.steps[0], self.steps[1] + 1))
+            self.offset = np.array(
+                [rng.uniform(*self.steer) * rng.choice((-1.0, 1.0)),
+                 rng.uniform(*self.throttle) * rng.choice((-1.0, 1.0))], np.float32)
+        if self.left == 0:
+            return a
+        self.left -= 1
+        return np.clip(np.asarray(a, np.float32) + self.offset, low, high).astype(np.float32)
+
+
+def record_step(driver, a_policy, a_expert, sigma, rng, low, high, throttle_sigma=0.0,
+                burst=None):
     """(a_exec, a_label) for one step. The label is always the expert's action;
-    what is executed is the noisy expert ("expert") or the policy ("policy")."""
+    what is executed is the noisy expert ("expert") -- DART noise, then any
+    coverage burst -- or the policy ("policy")."""
     a_label = np.asarray(a_expert, np.float32)
     if driver == "expert":
-        return dart_action(a_label, sigma, rng, low, high), a_label
+        a_exec = dart_action(a_label, sigma, rng, low, high, throttle_sigma=throttle_sigma)
+        if burst is not None:
+            a_exec = burst.apply(a_exec, rng, low, high)
+        return a_exec, a_label
     if driver == "policy":
         return np.asarray(a_policy, np.float32), a_label
     raise ValueError(f"driver must be 'expert' or 'policy', got {driver!r}")

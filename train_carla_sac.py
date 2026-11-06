@@ -650,6 +650,14 @@ def run_record(env, agent, pxr, server, out_root):
     low, high = box.low.astype(np.float32), box.high.astype(np.float32)
     root = os.path.join(EXPERT_RECORD_ROOT, town)
     rng = np.random.default_rng(EXPERT_SEED0)
+    throttle_sigma, burst = coverage_perturbation(EXPERT_RECORD_DRY)
+    if throttle_sigma > 0 or burst.prob > 0:
+        from torch_rl.expert_record import SIGMAS as _steer_sigmas
+        print(f"  COVERAGE: steering sigmas {_steer_sigmas} | throttle sigma "
+              f"{throttle_sigma:g} | bursts p={burst.prob:g}/step, {burst.steps[0]}-"
+              f"{burst.steps[1]} steps, |steer| {burst.steer[0]:g}-{burst.steer[1]:g}, "
+              f"|throttle| {burst.throttle[0]:g}-{burst.throttle[1]:g} (labels clean)",
+              flush=True)
     print(f"=== RECORD {town} | driver={EXPERT_DRIVER} | {EXPERT_RECORD_EPISODES} episodes "
           f"from seed {EXPERT_SEED0} | expert {EXPERT_TARGET_KMH:g} km/h, explore "
           f"{EXPERT_EXPLORE_MIN_M:g}-{EXPERT_EXPLORE_MAX_M:g} m | "
@@ -661,6 +669,7 @@ def run_record(env, agent, pxr, server, out_root):
         seed = EXPERT_SEED0 + k
         plan = episode_plan(seed)
         sigma = effective_sigma(plan["sigma"], EXPERT_RECORD_DRY)
+        burst.reset()                     # a coverage burst never spans two episodes
         gated.force_mode = int(plan["mode"])
         _random.seed(seed)
         np.random.seed(seed)
@@ -710,7 +719,8 @@ def run_record(env, agent, pxr, server, out_root):
                 a_act, hidden = agent.act(row, hidden, goal=goal_blk, deterministic=True)
                 a_pol = to_env(np.asarray(a_act, np.float32), box)
             a_exec, a_label = record_step(EXPERT_DRIVER, a_pol, a_exp, sigma,
-                                          rng, low, high)
+                                          rng, low, high,
+                                          throttle_sigma=throttle_sigma, burst=burst)
             obs, r, term, trunc, info = env.step(a_exec)
             pos = np.asarray(info.get("hero_pos", prev), np.float64)[:2]
             path_m += float(np.linalg.norm(pos - prev))
@@ -1084,6 +1094,25 @@ def run_eval(env, agent, pxr, server, out_root):
           f"ends={ends} -> {out}", flush=True)
     env.close()
     server.stop()
+
+
+def coverage_perturbation(dry):
+    """(throttle_sigma, BurstPerturber) for coverage recording (user 2026-11-06,
+    "PERTURB EXPERT MORE SO WE HAVE COVERAGE DATA"), from EXPERT_THROTTLE_SIGMA and
+    EXPERT_BURST_PROB / _STEPS / _STEER / _THROTTLE ("lo,hi"); all off by default.
+    A dry run -- the M0 gate, which measures the expert itself -- never perturbs."""
+    from torch_rl.expert_record import BurstPerturber
+    if dry:
+        return 0.0, BurstPerturber(prob=0.0)
+
+    def _pair(name, default):
+        lo, hi = (float(x) for x in os.environ.get(name, default).split(","))
+        return lo, hi
+    steps = tuple(int(v) for v in _pair("EXPERT_BURST_STEPS", "5,15"))
+    return (env_float("EXPERT_THROTTLE_SIGMA", 0.0),
+            BurstPerturber(prob=env_float("EXPERT_BURST_PROB", 0.0), steps=steps,
+                           steer=_pair("EXPERT_BURST_STEER", "0.3,1.0"),
+                           throttle=_pair("EXPERT_BURST_THROTTLE", "0.0,0.5")))
 
 
 def checkpoint_critic_layer_norm(ckpt_dir) -> bool:

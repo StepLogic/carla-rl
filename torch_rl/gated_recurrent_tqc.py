@@ -81,6 +81,11 @@ PREV_ACTION_DIM = 2
 _HALF_LOG_2PI_E = 0.5 * math.log(2.0 * math.pi * math.e)
 _CHUNK_KEYS = ("obs", "keep", "actions", "rewards", "masks", "valid", "mode")
 _CHUNK_KEYS_V2 = _CHUNK_KEYS + ("goal",)     # vc2: + the per-chunk (B, D*64) goal tokens
+# The update metrics an actor step produces (SAC and IQL): an off-turn update
+# under ACTOR_UPDATE_EVERY reports the last actor step's values for these.
+_ACTOR_METRICS = ("actor_loss", "temp_loss_g", "temp_loss_e", "neg_logp_g", "sat_steer",
+                  "sat_throttle", "mean_abs_u_steer", "mean_abs_u_throttle", "log_std_g",
+                  "enc_alive", "pretanh_pen", "awr_w_mean", "adv_mean")
 
 
 class Vc1Compression(nn.Module):
@@ -238,6 +243,10 @@ class GatedRecurrentTQCConfig:
     # -0.43 throttle, so their -2.0 average gives 5x its steering noise. None =
     # the usual (LOG_STD_MIN, LOG_STD_MAX) clamp, every earlier run.
     actor_log_std: Optional[Union[float, Tuple[float, ...]]] = None
+    # ACTOR_UPDATE_EVERY (user 2026-11-06, "keep pure sac - but update actor less
+    # frequently"): the critic trains on every update, the actor (and the SAC
+    # temperature) on every N-th -- TD3's delayed policy update. 1 = every update.
+    actor_update_every: int = 1
     discount: float = 0.99
     discount_e: float = 0.99
     tau: float = 0.005
@@ -390,6 +399,9 @@ class GatedRecurrentTQCConfig:
                 raise ValueError(f"actor_log_std={self.actor_log_std} outside the actor's "
                                  f"log-std bounds [{LOG_STD_MIN}, {LOG_STD_MAX}]")
             self.actor_log_std = pins[0] if len(pins) == 1 else pins
+        if int(self.actor_update_every) < 1:
+            raise ValueError(f"actor_update_every={self.actor_update_every}: the actor "
+                             "must step at least every update (1) or every N-th (N > 1)")
         # The ResNet reads one RGB frame; vc2's channel-stacked goal grid is VC-1 tokens.
         if self.mono_encoder == "resnet" and self.goal_tokens:
             raise ValueError("mono_encoder=resnet is debit-only: goal_tokens must be False")
@@ -477,6 +489,14 @@ class GatedRecurrentTQC:
         self._test_cpu_autocast = bool(_test_cpu_autocast)
         self.warmup = False              # set_warmup: critic-only updates
         self.trunk_frozen = False        # set_trunk_frozen: encoder + GRU fixed
+        # ACTOR_UPDATE_EVERY: a host-side count of updates decides the actor's
+        # turn (a Python bool, so a compiled update keeps one graph per value);
+        # last_actor_stepped tells the fine-tune's cloning hook whether the
+        # update it follows stepped the actor. True before any update.
+        self._host_updates = 0
+        self._actor_turn = True
+        self.last_actor_stepped = True
+        self._last_actor_metrics: Dict[str, float] = {}
         # Reseeds the GLOBAL torch RNG, as RecurrentTQC does: construction
         # order below is load-bearing for reproducibility.
         torch.manual_seed(cfg.seed)
@@ -928,12 +948,28 @@ class GatedRecurrentTQC:
             # A (B, 0) placeholder keeps the compiled update at 8 positional
             # arguments; with no goal_tokens nothing reads it (no ops).
             args.append(torch.zeros((chunk["obs"].shape[0], 0), device=self.device))
+        n = self._host_updates
+        self._actor_turn = n % int(self.cfg.actor_update_every) == 0
+        self._host_updates = n + 1
         out = self._update(*args)
         # ONE host sync for every metric (Phase 2 review P5): a float() per
         # metric was ~20 device syncs per update. Every metric is an fp32 0-d
         # tensor, so each value equals its float() exactly.
         vals = torch.stack([v.detach().reshape(()).float() for v in out.values()]).tolist()
-        return dict(zip(out.keys(), vals))
+        metrics = dict(zip(out.keys(), vals))
+        if metrics.get("skipped", 0.0) > 0.0:    # an empty chunk: nothing stepped
+            self.last_actor_stepped = False
+            metrics["actor_stepped"] = 0.0
+            return metrics
+        self.last_actor_stepped = bool(self._actor_turn and not self.warmup)
+        if self.last_actor_stepped:
+            self._last_actor_metrics = {k: metrics[k] for k in _ACTOR_METRICS if k in metrics}
+        elif not self.warmup:
+            # An off-turn update (ACTOR_UPDATE_EVERY): the actor did not step, so
+            # its numbers are the last actor step's rather than zeros.
+            metrics.update(self._last_actor_metrics)
+        metrics["actor_stepped"] = 1.0 if self.last_actor_stepped else 0.0
+        return metrics
 
     def _skip_metrics(self) -> Dict[str, torch.Tensor]:
         z = torch.zeros((), device=self.device)
@@ -1072,11 +1108,13 @@ class GatedRecurrentTQC:
             # already returns fp32, so this is exact whatever cfg.bf16 is.
             mean_u, log_std = self._actor_forward(actor_in)
             entropy = log_std.sum(dim=-1) + cfg.action_dim * _HALF_LOG_2PI_E
-        if self.warmup:
+        if self.warmup or not self._actor_turn:
             # CRITIC WARM-UP (imitation-first fine-tune, 2026-11-05): the critic
             # learns the loaded clone's values while nothing the clone learned
             # moves -- no actor step, no temperature step; set_warmup froze the
             # encoder and the GRU, so the critic loss above trained the heads only.
+            # An off-turn update under ACTOR_UPDATE_EVERY takes the same branch:
+            # critic only; update() reports the last actor step's diagnostics.
             actor_loss = temp_loss_g = temp_loss_e = zero
             diag = {k: zero for k in ("neg_logp_g", "sat_steer", "sat_throttle",
                                       "mean_abs_u_steer", "mean_abs_u_throttle",

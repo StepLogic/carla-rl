@@ -160,8 +160,14 @@ def il_bc_hook(agent, opt, expert_buf, n_chunks, length, w0, decay_updates,
     moves -- and those calls take no cloning step. The N-th call unfreezes it,
     and the cloning schedule starts from w0 at the call after. Unfreezing on the
     first live update collapsed the fine-tune (job 463440: policy= 0.76 -> 0.10
-    within ~190 updates, the cloning loss at full weight)."""
+    within ~190 updates, the cloning loss at full weight).
+
+    ACTOR_UPDATE_EVERY (2026-11-06): the cloning step goes with the actor step
+    -- a call after an update that did not step the actor (agent.
+    last_actor_stepped False) takes none -- and the fade counts those cloning
+    steps, so per actor step the cloning weight is what it is with N = 1."""
     count = [0]
+    steps = [0]
     K = int(agent.cfg.burn_in)
     freeze = int(freeze_updates)
     if freeze > 0:
@@ -178,7 +184,11 @@ def il_bc_hook(agent, opt, expert_buf, n_chunks, length, w0, decay_updates,
                         f"and actor train from the next update; cloning weight {w0:g} "
                         f"fading over {int(decay_updates)} updates")
             return None
-        w = bc_weight(n - freeze, w0, decay_updates)
+        if (int(getattr(agent.cfg, "actor_update_every", 1)) > 1
+                and not getattr(agent, "last_actor_stepped", True)):
+            return None                          # an off-turn update: no actor step
+        w = bc_weight(steps[0], w0, decay_updates)
+        steps[0] += 1
         if on_weight is not None:
             on_weight(w)
         if w <= 0.0:

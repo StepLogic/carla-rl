@@ -218,8 +218,10 @@ class GatedRecurrentSAC(GatedRecurrentTQC):
                 "enc_alive": self._enc_alive(obs),
                 "pretanh_pen": zero,
             }
-        if self.warmup:
-            actor_loss = zero                    # critic and value only, as in SAC's warm-up
+        if self.warmup or not self._actor_turn:
+            # critic and value only, as in SAC's warm-up and its off-turn
+            # updates under ACTOR_UPDATE_EVERY
+            actor_loss = zero
         else:
             u = torch.atanh(a.clamp(-0.995, 0.995))
             nll = (0.5 * ((u - mean_u) / log_std.exp()) ** 2 + log_std).sum(dim=-1)
@@ -273,7 +275,10 @@ class GatedRecurrentSAC(GatedRecurrentTQC):
                f" | actor log-std PINNED at "
                f"{', '.join(f'{v:g}' for v in (p if isinstance(p, tuple) else (p,)))}"
                f": only the mean action trains")
-        return self._describe_learner() + pin
+        every = int(self.cfg.actor_update_every)
+        delay = ("" if every == 1 else
+                 f" | actor (and temperature) updated every {every} critic updates")
+        return self._describe_learner() + pin + delay
 
     def _describe_learner(self) -> str:
         cfg = self.cfg

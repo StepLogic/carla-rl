@@ -1895,7 +1895,9 @@ def build_agent(binoc_dim, act_dim, critic_layer_norm=None):
         # ACTOR_LOG_STD (2026-11-06): pin the actor's noise; only its mean trains.
         # One value for every action, or one per action ("-3.70,-0.43").
         actor_log_std=(tuple(float(v) for v in os.environ["ACTOR_LOG_STD"].split(","))
-                       if os.environ.get("ACTOR_LOG_STD") else None))
+                       if os.environ.get("ACTOR_LOG_STD") else None),
+        # ACTOR_UPDATE_EVERY (user 2026-11-06): the actor steps on every N-th update.
+        actor_update_every=env_int("ACTOR_UPDATE_EVERY", 1))
     agent = GatedRecurrentSAC(cfg)
     # DEBiT'''S PRETRAINED MONOCULAR TRUNK (user 2026-10-14, "I want debit Mono +
     # binocular setup"). Loaded AFTER the learner builds the module and copied

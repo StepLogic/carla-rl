@@ -117,6 +117,9 @@ IL_FREEZE_TRUNK = os.environ.get("IL_FREEZE_TRUNK", "0") == "1"
 # every update draws this share of its chunks from it (mixed_replay.MixedReplay).
 # 0 = one shared replay, the expert steps preloaded into it.
 IL_EXPERT_FRAC = env_float("IL_EXPERT_FRAC", 0.0)
+# IL_ALPHA0 > 0 (user 2026-11-05): the fine-tune's starting temperature, set after
+# the warm start (the clone's checkpoint carries the from-scratch 0.1). 0 = keep it.
+IL_ALPHA0 = env_float("IL_ALPHA0", 0.0)
 EVAL_EPISODES = env_int("EVAL_EPISODES", 40)
 # EVAL_CHAIN=1 (imitation-first plan, Task 11): after each arrival the same car
 # gets the next goal (GatedReward's soft reset, GOAL_CHAIN_STYLE) until the chain
@@ -1399,6 +1402,10 @@ def main():
         return pxr.mono_row(i["debit_cur"], _net_mode(o["mode"]), o["binoc"],
                             speed_kmh=_speed_kmh(i))
 
+    if IL_ALPHA0 > 0:
+        print(f"  TEMPERATURE (IL_ALPHA0): {agent.alpha_g:g} from the checkpoint -> "
+              f"{IL_ALPHA0:g}, learned from there", flush=True)
+        agent.set_temperature(IL_ALPHA0)
     if IL_FREEZE_TRUNK:
         agent.set_trunk_frozen(True)
         print("  TRUNK FROZEN (IL_FREEZE_TRUNK=1): encoder, action embedding and GRU "

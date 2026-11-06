@@ -197,6 +197,26 @@ def test_trainer_freezes_the_trunk_on_request():
     assert s.index("agent.set_trunk_frozen(True)") < s.index("il_hook = il_finetune_prepare(")
 
 
+def test_set_temperature_overrides_the_loaded_temperatures():
+    """IL_ALPHA0 (user 2026-11-05): a clone's checkpoint carries the from-scratch
+    temperature 0.1, whose entropy bonus inflated c0's steering noise ~8x
+    (log-std -2.23 -> ~-0.2) within ~90 updates of the unfreeze while the
+    temperature itself drifted ~1% per 100 updates. The fine-tune starts low."""
+    import math
+    agent = GatedRecurrentSAC(_cfg())
+    agent.set_temperature(1e-3)
+    assert math.isclose(agent.alpha_g, 1e-3, rel_tol=1e-6)
+    assert math.isclose(agent.alpha_e, 1e-3, rel_tol=1e-6)
+    assert agent.log_alpha_g.requires_grad              # still learned from there
+
+
+def test_trainer_sets_the_starting_temperature_after_the_warm_start():
+    s = open(os.path.join(ROOT, "train_carla_sac.py")).read()
+    assert 'IL_ALPHA0 = env_float("IL_ALPHA0", 0.0)' in s
+    assert "agent.set_temperature(IL_ALPHA0)" in s
+    assert s.index("agent.set_temperature(IL_ALPHA0)") > s.index("agent.load(INIT_FROM)")
+
+
 class _ChunkBuf:
     def __init__(self, agent):
         self.agent = agent

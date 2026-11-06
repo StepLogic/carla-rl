@@ -544,6 +544,15 @@ class GatedRecurrentTQC:
     def alpha_e(self) -> float:
         return float(self.log_alpha_e.detach().exp())
 
+    def set_temperature(self, alpha: float) -> None:
+        """Set both temperatures (they stay learned from there). A fine-tune
+        from a clone starts low (IL_ALPHA0, 2026-11-05): the checkpoint's 0.1
+        is the from-scratch value, and its entropy bonus inflated c0's steering
+        noise ~8x within ~90 updates while the temperature drifted ~1% per 100."""
+        with torch.no_grad():
+            self.log_alpha_g.fill_(float(np.log(alpha)))
+            self.log_alpha_e.fill_(float(np.log(alpha)))
+
     @staticmethod
     def target_entropy_box(te: float, low, high) -> float:
         """The Box-space equivalent of a unit-space target entropy:

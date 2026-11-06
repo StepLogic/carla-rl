@@ -268,6 +268,12 @@ class GatedRecurrentSAC(GatedRecurrentTQC):
 
     # ------------------------------------------------------------- telemetry --
     def describe(self) -> str:
+        pin = ("" if self.cfg.actor_log_std is None else
+               f" | actor log-std PINNED at {self.cfg.actor_log_std:g}: only the mean "
+               f"action trains")
+        return self._describe_learner() + pin
+
+    def _describe_learner(self) -> str:
         cfg = self.cfg
         if cfg.algo == "iql":
             return (f"RecurrentIQL, ONE CRITIC for both reward modes: {cfg.n_critics} "

@@ -74,7 +74,8 @@ import torch
 import torch.nn as nn
 
 from torch_rl import tqc_loss
-from torch_rl.nets import Actor, GRUCore, QuantileCritics, soft_update
+from torch_rl.nets import (LOG_STD_MAX, LOG_STD_MIN, Actor, GRUCore, QuantileCritics,
+                           soft_update)
 
 PREV_ACTION_DIM = 2
 _HALF_LOG_2PI_E = 0.5 * math.log(2.0 * math.pi * math.e)
@@ -230,6 +231,11 @@ class GatedRecurrentTQCConfig:
     # a high replay ratio stable. 0 / False = every earlier run.
     critic_dropout: float = 0.0
     critic_layer_norm: bool = False
+    # ACTOR_LOG_STD (2026-11-06): pin the actor's log-std at this value (its
+    # clamp becomes (v, v)), so a fine-tune trains only the mean action: every
+    # clone fine-tune collapsed with its action noise growing. None = the usual
+    # (LOG_STD_MIN, LOG_STD_MAX) clamp, every earlier run.
+    actor_log_std: Optional[float] = None
     discount: float = 0.99
     discount_e: float = 0.99
     tau: float = 0.005
@@ -367,6 +373,10 @@ class GatedRecurrentTQCConfig:
         problem = mono_encoder_problems(self.mono_encoder, self.embed_dim, self.grid)
         if problem:
             raise ValueError(problem)
+        if self.actor_log_std is not None and not (
+                LOG_STD_MIN <= float(self.actor_log_std) <= LOG_STD_MAX):
+            raise ValueError(f"actor_log_std={self.actor_log_std} outside the actor's "
+                             f"log-std bounds [{LOG_STD_MIN}, {LOG_STD_MAX}]")
         # The ResNet reads one RGB frame; vc2's channel-stacked goal grid is VC-1 tokens.
         if self.mono_encoder == "resnet" and self.goal_tokens:
             raise ValueError("mono_encoder=resnet is debit-only: goal_tokens must be False")
@@ -478,7 +488,10 @@ class GatedRecurrentTQC:
         # vc3: + the core_state_cols (0 by default, so the v1 / v2 GRU is unchanged).
         self.core = GRUCore(cfg.visual_dim + (cfg.action_emb if cfg.prev_action else 0)
                             + len(cfg.core_state_cols), cfg.hidden).to(dev)
-        self.actor = Actor(cfg.hidden + cfg.state_dim, cfg.action_dim, cfg.mlp).to(dev)
+        log_std_bounds = ((LOG_STD_MIN, LOG_STD_MAX) if cfg.actor_log_std is None
+                          else (float(cfg.actor_log_std),) * 2)
+        self.actor = Actor(cfg.hidden + cfg.state_dim, cfg.action_dim, cfg.mlp,
+                           log_std_bounds=log_std_bounds).to(dev)
         self.critics_g = QuantileCritics(cfg.hidden + len(cfg.goal_cols), cfg.action_dim,
                                          cfg.n_critics, cfg.n_quantiles, cfg.mlp,
                                          dropout=cfg.critic_dropout,

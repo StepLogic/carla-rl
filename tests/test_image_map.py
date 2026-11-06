@@ -225,3 +225,39 @@ def test_sgm_never_merges_outside_the_gate():
     cand, pairs, q, xy, yaw = _sgm_line()
     keep, _ = im.sgm_place(cand, pairs, q, xy, yaw, gate_m=1.0, cutoff=1e9)
     assert list(keep) == list(cand)
+
+
+# ---- SGM without the spatial gate (the peer's rule; single-trace maps, 2026-11-06) --
+
+def test_sgm_without_a_gate_merges_consistent_states_at_any_distance():
+    # 20 m apart: a 10 m gate merges nothing, consistency alone merges them all
+    cand, pairs, q, xy, yaw = _sgm_line(step=20.0)
+    keep_gated, _ = im.sgm_place(cand, pairs, q, xy, yaw, gate_m=10.0, cutoff=1e9)
+    assert list(keep_gated) == list(cand)
+    keep, st = im.sgm_place(cand, pairs, q, xy, yaw, gate_m=None, cutoff=1e9)
+    assert list(keep) == [cand[0]] and st["gate_m"] is None
+
+
+def test_sgm_without_a_gate_ignores_heading_but_still_needs_a_shared_read():
+    cand, pairs, q, xy, yaw = _sgm_line(n=4)
+    yaw = np.array([0.0, np.pi, 0.0, np.pi])        # alternate headings: no heading test
+    keep, _ = im.sgm_place(cand, pairs, q, xy, yaw, gate_m=None, cutoff=1e9)
+    assert list(keep) == [cand[0]]
+    # two candidates the critic was never read between cannot be compared
+    lone = np.array([[0, 0], [1, 1]])
+    keep, _ = im.sgm_place(np.array([5, 9]), lone, np.zeros(2), np.zeros((2, 2)),
+                           np.zeros(2), gate_m=None, cutoff=1e9)
+    assert list(keep) == [5, 9]
+
+
+def test_sgm_match_bisects_the_cutoff_to_the_target_count():
+    cand, pairs, q, xy, yaw = _sgm_line(n=12)
+    full = len(im.sgm_place(cand, pairs, q, xy, yaw, gate_m=None, cutoff=1e-6)[0])
+    one = len(im.sgm_place(cand, pairs, q, xy, yaw, gate_m=None, cutoff=1e9)[0])
+    assert (full, one) == (12, 1)
+    # on this line a candidate merges into a member fewer than `cutoff` places
+    # back, so 4 members (every third candidate) is reachable and 5 is not
+    cutoff, keep, st = im.sgm_match(cand, pairs, q, xy, yaw, count=4, gate_m=None)
+    assert len(keep) == 4 and st["target"] == 4 and st["cutoff"] == cutoff
+    again, _ = im.sgm_place(cand, pairs, q, xy, yaw, gate_m=None, cutoff=cutoff)
+    assert list(again) == list(keep)

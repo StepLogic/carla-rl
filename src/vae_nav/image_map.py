@@ -379,19 +379,40 @@ def sgm_place(cand, pairs, q, xy, yaw, gate_m=10.0, cutoff=5.0):
 
     over the members k for which BOTH distances are known (k = w included, as in
     the reference); a pair with no common k cannot merge. Returns (trace
-    indices of the members, stats)."""
+    indices of the members, stats).
+
+    gate_m=None is THE PEER'S RULE (habitat-map-spec, 2026-10-03): no spatial
+    gate and no heading test, consistency alone. s is then compared with every
+    member, in the order they were placed; on a sparse read only members within
+    twice the read radius can share a known k with s, so only those are visited
+    -- an index, not a gate: no other member can produce a C at all."""
     cand = np.asarray(cand, int)
     xy = np.asarray(xy, np.float64)
     yaw = np.asarray(yaw, np.float64)
+    pairs = np.asarray(pairs, int).reshape(-1, 2)
     out_d, in_d = {}, {}
-    for (a, b), v in zip(np.asarray(pairs, int), np.asarray(q, np.float64)):
+    for (a, b), v in zip(pairs, np.asarray(q, np.float64)):
         out_d.setdefault(int(a), {})[int(b)] = -v
         in_d.setdefault(int(b), {})[int(a)] = -v
+    if gate_m is None:
+        span = np.hypot(*(xy[pairs[:, 0]] - xy[pairs[:, 1]]).T) if len(pairs) else np.zeros(1)
+        reach = 2.0 * float(span.max()) + 1e-6
+        cell = max(reach, 1.0)
+        grid = {}
+
+        def _cell(i):
+            return int(np.floor(xy[i, 0] / cell)), int(np.floor(xy[i, 1] / cell))
     members, mset, cs = [], set(), []
     for s in range(len(cand)):
-        d = np.hypot(*(xy[members] - xy[s]).T) if members else np.zeros(0)
-        near = [members[i] for i in np.argsort(d) if d[i] <= gate_m
-                and _aligned(yaw[members[i]], yaw[s])]
+        if gate_m is None:
+            kx, ky = _cell(s)
+            near = sorted(m for dx in (-1, 0, 1) for dy in (-1, 0, 1)
+                          for m in grid.get((kx + dx, ky + dy), ())
+                          if np.hypot(*(xy[m] - xy[s])) <= reach)
+        else:
+            d = np.hypot(*(xy[members] - xy[s]).T) if members else np.zeros(0)
+            near = [members[i] for i in np.argsort(d) if d[i] <= gate_m
+                    and _aligned(yaw[members[i]], yaw[s])]
         merged = False
         for w in near:
             c = -np.inf
@@ -408,8 +429,33 @@ def sgm_place(cand, pairs, q, xy, yaw, gate_m=10.0, cutoff=5.0):
         if not merged:
             members.append(s)
             mset.add(s)
+            if gate_m is None:
+                grid.setdefault(_cell(s), []).append(s)
     stats = {"candidates": int(len(cand)), "members": len(members), "gate_m": gate_m,
              "cutoff": cutoff, "c_median": float(np.median(cs)) if cs else None,
              "c_p10": float(np.percentile(cs, 10)) if cs else None,
              "tested": len(cs)}
     return cand[np.asarray(members, int)], stats
+
+
+def sgm_match(cand, pairs, q, xy, yaw, count, gate_m=None, lo=0.0, hi=None, iters=40):
+    """The cutoff whose SGM selection keeps the node count closest to `count`,
+    by bisection (the count falls as the cutoff rises): the matched-budget SGM
+    arm. -> (cutoff, members, stats with target and cutoff)."""
+    if hi is None:
+        # every |d1 - d2| is below this, so at `hi` everything mergeable merges
+        hi = 2.0 * float(np.max(np.abs(np.asarray(q, np.float64)))) + 1.0
+    best = None
+    for _ in range(iters):
+        mid = 0.5 * (lo + hi)
+        keep, st = sgm_place(cand, pairs, q, xy, yaw, gate_m=gate_m, cutoff=mid)
+        if best is None or abs(len(keep) - count) < abs(len(best[1]) - count):
+            best = (mid, keep, st)
+        if len(keep) > count:
+            lo = mid
+        elif len(keep) < count:
+            hi = mid
+        else:
+            break
+    cutoff, keep, st = best
+    return cutoff, keep, {**st, "target": int(count), "cutoff": cutoff}

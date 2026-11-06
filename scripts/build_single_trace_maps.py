@@ -61,7 +61,33 @@ def load(trace_fmt, town):
               flush=True)
     tr = im.load_trace(d)
     tr["drive"] = drive_ids(tr, index)      # run_trace: a drive is a segment
+    # WHO DROVE each sample (the unbroken trace, run_unbroken_trace: 0 = c0,
+    # 1 = the expert recovering from a fault). Absent in every other trace: all c0.
+    drv = []
+    for sg in index["segments"]:
+        if not sg.get("kept"):
+            continue
+        with np.load(os.path.join(d, sg["file"])) as z:
+            n = len(z["t"])
+            drv.append(np.asarray(z["driver"], int).reshape(n) if "driver" in z.files
+                       else np.zeros(n, int))
+    tr["driver"] = np.concatenate(drv)
     return tr, index
+
+
+def c0_only(idx, tr):
+    """Placed sample indices with the expert-driven ones removed: a node is a
+    frame c0 itself drove through (user 2026-11-06, "Expert recovers": expert
+    steps are flagged so placement can skip them). The expert's stretch of the
+    drive still joins the graph's edges -- that is the point of recovering."""
+    idx = np.asarray(idx, int)
+    return idx[tr["driver"][idx] == 0]
+
+
+def c0_view(tr):
+    """(sub-trace of c0-driven samples, their indices in the full trace)."""
+    k = np.flatnonzero(tr["driver"] == 0)
+    return {"pos": tr["pos"][k], "yaw": tr["yaw"][k]}, k
 
 
 def trace_stats(tr, index):
@@ -100,6 +126,12 @@ def main():
         print(f"\n{town}: {json.dumps(ts)}", flush=True)
         ent, st = online_maps.online_mad(tr["entropy"], tr["pos"], tr["drive"],
                                          window_m=a.window_m, z=a.z)
+        expert_n = int((tr["driver"] == 1).sum())
+        if expert_n:
+            before = len(ent)
+            ent = c0_only(ent, tr)
+            print(f"  expert-driven samples: {expert_n} ({expert_n / len(tr['driver']):.1%}); "
+                  f"entropy nodes {before} -> {len(ent)} placed on c0's own frames", flush=True)
         n = len(ent)
         print(f"  online MAD: {n} nodes, window {st['window_samples']} samples = "
               f"{st['window_m']:.1f} m at {st['sample_spacing_m']:.3f} m spacing, "
@@ -108,6 +140,7 @@ def main():
             z = np.load(os.path.join(a.out, f"sgm_pairs_{town}.npz"))
             cut, keep, sst = im.sgm_match(z["cand"], z["pairs"], z["q"], z["xy"], z["yaw"],
                                           count=n, gate_m=None, iters=30)
+            keep = c0_only(keep, tr)
             rows.append(save(a.out, "sgm_matched", town, tr, keep,
                              {**sst, "cand_m": float(z["cand_m"]), "pair_m": float(z["pair_m"])}))
             continue
@@ -117,9 +150,11 @@ def main():
                           "degenerate_window_frac": st["degenerate_window_frac"],
                           "signal": "entropy of the driving policy (act_with_stats)",
                           "trace": ts}))
-        spacing, uni = im.match_uniform(tr, n)
+        view, k = c0_view(tr)
+        spacing, uni = im.match_uniform(view, n)
+        uni = k[uni]
         rows.append(save(a.out, "uniform", town, tr, uni, {"spacing_m": round(spacing, 3)}))
-        rnd = im.place_random(tr, n, seed=a.seed)
+        rnd = k[im.place_random(view, n, seed=a.seed)]
         rows.append(save(a.out, "random", town, tr, rnd, {"seed": a.seed}))
     name = f"maps_summary{'_sgm' if a.sgm else ''}_{'_'.join(a.towns)}.json"   # per town set
     with open(os.path.join(a.out, name), "w") as fh:

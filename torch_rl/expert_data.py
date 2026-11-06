@@ -84,10 +84,13 @@ def load_episode(path):
 
 
 def episode_paths(root, towns):
-    """All episode files under <root>/<town>/ for the given towns, sorted."""
+    """All episode files under <root>/<town>/ for the given towns, sorted. `root`
+    may join several roots with os.pathsep (il_data:il_data_cover), each read
+    with the same per-town layout."""
     out = []
-    for t in towns:
-        out += glob.glob(os.path.join(root, t, "ep_*.npz"))
+    for r in (x for x in str(root).split(os.pathsep) if x):
+        for t in towns:
+            out += glob.glob(os.path.join(r, t, "ep_*.npz"))
     return sorted(p for p in out if not p.endswith(".tmp.npz"))
 
 

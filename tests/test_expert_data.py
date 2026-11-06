@@ -153,6 +153,20 @@ def test_episode_paths_are_sorted_per_town(tmp_path):
     assert got == sorted(got) and len(got) == 3
 
 
+def test_episode_paths_join_several_roots(tmp_path):
+    """IL_PRELOAD_ROOT=il_data:il_data_cover (2026-11-06): the fine-tune preloads
+    the M1/DAgger episodes AND the coverage recording, one os.pathsep-joined
+    string, every root read with the same per-town layout."""
+    a, b = tmp_path / "il_data", tmp_path / "il_data_cover"
+    for root, seed in ((a, 1), (a, 2), (b, 500000)):
+        os.makedirs(root / "Town05", exist_ok=True)
+        save_episode(str(root / "Town05" / f"ep_{seed}.npz"), _ep(T=2, seed=seed))
+    got = episode_paths(f"{a}{os.pathsep}{b}", ["Town05"])
+    assert got == sorted([str(a / "Town05" / "ep_1.npz"), str(a / "Town05" / "ep_2.npz"),
+                          str(b / "Town05" / "ep_500000.npz")])
+    assert episode_paths(str(b), ["Town05"]) == [str(b / "Town05" / "ep_500000.npz")]
+
+
 def test_split_is_deterministic_and_by_episode():
     paths = [f"/x/ep_{i}.npz" for i in range(40)]
     a = split_by_episode(paths, 0.05, seed=0)

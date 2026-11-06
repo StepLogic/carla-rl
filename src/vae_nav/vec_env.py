@@ -53,6 +53,8 @@ class ThreadedVecEnv:
         # forever -- the env is unrecoverable and only a rebuild restores it.
         self._env_fns = list(env_fns)
         self.envs = list(self._pool.map(lambda f: f(), env_fns))
+        # Envs replaced by a rebuild, KEPT referenced (see _safe_reset).
+        self._dead_envs = []
 
         self.observation_space = self.envs[0].observation_space
         self.action_space = self.envs[0].action_space
@@ -78,6 +80,13 @@ class ThreadedVecEnv:
             self.envs[i].close()
         except Exception:  # noqa: BLE001
             pass
+        # KEEP THE DEAD ENV REFERENCED (2026-11-05, fine-tune job 463476). Dropped,
+        # its CARLA client and actors were garbage-collected a minute after the
+        # rebuild; a destructor's call to the replaced server timed out, and a C++
+        # exception inside a destructor is std::terminate ("terminate called after
+        # throwing an instance of 'carla::client::TimeoutException'", rc 134) --
+        # uncatchable, and it took all four towns with it.
+        self._dead_envs.append(self.envs[i])
         self.envs[i] = self._env_fns[i]()
         out = self.envs[i].reset()
         return out if isinstance(out, tuple) else (out, {})

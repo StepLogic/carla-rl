@@ -121,7 +121,7 @@ def main():
         rows.append(save(a.out, "uniform", town, tr, uni, {"spacing_m": round(spacing, 3)}))
         rnd = im.place_random(tr, n, seed=a.seed)
         rows.append(save(a.out, "random", town, tr, rnd, {"seed": a.seed}))
-    name = "maps_summary_sgm.json" if a.sgm else "maps_summary.json"
+    name = f"maps_summary{'_sgm' if a.sgm else ''}_{'_'.join(a.towns)}.json"   # per town set
     with open(os.path.join(a.out, name), "w") as fh:
         json.dump(rows, fh, indent=1)
 

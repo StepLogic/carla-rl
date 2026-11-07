@@ -185,6 +185,17 @@ def test_fast_through_2m_does_not_count():
     assert not r["reached_2m"]
 
 
+def test_max_speed_zero_means_no_speed_condition():
+    """User 2026-11-07, "drop the 5km/h rule": GOAL_ARRIVAL_MAX_SPEED=0, which the
+    reward already reads as OFF (gated_reward._stopped_enough). The eval's 2 m
+    scoring must agree: a fast pass through 2 m counts, not only a standstill."""
+    tr = cb.EpisodeTracker(goal_pos=(10.0, 0.0), start_pos=(0.0, 0.0), max_speed=0.0)
+    tr.step((8.5, 0.0), 30.0)      # inside 2 m at 30 km/h
+    tr.step((12.5, 0.0), 30.0)
+    r = tr.finish(reached=False, t_end=2, route_m=10.0)
+    assert r["reached_2m"] and r["reach2_step"] == 1
+
+
 def test_a_fault_on_the_reaching_step_is_a_failure():
     tr = cb.EpisodeTracker(goal_pos=(10.0, 0.0), start_pos=(0.0, 0.0), max_speed=10.0)
     tr.step((8.5, 0.0), 5.0)       # step 1 is both inside-2m-slow AND the fatal step

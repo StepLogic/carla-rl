@@ -122,6 +122,50 @@ def test_the_converter_writes_c0s_split_and_the_metric_spacing(tmp_path):
     assert abs(s["metric_waypoint_spacing_m"] - 0.4) < 1e-6
 
 
+def test_encode_traj_gives_the_same_files_write_traj_writes(tmp_path):
+    from vae_nav.vint_data import encode_traj
+    frames, xy, yaw = episode_to_traj(*_shard(5, "reached"))
+    files = dict(encode_traj(frames, xy, yaw))
+    assert sorted(files) == sorted([f"{k}.jpg" for k in range(6)] + ["traj_data.pkl"])
+    write_traj(str(tmp_path / "t"), frames, xy, yaw)
+    for name, data in files.items():
+        assert (tmp_path / "t" / name).read_bytes() == data
+
+
+def test_the_converter_can_write_one_tar_instead_of_small_files(tmp_path):
+    """CephFS reads ~85 ms per small file, so 290k JPEGs could not be tarred
+    afterwards in useful time: --tar streams the same layout into one file."""
+    import json
+    import subprocess
+    import tarfile
+    paths = []
+    for seed, end, T in ((100000, "reached", 40), (100001, "off_road", 60)):
+        frames, pos, _ = _shard(T, end)
+        p = tmp_path / f"ep_{seed}.npz"
+        np.savez(p, frames=frames, pos=pos, end=np.array(end), town=np.array("Town01"),
+                 seed=np.array(seed), mode=np.array(1, np.int8))
+        paths.append(str(p))
+    split = tmp_path / "bc_split.json"
+    split.write_text(json.dumps({"train": paths, "val": paths[:1]}))
+    tar = tmp_path / "carla_expert.tar"
+    r = subprocess.run([sys.executable, os.path.join(ROOT, "scripts", "convert_il_to_vint.py"),
+                        "--split", str(split), "--tar", str(tar), "--workers", "2"],
+                       capture_output=True, text=True,
+                       env={**os.environ, "CUDA_VISIBLE_DEVICES": ""})
+    assert r.returncode == 0, r.stderr
+    with tarfile.open(tar) as tf:
+        names = set(tf.getnames())
+        assert "carla_expert/Town01_100001/40.jpg" in names
+        assert "carla_expert/Town01_100001/41.jpg" not in names      # 61 frames - 20 trimmed
+        assert "carla_expert/Town01_100000/traj_data.pkl" in names
+        assert tf.extractfile("splits/carla_expert/train/traj_names.txt").read().split() == [
+            b"Town01_100000", b"Town01_100001"]
+        assert tf.extractfile("splits/carla_expert/test/traj_names.txt").read().split() == [
+            b"Town01_100000"]
+        s = json.loads(tf.extractfile("carla_expert/summary.json").read())
+    assert abs(s["metric_waypoint_spacing_m"] - 0.4) < 1e-6
+
+
 def test_frames_and_positions_must_agree():
     frames, pos, end = _shard(5, "reached")
     with pytest.raises(ValueError):

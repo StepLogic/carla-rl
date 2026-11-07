@@ -85,13 +85,25 @@ def episode_to_traj(frames, pos, end, trim_frames=20, min_step_m=0.3):
     return frames[:keep], xy[:keep], yaw[:keep]
 
 
-def write_traj(folder, frames, xy, yaw, quality=95):
-    """0.jpg .. N.jpg and traj_data.pkl, as ViNT's ViNT_Dataset reads them."""
+def encode_traj(frames, xy, yaw, quality=95):
+    """[(file name, bytes)]: 0.jpg .. N.jpg and traj_data.pkl, as ViNT's
+    ViNT_Dataset reads them, encoded in memory (the --tar path never writes a
+    small file to the shared filesystem)."""
+    import io
     from PIL import Image
-    os.makedirs(folder, exist_ok=True)
+    out = []
     for k, f in enumerate(frames):
-        Image.fromarray(np.asarray(f, np.uint8)).save(os.path.join(folder, f"{k}.jpg"),
-                                                      quality=int(quality))
-    with open(os.path.join(folder, "traj_data.pkl"), "wb") as fh:
-        pickle.dump({"position": np.asarray(xy, np.float32),
-                     "yaw": np.asarray(yaw, np.float32)}, fh)
+        buf = io.BytesIO()
+        Image.fromarray(np.asarray(f, np.uint8)).save(buf, format="JPEG", quality=int(quality))
+        out.append((f"{k}.jpg", buf.getvalue()))
+    out.append(("traj_data.pkl", pickle.dumps({"position": np.asarray(xy, np.float32),
+                                               "yaw": np.asarray(yaw, np.float32)})))
+    return out
+
+
+def write_traj(folder, frames, xy, yaw, quality=95):
+    """The files of encode_traj, written into `folder`."""
+    os.makedirs(folder, exist_ok=True)
+    for name, data in encode_traj(frames, xy, yaw, quality=quality):
+        with open(os.path.join(folder, name), "wb") as fh:
+            fh.write(data)

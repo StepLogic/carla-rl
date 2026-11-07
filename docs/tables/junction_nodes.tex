@@ -1,28 +1,18 @@
-% Map nodes inside a junction (CARLA is_junction at each node position).
+% Key nodes inside a junction (CARLA is_junction at each node position).
 % Source: scripts/junction_node_count.py on checkpoints/maps_expert_jx_img (2026-11-07).
-% Requires \usepackage{booktabs} and \usepackage{multirow}.
+% Requires \usepackage{booktabs}.
 \begin{table}[t]
 \centering
-\caption{Map nodes inside a junction. Baseline: share of trace frames (0.5\,m apart) inside a junction.}
+\caption{Key nodes inside a junction. Trace: all trace frames, 0.5\,m apart.}
 \label{tab:junction_nodes}
-\begin{tabular}{llrr}
+\begin{tabular}{lrr}
 \toprule
- & & Town02 & Town03 \\
+Placement & Town02 & Town03 \\
 \midrule
-Baseline & Trace frames & 24.4\% & 39.7\% \\
-\midrule
-\multirow{3}{*}{Key nodes}
- & Entropy & 84/255 (32.9\%) & 552/1104 (50.0\%) \\
- & Uniform & 41/255 (16.1\%) & 376/1104 (34.1\%) \\
- & Random  & 52/255 (20.4\%) & 430/1104 (38.9\%) \\
-\midrule
-\multirow{2}{*}{Gap nodes}
- & Entropy & 36/209 (17.2\%) & 194/387 (50.1\%) \\
- & Uniform & 63/156 (40.4\%) & 258/390 (66.2\%) \\
-\midrule
-\multirow{2}{*}{All nodes}
- & Entropy & 120/464 (25.9\%) & 746/1491 (50.0\%) \\
- & Uniform & 104/411 (25.3\%) & 634/1494 (42.4\%) \\
+Trace   & 24.4\% & 39.7\% \\
+Entropy & 84/255 (32.9\%) & 552/1104 (50.0\%) \\
+Uniform & 41/255 (16.1\%) & 376/1104 (34.1\%) \\
+Random  & 52/255 (20.4\%) & 430/1104 (38.9\%) \\
 \bottomrule
 \end{tabular}
 \end{table}

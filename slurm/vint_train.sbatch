@@ -6,6 +6,8 @@
 #   cd ~/carla-rl-vint && sbatch --partition=gpu --nodelist=<node> --gres=gpu:1 \
 #     --cpus-per-task=16 --mem=64gb --time=12:00:00 --job-name=vint_train \
 #     --output=logs/%x_%j.log slurm/vint_train.sbatch
+# Lane-centre labels: DATA_TAR=$HOME/carla-rl/checkpoints/vint_data/carla_expert_lc.tar
+#   CONFIG=$HOME/carla-rl-vint/scripts/vint/vint_carla_lanecentre.yaml
 #
 # MODE=probe runs scripts/vint/probe_vint_setup.py (PROBE_TRAJ trajectories) instead
 # of training. The data comes as ONE tar (checkpoints/vint_data/carla_expert.tar) and
@@ -32,6 +34,9 @@ echo "=== data unpacked in $(( $(date +%s) - t0 )) s: $(du -sh "$LOCAL" | cut -f
 
 # ViNT's goal bound is wrong for waypoint_spacing > 1 (scripts/vint/patch_vint_dataset.py).
 $PY "$REPO/scripts/vint/patch_vint_dataset.py" "$TRAIN/vint_train/data/vint_dataset.py" || exit 1
+# Lane-centre labels when the tar carries them (carla_expert_lc.tar,
+# scripts/vint/patch_vint_cf_labels.py); a tar without them is labelled as before.
+$PY "$REPO/scripts/vint/patch_vint_cf_labels.py" "$TRAIN/vint_train/data/vint_dataset.py" || exit 1
 
 # ViNT reads metric_waypoint_spacing for the dataset from data_config.yaml.
 SPACING=$($PY -c "import json; print(json.load(open('$LOCAL/carla_expert/summary.json'))['metric_waypoint_spacing_m'])")

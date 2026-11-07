@@ -1311,8 +1311,8 @@ def run_record(env, agent, pxr, server, out_root):
     import torch
     from torch_rl.expert_data import save_episode
     from torch_rl.expert_record import (assert_recordable_town, effective_sigma,
-                                        episode_plan, gate_report, keep_episode,
-                                        record_step)
+                                        episode_plan, episode_returns, expert_bias,
+                                        gate_report, keep_episode, record_step)
     from vae_nav.expert_oracle import BasicAgentExpert
     from vae_nav.expert_route import explore_route
     from vae_nav.gated_reward import GatedReward
@@ -1330,6 +1330,15 @@ def run_record(env, agent, pxr, server, out_root):
     root = os.path.join(EXPERT_RECORD_ROOT, town)
     rng = np.random.default_rng(EXPERT_SEED0)
     throttle_sigma, burst = coverage_perturbation(EXPERT_RECORD_DRY)
+    # EXPERT_BIAS (user 2026-11-06, "see if the expert behavior scores the best
+    # reward"): a constant offset on every executed expert action, dry runs too;
+    # every episode logs its return under the env's reward (RECORD_GAMMA: the
+    # fine-tune's goal discount) so biased and unbiased experts compare.
+    bias = expert_bias()
+    RECORD_GAMMA = 0.99
+    if bias is not None:
+        print(f"  EXPERT BIAS: steer {bias[0]:+g}, throttle {bias[1]:+g} (env units) on "
+              f"every executed action; labels clean", flush=True)
     if throttle_sigma > 0 or burst.prob > 0:
         from torch_rl.expert_record import SIGMAS as _steer_sigmas
         print(f"  COVERAGE: steering sigmas {_steer_sigmas} | throttle sigma "
@@ -1399,7 +1408,7 @@ def run_record(env, agent, pxr, server, out_root):
                 a_pol = to_env(np.asarray(a_act, np.float32), box)
             a_exec, a_label = record_step(EXPERT_DRIVER, a_pol, a_exp, sigma,
                                           rng, low, high,
-                                          throttle_sigma=throttle_sigma, burst=burst)
+                                          throttle_sigma=throttle_sigma, burst=burst, bias=bias)
             obs, r, term, trunc, info = env.step(a_exec)
             pos = np.asarray(info.get("hero_pos", prev), np.float64)[:2]
             path_m += float(np.linalg.norm(pos - prev))
@@ -1430,8 +1439,10 @@ def run_record(env, agent, pxr, server, out_root):
             fin = tracker.finish(reached=end == "reached", t_end=n, route_m=None)
             approach = {k: fin[k] for k in ("closest_m", "speed_at_closest_kmh",
                                             "entry_speed_kmh", "min_speed_inside_kmh")}
+        ret, ret_d = episode_returns(rec["reward"], RECORD_GAMMA)
         episodes.append({"seed": seed, "mode": mode, "sigma": sigma, "end": end,
-                         "path_m": round(path_m, 2), "steps": n, **approach})
+                         "path_m": round(path_m, 2), "steps": n,
+                         "return": round(ret, 3), "return_disc": round(ret_d, 3), **approach})
         if keep_episode(n) and not EXPERT_RECORD_DRY:
             save_episode(os.path.join(root, f"ep_{seed}.npz"), {
                 "frames": np.stack(rec["frames"]), "binoc": np.stack(rec["binoc"]),
@@ -1446,7 +1457,7 @@ def run_record(env, agent, pxr, server, out_root):
             kept += n
         print(f"[Record {k + 1}/{EXPERT_RECORD_EPISODES}] seed={seed} "
               f"{'goal' if mode == 1 else 'explore'} sigma={sigma:g} end={end} "
-              f"steps={n} driven={path_m:.1f} m"
+              f"steps={n} driven={path_m:.1f} m return={ret:.2f} disc={ret_d:.2f}"
               + (f" closest={approach['closest_m']} m at {approach['speed_at_closest_kmh']} km/h"
                  f" entry={approach['entry_speed_kmh']}" if approach else "")
               + f" | total {total} steps", flush=True)
@@ -1459,6 +1470,11 @@ def run_record(env, agent, pxr, server, out_root):
     os.makedirs(out_root, exist_ok=True)
     with open(os.path.join(out_root, "record_summary.json"), "w") as fh:
         json.dump(summary, fh, indent=1)
+    for m_, name_ in ((1, "goal"), (0, "explore")):
+        rs_ = [e["return"] for e in episodes if e["mode"] == m_]
+        if rs_:
+            print(f"[RecordReturn] {name_}: n={len(rs_)} mean return {np.mean(rs_):.2f} "
+                  f"(se {np.std(rs_) / max(1.0, np.sqrt(len(rs_) - 1)):.2f})", flush=True)
     print("[RecordDone] " + json.dumps({"town": town, "steps": total, "kept_steps": kept,
                                         "gate": gate}), flush=True)
     env.close()

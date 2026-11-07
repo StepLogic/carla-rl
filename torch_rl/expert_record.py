@@ -95,16 +95,39 @@ class BurstPerturber:
         return np.clip(np.asarray(a, np.float32) + self.offset, low, high).astype(np.float32)
 
 
+def expert_bias():
+    """EXPERT_BIAS="steer,throttle" (env units; user 2026-11-06, "see if the expert
+    behavior scores the best reward"): a constant offset added to every EXECUTED
+    expert action, or None when unset. The label stays the expert's own action."""
+    raw = os.environ.get("EXPERT_BIAS", "").strip()
+    if not raw:
+        return None
+    vals = np.array([float(x) for x in raw.split(",")], np.float32)
+    if vals.shape != (2,):
+        raise ValueError(f"EXPERT_BIAS={raw!r}: give two values, 'steer,throttle'")
+    return vals
+
+
+def episode_returns(rewards, gamma):
+    """(sum, discounted sum) of one episode's rewards."""
+    r = np.asarray(rewards, np.float64)
+    if r.size == 0:
+        return 0.0, 0.0
+    return float(r.sum()), float(np.sum(r * float(gamma) ** np.arange(r.size)))
+
+
 def record_step(driver, a_policy, a_expert, sigma, rng, low, high, throttle_sigma=0.0,
-                burst=None):
+                burst=None, bias=None):
     """(a_exec, a_label) for one step. The label is always the expert's action;
     what is executed is the noisy expert ("expert") -- DART noise, then any
-    coverage burst -- or the policy ("policy")."""
+    coverage burst, then any constant EXPERT_BIAS -- or the policy ("policy")."""
     a_label = np.asarray(a_expert, np.float32)
     if driver == "expert":
         a_exec = dart_action(a_label, sigma, rng, low, high, throttle_sigma=throttle_sigma)
         if burst is not None:
             a_exec = burst.apply(a_exec, rng, low, high)
+        if bias is not None:
+            a_exec = np.clip(np.asarray(a_exec, np.float32) + bias, low, high).astype(np.float32)
         return a_exec, a_label
     if driver == "policy":
         return np.asarray(a_policy, np.float32), a_label

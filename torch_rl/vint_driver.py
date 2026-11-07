@@ -141,8 +141,19 @@ class ViNTDriver:
                 for j in range(self.context_size, -1, -1)]
 
     def act_env(self, cur_frame, goal_frame, speed_kmh):
-        self.frames.append(np.asarray(cur_frame))
+        """One step toward `goal_frame`: push the frame, ask ViNT, steer."""
+        self.push(cur_frame)
         dist_steps, wps = self.policy(self.context(), np.asarray(goal_frame))
+        return self.control(dist_steps, wps, speed_kmh)
+
+    def push(self, cur_frame):
+        """The current camera frame joins the context (once per env step)."""
+        self.frames.append(np.asarray(cur_frame))
+
+    def control(self, dist_steps, wps, speed_kmh):
+        """ViNT's prediction (goal distance in steps, waypoints in metres) -> env
+        action, through the expert's controller. The topological navigator calls
+        this with the prediction for the node it chose."""
         dist_s = max(0.0, float(dist_steps)) * self.step_s
         speed = max(0.0, float(speed_kmh))
         target = pick_waypoint(wps, self.base_lookahead_m + self.lookahead_s * speed / 3.6)
@@ -164,15 +175,86 @@ class ViNTDriver:
         return action
 
 
+class VintPolicy:
+    """ViNT inference. Distances stay in ViNT steps (time); waypoints come back in
+    metres. Frames are either camera frames (any size; ViNT's crop is applied) or
+    already-cropped (H, W, 3) uint8 images at ViNT's input size -- the form the
+    topological map stores its nodes in, so thousands score cheaply."""
+
+    def __init__(self, model, meta, device="cuda", crop_fn=None, chunk=256):
+        import torch
+        from torchvision import transforms
+        self.torch, self.model, self.meta, self.device = torch, model, meta, device
+        self.size = tuple(int(v) for v in meta["image_size"])          # (W, H)
+        self.scale = float(meta["metric_step_m"]) * int(meta["stride"])
+        self.chunk = int(chunk)
+        self.normalize = transforms.Normalize(IMAGENET_MEAN, IMAGENET_STD)
+        if crop_fn is None:
+            from vint_train.data.data_utils import resize_and_aspect_crop
+            crop_fn = lambda img: resize_and_aspect_crop(img, self.size)  # noqa: E731
+        self.crop_fn = crop_fn
+
+    # ---------------------------------------------------------------- images --
+    def crop85(self, frame):
+        """ViNT's input crop as (H, W, 3) uint8, before normalisation (lossless:
+        ViNT's crop is a PIL resize followed by to_tensor's /255)."""
+        from PIL import Image
+        a = np.asarray(frame, np.uint8)
+        if a.shape[:2] == (self.size[1], self.size[0]):
+            return a
+        t = self.crop_fn(Image.fromarray(a))
+        return np.round(t.permute(1, 2, 0).numpy() * 255.0).astype(np.uint8)
+
+    def _tensor(self, crops):
+        """(B, H, W, 3) uint8 crops -> normalised (B, 3, H, W) float on the device."""
+        t = self.torch.from_numpy(np.ascontiguousarray(crops)).permute(0, 3, 1, 2).float() / 255.0
+        return self.normalize(t).to(self.device)
+
+    def _obs(self, ctx):
+        """Context frames -> (1, 3 * (context + 1), H, W)."""
+        crops = np.stack([self.crop85(f) for f in ctx])
+        return self._tensor(crops).reshape(1, -1, self.size[1], self.size[0])
+
+    # ------------------------------------------------------------- inference --
+    def __call__(self, ctx, goal):
+        d, w = self.dists_to_goals(ctx, self.crop85(goal)[None])
+        return float(d[0]), w[0]
+
+    def dists_to_goals(self, ctx, goals):
+        """The car's context against N goal images -> (dists (N,), waypoints (N, L, 2) m)."""
+        with self.torch.no_grad():
+            obs = self._obs(ctx)
+            goals = np.asarray(goals, np.uint8)
+            ds, ws = [], []
+            for i in range(0, len(goals), self.chunk):
+                g = self._tensor(np.stack([self.crop85(x) for x in goals[i:i + self.chunk]]))
+                dist, act = self.model(obs.expand(len(g), -1, -1, -1), g)
+                ds.append(dist.reshape(-1).float().cpu().numpy())
+                ws.append(act[:, :, :2].float().cpu().numpy() * self.scale)
+        return np.concatenate(ds), np.concatenate(ws)
+
+    def dists_from_contexts(self, ctxs, goal):
+        """N contexts (N, context + 1, H, W, 3) crops against one goal -> dists (N,)."""
+        with self.torch.no_grad():
+            g = self._tensor(self.crop85(goal)[None])
+            ctxs = np.asarray(ctxs, np.uint8)
+            n, c = ctxs.shape[:2]
+            ds = []
+            for i in range(0, n, self.chunk):
+                part = ctxs[i:i + self.chunk]
+                obs = self._tensor(part.reshape(-1, *part.shape[2:]))
+                obs = obs.reshape(len(part), c * 3, self.size[1], self.size[0])
+                dist, _ = self.model(obs, g.expand(len(part), -1, -1, -1))
+                ds.append(dist.reshape(-1).float().cpu().numpy())
+        return np.concatenate(ds)
+
+
 def load_vint_policy(ckpt_dir, device="cuda"):
     """EVAL_FROM=<dir> holding model.pth (a ViNT training checkpoint, {"model":
     ViNT, ...}) and vint.json (architecture, image_size, stride, metric_step_m,
-    as trained). -> (policy for ViNTDriver, meta). Needs vint_train and
-    efficientnet_pytorch on the path (slurm/vint_eval_pair.sh)."""
+    as trained). -> (VintPolicy, meta). Needs vint_train and efficientnet_pytorch
+    on the path (slurm/vint_eval_pair.sh, slurm/vint_bench_map.sh)."""
     import torch
-    from PIL import Image
-    from torchvision import transforms
-    from vint_train.data.data_utils import resize_and_aspect_crop
     from vint_train.models.vint.vint import ViNT
 
     with open(os.path.join(ckpt_dir, "vint.json")) as fh:
@@ -188,19 +270,4 @@ def load_vint_policy(ckpt_dir, device="cuda"):
     src = getattr(src, "module", src)
     model.load_state_dict(src.state_dict(), strict=True)
     model.to(device).eval()
-    norm = transforms.Normalize(IMAGENET_MEAN, IMAGENET_STD)
-    size = tuple(int(v) for v in meta["image_size"])
-    scale = float(meta["metric_step_m"]) * int(meta["stride"])
-
-    def prep(frame):
-        return norm(resize_and_aspect_crop(Image.fromarray(np.asarray(frame, np.uint8)), size))
-
-    @torch.no_grad()
-    def policy(ctx, goal):
-        obs = torch.cat([prep(f) for f in ctx], dim=0)[None].to(device)
-        g = prep(goal)[None].to(device)
-        dist, act = model(obs, g)
-        # distance stays in ViNT steps (time); waypoints become metres
-        return float(dist.reshape(-1)[0]), act[0, :, :2].float().cpu().numpy() * scale
-
-    return policy, meta
+    return VintPolicy(model, meta, device=device), meta

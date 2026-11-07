@@ -72,6 +72,10 @@ def main():
                          "heading-aligned (90 deg): image chooses, pose only rules out far lookalikes")
     ap.add_argument("--gap-m", type=float, default=8.0)
     ap.add_argument("--max-edge-m", type=float, default=25.0)
+    ap.add_argument("--edge-cost", choices=("unit", "metres"), default="unit",
+                    help="unit (user 2026-11-07: 'each edge cost should be uniform', as the "
+                         "Habitat peer's maps): every edge costs 1, the planner minimises hops; "
+                         "metres: driven metres, never below the straight-line hop")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--batch", type=int, default=128)
     a = ap.parse_args()
@@ -195,6 +199,8 @@ def main():
         n_img = len(edges)
         for e, w in gd.edges.items():
             edges[e] = min(edges.get(e, np.inf), w)
+        if a.edge_cost == "unit":
+            edges = {e: 1.0 for e in edges}
         gnodes = [{"pos": (float(pos[s][0]), float(pos[s][1])), "yaw": float(yaw[s]),
                    "idx": int(S[s])} for s in nodes]
         meta = {"placement": name, "town": a.town, "trace": a.trace, "image_rules": True,
@@ -203,7 +209,8 @@ def main():
                 "key_nodes": len(key), "image_gap_nodes": img_gap, "metric_gap_nodes": met_gap,
                 "gap_m": a.gap_m, "edges_rejected_turn": rej_turn, "edges_rejected_length": rej_len,
                 "max_edge_m": a.max_edge_m, "cand_m": a.cand_m,
-                "edges_image_transition": n_img, "edges_drive": len(gd.edges)}
+                "edges_image_transition": n_img, "edges_drive": len(gd.edges),
+                "edge_cost": a.edge_cost}
         g = im.Graph(gnodes, {k: float(v) for k, v in edges.items()}, meta)
         d = os.path.join(a.out, name); os.makedirs(d, exist_ok=True)
         g.save(os.path.join(d, f"{a.town}.json"))

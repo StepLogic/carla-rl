@@ -136,18 +136,26 @@ def stop_cut(act_label, speed, run=STOP_RUN, min_kmh=STOP_MIN_KMH):
     return int(cand[0]) if len(cand) else T
 
 
-def fill_buffer(buf, paths, which="label", env_id=0):
+def fill_buffer(buf, paths, which="label", env_id=0, transform=None):
     """Load episodes into a DeviceEpisodeBuffer exactly as the trainer would
     have added them. `which`: "label" (cloning) or "exec" (replay). Returns the
     number of transitions added; empty episodes are skipped. For cloning, an
     episode is cut before a stop-forever label tail (stop_cut) and the cut
-    episode counts as truncated; replay keeps every executed step."""
+    episode counts as truncated; replay keeps every executed step.
+
+    `transform` (optional, offline diagnostics): episode -> episode, or None to
+    leave the episode out, applied to each loaded episode before anything else
+    (torch_rl.slope_diag)."""
     if which not in ("label", "exec"):
         raise ValueError(f"which must be 'label' or 'exec', got {which!r}")
     key = "act_label" if which == "label" else "act_exec"
     added = 0
     for path in paths:
         ep = load_episode(path)
+        if transform is not None:
+            ep = transform(ep)
+            if ep is None:
+                continue
         T = len(ep["act_exec"])
         cut = False
         if which == "label":

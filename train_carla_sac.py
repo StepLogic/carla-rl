@@ -2302,12 +2302,19 @@ def main():
     print(f"  binocular (FROZEN, precomputed in the env): {binoc_dim}-d -> GRU "
           f"via core_state_cols[{cfg.core_state_cols[0]}..{cfg.core_state_cols[-1]}]",
           flush=True)
-    print(f"  state block: mode bit ONLY at index {cfg.mode_index} "
-          f"(no steer/throttle/speed) | critic view = the FULL state block "
-          f"({len(cfg.goal_cols)} cols: mode + binoc), same as the actor", flush=True)
+    _parts = (["mode bit"] + (["speed"] if pxr.SPEED_OBS else [])
+              + (["goal distance + known flag (PRIV_OBS, critic only)"] if pxr.PRIV_OBS else [])
+              + ["binoc"])
+    _actor_n = (len(cfg.actor_state_cols) if cfg.actor_state_cols is not None
+                else int(cfg.state_dim))
+    print(f"  state block: {' | '.join(_parts)} (mode at index {cfg.mode_index}; "
+          f"no steer/throttle) | critic view = {len(cfg.goal_cols)} cols, the full block | "
+          f"actor view = {_actor_n} cols"
+          + (" (the critic only columns skipped, and by the GRU)"
+             if cfg.actor_state_cols is not None else ", the full block"), flush=True)
     print(f"  weights: {enc.describe()}", flush=True)
     print(f"  row={row_dim} (frame {pxr.MONO_PIX} + mode 1 + "
-          f"binoc {binoc_dim}; NO prev action)"
+          f"{pxr.n_extra_state()} speed/priv + binoc {binoc_dim}; NO prev action)"
           f" | replay {CAPACITY} rows = {buf.nbytes / 2 ** 30:.1f} GiB on "
           f"{buf.store_device} (frames {'uint8' if REPLAY_U8 else 'fp16'}), "
           f"batches delivered to {buf.device}",

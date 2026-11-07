@@ -174,6 +174,15 @@ def test_the_trainer_builds_the_actor_view_and_live_rows_carry_the_distance():
     assert "priv_m=_priv_m(o, i)" in s
 
 
+def test_the_banner_states_both_views():
+    """Run K's log said the critic's 3140 columns were 'same as the actor' --
+    false under PRIV_OBS. The banner must name the actor's view separately."""
+    s = open(os.path.join(ROOT, "train_carla_sac.py")).read()
+    assert "same as the actor" not in s
+    assert "actor view = " in s and "critic view = " in s
+    assert "critic only" in s
+
+
 def test_live_rows_read_the_route_distance_in_goal_mode_only(priv):
     import train_carla_sac as T
     assert T._priv_m({"mode": np.array([1.0], np.float32)}, {"route_remaining_m": 12.5}) == 12.5

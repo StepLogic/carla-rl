@@ -162,8 +162,11 @@ def test_a_preflight_banner_is_printed_before_stepping():
     banner = s[i:j]
     assert "env.action_space" in s or "_box = env.action_space" in s, \
         "the banner must print the SPACE, not the env vars meant to shape it"
+    # "no steer/throttle": the state block carries no action feedback (user
+    # 2026-10-14). It replaced "mode bit ONLY" on 2026-11-07, when the banner
+    # began listing speed (SPEED_OBS) and the critic-only PRIV_OBS columns.
     for want in ("towns=", "seed=", "action box", "checkpoints ->", "reward:",
-                 "HELD OUT", "FROZEN", "mode bit ONLY"):
+                 "HELD OUT", "FROZEN", "no steer/throttle", "actor view = "):
         assert want in banner, want
 
 

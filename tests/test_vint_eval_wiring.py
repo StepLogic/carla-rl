@@ -87,6 +87,23 @@ def test_vint_slows_only_for_the_final_goal_on_a_map():
     assert "agent.final_goal = nav is None or bool(nav.final)" in body[i - 400:i]
 
 
+def test_vint_topomap_is_wired_into_run_eval():
+    """EVAL_VINT_TOPOMAP (user 2026-11-07: "ViNT-native topomap"): run_eval
+    localises and plans per episode with VintTopoEpisode and lets it drive."""
+    import train_carla_sac as m
+    assert m.EVAL_VINT_TOPOMAP == os.environ.get("EVAL_VINT_TOPOMAP", "")
+    body = SRC[SRC.index("\ndef run_eval("):SRC.index("\ndef coverage_perturbation(")]
+    assert "VintTopoEpisode(topo_map, agent.policy)" in body
+    assert "topo.start(*pixel_frames(info, pxr))" in body
+    assert "topo.act(agent, *pixel_frames(info, pxr), _speed_kmh(info))" in body
+    assert '"vint_topo"' in body and "topo.diagnostics(" in body
+    assert '_vinttopo-' in body                     # its own output folder
+
+
+def test_the_vint_topomap_and_the_benchmark_map_are_exclusive():
+    assert ("if EVAL_VINT_TOPOMAP and (EVAL_MAP_DIR or EVAL_POLICY != \"vint\"):" in SRC)
+
+
 def test_vint_may_run_map_evals():
     main_src = SRC[SRC.index("\ndef main():"):]
     i = main_src.index('if EVAL_POLICY == "vint":')

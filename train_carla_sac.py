@@ -198,6 +198,15 @@ EVAL_TRACE = os.environ.get("EVAL_TRACE", "0") == "1"
 # no goal node or no route is recorded end="unroutable" (a failure) without
 # being driven. EVAL_MAP_RESET_HIDDEN=1 resets the GRU at each switch.
 EVAL_MAP_DIR = os.environ.get("EVAL_MAP_DIR", "")
+# EVAL_VINT_TOPOMAP (user 2026-11-07, "ViNT-native topomap"): a directory of
+# <Town>_topomap.npz (scripts/vint/build_topomap.py), ViNT's own topological map
+# of the expert-tour trace. run_eval then localises start and goal and navigates
+# with ViNT's distance head and navigate.py's rule (torch_rl.vint_topomap.
+# VintTopoEpisode); no route -> driven mapless. ViNT only, never with EVAL_MAP_DIR.
+EVAL_VINT_TOPOMAP = os.environ.get("EVAL_VINT_TOPOMAP", "")
+if EVAL_VINT_TOPOMAP and (EVAL_MAP_DIR or EVAL_POLICY != "vint"):
+    raise ValueError("EVAL_VINT_TOPOMAP needs EVAL_POLICY=vint and no EVAL_MAP_DIR: "
+                     "ViNT's own map or the benchmark's, not both")
 # SGM PAIRS (map arm 4): EVAL_SGM_TRACE=<trace dir> reads the goal critic
 # between trace frames instead of driving -- candidates every EVAL_SGM_CAND_M
 # (directional uniform thinning), every aligned (<90 deg) ordered pair within
@@ -1595,8 +1604,18 @@ def run_eval(env, agent, pxr, server, out_root):
     out = os.path.join(out_root, f"eval_{tag}"
                        + _eval_tag_suffix(EVAL_NOISE_SCALE, EVAL_EXPLORE, EVAL_WRONG_GOAL)
                        + (f"_map-{os.path.basename(os.path.normpath(EVAL_MAP_DIR))}"
-                          if EVAL_MAP_DIR else ""))
+                          if EVAL_MAP_DIR else "")
+                       + (f"_vinttopo-{os.path.basename(os.path.normpath(EVAL_VINT_TOPOMAP))}"
+                          if EVAL_VINT_TOPOMAP else ""))
     from vae_nav.carla_benchmark import EpisodeTracker
+    topo_map = None
+    if EVAL_VINT_TOPOMAP:
+        from torch_rl.vint_topomap import VintTopoEpisode, load_topomap
+        topo_map = load_topomap(os.path.join(EVAL_VINT_TOPOMAP, f"{TOWNS[0]}_topomap.npz"))
+        print(f"[ViNTMap] {EVAL_VINT_TOPOMAP} {TOWNS[0]}: {len(topo_map['ctx85'])} nodes, "
+              f"{len(topo_map['edges'])} links | ViNT localises start and goal (images only), "
+              f"navigate.py radius 4 / close 3, the real goal image on the last leg, no "
+              f"route -> mapless", flush=True)
     gmap = map_frames = goal_wrapper = None
     img_scores = img_thr = None
     if EVAL_MAP_DIR:
@@ -1718,6 +1737,10 @@ def run_eval(env, agent, pxr, server, out_root):
         start_poses = _poses(info)
         nav = map_row = None
         leg_steps, replans, replan_log = 0, 0, []
+        topo = None
+        if topo_map is not None:
+            topo = VintTopoEpisode(topo_map, agent.policy)
+            topo.start(*pixel_frames(info, pxr))
         if gmap is not None:
             hp = np.asarray(info.get("hero_pos", (0.0, 0.0)), np.float64)[:2]
             hy = float(info.get("hero_yaw", 0.0) or 0.0)
@@ -1812,8 +1835,12 @@ def run_eval(env, agent, pxr, server, out_root):
                     # EVAL_POLICY=vint: frames in, env action out (vint_driver). On a
                     # map it cruises toward intermediate nodes and approaches only
                     # the real goal (the planner's own state, not privileged).
-                    agent.final_goal = nav is None or bool(nav.final)
-                    a_env = agent.act_env(*pixel_frames(info, pxr), _speed_kmh(info))
+                    if topo is not None:
+                        # EVAL_VINT_TOPOMAP: ViNT's own map and navigate.py rule.
+                        a_env = topo.act(agent, *pixel_frames(info, pxr), _speed_kmh(info))
+                    else:
+                        agent.final_goal = nav is None or bool(nav.final)
+                        a_env = agent.act_env(*pixel_frames(info, pxr), _speed_kmh(info))
                     if VINT_DEBUG and t % VINT_DEBUG_EVERY == 0:
                         lv = agent.last
                         print(f"[ViNT] ep={k} t={t} v={_speed_kmh(info):.1f} "
@@ -1927,6 +1954,11 @@ def run_eval(env, agent, pxr, server, out_root):
                  if ell_eff is not None else float("nan"))
         two = (tracker.finish(reached=reached, t_end=t, route_m=ell)
                if tracker is not None else {"reached_2m": reached, "spl_2m": spl_i})
+        topo_row = None
+        if topo is not None:
+            topo_row = topo.row()
+            if gpos is not None and start_poses.get("start_xy") is not None:
+                topo_row.update(topo.diagnostics(start_poses["start_xy"], gpos))
         rows.append({"episode": k, "seed": seed, "town": TOWNS[0], "end": end,
                      **start_poses,
                      **{key: ep[key] for key in ("bin", "kind", "band") if key in ep},
@@ -1950,6 +1982,7 @@ def run_eval(env, agent, pxr, server, out_root):
                                                                      else round(nav.subgoal_m(pos), 2))}),
                      "end_xy": [round(float(v), 2) for v in np.asarray(pos, np.float64)[:2]],
                      # ViNT's own time-to-goal estimate at the end (EVAL_POLICY=vint)
+                     **({"vint_topo": topo_row} if topo_row is not None else {}),
                      **({"vint_dist_end_s": round(float(agent.last.get("dist_s", float("nan"))), 2)}
                         if getattr(agent, "drives_from_pixels", False) else {}),
                      "end_in_junction": bool(info.get("in_junction", False)),
@@ -1991,6 +2024,9 @@ def run_eval(env, agent, pxr, server, out_root):
                "episodes_file": EVAL_EPISODES_FILE or None,
                "map_dir": EVAL_MAP_DIR or None,
                "unroutable": sum(1 for x in rows if x["end"] == "unroutable"),
+               "vint_topomap": EVAL_VINT_TOPOMAP or None,
+               "vint_topo_fallback": sum(1 for x in rows
+                                         if (x.get("vint_topo") or {}).get("fallback")),
                "map_fallback": sum(1 for x in rows if x.get("map_fallback")),
                "wilson95": [round(centre - half, 3), round(centre + half, 3)],
                "ends": ends, "fault_ends": "crossing/off_road/collision",

@@ -182,6 +182,85 @@ def build_topomap(frames, xy, yaw, policy, *, every=EVERY, context_size=5, strid
             "edges": np.asarray(edges, np.float32).reshape(-1, 3), "summary": summary}
 
 
+def load_topomap(path):
+    """<Town>_topomap.npz from scripts/vint/build_topomap.py -> dict."""
+    with np.load(path) as z:
+        return {k: z[k] for k in z.files}
+
+
+class VintTopoEpisode:
+    """One episode on ViNT's topological map (EVAL_VINT_TOPOMAP).
+
+    start(): images-only localisation with ViNT's distance head -- the start node
+    is the node image ViNT judges nearest ahead of the car's view (the car at rest:
+    its first frame, repeated, is its context), the goal node is the node from
+    whose context ViNT judges the goal image nearest -- then the cheapest route by
+    ViNT's predicted link distances. No route, or start node == goal node: the
+    episode is driven mapless (the benchmark's EVAL_MAP_FALLBACK=mapless rule).
+    act(): navigate.py along the route (the driver cruises: final_goal False),
+    then the REAL goal image for the last leg (final_goal True: approach)."""
+
+    def __init__(self, tmap, policy, radius=RADIUS, close=CLOSE):
+        self.tmap, self.policy = tmap, policy
+        self.node_img = tmap["ctx85"][:, -1]
+        self.n = len(self.node_img)
+        self.radius, self.close = radius, close
+        self.nav = None
+        self.info = {}
+        self.t = 0
+
+    def start(self, cur_frame, goal_frame):
+        ctx_len = self.tmap["ctx85"].shape[1]
+        s_d, _ = self.policy.dists_to_goals([np.asarray(cur_frame)] * ctx_len, self.node_img)
+        g_d = self.policy.dists_from_contexts(self.tmap["ctx85"], np.asarray(goal_frame))
+        s, g = int(np.argmin(s_d)), int(np.argmin(g_d))
+        path = shortest_path(self.n, self.tmap["edges"].tolist(), s, g)
+        fallback = None
+        if path is None:
+            fallback = "no route"
+        elif len(path) == 1:
+            fallback = "same node"
+        else:
+            self.nav = TopoNavigator(path, radius=self.radius, close=self.close)
+        cost = None
+        if path is not None and len(path) > 1:
+            c = {(int(u), int(v)): float(w) for u, v, w in self.tmap["edges"].tolist()}
+            cost = round(sum(c[(a, b)] for a, b in zip(path, path[1:])), 2)
+        self.info = {"start_node": s, "goal_node": g, "start_dist": round(float(s_d[s]), 2),
+                     "goal_dist": round(float(g_d[g]), 2),
+                     "route_nodes": None if path is None else len(path), "route_cost": cost,
+                     "fallback": fallback, "final_at": None}
+        return self.row()
+
+    def act(self, driver, cur_frame, goal_frame, speed_kmh):
+        self.t += 1
+        if self.nav is None or self.nav.final:
+            driver.final_goal = True
+            return driver.act_env(cur_frame, goal_frame, speed_kmh)
+        driver.final_goal = False
+        driver.push(cur_frame)
+        w = self.nav.window()
+        nodes = [self.nav.path[i] for i in w]
+        d, wps = self.policy.dists_to_goals(driver.context(), self.node_img[nodes])
+        tgt = self.nav.step(d)
+        j = tgt - w.start
+        if self.nav.final and self.info["final_at"] is None:
+            self.info["final_at"] = self.t
+        return driver.control(d[j], wps[j], speed_kmh)
+
+    def row(self):
+        return dict(self.info)
+
+    def diagnostics(self, start_xy, goal_xy):
+        """PRIVILEGED, for reporting only (never used to drive): how far the chosen
+        start and goal nodes' trace positions are from the true start and goal."""
+        xy = self.tmap["node_xy"]
+        return {"privileged_start_node_err_m": float(np.linalg.norm(
+                    xy[self.info["start_node"]] - np.asarray(start_xy, np.float64)[:2])),
+                "privileged_goal_node_err_m": float(np.linalg.norm(
+                    xy[self.info["goal_node"]] - np.asarray(goal_xy, np.float64)[:2]))}
+
+
 class TopoNavigator:
     """navigate.py's ViNT rule along a planned path (indices into `path`)."""
 

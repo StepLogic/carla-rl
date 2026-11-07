@@ -30,10 +30,16 @@ export OFF_ROAD_JUNCTION_M=${OFF_ROAD_JUNCTION_M:-3.5} EVAL_MAP_FALLBACK=${EVAL_
 export EVAL_MAP_RESET_HIDDEN=${EVAL_MAP_RESET_HIDDEN:-1} EVAL_MAP_REPLAN=${EVAL_MAP_REPLAN:-3}
 TAG=$(basename "$CKPT")
 RUN=bench_${LABEL}_${ARM}_${TOWN}_${BAND}
+# ARM=vinttopo (user 2026-11-07, "ViNT-native topomap"): ViNT's own map of the
+# expert-tour trace, TOPOMAP=<dir of <Town>_topomap.npz>; no benchmark map.
 if [ "$ARM" = mapless ]; then out=$HOME/carla-rl/checkpoints/$RUN/eval_$TAG; MAPDIR=""
+elif [ "$ARM" = vinttopo ]; then
+  : "${TOPOMAP:?ARM=vinttopo needs TOPOMAP}"
+  export EVAL_VINT_TOPOMAP=$TOPOMAP
+  out=$HOME/carla-rl/checkpoints/$RUN/eval_${TAG}_vinttopo-$(basename "$TOPOMAP"); MAPDIR=""
 else out=$HOME/carla-rl/checkpoints/$RUN/eval_${TAG}_map-${ARM}; MAPDIR=$MAPROOT/$ARM; fi
 if [ -f "$out/eval.json" ]; then echo "=== have $RUN"; exit 0; fi
-echo "=== VINT_BENCH $RUN ckpt=$CKPT port $PORT localise=${EVAL_MAP_LOCALISE:-pose} joint=${EVAL_MAP_JOINT_LOCALISE:-0} reset_hidden=$EVAL_MAP_RESET_HIDDEN replan=$EVAL_MAP_REPLAN fallback=$EVAL_MAP_FALLBACK off_road_junction_m=$OFF_ROAD_JUNCTION_M maps=${MAPDIR:-none} episodes=$EVAL_EPISODES_FILE ==="
+echo "=== VINT_BENCH $RUN ckpt=$CKPT port $PORT topomap=${EVAL_VINT_TOPOMAP:-none} localise=${EVAL_MAP_LOCALISE:-pose} joint=${EVAL_MAP_JOINT_LOCALISE:-0} reset_hidden=$EVAL_MAP_RESET_HIDDEN replan=$EVAL_MAP_REPLAN fallback=$EVAL_MAP_FALLBACK off_road_junction_m=$OFF_ROAD_JUNCTION_M maps=${MAPDIR:-none} episodes=$EVAL_EPISODES_FILE ==="
 EVAL_VIDEO_EVERY=10 REWARD_OVERLAY=slurm/bench_$BAND.env ENV_TOWNS=$TOWN WRONG_GOAL_MODE=0 \
   EVAL_MAP_DIR=$MAPDIR RUN_NAME=$RUN CARLA_PORT=$PORT EVAL_FROM=$CKPT bash slurm/train_sac.sbatch
 echo "=== VINT_BENCH $RUN rc=$? ==="

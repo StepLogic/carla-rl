@@ -8,6 +8,10 @@
 #
 # Then: python3 -I scripts/select_checkpoint.py --out logs/<run>_selected.txt \
 #         checkpoints/<run>_val_Town05/eval_step_* checkpoints/<run>_val_Town01/eval_step_*
+#
+# VAL_TAG (optional, 2026-11-06): results go to checkpoints/<run>_val_<tag>_<Town>
+# instead, so the same checkpoint can be re-scored under another eval rule (an
+# eval half whose eval.json exists is skipped). Unset = the usual name.
 set -u
 cd ~/carla-rl
 : "${BC_RUN:?}" "${TOWN:?}" "${PORT:?}"
@@ -24,7 +28,8 @@ for s in $STEPS; do
       exit 1
     fi
   done
-  OVERLAY=${VAL_OVERLAY:-slurm/il_eval_val.env} CKPT=$c TOWN=$TOWN RUN=${BC_RUN}_val_$TOWN N=40 PORT=$PORT \
+  OVERLAY=${VAL_OVERLAY:-slurm/il_eval_val.env} CKPT=$c TOWN=$TOWN \
+    RUN=${BC_RUN}_val${VAL_TAG:+_$VAL_TAG}_$TOWN N=40 PORT=$PORT \
     bash slurm/il_eval_pair.sh
 done
 echo "=== VAL_SWEEP DONE ==="

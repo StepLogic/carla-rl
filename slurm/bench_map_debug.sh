@@ -12,7 +12,9 @@ cd ~/carla-rl
 C=$HOME/carla-rl/checkpoints/il_bc_c0/step_15000
 MAPROOT=${MAPROOT:-$HOME/carla-rl/checkpoints/maps_expert}
 export BENCH_BASE_OVERLAY=slurm/il_eval_chw.env GOAL_CAM_MATCH=1
-export EVAL_EPISODES_FILE=$HOME/carla-rl/logs/bench_long_episodes.json
+# EPISODES: the fixed episode file (default: the development set). The frozen
+# evaluation uses the fresh, never-seen set (slurm/bench_probe_fresh.sh).
+export EVAL_EPISODES_FILE=${EPISODES:-$HOME/carla-rl/logs/bench_long_episodes.json}
 export EVAL_MAP_FALLBACK=${EVAL_MAP_FALLBACK:-mapless}
 RUN=bench_${LABEL}_${ARM}_${TOWN}_${BAND}
 # ARM=mapless: no map, the true goal image (bench_c0.sh's mapless arm).

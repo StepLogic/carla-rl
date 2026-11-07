@@ -140,3 +140,22 @@ def test_lane_graph_can_require_every_junction_turn():
     _e, lanes_only, _w = lane_graph(G())
     _e, every_turn, _w = lane_graph(G(), junctions=True)
     assert lanes_only == [(0, 1)] and sorted(every_turn) == [(0, 1), (1, 2)]
+
+
+def test_joint_localisation_picks_the_branch_the_goal_is_on():
+    # a fork: straight-on 0->1->2 (east), right turn 0->3->4 (south). The car sits
+    # at the fork already turning right; its nearest aligned node is on the
+    # straight-on branch, but the goal is down the right turn.
+    nodes = [{"pos": (0.0, 0.0), "yaw": 0.0, "idx": 0},
+             {"pos": (5.0, 0.0), "yaw": 0.0, "idx": 1},
+             {"pos": (10.0, 0.0), "yaw": 0.0, "idx": 2},
+             {"pos": (3.0, 3.0), "yaw": np.pi / 3, "idx": 3},
+             {"pos": (4.0, 9.0), "yaw": np.pi / 2, "idx": 4}]
+    edges = {(0, 1): 1.0, (1, 2): 1.0, (0, 3): 1.0, (3, 4): 1.0}
+    g = im.Graph(nodes, edges, {})
+    car, yaw, goal = (4.2, 0.6), np.radians(25), (4.0, 11.0)
+    assert g.nearest(car, yaw) == 1                       # the old rule: straight on
+    assert g.path(1, 4) is None                           # ...and the turn is behind it
+    s, t, route = g.localise(car, yaw, goal)
+    assert (s, t) == (3, 4) and route == [3, 4]
+    assert g.localise((50.0, 50.0), 0.0, goal) == (None, None, None)

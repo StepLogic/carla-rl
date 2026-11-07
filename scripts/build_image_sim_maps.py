@@ -179,7 +179,10 @@ def main():
                     rej_len += 1
                 else:
                     e = (last, k)
-                    edges[e] = min(edges.get(e, np.inf), max(since, 1e-3))
+                    # metres driven between the label SWITCHES undercounts when the
+                    # label skips ahead (job 464473: 315 of 597 uniform edges costed
+                    # < 0.8x the hop); an edge is never cheaper than its own hop
+                    edges[e] = min(edges.get(e, np.inf), max(since, float(np.hypot(*(pa - pb))), 1e-3))
             if k != last:
                 last, since = k, 0.0
         # DRIVE EDGES as well: the trace's own node-to-node visits (image_map.build_graph,

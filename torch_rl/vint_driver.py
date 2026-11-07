@@ -149,6 +149,7 @@ class ViNTDriver:
         throttle = min(acc, self.max_throttle) if acc >= 0.0 else -min(-acc, self.max_brake)
         action = np.clip(np.array([steer, throttle], np.float32), self.low, self.high)
         self.last = {"dist_steps": float(dist_steps), "dist_s": dist_s,
+                     "wps": np.round(np.asarray(wps, np.float64), 2).tolist(),
                      "target": [float(target[0]), float(target[1])],
                      "angle": angle, "target_kmh": float(target_kmh),
                      "steer": float(action[0]), "throttle": float(action[1])}

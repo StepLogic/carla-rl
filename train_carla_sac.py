@@ -90,6 +90,10 @@ def validate_eval_policy(name):
 
 
 EVAL_POLICY = validate_eval_policy(os.environ.get("EVAL_POLICY", "sac"))
+# VINT_DEBUG=1: a [ViNT] line every VINT_DEBUG_EVERY steps (predicted waypoints,
+# target, steer, throttle, the speed target from the predicted time-to-goal).
+VINT_DEBUG = os.environ.get("VINT_DEBUG", "0") == "1"
+VINT_DEBUG_EVERY = env_int("VINT_DEBUG_EVERY", 1)
 # INIT_FROM (user 2026-11-01, "resume v30 and train for longer"): start TRAINING
 # from a checkpoint -- every module and target, both temperatures, all four
 # optimisers and the update counter. The replay buffer is NOT in a checkpoint,
@@ -1689,6 +1693,13 @@ def run_eval(env, agent, pxr, server, out_root):
                 if getattr(agent, "drives_from_pixels", False):
                     # EVAL_POLICY=vint: frames in, env action out (vint_driver).
                     a_env = agent.act_env(*pixel_frames(info, pxr), _speed_kmh(info))
+                    if VINT_DEBUG and t % VINT_DEBUG_EVERY == 0:
+                        lv = agent.last
+                        print(f"[ViNT] ep={k} t={t} v={_speed_kmh(info):.1f} "
+                              f"dist={lv['dist_steps']:.1f}st/{lv['dist_s']:.1f}s "
+                              f"wps={lv['wps']} tgt=({lv['target'][0]:+.2f},{lv['target'][1]:+.2f}) "
+                              f"ang={np.degrees(lv['angle']):+.0f} steer={lv['steer']:+.2f} "
+                              f"thr={lv['throttle']:.2f} v*={lv['target_kmh']:.1f}", flush=True)
                 else:
                     row = pxr.mono_row(info["debit_cur"], _net_mode(obs["mode"]), obs["binoc"],
                                        speed_kmh=_speed_kmh(info))

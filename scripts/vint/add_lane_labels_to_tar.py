@@ -20,10 +20,14 @@ import numpy as np
 
 
 def _labels(path):
+    """{name: (position, yaw, ok)} slices of arrays read ONCE (z[key] re-reads the
+    whole array; per episode that kept 1,920 full copies alive)."""
     z = np.load(path)
-    starts = np.concatenate([[0], np.cumsum(z["lens"])[:-1]])
-    return {str(n): (z["position"][s:s + k], z["yaw"][s:s + k], z["ok"][s:s + k])
-            for n, s, k in zip(z["names"], starts, z["lens"])}
+    names, lens = z["names"], z["lens"]
+    P, Y, OK = z["position"], z["yaw"], z["ok"]
+    starts = np.concatenate([[0], np.cumsum(lens)[:-1]])
+    return {str(n): (P[s:s + k], Y[s:s + k], OK[s:s + k])
+            for n, s, k in zip(names, starts, lens)}
 
 
 def main(argv=None):

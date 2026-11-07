@@ -1,8 +1,11 @@
-# LANE-CENTRE LABELS (2026-11-07, "can we fix it?"): identical to vint_carla_expert.yaml
-# except the run name; the data tar (carla_expert_lc.tar) differs from the first only
-# in its waypoint labels -- the lane centre ahead of the car (the expert's aim point),
-# scripts/vint/build_lane_labels.py + add_lane_labels_to_tar.py; the loader reads
-# them through scripts/vint/patch_vint_cf_labels.py. One change, so its effect is known.
+# LANE-CENTRE LABELS + START PADDING (2026-11-07, "can we fix it?"): identical to
+# vint_carla_expert.yaml except the run name. Two data changes, both from the
+# closed-loop lane diagnostic (lanedbg2 jobs 464604/464605, development set):
+#  1. waypoint labels = the lane centre ahead of the car, with the lane heading (the
+#     expert's aim point): carla_expert_lc.tar, scripts/vint/build_lane_labels.py +
+#     add_lane_labels_to_tar.py, read through scripts/vint/patch_vint_cf_labels.py;
+#  2. VINT_START_PAD=1: samples from frame 0 with first-frame context padding, as
+#     the driver feeds a start (scripts/vint/patch_vint_start_pad.py).
 #
 # ViNT fine-tuned on c0's expert data (user 2026-11-07: "run VINT train on CARLA
 # dataset and evaluate"; choices: c0's expert data with c0's split, fine-tuned from

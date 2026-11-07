@@ -61,6 +61,31 @@ def test_only_the_labels_change(tmp_path):
                 assert a.extractfile(m).read() == b.extractfile(m.name).read()
 
 
+def test_labels_are_sliced_per_episode_from_arrays_read_once(tmp_path, monkeypatch):
+    """Each npz array is read once (a read per episode kept 1,920 full copies alive
+    and the cluster job ran out of memory)."""
+    n1, n2 = 3, 5
+    P = np.arange((n1 + n2) * 12, dtype=np.float32).reshape(n1 + n2, 6, 2)
+    path = tmp_path / "l.npz"
+    np.savez(path, names=np.array(["A_1", "B_2"]), lens=np.array([n1, n2]), position=P,
+             yaw=np.zeros((n1 + n2, 6), np.float32), ok=np.ones(n1 + n2, bool))
+    reads = []
+    real_load = np.load
+
+    class Counting:
+        def __init__(self, z):
+            self.z = z
+
+        def __getitem__(self, k):
+            reads.append(k)
+            return self.z[k]
+
+    monkeypatch.setattr(addl.np, "load", lambda p: Counting(real_load(p)))
+    lab = addl._labels(str(path))
+    assert np.array_equal(lab["A_1"][0], P[:n1]) and np.array_equal(lab["B_2"][0], P[n1:])
+    assert reads.count("position") == 1 and reads.count("yaw") == 1
+
+
 def test_misaligned_labels_are_refused(tmp_path):
     src, lab, out = tmp_path / "a.tar", tmp_path / "l.npz", tmp_path / "b.tar"
     pos = _tar(src)

@@ -62,13 +62,17 @@ def _wrap(a):
 
 
 def lane_centre_labels(xy, yaw, poly, spacing=1.1346, n=5, stride=3, max_gap_m=2.5,
-                       back_m=2.0, ahead_m=15.0):
+                       back_m=2.0, ahead_m=15.0, max_branch_gap_m=3.0):
     """-> (positions (N, n+1, 2), yaws (N, n+1), ok (N,)) per frame of a trajectory
-    (xy (N, 2), yaw (N,), right-handed) against its route's lane centre `poly`."""
+    (xy (N, 2), yaw (N,), right-handed) against its route's lane centre `poly`.
+    A label point farther than max_branch_gap_m from where the car itself was at
+    the same distance along its path (a wrong branch of the lane chain) sends the
+    frame back to the recorded-path label."""
     xy = np.asarray(xy, np.float64)
     yaw = np.asarray(yaw, np.float64)
     poly = np.asarray(poly, np.float64)
     cum = _cum(poly)
+    car_cum = _cum(xy) if len(xy) > 1 else np.zeros(1)
     N = len(xy)
     pos = np.zeros((N, n + 1, 2))
     yw = np.zeros((N, n + 1))
@@ -89,7 +93,12 @@ def lane_centre_labels(xy, yaw, poly, spacing=1.1346, n=5, stride=3, max_gap_m=2
                 p, h = point_at(poly, s + j * spacing, cum)
                 pos[t, j] = p
                 yw[t, j] = yaw[t] + _wrap(h - yaw[t])
-        else:
+                d = car_cum[t] + j * spacing
+                if len(xy) > 1 and d <= car_cum[-1]:
+                    q, _ = point_at(xy, d, car_cum)
+                    if float(np.hypot(*(p - q))) > max_branch_gap_m:
+                        ok[t] = False
+        if not ok[t]:
             # the recorded path, padded at the end as ViNT's _compute_actions pads
             sl = list(range(t, min(t + stride * n + 1, N), stride))
             sl += [sl[-1]] * (n + 1 - len(sl))

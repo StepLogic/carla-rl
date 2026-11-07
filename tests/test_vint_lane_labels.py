@@ -57,6 +57,18 @@ def test_heading_labels_are_the_lanes_and_unwrapped_against_the_car():
     assert all(abs(yw[0, j] - yw[0, 0]) < 0.1 for j in range(1, 6))   # no 2*pi jump
 
 
+def test_a_label_on_another_branch_than_the_car_took_keeps_the_recorded_path():
+    """The lane chain can pick the wrong branch at a junction; a label farther than
+    max_branch_gap_m from where the car actually was at that distance is refused."""
+    turn = np.concatenate([_line(21), np.stack([np.full(40, 10.0), np.arange(1, 41) * 0.5], 1)])
+    xy = np.stack([np.arange(40) * 0.5, np.zeros(40)], 1)      # the car went straight on
+    pos, _, ok = lane_centre_labels(xy, np.zeros(40), turn, spacing=SP, n=5,
+                                    max_branch_gap_m=3.0)
+    assert ok[0]                                               # 5.7 m ahead: still together
+    t = 16                                                     # at x = 8, 2 m before the branch
+    assert not ok[t] and pos[t] == pytest.approx(xy[t:t + 16:3])
+
+
 def test_a_car_far_from_its_lane_keeps_its_recorded_path():
     xy = np.array([[5.0, 4.0], [6.0, 4.0], [7.0, 4.0], [8.0, 4.0], [9.0, 4.0], [10.0, 4.0],
                    [11.0, 4.0], [12.0, 4.0], [13.0, 4.0], [14.0, 4.0], [15.0, 4.0],

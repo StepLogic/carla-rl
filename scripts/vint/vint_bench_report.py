@@ -99,6 +99,14 @@ def speed_kmh(rows):
         if steps else float("nan")
 
 
+def near_pass_share(rows, within_m=2.0):
+    """Share of episodes whose closest approach to the goal was within 2 m, at any
+    speed (diagnostic: the run scores 1 m; a pass at 1-2 m is a near miss)."""
+    n = len(rows)
+    return sum(r.get("closest_m") is not None and float(r["closest_m"]) <= within_m
+               for r in rows.values()) / n if n else float("nan")
+
+
 def end_mix(rows):
     out = {e: 0 for e in ENDS + ("clock/other",)}
     for r in rows.values():
@@ -168,13 +176,15 @@ def main(argv=None):
               f"{d['routed_fails']} | {d['off_route_fails']} | {d['belief_gap_med_nodes']:.1f} |")
 
     print("\n### Speed and end mix")
-    print("| Town | Band | Arm | km/h | Reached | Crossing | Off road | Collision | Clock/other |")
-    print("|---|---|---|---|---|---|---|---|---|")
+    print("| Town | Band | Arm | km/h | Passed within 2 m (any speed) | Reached | Crossing "
+          "| Off road | Collision | Clock/other |")
+    print("|---|---|---|---|---|---|---|---|---|---|")
     for town, band, topo, mapless in cells:
         for arm, rows in (("Topomap", topo), ("Mapless", mapless)):
             m = end_mix(rows)
-            print(f"| {town} | {band} | {arm} | {speed_kmh(rows):.1f} | {m['reached']} | "
-                  f"{m['crossing']} | {m['off_road']} | {m['collision']} | {m['clock/other']} |")
+            print(f"| {town} | {band} | {arm} | {speed_kmh(rows):.1f} | "
+                  f"{near_pass_share(rows):.2f} | {m['reached']} | {m['crossing']} | "
+                  f"{m['off_road']} | {m['collision']} | {m['clock/other']} |")
 
 
 if __name__ == "__main__":

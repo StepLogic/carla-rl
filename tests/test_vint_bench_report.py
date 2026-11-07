@@ -69,3 +69,9 @@ def test_end_mix_groups_the_clock_and_other_ends():
             5: _row(5, False, end="collision")}
     assert rep.end_mix(rows) == {"reached": 1, "crossing": 1, "off_road": 1,
                                  "collision": 1, "clock/other": 1}
+
+
+def test_near_pass_share_counts_closest_approach_within_2m_at_any_speed():
+    rows = {1: dict(_row(1, True), closest_m=0.4), 2: dict(_row(2, False), closest_m=1.6),
+            3: dict(_row(3, False), closest_m=7.0), 4: dict(_row(4, False), closest_m=None)}
+    assert rep.near_pass_share(rows) == pytest.approx(0.5)

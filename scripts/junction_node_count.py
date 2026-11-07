@@ -28,7 +28,7 @@ def main():
     ap.add_argument("--port", type=int, default=8800)
     a = ap.parse_args()
     import carla
-    srv = CarlaServer(a.port, quality="Low", log_dir=os.path.dirname(os.path.abspath(a.out)))
+    srv = CarlaServer(a.port, quality="Epic", log_dir=os.path.dirname(os.path.abspath(a.out)))
     srv.start(); srv.wait_ready()
     try:
         c = carla.Client("localhost", a.port); c.set_timeout(300.0)

@@ -1348,6 +1348,15 @@ class GatedRecurrentTQC:
 
     _CRITIC_PARTS = ("critics_g", "critics_e", "critics_g_targ", "critics_e_targ", "opt_critic")
 
+    def _apply_configured_lrs(self) -> None:
+        """Every optimiser's learning rate from the config: LR for the critic and
+        the actor, ALPHA_LR (0 = follow LR) for the temperatures."""
+        alpha_lr = float(self.cfg.alpha_lr) or float(self.cfg.lr)
+        for name, lr in (("opt_critic", float(self.cfg.lr)), ("opt_actor", float(self.cfg.lr)),
+                         ("opt_temp_g", alpha_lr), ("opt_temp_e", alpha_lr)):
+            for group in getattr(self, name).param_groups:
+                group["lr"] = lr
+
     def load(self, in_dir: str, fresh_critics_on_mismatch: bool = False) -> None:
         """`fresh_critics_on_mismatch` (warm starts and clone inits, 2026-11-06):
         when the checkpoint's critics have a different architecture -- made
@@ -1368,6 +1377,11 @@ class GatedRecurrentTQC:
         for n in self.modules_list + self._OPTIMISERS:
             if n not in skip:
                 getattr(self, n).load_state_dict(blob[n])
+        # torch's Optimizer.load_state_dict restores the SAVED param-group
+        # hyperparameters, lr included: re-apply the configured rates, so a warm
+        # start with a new LR / ALPHA_LR gets them (run L, user 2026-11-07:
+        # "increase temperature learning rate") and a resume is unchanged.
+        self._apply_configured_lrs()
         # In place: the compiled update holds these very tensors.
         with torch.no_grad():
             for n in self._TENSORS:

@@ -270,6 +270,8 @@ class GatedRecurrentSAC(GatedRecurrentTQC):
             blob = torch.load(p, map_location=self.device, weights_only=True)
             self.value_g.load_state_dict(blob["value_g"])
             self.opt_value.load_state_dict(blob["opt_value"])
+            for group in self.opt_value.param_groups:      # the configured rate, not the saved one
+                group["lr"] = float(self.cfg.lr)
 
     # ------------------------------------------------------------- telemetry --
     def describe(self) -> str:

@@ -93,3 +93,18 @@ def test_the_gru_never_reads_a_column_the_actor_may_not():
     with pytest.raises(ValueError, match="core_state_cols"):
         _cfg(actor_state_cols=ACTOR_COLS, core_state_cols=(1, 5),
              goal_cols=tuple(range(STATE)))
+
+
+def test_a_loaded_checkpoint_keeps_the_configured_learning_rates(tmp_path):
+    """User 2026-11-07, "increase temperature learning rate": run L warm-starts
+    from c0 with ALPHA_LR=1e-2. torch's Optimizer.load_state_dict restores the
+    SAVED param-group hyperparameters, so without a re-apply the checkpoint's
+    3e-4 would silently replace the configured rate and run L would be run K."""
+    saved = GatedRecurrentSAC(_cfg(lr=3e-4, alpha_lr=0.0, goal_cols=tuple(range(STATE))))
+    saved.save(str(tmp_path / "ck"))
+    agent = GatedRecurrentSAC(_cfg(lr=5e-4, alpha_lr=1e-2, goal_cols=tuple(range(STATE))))
+    agent.load(str(tmp_path / "ck"))
+    assert agent.opt_temp_g.param_groups[0]["lr"] == 1e-2
+    assert agent.opt_temp_e.param_groups[0]["lr"] == 1e-2
+    assert agent.opt_actor.param_groups[0]["lr"] == 5e-4
+    assert agent.opt_critic.param_groups[0]["lr"] == 5e-4

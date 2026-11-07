@@ -57,8 +57,19 @@ def main():
     ap.add_argument("--town", required=True)
     ap.add_argument("--out", required=True)
     ap.add_argument("--cand-m", type=float, default=0.5)
-    ap.add_argument("--dedupe", type=float, default=0.55)
-    ap.add_argument("--label-floor", type=float, default=0.40)
+    # Habitat's thresholds were set against THEIR same-place median (~0.61, true
+    # arrivals): spacing 0.55, coverage 0.50, label floor 0.40. Taken as-is on our
+    # camera (same-place median 0.73) they placed 120 key nodes in Town02 and the
+    # graph fell apart (largest SCC 3-29%, job 464471). So each is scaled by OUR
+    # same-place median / theirs unless given explicitly (--scale-to-habitat 0).
+    ap.add_argument("--dedupe", type=float, default=None)
+    ap.add_argument("--label-floor", type=float, default=None)
+    ap.add_argument("--cover", type=float, default=None,
+                    help="coverage threshold (default: Habitat 0.50, scaled)")
+    ap.add_argument("--habitat-same-median", type=float, default=0.61)
+    ap.add_argument("--label-radius-m", type=float, default=25.0,
+                    help="a frame's label is the best node among those within this many metres and "
+                         "heading-aligned (90 deg): image chooses, pose only rules out far lookalikes")
     ap.add_argument("--gap-m", type=float, default=8.0)
     ap.add_argument("--max-edge-m", type=float, default=25.0)
     ap.add_argument("--seed", type=int, default=0)
@@ -92,8 +103,18 @@ def main():
     i = rng.integers(0, len(pos), 400000); j = rng.integers(0, len(pos), 400000)
     far = np.hypot(*(pos[i] - pos[j]).T) > 10
     i, j = i[far][:20000], j[far][:20000]
-    thr = float(np.percentile((D[i].float() * D[j].float()).sum(1).cpu().numpy(), 98))
-    print(f"[ImgMap] threshold (2% far-false) {thr:.3f}; dedupe {a.dedupe}; label floor {a.label_floor}", flush=True)
+    thr_far = float(np.percentile((D[i].float() * D[j].float()).sum(1).cpu().numpy(), 98))
+    # same-place median: pairs < 2 m apart, heading within 30 deg
+    i = rng.integers(0, len(pos), 2000000); j = rng.integers(0, len(pos), 2000000)
+    same = (np.hypot(*(pos[i] - pos[j]).T) < 2) & (wrapd(yaw[i], yaw[j]) < 30) & (i != j)
+    i, j = i[same][:20000], j[same][:20000]
+    same_med = float(np.median((D[i].float() * D[j].float()).sum(1).cpu().numpy()))
+    scale = same_med / a.habitat_same_median
+    a.dedupe = a.dedupe if a.dedupe is not None else round(0.55 * scale, 3)
+    a.label_floor = a.label_floor if a.label_floor is not None else round(0.40 * scale, 3)
+    thr = a.cover if a.cover is not None else round(0.50 * scale, 3)
+    print(f"[ImgMap] 2% far-false {thr_far:.3f}; same-place median {same_med:.3f} (Habitat {a.habitat_same_median}) "
+          f"-> scale {scale:.3f}: coverage {thr}, dedupe {a.dedupe}, label floor {a.label_floor}", flush=True)
 
     def sims_to(nodes):
         """(len(S), len(nodes)) cosine, chunked, on the GPU."""
@@ -133,8 +154,14 @@ def main():
         met_gap = len(nodes) - before
         # 3. TRANSITION EDGES
         Sm = sims_to(nodes)
-        val, lab = Sm.max(1)
-        val, lab = val.cpu().numpy(), lab.cpu().numpy()
+        npos_, nyaw_ = pos[np.asarray(nodes)], yaw[np.asarray(nodes)]
+        val = np.full(len(S), -1.0); lab = np.zeros(len(S), int)
+        for c0 in range(0, len(S), 4096):
+            c1 = min(c0 + 4096, len(S))
+            dd = np.hypot(pos[c0:c1, None, 0] - npos_[None, :, 0], pos[c0:c1, None, 1] - npos_[None, :, 1])
+            ok = (dd <= a.label_radius_m) & (wrapd(yaw[c0:c1, None], nyaw_[None, :]) <= 90)
+            sm = Sm[c0:c1].cpu().numpy(); sm[~ok] = -1.0
+            lab[c0:c1] = sm.argmax(1); val[c0:c1] = sm.max(1)
         step = np.r_[0.0, np.hypot(*np.diff(pos, axis=0).T)]
         edges, rej_turn, rej_len, last, since = {}, 0, 0, None, 0.0
         for t in range(len(S)):
@@ -158,7 +185,8 @@ def main():
         gnodes = [{"pos": (float(pos[s][0]), float(pos[s][1])), "yaw": float(yaw[s]),
                    "idx": int(S[s])} for s in nodes]
         meta = {"placement": name, "town": a.town, "trace": a.trace, "image_rules": True,
-                "threshold": round(thr, 3), "dedupe": a.dedupe, "label_floor": a.label_floor,
+                "threshold": round(thr, 3), "far_false_2pct": round(thr_far, 3), "same_place_median": round(same_med, 3),
+                "dedupe": a.dedupe, "label_floor": a.label_floor, "label_radius_m": a.label_radius_m,
                 "key_nodes": len(key), "image_gap_nodes": img_gap, "metric_gap_nodes": met_gap,
                 "gap_m": a.gap_m, "edges_rejected_turn": rej_turn, "edges_rejected_length": rej_len,
                 "max_edge_m": a.max_edge_m, "cand_m": a.cand_m}

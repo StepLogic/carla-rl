@@ -54,7 +54,10 @@ def pair_stats(topo, mapless):
         return {"n": 0}
     om = sum(bool(topo[k]["reached"]) and not mapless[k]["reached"] for k in ks)
     ob = sum(bool(mapless[k]["reached"]) and not topo[k]["reached"] for k in ks)
+    om2 = sum(bool(topo[k]["reached_2m"]) and not mapless[k]["reached_2m"] for k in ks)
+    ob2 = sum(bool(mapless[k]["reached_2m"]) and not topo[k]["reached_2m"] for k in ks)
     return {"n": n, "keys": ks,
+            "only_topo_2m": om2, "only_mapless_2m": ob2, "p_2m": mcnemar_p(om2, ob2),
             "sr_topo": sum(bool(topo[k]["reached"]) for k in ks) / n,
             "sr_mapless": sum(bool(mapless[k]["reached"]) for k in ks) / n,
             "only_topo": om, "only_mapless": ob, "p": mcnemar_p(om, ob),
@@ -128,6 +131,12 @@ def end_mix(rows):
     return out
 
 
+def c0_mapless_path(root, town, band):
+    """c0's mapless row of the frozen benchmark (results/map_fresh_2026-11-07)."""
+    return os.path.join(root, f"bench_fresh_mapless_{town}_{band}", "eval_step_15000",
+                        "eval.json")
+
+
 def cell_paths(root, label, town, band, tag, topomap_tag):
     return (os.path.join(root, f"bench_{label}_vinttopo_{town}_{band}",
                          f"eval_{tag}_vinttopo-{topomap_tag}", "eval.json"),
@@ -142,6 +151,8 @@ def main(argv=None):
     ap.add_argument("--towns", nargs="+", default=["Town02", "Town03"])
     ap.add_argument("--tag", default="epoch_1")
     ap.add_argument("--topomap-tag", default="epoch_1")
+    ap.add_argument("--c0-root", default=None,
+                    help="results/map_fresh_2026-11-07/checkpoints: pair ViNT mapless with c0 mapless")
     a = ap.parse_args(argv)
 
     cells = []
@@ -156,14 +167,17 @@ def main(argv=None):
 
     print("\n### ViNT-native topomap vs ViNT mapless, paired (same episodes)")
     print("| Town | Band | n | SR@1m Topomap | SR@1m Mapless | Topomap-only / Mapless-only "
-          "| p (McNemar, Holm) | SR@2m Topomap | SR@2m Mapless | SPL Topomap | SPL Mapless |")
-    print("|---|---|---|---|---|---|---|---|---|---|---|")
+          "| p (McNemar, Holm) | SR@2m Topomap | SR@2m Mapless | 2 m: Topomap-only / Mapless-only "
+          "| p 2 m (Holm) | SPL Topomap | SPL Mapless |")
+    print("|---|---|---|---|---|---|---|---|---|---|---|---|---|")
     stats = [pair_stats(topo, mapless) for _, _, topo, mapless in cells]
     adj = holm([s["p"] for s in stats]) if stats else []
-    for (town, band, _, _), s, q in zip(cells, stats, adj):
+    adj2 = holm([s["p_2m"] for s in stats]) if stats else []
+    for (town, band, _, _), s, q, q2 in zip(cells, stats, adj, adj2):
         print(f"| {town} | {band} | {s['n']} | {s['sr_topo']:.3f} | {s['sr_mapless']:.3f} | "
               f"{s['only_topo']} / {s['only_mapless']} | {q:.4f} | {s['sr2_topo']:.3f} | "
-              f"{s['sr2_mapless']:.3f} | {s['spl_topo']:.3f} | {s['spl_mapless']:.3f} |")
+              f"{s['sr2_mapless']:.3f} | {s['only_topo_2m']} / {s['only_mapless_2m']} | "
+              f"{q2:.4f} | {s['spl_topo']:.3f} | {s['spl_mapless']:.3f} |")
     for town in a.towns + ["All"]:
         sel = [c for c in cells if town == "All" or c[0] == town]
         if not sel:
@@ -173,8 +187,32 @@ def main(argv=None):
         s = pair_stats(topo, mapless)
         print(f"| {town} | pooled | {s['n']} | {s['sr_topo']:.3f} | {s['sr_mapless']:.3f} | "
               f"{s['only_topo']} / {s['only_mapless']} | {s['p']:.4f} (raw) | "
-              f"{s['sr2_topo']:.3f} | {s['sr2_mapless']:.3f} | {s['spl_topo']:.3f} | "
-              f"{s['spl_mapless']:.3f} |")
+              f"{s['sr2_topo']:.3f} | {s['sr2_mapless']:.3f} | "
+              f"{s['only_topo_2m']} / {s['only_mapless_2m']} | {s['p_2m']:.4f} (raw) | "
+              f"{s['spl_topo']:.3f} | {s['spl_mapless']:.3f} |")
+
+    if a.c0_root:
+        print("\n### Policy comparison: ViNT mapless vs c0 mapless, paired (same episodes)")
+        print("| Town | Band | n | SR@1m ViNT | SR@1m c0 | ViNT-only / c0-only | p (McNemar, Holm) "
+              "| SR@2m ViNT | SR@2m c0 |")
+        print("|---|---|---|---|---|---|---|---|---|")
+        pol = []
+        for town, band, _, mapless in cells:
+            c0 = load(c0_mapless_path(a.c0_root, town, band))
+            if c0:
+                pol.append((town, band, mapless, c0, pair_stats(mapless, c0)))
+        adj_c0 = holm([x[4]["p"] for x in pol]) if pol else []
+        for (town, band, _, _, s), q in zip(pol, adj_c0):
+            print(f"| {town} | {band} | {s['n']} | {s['sr_topo']:.3f} | {s['sr_mapless']:.3f} | "
+                  f"{s['only_topo']} / {s['only_mapless']} | {q:.4g} | {s['sr2_topo']:.3f} | "
+                  f"{s['sr2_mapless']:.3f} |")
+        if pol:
+            v = {(x[0], x[1], k): r for x in pol for k, r in x[2].items()}
+            c = {(x[0], x[1], k): r for x in pol for k, r in x[3].items()}
+            s = pair_stats(v, c)
+            print(f"| All | pooled | {s['n']} | {s['sr_topo']:.3f} | {s['sr_mapless']:.3f} | "
+                  f"{s['only_topo']} / {s['only_mapless']} | {s['p']:.4g} (raw) | "
+                  f"{s['sr2_topo']:.3f} | {s['sr2_mapless']:.3f} |")
 
     print("\n### Topomap arm: fallbacks and PRIVILEGED diagnostics (reporting only)")
     print("| Town | Band | n | No route | Same node | Start node err med (m) | Start <=8 m "

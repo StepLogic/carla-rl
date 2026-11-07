@@ -41,6 +41,21 @@ def test_paired_stats_count_discordant_pairs_on_common_seeds_only():
     assert s["p"] == pytest.approx(1.0)
 
 
+def test_paired_stats_also_test_the_2m_score():
+    topo = {1: dict(_row(1, False), reached_2m=True), 2: dict(_row(2, False), reached_2m=True),
+            3: dict(_row(3, False), reached_2m=False)}
+    mapless = {1: dict(_row(1, False), reached_2m=False), 2: dict(_row(2, False), reached_2m=False),
+               3: dict(_row(3, False), reached_2m=False)}
+    s = rep.pair_stats(topo, mapless)
+    assert (s["only_topo_2m"], s["only_mapless_2m"]) == (2, 0)
+    assert s["p_2m"] == pytest.approx(0.5)               # exact McNemar, 2 discordant
+
+
+def test_c0_cells_are_the_frozen_benchmark_files():
+    p = rep.c0_mapless_path("results/map_fresh_2026-11-07/checkpoints", "Town03", "hard")
+    assert p.endswith("bench_fresh_mapless_Town03_hard/eval_step_15000/eval.json")
+
+
 def test_fallbacks_and_localisation_diagnostics():
     rows = {1: _row(1, False, topo=_topo(fallback="no route", s_err=40.0, g_err=2.0)),
             2: _row(2, False, topo=_topo(fallback="same node", s_err=1.0, g_err=1.0)),

@@ -29,6 +29,9 @@ t0=$(date +%s)
 tar -xf "$DATA_TAR" -C "$LOCAL" || { echo "=== tar failed"; exit 1; }
 echo "=== data unpacked in $(( $(date +%s) - t0 )) s: $(du -sh "$LOCAL" | cut -f1) | $(df -h "$LOCAL" | tail -1)"
 
+# ViNT's goal bound is wrong for waypoint_spacing > 1 (scripts/vint/patch_vint_dataset.py).
+$PY "$REPO/scripts/vint/patch_vint_dataset.py" "$TRAIN/vint_train/data/vint_dataset.py" || exit 1
+
 # ViNT reads metric_waypoint_spacing for the dataset from data_config.yaml.
 SPACING=$($PY -c "import json; print(json.load(open('$LOCAL/carla_expert/summary.json'))['metric_waypoint_spacing_m'])")
 DC=$TRAIN/vint_train/data/data_config.yaml

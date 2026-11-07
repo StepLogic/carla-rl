@@ -69,6 +69,18 @@ with tempfile.TemporaryDirectory() as split:
     print(f"[Probe] sample: obs {tuple(obs.shape)} goal {tuple(goal.shape)} "
           f"dist {int(dist)} action {tuple(action.shape)} action_mask {float(action_mask):.0f}",
           flush=True)
+    # Goal sampling is random per item: draw many and check every label is in range
+    # (the unpatched goal bound overran short episodes at stride 3).
+    rng = np.random.default_rng(0)
+    draws = [ds[int(i)] for i in rng.integers(0, len(ds), 400)]
+    dists = np.array([int(d[3]) for d in draws])
+    masks = np.array([float(d[6]) for d in draws])
+    print(f"[Probe] 400 random samples: distance labels {dists.min()}..{dists.max()} "
+          f"(max_dist_cat {cfg['distance']['max_dist_cat']}), negatives "
+          f"{np.mean(dists == cfg['distance']['max_dist_cat']):.0%}, action-supervised "
+          f"{masks.mean():.0%}", flush=True)
+    if dists.max() > cfg["distance"]["max_dist_cat"] or dists.min() < 0:
+        sys.exit("[Probe] FAIL: distance labels outside [0, max_dist_cat]")
     acts = np.stack([ds[i][2].numpy() for i in range(0, len(ds), max(1, len(ds) // 40))])
     print(f"[Probe] normalised waypoints over {len(acts)} samples: first step x "
           f"{acts[:, 0, 0].mean():.2f}+-{acts[:, 0, 0].std():.2f}, y "

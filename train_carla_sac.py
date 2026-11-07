@@ -220,6 +220,22 @@ EVAL_MAP_REPLAN = int(os.environ.get("EVAL_MAP_REPLAN", 0) or 0)
 # worst 12x: a car already turning right snapped to the straight-on lane) to 0,
 # worst 1.2x. 0 = the nearest-node start of every earlier benchmark.
 EVAL_MAP_JOINT_LOCALISE = os.environ.get("EVAL_MAP_JOINT_LOCALISE", "0") == "1"
+# EVAL_MAP_LOCALISE=image (user 2026-11-07: pose localisation is the labelled
+# UPPER BOUND; the image-navigation result uses images only, "as close to habitat
+# as possible"). vae_nav.image_nav: start / goal node = TOP-1 AnyLoc match of the
+# car's view / the goal image (no threshold, no radius); subgoal switch = image-
+# match competition among previous / current / next node, >= the map's 2%
+# far-false threshold on EVAL_MAP_ARRIVE_STEPS (2) consecutive steps; leg timeout
+# EVAL_MAP_LEG_TIMEOUT (150) steps -> top-1 image relocalise and replan to the same
+# goal node, up to EVAL_MAP_REPLAN (default 3 here) times, then the real goal. No
+# pose is read to navigate; true pose is used only to score and to record the
+# localisation error. Needs <map>/<Town>_anyloc.npz (scripts/build_map_descriptors.py).
+# Default "pose" = every earlier benchmark (and the oracle upper bound).
+EVAL_MAP_LOCALISE = os.environ.get("EVAL_MAP_LOCALISE", "pose")
+if EVAL_MAP_LOCALISE not in ("pose", "image"):
+    raise ValueError(f"EVAL_MAP_LOCALISE={EVAL_MAP_LOCALISE!r}: use 'pose' or 'image'")
+EVAL_MAP_LEG_TIMEOUT = int(os.environ.get("EVAL_MAP_LEG_TIMEOUT", 150) or 150)
+EVAL_MAP_ARRIVE_STEPS = int(os.environ.get("EVAL_MAP_ARRIVE_STEPS", 2) or 2)
 EVAL_MAP_LEG_STEPS = int(os.environ.get("EVAL_MAP_LEG_STEPS", 100) or 100)
 EVAL_MAP_OFFROUTE_M = float(os.environ.get("EVAL_MAP_OFFROUTE_M", 15.0) or 15.0)
 if EVAL_MAP_FALLBACK not in ("", "mapless"):
@@ -1546,6 +1562,7 @@ def run_eval(env, agent, pxr, server, out_root):
                           if EVAL_MAP_DIR else ""))
     from vae_nav.carla_benchmark import EpisodeTracker
     gmap = map_frames = goal_wrapper = None
+    img_scores = img_thr = None
     if EVAL_MAP_DIR:
         from vae_nav import image_map
         from vae_nav.debit_goal_wrapper import DebitGoalWrapper
@@ -1557,6 +1574,27 @@ def run_eval(env, agent, pxr, server, out_root):
         goal_wrapper = env
         while not isinstance(goal_wrapper, DebitGoalWrapper):
             goal_wrapper = goal_wrapper.env
+        img_scores = img_thr = None
+        if EVAL_MAP_LOCALISE == "image":
+            # POSE-FREE: the map's AnyLoc vocabulary and node descriptors
+            from vae_nav import anyloc
+            _npz = np.load(os.path.join(EVAL_MAP_DIR, f"{TOWNS[0]}_anyloc.npz"))
+            if len(_npz["D"]) != len(gmap.nodes):
+                raise RuntimeError(f"{EVAL_MAP_DIR}: {len(_npz['D'])} descriptors for "
+                                   f"{len(gmap.nodes)} nodes")
+            _dev = "cuda" if torch.cuda.is_available() else "cpu"
+            _enc = anyloc.ValueFacet(_dev)
+            _C = torch.as_tensor(_npz["C"], device=_dev)
+            _D = torch.as_tensor(_npz["D"], device=_dev).float()
+            img_thr = float(_npz["thr"])
+
+            def img_scores(frame_u8):
+                """cosine of one frame against every map node (numpy, node order)"""
+                d = anyloc.describe(_enc, _C, np.asarray(frame_u8, np.uint8)[None])
+                return (d @ _D.T)[0].cpu().numpy()
+            print(f"[Map] IMAGE localisation: top-1 start / goal, arrival competition at "
+                  f"{img_thr:.3f} x{EVAL_MAP_ARRIVE_STEPS} steps, leg timeout "
+                  f"{EVAL_MAP_LEG_TIMEOUT}, replans {EVAL_MAP_REPLAN or 3}", flush=True)
         print(f"[Map] {EVAL_MAP_DIR} {TOWNS[0]}: {len(gmap.nodes)} nodes, "
               f"{len(gmap.edges)} edges, placement={gmap.meta.get('placement')} | "
               f"start<= {EVAL_MAP_START_M:g} m, goal<= {EVAL_MAP_GOAL_M:g} m, "
@@ -1647,7 +1685,24 @@ def run_eval(env, agent, pxr, server, out_root):
         if gmap is not None:
             hp = np.asarray(info.get("hero_pos", (0.0, 0.0)), np.float64)[:2]
             hy = float(info.get("hero_yaw", 0.0) or 0.0)
-            if EVAL_MAP_JOINT_LOCALISE and info.get("goal_pos") is not None:
+            img_loc = None
+            if img_scores is not None:
+                # POSE-FREE (Habitat): top-1 image match of the car's view and of the
+                # goal image; start == goal node -> no route -> driven mapless.
+                from vae_nav.image_nav import top1
+                _sc_s = img_scores(info["debit_cur"])
+                _sc_g = img_scores(goal_wrapper.latched_goal())
+                s_node, g_node = top1(_sc_s), top1(_sc_g)
+                route = gmap.path(s_node, g_node) if s_node != g_node else None
+                _gp = info.get("goal_pos")
+                img_loc = {   # the true-pose errors are RECORDED, never used to navigate
+                    "img_start_score": round(float(_sc_s[s_node]), 3),
+                    "img_goal_score": round(float(_sc_g[g_node]), 3),
+                    "img_start_err_m": round(float(np.hypot(*(gmap._xy[s_node] - hp))), 2),
+                    "img_goal_err_m": (None if _gp is None else round(float(np.hypot(
+                        *(gmap._xy[g_node] - np.asarray(_gp, np.float64)[:2]))), 2)),
+                    "img_same_node": bool(s_node == g_node)}
+            elif EVAL_MAP_JOINT_LOCALISE and info.get("goal_pos") is not None:
                 s_node, g_node, route = gmap.localise(hp, hy, info["goal_pos"],
                                                       start_radius=EVAL_MAP_START_M,
                                                       goal_radius=EVAL_MAP_GOAL_M)
@@ -1658,10 +1713,11 @@ def run_eval(env, agent, pxr, server, out_root):
                 route = gmap.path(s_node, g_node)
             map_row = {"map_start_node": s_node, "map_goal_node": g_node,
                        "map_hops": None if route is None else len(route) - 1,
-                       "map_route_m": None if route is None else round(gmap.length(route), 2)}
+                       "map_route_m": None if route is None else round(gmap.length(route), 2),
+                       "map_localise": EVAL_MAP_LOCALISE, **(img_loc or {})}
             if route is None and EVAL_MAP_FALLBACK == "mapless":
                 why = ("no start node" if s_node is None else "no goal node"
-                       if g_node is None else "no route")
+                       if g_node is None else "same node" if s_node == g_node else "no route")
                 map_row["map_fallback"] = why
                 print(f"[Eval {k + 1:3d}/{n_eps}] seed={seed} no map route ({why}): "
                       f"driven MAPLESS", flush=True)
@@ -1680,9 +1736,15 @@ def run_eval(env, agent, pxr, server, out_root):
                 continue
             if route is not None:
                 final_frame = goal_wrapper.latched_goal()
-                nav = image_map.Navigator(gmap, route, switch_m=EVAL_MAP_SWITCH_M,
-                                          lookahead_m=EVAL_MAP_LOOKAHEAD_M)
-                nav.look_ahead(hp)            # the first leg (no-op when off)
+                if img_scores is not None:
+                    from vae_nav.image_nav import ImageNavigator
+                    nav = ImageNavigator(route, img_thr, confirm_steps=EVAL_MAP_ARRIVE_STEPS,
+                                         leg_steps=EVAL_MAP_LEG_TIMEOUT,
+                                         max_replans=EVAL_MAP_REPLAN or 3, node_xy=gmap._xy)
+                else:
+                    nav = image_map.Navigator(gmap, route, switch_m=EVAL_MAP_SWITCH_M,
+                                              lookahead_m=EVAL_MAP_LOOKAHEAD_M)
+                    nav.look_ahead(hp)        # the first leg (no-op when off)
 
                 def _aim():
                     f = final_frame if nav.final else map_frames[nav.current()]
@@ -1734,7 +1796,20 @@ def run_eval(env, agent, pxr, server, out_root):
                 pos = np.asarray(info.get("hero_pos", prev_pos), np.float64)
                 if tracker is not None:
                     tracker.step(pos, float(info.get("speed_kmh", 0.0) or 0.0))
-                if nav is not None and nav.update(pos, float(info.get("hero_yaw", 0.0) or 0.0)):
+                if nav is not None and img_scores is not None:
+                    # POSE-FREE: arrival by image competition, leg timeout -> top-1 image
+                    # relocalise + replan to the same goal node, then the real goal.
+                    ev = nav.step(img_scores(info["debit_cur"])) if not nav.final else None
+                    if ev == "timeout":
+                        s2 = top1(img_scores(info["debit_cur"]))
+                        r2 = gmap.path(s2, map_row["map_goal_node"]) if s2 != map_row["map_goal_node"] else None
+                        ok = nav.replan(r2)
+                        replan_log.append({"t": t, "why": "timeout", "ok": bool(ok)})
+                    if ev is not None:
+                        goal_blk = _aim()
+                        if EVAL_MAP_RESET_HIDDEN:
+                            hidden = agent.reset_hidden(1)
+                elif nav is not None and nav.update(pos, float(info.get("hero_yaw", 0.0) or 0.0)):
                     goal_blk = _aim()
                     leg_steps = 0
                     if EVAL_MAP_RESET_HIDDEN:

@@ -154,7 +154,10 @@ def main():
             cover = torch.maximum(cover, (D @ D[w]).float())     # half matmul: no fp32 copy of D
         # 2b. METRIC GAP (aligned, gap_m)
         before = len(nodes)
+        kind = {int(x): "key" for x in key}
+        kind.update({int(x): "image_gap" for x in nodes if int(x) not in kind})
         nodes = list(map(int, im.place_uniform(view, a.gap_m, seed_nodes=nodes)))
+        kind.update({int(x): "metric_gap" for x in nodes if int(x) not in kind})
         met_gap = len(nodes) - before
         # 3. TRANSITION EDGES
         Sm = sims_to(nodes)
@@ -202,7 +205,7 @@ def main():
         if a.edge_cost == "unit":
             edges = {e: 1.0 for e in edges}
         gnodes = [{"pos": (float(pos[s][0]), float(pos[s][1])), "yaw": float(yaw[s]),
-                   "idx": int(S[s])} for s in nodes]
+                   "idx": int(S[s]), "kind": kind[int(s)], "entropy": float(ent[s])} for s in nodes]
         meta = {"placement": name, "town": a.town, "trace": a.trace, "image_rules": True,
                 "threshold": round(thr, 3), "far_false_2pct": round(thr_far, 3), "same_place_median": round(same_med, 3),
                 "dedupe": a.dedupe, "label_floor": a.label_floor, "label_radius_m": a.label_radius_m,

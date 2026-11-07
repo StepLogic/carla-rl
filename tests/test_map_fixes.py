@@ -119,3 +119,24 @@ def test_replan_is_off_by_default_and_relocalises_to_the_same_goal_node():
     assert 'gmap.path(s2, map_row["map_goal_node"])' in body       # same goal node
     assert "nav.k = len(nav.path)" in body                          # else the real goal
     assert "leg_steps, replans, replan_log = 0, 0, []" in body      # reset per episode
+
+
+def test_lane_graph_can_require_every_junction_turn():
+    from vae_nav.coverage_tour import lane_graph
+
+    class W:
+        def __init__(self, x):
+            class L: pass
+            self.transform = type("T", (), {"location": L()})()
+            self.transform.location.x, self.transform.location.y = x, 0.0
+
+    class G:
+        def __init__(self):
+            import networkx as nx
+            self._graph = nx.DiGraph()
+            T = type("K", (), {"name": "LANEFOLLOW"})
+            self._graph.add_edge(0, 1, type=T, entry_waypoint=W(0), exit_waypoint=W(10), path=[], intersection=False)
+            self._graph.add_edge(1, 2, type=T, entry_waypoint=W(10), exit_waypoint=W(15), path=[], intersection=True)
+    _e, lanes_only, _w = lane_graph(G())
+    _e, every_turn, _w = lane_graph(G(), junctions=True)
+    assert lanes_only == [(0, 1)] and sorted(every_turn) == [(0, 1), (1, 2)]

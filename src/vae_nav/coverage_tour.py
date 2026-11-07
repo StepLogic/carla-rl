@@ -118,12 +118,16 @@ def walk_length(walk, edges):
     return float(sum(edges[tuple(e)] for e in walk))
 
 
-def lane_graph(grp, follow_type="LANEFOLLOW"):
+def lane_graph(grp, follow_type="LANEFOLLOW", junctions=False):
     """(edges, required, waypoints) from a GlobalRoutePlanner's `_graph`.
 
     edges     {(u, v): metres along the edge's waypoints}, LANEFOLLOW only, so
               the tour never changes lane;
-    required  the edges outside junctions (the lanes);
+    required  the edges outside junctions (the lanes) -- and, with
+              `junctions=True`, every junction connector too, i.e. every legal
+              TURN (user 2026-11-07, "make sure paths can be planned with MAP":
+              a lanes-only tour skips most turns, so the map built from it has
+              no edge for them and plans 6-22x detours round the block);
     waypoints {(u, v): [entry, *path, exit]}, the polyline the expert follows."""
     edges, required, wps = {}, [], {}
     for u, v, d in grp._graph.edges(data=True):
@@ -135,7 +139,7 @@ def lane_graph(grp, follow_type="LANEFOLLOW"):
                       np.float64)
         edges[(u, v)] = float(np.hypot(*np.diff(xy, axis=0).T).sum()) if len(xy) > 1 else 0.0
         wps[(u, v)] = pts
-        if not d["intersection"]:
+        if junctions or not d["intersection"]:
             required.append((u, v))
     return edges, required, wps
 

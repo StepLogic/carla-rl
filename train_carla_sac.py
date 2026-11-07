@@ -246,6 +246,10 @@ EXPERT_TRACE = os.environ.get("EXPERT_TRACE", "0") == "1"
 EXPERT_TRACE_ROOT = os.environ.get(
     "EXPERT_TRACE_ROOT", os.path.expanduser("~/carla-rl/checkpoints/trace_expert"))
 EXPERT_TRACE_CHUNK = env_int("EXPERT_TRACE_CHUNK", 2000)
+# EXPERT_TOUR_JUNCTIONS=1 (user 2026-11-07): the coverage tour also drives EVERY
+# junction turn, not only every lane, so a map built from it has an edge for every
+# legal turn (coverage_tour.lane_graph junctions=True). 0 = lanes only (earlier).
+EXPERT_TOUR_JUNCTIONS = os.environ.get("EXPERT_TOUR_JUNCTIONS", "0") == "1"
 EXPERT_TRACE_MAX_STEPS = env_int("EXPERT_TRACE_MAX_STEPS", 200000)
 EXPERT_TRACE_MAX_DRIVES = env_int("EXPERT_TRACE_MAX_DRIVES", 20)
 EXPERT_TRACE_STUCK_STEPS = env_int("EXPERT_TRACE_STUCK_STEPS", 300)
@@ -1188,7 +1192,7 @@ def run_expert_trace(env, agent, pxr, server, out_root):
     _ensure_agents_on_path()
     from agents.navigation.global_route_planner import GlobalRoutePlanner
     grp = GlobalRoutePlanner(core.map, SAMPLING_RESOLUTION_M)
-    edges, req, wps = lane_graph(grp)
+    edges, req, wps = lane_graph(grp, junctions=EXPERT_TOUR_JUNCTIONS)
     start = sorted(req)[0][0]
     walk = coverage_tour(edges, req, start)
     tour = tour_waypoints(walk, wps)
@@ -1199,6 +1203,7 @@ def run_expert_trace(env, agent, pxr, server, out_root):
         "town": town, "checkpoint": EVAL_FROM, "spacing_m": None, "driver": "expert",
         "target_kmh": EXPERT_TARGET_KMH, "tour_edges": len(walk), "tour_m": round(tour_m, 1),
         "lanes": len(req), "lanes_m": round(lanes_m, 1), "tour_waypoints": len(tour),
+        "junction_turns_required": bool(EXPERT_TOUR_JUNCTIONS),
         "plan_waypoints": len(plan), "closing_waypoints": len(plan) - len(tour),
         "trace_only": True})
     print(f"=== EXPERT TRACE {town} | tour {len(walk)} edges, {tour_m:.0f} m over "

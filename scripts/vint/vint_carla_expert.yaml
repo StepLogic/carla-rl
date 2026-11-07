@@ -48,12 +48,18 @@ context_type: temporal
 context_size: 5
 alpha: 0.5
 
+# Distance classes count STRIDES (patch_vint_dataset.py). ViNT rebuilds them as
+# range(0, 20 + 1, 3), so the top class is 18 strides (~20 m) and negatives get it.
 distance:
   min_dist_cat: 0
   max_dist_cat: 20
+# WAYPOINTS FOR EVERY POSITIVE GOAL (my call, 2026-11-07): ViNT's recipe supervises
+# actions only for goals < 10 steps because its deployment feeds near map subgoals.
+# This eval is MAPLESS with goals 5-25 m away (as c0's), so with 10 the waypoints
+# would be untrained for most eval goals; 19 supervises every positive (1..18 strides).
 action:
   min_dist_cat: 0
-  max_dist_cat: 10
+  max_dist_cat: 19
 close_far_threshold: 10
 
 len_traj_pred: 5

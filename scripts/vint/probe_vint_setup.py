@@ -27,7 +27,8 @@ import warmup_scheduler  # noqa: E402,F401
 from diffusion_policy.model.diffusion.conditional_unet1d import ConditionalUnet1D  # noqa: E402,F401
 from vint_train.data.vint_dataset import ViNT_Dataset  # noqa: E402
 from vint_train.models.vint.vint import ViNT  # noqa: E402
-print(f"[Probe] imports ok ({time.time() - t0:.0f} s)", flush=True)
+import train  # noqa: E402,F401  -- every module-level import train.py makes (wandb included)
+print(f"[Probe] imports ok, train.py's too ({time.time() - t0:.0f} s)", flush=True)
 
 cfg = yaml.safe_load(open(sys.argv[1]))
 n_traj = int(sys.argv[2]) if len(sys.argv) > 2 else 4
@@ -75,12 +76,16 @@ with tempfile.TemporaryDirectory() as split:
     draws = [ds[int(i)] for i in rng.integers(0, len(ds), 400)]
     dists = np.array([int(d[3]) for d in draws])
     masks = np.array([float(d[6]) for d in draws])
+    # ViNT rebuilds the classes as range(min, max + 1, stride): at stride 3 the top
+    # class is 18, and a negative (an unrelated goal) is labelled with it.
+    top = ds.max_dist_cat
     print(f"[Probe] 400 random samples: distance labels {dists.min()}..{dists.max()} "
-          f"(max_dist_cat {cfg['distance']['max_dist_cat']}), negatives "
-          f"{np.mean(dists == cfg['distance']['max_dist_cat']):.0%}, action-supervised "
-          f"{masks.mean():.0%}", flush=True)
-    if dists.max() > cfg["distance"]["max_dist_cat"] or dists.min() < 0:
-        sys.exit("[Probe] FAIL: distance labels outside [0, max_dist_cat]")
+          f"(effective top class {top}, classes {ds.distance_categories}); at the top "
+          f"(farthest or negative) {np.mean(dists == top):.0%}; action-supervised "
+          f"{masks.mean():.0%} (goals {ds.min_action_distance} < d < {ds.max_action_distance})",
+          flush=True)
+    if dists.max() > top or dists.min() < 0:
+        sys.exit("[Probe] FAIL: distance labels outside [0, the top class]")
     acts = np.stack([ds[i][2].numpy() for i in range(0, len(ds), max(1, len(ds) // 40))])
     print(f"[Probe] normalised waypoints over {len(acts)} samples: first step x "
           f"{acts[:, 0, 0].mean():.2f}+-{acts[:, 0, 0].std():.2f}, y "

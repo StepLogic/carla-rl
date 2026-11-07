@@ -18,7 +18,8 @@ DATA_TAR=${DATA_TAR:-$HOME/carla-rl/checkpoints/vint_data/carla_expert.tar}
 WEIGHTS=${WEIGHTS:-$VINT/weights/vint_release.pth}
 CONFIG=${CONFIG:-$REPO/scripts/vint/vint_carla_expert.yaml}
 TRAIN=$VINT/visualnav/train
-export PYTHONPATH="$VINT/pkgs:$TRAIN:$VINT/visualnav/diffusion_policy${PYTHONPATH:+:$PYTHONPATH}"
+# scripts/vint/stubs first: its wandb stands in for the cluster's, which cannot import.
+export PYTHONPATH="$REPO/scripts/vint/stubs:$VINT/pkgs:$TRAIN:$VINT/visualnav/diffusion_policy${PYTHONPATH:+:$PYTHONPATH}"
 echo "=== $(date +%T) node $(hostname) job ${SLURM_JOB_ID:-local} mode ${MODE:-train} config $CONFIG ==="
 nvidia-smi --query-gpu=name,memory.total --format=csv,noheader 2>/dev/null || echo "no GPU visible"
 

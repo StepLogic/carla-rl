@@ -224,6 +224,8 @@ def run_parallel(venv, agent, buf, row_of, box, *, to_env, to_actor, goal_block,
                 for _ in range(updates_per):
                     chunk = buf.sample_chunks(chunk_b, chunk_t + burn_in, burn_in)
                     metrics = agent.update(chunk)
+                    if "per_rows" in chunk:      # PER: the chunks' TD errors become priorities
+                        buf.update_priorities(chunk["per_rows"], agent.last_td_prio)
                     if after_update is not None:
                         after_update()       # e.g. the fine-tune's cloning step
             next_update += update_every

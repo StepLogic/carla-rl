@@ -2110,11 +2110,26 @@ def main():
               f"optimisers and update counter restored; replay buffer EMPTY, so no "
               f"update until {LEARNING_STARTS} transitions from the loaded policy",
               flush=True)
+    # PER (user 2026-11-06, "use PER"): prioritized replay; PER_ALPHA 0 = uniform,
+    # every earlier run. The SAC update weights its critic loss by the chunks'
+    # importance weights and returns their TD priorities; IQL's does not.
+    if env_float("PER_ALPHA", 0.0) > 0.0 and (os.environ.get("ALGO", "sac") != "sac"
+                                             or IL_EXPERT_FRAC > 0.0):
+        raise SystemExit("PER is implemented for ALGO=sac with one replay "
+                         "(not ALGO=iql, not IL_EXPERT_FRAC's mixed replay)")
     buf = DeviceEpisodeBuffer(row_dim, ACT_DIM, 1000 if EVAL_FROM else CAPACITY, DEVICE, seed=SEED,
                               goal_dim=pxr.PIX,
                               goal_batch_frac=env_float("GOAL_BATCH_FRAC", 0.5),
                               store_device=REPLAY_DEVICE,
-                              u8_cols=pxr.MONO_PIX if REPLAY_U8 else 0)
+                              u8_cols=pxr.MONO_PIX if REPLAY_U8 else 0,
+                              per_alpha=env_float("PER_ALPHA", 0.0),
+                              per_beta0=env_float("PER_BETA0", 0.4),
+                              per_beta_updates=env_int("PER_BETA_UPDATES",
+                                                       max(1, MAX_STEPS // UPDATE_EVERY)))
+    if buf.per_alpha > 0.0:
+        print(f"  PER: priority alpha {buf.per_alpha:g}, importance beta {buf.per_beta0:g} -> 1 "
+              f"over {buf.per_beta_updates} updates, chunk priority 0.9 max + 0.1 mean "
+              f"|TD error|; new rows enter at the max priority", flush=True)
 
     # PREFLIGHT, printed before a single step (user rule, after four restarts):
     # the label, the checkpoint directory, the town, the seeds and the action

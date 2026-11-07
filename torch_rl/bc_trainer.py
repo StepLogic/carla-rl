@@ -230,7 +230,10 @@ def il_finetune_prepare(agent, buf, root, towns, *, warmup_updates, chunk_b, chu
     agent.set_warmup(True)
     m = {}
     for _ in range(int(warmup_updates)):
-        m = agent.update(replay.sample_chunks(chunk_b, chunk_t + K, K))
+        chunk = replay.sample_chunks(chunk_b, chunk_t + K, K)
+        m = agent.update(chunk)
+        if "per_rows" in chunk:                  # PER: priorities train from the warm-up on
+            replay.update_priorities(chunk["per_rows"], agent.last_td_prio)
     agent.set_warmup(False)
     log(f"[IL] critic warm-up: {int(warmup_updates)} updates, encoder/GRU/actor frozen, "
         f"q_g {m.get('q_g', float('nan')):.2f} critic_loss_g "

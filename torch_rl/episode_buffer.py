@@ -176,7 +176,9 @@ class DeviceEpisodeBuffer:
 
     def __init__(self, obs_dim: int, action_dim: int, capacity: int, device,
                  seed: int = 0, goal_batch_frac: float = 0.5, goal_dim: int = 0,
-                 store_device=None, u8_cols: int = 0) -> None:
+                 store_device=None, u8_cols: int = 0, per_alpha: float = 0.0,
+                 per_beta0: float = 0.4, per_beta_updates: int = 100000,
+                 per_eps: float = 1e-3) -> None:
         """`device` is where SAMPLED batches are delivered (the learner's).
         `store_device` is where the ring lives; default `device`. Set it to
         "cpu" to hold the replay in host RAM -- user 2026-10-19, "move to main
@@ -209,6 +211,25 @@ class DeviceEpisodeBuffer:
         self._size = 0              # transitions in ended + open episodes (mirrors EpisodeBuffer.size)
         self._open: Dict[int, _OpenEpisode] = {}   # env_id -> its one open episode
         self._goals: Dict[int, torch.Tensor] = {}  # episode start row -> (goal_dim,) fp16 on store_device
+
+        # PER (user 2026-11-06, "use PER"; per_alpha 0 = off, uniform as above).
+        # Every row of an ended episode starts exactly one trained window, so the
+        # priority lives per ROW: new rows enter at the current max, evicted rows
+        # drop out, sample_chunks draws window starts with probability p^alpha
+        # inside each mode stratum and returns `is_weight` (N P)^-beta / max and
+        # `per_rows`; update_priorities writes the learner's TD priorities back.
+        self.per_alpha = float(per_alpha)
+        self.per_beta0 = float(per_beta0)
+        self.per_beta_updates = max(1, int(per_beta_updates))
+        self.per_eps = float(per_eps)
+        self.per_beta = self.per_beta0
+        self._per_calls = 0
+        if self.per_alpha > 0.0:
+            self._prio = np.zeros(self.capacity, np.float64)
+            self._row_mode = np.full(self.capacity, -1, np.int8)   # -1: not a window start
+            self._row_start = np.zeros(self.capacity, np.int64)    # its episode's start row
+            self._row_n = np.zeros(self.capacity, np.int64)        # its episode's length
+            self._prio_max = 1.0
 
     @property
     def nbytes(self) -> int:
@@ -365,6 +386,12 @@ class DeviceEpisodeBuffer:
             # end_episode never reaches this line, so it stores no goal.
             self._goals[start] = ep.goal
         self._episodes.append((start, n, ep.mode))
+        if self.per_alpha > 0.0:
+            # The n window-start rows (not the trailing obs-only row), at max priority.
+            self._row_mode[start:start + n] = ep.mode
+            self._row_start[start:start + n] = start
+            self._row_n[start:start + n] = n
+            self._prio[start:start + n] = self._prio_max
 
     def _reserve_rows(self, n: int) -> int:
         """Choose the start row for n+1 new rows, wrapping and evicting overlapping
@@ -390,6 +417,9 @@ class DeviceEpisodeBuffer:
             if ev_start < end and start < ev_end:   # half-open range overlap
                 self._size -= ev_n
                 self._goals.pop(ev_start, None)     # the goal dies with its rows
+                if self.per_alpha > 0.0:            # and its windows stop being drawn
+                    self._row_mode[ev_start:ev_start + ev_n] = -1
+                    self._prio[ev_start:ev_start + ev_n] = 0.0
             else:
                 survivors.append((ev_start, ev_n, ev_mode))
         self._episodes = survivors
@@ -423,10 +453,34 @@ class DeviceEpisodeBuffer:
         ns = np.empty(B, dtype=np.int64)
         t0 = np.empty(B, dtype=np.int64)
         mode_out = np.empty(B, dtype=np.float32)
+        per = self.per_alpha > 0.0
+        if per:
+            beta = min(1.0, self.per_beta0 + (1.0 - self.per_beta0)
+                       * self._per_calls / self.per_beta_updates)
+            self.per_beta = beta
+            self._per_calls += 1
+            per_rows = np.empty(B, dtype=np.int64)
+            is_w = np.empty(B, dtype=np.float64)
 
         pos = 0
         for count, mode_value in ((n_goal, 1), (n_explore, 0)):
             if count == 0:
+                continue
+            if per:
+                # Window starts drawn with probability p^alpha within the stratum.
+                cand = np.flatnonzero(self._row_mode == mode_value)
+                p = self._prio[cand] ** self.per_alpha
+                prob = p / p.sum()
+                pick = self.rng.choice(len(cand), size=count, p=prob)
+                rows = cand[pick]
+                sl = slice(pos, pos + count)
+                starts[sl] = self._row_start[rows]
+                ns[sl] = self._row_n[rows]
+                t0[sl] = rows - self._row_start[rows]
+                mode_out[sl] = mode_value
+                per_rows[sl] = rows
+                is_w[sl] = (len(cand) * prob[pick]) ** (-beta)
+                pos += count
                 continue
             eps = by_mode[mode_value]
             ep_starts = np.array([s for s, _ in eps], dtype=np.int64)
@@ -498,4 +552,21 @@ class DeviceEpisodeBuffer:
             # One row per episode, looked up by the chunk's episode start row.
             out["goal"] = torch.stack([self._goals[int(s)] for s in starts]).to(
                 device=dev, dtype=torch.float32)  # (B, goal_dim)
+        if per:
+            out["is_weight"] = torch.from_numpy((is_w / is_w.max()).astype(np.float32)).to(dev)
+            out["per_rows"] = torch.from_numpy(per_rows)
         return out
+
+    def update_priorities(self, rows, td) -> None:
+        """PER: write the learner's per-chunk TD priorities back to the chunks'
+        window-start rows (|td| + per_eps). A row evicted since it was drawn
+        stays out; `td` None (an update that trained nothing) changes nothing."""
+        if self.per_alpha <= 0.0 or td is None:
+            return
+        rows = np.asarray(rows.cpu().numpy() if torch.is_tensor(rows) else rows, np.int64)
+        td = np.asarray(td.detach().cpu().numpy() if torch.is_tensor(td) else td, np.float64)
+        pr = np.abs(td).reshape(-1) + self.per_eps
+        alive = self._row_mode[rows] >= 0
+        self._prio[rows[alive]] = pr[alive]
+        if alive.any():
+            self._prio_max = max(self._prio_max, float(pr[alive].max()))

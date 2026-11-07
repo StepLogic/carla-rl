@@ -509,6 +509,10 @@ class GatedRecurrentTQC:
         self._actor_bc_source = None
         self._bc_x = None
         self._bc_a = None
+        # PER: the chunk's importance weights (B,) for this update, and the
+        # per-chunk TD priorities (B,) it produced (None without PER).
+        self._is_w = None
+        self.last_td_prio = None
         # Reseeds the GLOBAL torch RNG, as RecurrentTQC does: construction
         # order below is load-bearing for reproducibility.
         torch.manual_seed(cfg.seed)
@@ -1000,7 +1004,11 @@ class GatedRecurrentTQC:
                 raise RuntimeError("actor_bc_alpha > 0 needs set_actor_bc_source "
                                    "(il_finetune_prepare sets it from the expert labels)")
             self._bc_x, self._bc_a = self._bc_inputs(self._actor_bc_source())
+        self._is_w = (chunk["is_weight"].to(device=self.device, dtype=torch.float32)
+                      if "is_weight" in chunk else None)
         out = self._update(*args)
+        td = out.pop("td_prio", None)
+        self.last_td_prio = None if td is None else td.detach().float().cpu().numpy()
         # ONE host sync for every metric (Phase 2 review P5): a float() per
         # metric was ~20 device syncs per update. Every metric is an fp32 0-d
         # tensor, so each value equals its float() exactly.
@@ -1111,6 +1119,10 @@ class GatedRecurrentTQC:
         critic_loss = zero
         loss_g = loss_e = q_g_data = q_e_data = zero
         at_floor = at_ceiling = zero
+        # PER: each chunk's importance weight on each of its T rows, and the
+        # per-row |TD error| that becomes the chunk's new priority.
+        is_w_rows = None if self._is_w is None else self._is_w.repeat_interleave(T)
+        td_abs = torch.zeros(N, device=obs.device)
         if has_g:
             with torch.no_grad():
                 next_q = self._q(self.critics_g_targ, s_next_t, st_next, self.goal_cols, next_a)
@@ -1127,8 +1139,11 @@ class GatedRecurrentTQC:
                     at_ceiling = _masked_mean(
                         _bound_frac(target_g, cfg.value_ceiling, upper=True), m_g)
             qs_g = self._q(self.critics_g, s, st, self.goal_cols, a)
-            loss_g = _masked_mean(
-                self._critic_loss_per_sample(qs_g, target_g, head="goal"), m_g)
+            per_g = self._critic_loss_per_sample(qs_g, target_g, head="goal")
+            if is_w_rows is not None:
+                per_g = per_g * is_w_rows        # PER importance weights
+                td_abs = td_abs + (qs_g.detach().mean(dim=(0, 2)) - target_g).abs() * m_g
+            loss_g = _masked_mean(per_g, m_g)
             q_g_data = _masked_mean(qs_g.detach().mean(dim=(0, 2)), m_g)
             critic_loss = critic_loss + loss_g
         if has_e:
@@ -1139,8 +1154,11 @@ class GatedRecurrentTQC:
                     next_log_probs=next_logp, value_floor=cfg.value_floor_e,
                     value_ceiling=cfg.value_ceiling_e, head="explore")
             qs_e = self._q(self.critics_e, s, st, self.explore_cols, a)
-            loss_e = _masked_mean(
-                self._critic_loss_per_sample(qs_e, target_e, head="explore"), m_e)
+            per_e = self._critic_loss_per_sample(qs_e, target_e, head="explore")
+            if is_w_rows is not None:
+                per_e = per_e * is_w_rows
+                td_abs = td_abs + (qs_e.detach().mean(dim=(0, 2)) - target_e).abs() * m_e
+            loss_e = _masked_mean(per_e, m_e)
             q_e_data = _masked_mean(qs_e.detach().mean(dim=(0, 2)), m_e)
             critic_loss = critic_loss + loss_e
         self.opt_critic.zero_grad(set_to_none=True)
@@ -1262,7 +1280,15 @@ class GatedRecurrentTQC:
                 soft_update(targ, src, cfg.tau)
 
         n_rows = (m_g + m_e).sum().clamp_min(1.0)
-        return {"critic_loss_g": loss_g.detach(), "critic_loss_e": loss_e.detach(),
+        per_out = {}
+        if is_w_rows is not None:
+            # R2D2's sequence priority: 0.9 max + 0.1 mean |TD error| over each
+            # chunk's valid transitions. update() pops it before the float metrics.
+            d = td_abs.reshape(B, T)
+            per_out["td_prio"] = 0.9 * d.max(dim=1).values + 0.1 * (
+                d.sum(dim=1) / valid.sum(dim=1).clamp_min(1.0))
+        return {**per_out,
+                "critic_loss_g": loss_g.detach(), "critic_loss_e": loss_e.detach(),
                 "actor_loss": actor_loss.detach(),
                 "temp_loss_g": temp_loss_g.detach(), "temp_loss_e": temp_loss_e.detach(),
                 "alpha_g": self.log_alpha_g.detach().exp(),

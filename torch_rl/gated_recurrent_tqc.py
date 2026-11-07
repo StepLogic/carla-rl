@@ -85,7 +85,7 @@ _CHUNK_KEYS_V2 = _CHUNK_KEYS + ("goal",)     # vc2: + the per-chunk (B, D*64) go
 # under ACTOR_UPDATE_EVERY reports the last actor step's values for these.
 _ACTOR_METRICS = ("actor_loss", "temp_loss_g", "temp_loss_e", "neg_logp_g", "sat_steer",
                   "sat_throttle", "mean_abs_u_steer", "mean_abs_u_throttle", "log_std_g",
-                  "enc_alive", "pretanh_pen", "awr_w_mean", "adv_mean")
+                  "enc_alive", "pretanh_pen", "awr_w_mean", "adv_mean", "bc_mse")
 
 
 class Vc1Compression(nn.Module):
@@ -247,6 +247,11 @@ class GatedRecurrentTQCConfig:
     # frequently"): the critic trains on every update, the actor (and the SAC
     # temperature) on every N-th -- TD3's delayed policy update. 1 = every update.
     actor_update_every: int = 1
+    # ACTOR_BC_ALPHA (user 2026-11-06, "SAC + in-loss cloning"): > 0 puts the
+    # cloning term INSIDE the SAC actor loss, TD3+BC style -- (a / mean|Q|) * Q
+    # against mean((tanh(mu(s_E)) - a_E)^2) on expert labels, one optimizer --
+    # because a cloning step on its own Adam ignores its weight. 0 = off.
+    actor_bc_alpha: float = 0.0
     discount: float = 0.99
     discount_e: float = 0.99
     tau: float = 0.005
@@ -402,6 +407,8 @@ class GatedRecurrentTQCConfig:
         if int(self.actor_update_every) < 1:
             raise ValueError(f"actor_update_every={self.actor_update_every}: the actor "
                              "must step at least every update (1) or every N-th (N > 1)")
+        if float(self.actor_bc_alpha) < 0.0:
+            raise ValueError(f"actor_bc_alpha={self.actor_bc_alpha}: 0 (off) or > 0")
         # The ResNet reads one RGB frame; vc2's channel-stacked goal grid is VC-1 tokens.
         if self.mono_encoder == "resnet" and self.goal_tokens:
             raise ValueError("mono_encoder=resnet is debit-only: goal_tokens must be False")
@@ -497,6 +504,11 @@ class GatedRecurrentTQC:
         self._actor_turn = True
         self.last_actor_stepped = True
         self._last_actor_metrics: Dict[str, float] = {}
+        # ACTOR_BC_ALPHA: the expert-label chunk source (il_finetune_prepare sets
+        # it) and, per actor step, the cloning rows' actor inputs and labels.
+        self._actor_bc_source = None
+        self._bc_x = None
+        self._bc_a = None
         # Reseeds the GLOBAL torch RNG, as RecurrentTQC does: construction
         # order below is load-bearing for reproducibility.
         torch.manual_seed(cfg.seed)
@@ -941,6 +953,37 @@ class GatedRecurrentTQC:
 
     # ── update ───────────────────────────────────────────────────────────
 
+    def set_actor_bc_source(self, source) -> None:
+        """ACTOR_BC_ALPHA: `source()` returns an expert-label chunk (the replay
+        chunk keys, `actions` = the expert's clean labels) for each actor step."""
+        self._actor_bc_source = source
+
+    def _bc_inputs(self, chunk: Dict[str, torch.Tensor]):
+        """(actor inputs, labels) on a cloning chunk's valid rows. The trunk runs
+        under no_grad: in these fine-tunes it is frozen, so the in-loss cloning
+        term trains the actor head, as bc_loss would with the trunk frozen."""
+        cfg, dev = self.cfg, self.device
+        obs, keep, actions, valid = (chunk[k].to(device=dev, dtype=torch.float32)
+                                     for k in ("obs", "keep", "actions", "valid"))
+        goal = chunk["goal"].to(device=dev, dtype=torch.float32) if cfg.goal_tokens else None
+        K = int(cfg.burn_in)
+        B, T = valid.shape
+        N = B * T
+        with torch.no_grad():
+            s = self._roll(self.compress, self.act_embed, self.core, obs, keep, goal)[:, :-1]
+            st = self._state(obs[:, K:-1]).reshape(N, cfg.state_dim)
+            x = torch.cat([s.reshape(N, cfg.hidden).float(), st.float()], dim=-1)
+        v = valid.reshape(N) > 0
+        return x[v], actions.reshape(N, cfg.action_dim)[v]
+
+    def bc_mse(self, chunk: Dict[str, torch.Tensor]) -> float:
+        """Mean squared error of the noise-free action tanh(mean) against a
+        chunk's labels, on its valid rows -- the in-loss cloning term's value."""
+        x, a = self._bc_inputs(chunk)
+        with torch.no_grad():
+            mean, _ = self._actor_forward(x)
+            return float(((torch.tanh(mean) - a) ** 2).mean())
+
     def update(self, chunk: Dict[str, torch.Tensor]) -> Dict[str, float]:
         keys = _CHUNK_KEYS_V2 if self.cfg.goal_tokens else _CHUNK_KEYS
         args = [chunk[k].to(device=self.device, dtype=torch.float32) for k in keys]
@@ -951,6 +994,12 @@ class GatedRecurrentTQC:
         n = self._host_updates
         self._actor_turn = n % int(self.cfg.actor_update_every) == 0
         self._host_updates = n + 1
+        self._bc_x = self._bc_a = None
+        if float(self.cfg.actor_bc_alpha) > 0.0 and self._actor_turn and not self.warmup:
+            if self._actor_bc_source is None:
+                raise RuntimeError("actor_bc_alpha > 0 needs set_actor_bc_source "
+                                   "(il_finetune_prepare sets it from the expert labels)")
+            self._bc_x, self._bc_a = self._bc_inputs(self._actor_bc_source())
         out = self._update(*args)
         # ONE host sync for every metric (Phase 2 review P5): a float() per
         # metric was ~20 device syncs per update. Every metric is an fp32 0-d
@@ -1141,10 +1190,18 @@ class GatedRecurrentTQC:
                     "enc_alive": self._enc_alive(obs),
                 }
             per_row = zero
+            bc_on = self._bc_x is not None
             if has_g:
                 q_g = self._q(self.critics_g, s_d, st, self.goal_cols, new_a).mean(dim=(0, 2))
-                scale_g = self._actor_q_scale(q_g, m_g, self.q_scale_g, self.q_scale_init_g)
-                per_row = per_row + (alpha_g * logp - q_g / scale_g) * m_g
+                if bc_on:
+                    # TD3+BC: the critic term scaled by alpha / mean|Q| so the
+                    # cloning term below keeps a fixed share of the one actor step.
+                    lam = float(cfg.actor_bc_alpha) / _masked_mean(
+                        q_g.detach().abs(), m_g).clamp_min(1e-6)
+                    per_row = per_row + (alpha_g * logp - lam * q_g) * m_g
+                else:
+                    scale_g = self._actor_q_scale(q_g, m_g, self.q_scale_g, self.q_scale_init_g)
+                    per_row = per_row + (alpha_g * logp - q_g / scale_g) * m_g
             if has_e:
                 q_e = self._q(self.critics_e, s_d, st, self.explore_cols, new_a).mean(dim=(0, 2))
                 scale_e = self._actor_q_scale(q_e, m_e, self.q_scale_e, self.q_scale_init_e)
@@ -1161,6 +1218,13 @@ class GatedRecurrentTQC:
             else:
                 diag["pretanh_pen"] = zero
             actor_loss = per_row.sum() / (m_g + m_e).sum().clamp_min(1.0)
+            if bc_on:
+                # ACTOR_BC_ALPHA: the cloning term on the expert's labels, in the
+                # SAME loss and optimizer step as the critic term.
+                mean_bc, _ = self._actor_forward(self._bc_x)
+                bc_mse = ((torch.tanh(mean_bc) - self._bc_a) ** 2).mean()
+                actor_loss = actor_loss + bc_mse
+                diag["bc_mse"] = bc_mse.detach()
             self.opt_actor.zero_grad(set_to_none=True)
             actor_loss.backward()
             self.opt_actor.step()

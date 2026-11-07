@@ -238,6 +238,15 @@ def il_finetune_prepare(agent, buf, root, towns, *, warmup_updates, chunk_b, chu
     if online_freeze_updates:
         log(f"[IL] online freeze: the first {int(online_freeze_updates)} RL updates train "
             f"the critic only, on the clone's own rollouts")
+    if float(getattr(agent.cfg, "actor_bc_alpha", 0.0)) > 0.0:
+        # ACTOR_BC_ALPHA (2026-11-06): the cloning term lives INSIDE the SAC actor
+        # loss (one optimizer), drawn from the expert labels at each actor step;
+        # the hook keeps only the online freeze (w0 = 0: no separate cloning step).
+        agent.set_actor_bc_source(lambda: expert_buf.sample_chunks(bc_chunks, bc_len + K, K))
+        log(f"[IL] in-loss cloning (TD3+BC, alpha {float(agent.cfg.actor_bc_alpha):g}): "
+            f"{bc_chunks} expert-label chunks of {bc_len} steps per actor step; no "
+            f"separate cloning optimizer")
+        w0 = 0.0
     return il_bc_hook(agent, make_bc_optimizer(agent), expert_buf, bc_chunks, bc_len, w0,
                       decay_updates, aug=aug, freeze_updates=online_freeze_updates, log=log)
 

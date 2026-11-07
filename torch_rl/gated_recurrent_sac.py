@@ -76,6 +76,9 @@ class GatedRecurrentSACConfig(GatedRecurrentTQCConfig):
             if not 0.5 <= float(self.iql_expectile) < 1.0:
                 raise ValueError(f"iql_expectile={self.iql_expectile}: in [0.5, 1); "
                                  "0.5 is the mean, toward 1 the best replay action")
+            if float(self.actor_bc_alpha) > 0.0:
+                raise ValueError("actor_bc_alpha is SAC's in-loss cloning (TD3+BC); "
+                                 "IQL's actor is already advantage-weighted regression")
         if int(self.n_quantiles) != 1:
             raise ValueError(
                 f"n_quantiles={self.n_quantiles}: this arm is EXPECTATION SAC, "
@@ -278,7 +281,11 @@ class GatedRecurrentSAC(GatedRecurrentTQC):
         every = int(self.cfg.actor_update_every)
         delay = ("" if every == 1 else
                  f" | actor (and temperature) updated every {every} critic updates")
-        return self._describe_learner() + pin + delay
+        a = float(self.cfg.actor_bc_alpha)
+        td3bc = ("" if a <= 0.0 else
+                 f" | actor: TD3+BC in-loss cloning, critic term x {a:g}/mean|Q| plus "
+                 f"mean (tanh(mu) - expert label)^2, one optimizer")
+        return self._describe_learner() + pin + delay + td3bc
 
     def _describe_learner(self) -> str:
         cfg = self.cfg

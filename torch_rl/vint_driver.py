@@ -233,6 +233,22 @@ class VintPolicy:
                 ws.append(act[:, :, :2].float().cpu().numpy() * self.scale)
         return np.concatenate(ds), np.concatenate(ws)
 
+    def pair_dists(self, ctxs, goals):
+        """Context i against goal i: (N, context + 1, H, W, 3) and (N, H, W, 3) crops
+        -> dists (N,). The map builder scores drive neighbours and revisit
+        candidates this way."""
+        with self.torch.no_grad():
+            ctxs, goals = np.asarray(ctxs, np.uint8), np.asarray(goals, np.uint8)
+            n, c = ctxs.shape[:2]
+            ds = []
+            for i in range(0, n, self.chunk):
+                part = ctxs[i:i + self.chunk]
+                obs = self._tensor(part.reshape(-1, *part.shape[2:]))
+                obs = obs.reshape(len(part), c * 3, self.size[1], self.size[0])
+                dist, _ = self.model(obs, self._tensor(goals[i:i + self.chunk]))
+                ds.append(dist.reshape(-1).float().cpu().numpy())
+        return np.concatenate(ds) if ds else np.zeros(0)
+
     def dists_from_contexts(self, ctxs, goal):
         """N contexts (N, context + 1, H, W, 3) crops against one goal -> dists (N,)."""
         with self.torch.no_grad():

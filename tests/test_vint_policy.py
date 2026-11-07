@@ -62,6 +62,15 @@ def test_many_node_contexts_against_one_goal():
     assert d.shape == (4,) and np.argsort(d).tolist() == [0, 3, 1, 2]
 
 
+def test_pair_dists_scores_each_context_against_its_own_goal():
+    p = _policy(chunk=2)
+    ctxs = np.stack([np.full((6, 64, 85, 3), v, np.uint8) for v in (0, 0, 51)])
+    goals = np.stack([np.full((64, 85, 3), v, np.uint8) for v in (102, 0, 0)])
+    d = p.pair_dists(ctxs, goals)
+    want = [10 * 0.4, 0.0, 0.2]                    # 10 x mean(goal) + mean(obs), /255 scale
+    assert d.shape == (3,) and d == pytest.approx(want, abs=1e-5)
+
+
 def test_a_single_call_accepts_raw_frames_or_stored_crops():
     p = _policy()
     raw = [np.full((128, 128, 3), 51, np.uint8)] * 6

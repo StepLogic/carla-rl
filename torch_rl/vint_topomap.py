@@ -76,8 +76,9 @@ def shortest_path(n, edges, s, g):
     if s == g:
         return [int(s)]
     adj = [[] for _ in range(int(n))]
-    for u, v, c in edges:
-        adj[u].append((v, max(float(c), 0.0)))
+    for u, v, c in edges:                      # a saved map's edges come back as floats
+        adj[int(u)].append((int(v), max(float(c), 0.0)))
+    s, g = int(s), int(g)
     dist = {s: 0.0}
     prev = {}
     heap = [(0.0, s)]
@@ -98,6 +99,87 @@ def shortest_path(n, edges, s, g):
     while path[-1] != s:
         path.append(prev[path[-1]])
     return [int(x) for x in reversed(path)]
+
+
+def scc_sizes(n, edges):
+    """Strongly connected component sizes, largest first (Kosaraju)."""
+    n = int(n)
+    fwd, rev = [[] for _ in range(n)], [[] for _ in range(n)]
+    for u, v, *_ in edges:
+        fwd[int(u)].append(int(v))
+        rev[int(v)].append(int(u))
+    seen, order = [False] * n, []
+    for s in range(n):
+        if seen[s]:
+            continue
+        stack, seen[s] = [(s, 0)], True
+        while stack:
+            u, i = stack.pop()
+            if i < len(fwd[u]):
+                stack.append((u, i + 1))
+                v = fwd[u][i]
+                if not seen[v]:
+                    seen[v] = True
+                    stack.append((v, 0))
+            else:
+                order.append(u)
+    comp, sizes = [-1] * n, []
+    for s in reversed(order):
+        if comp[s] >= 0:
+            continue
+        size, stack, comp[s] = 0, [s], s
+        while stack:
+            u = stack.pop()
+            size += 1
+            for v in rev[u]:
+                if comp[v] < 0:
+                    comp[v] = s
+                    stack.append(v)
+        sizes.append(size)
+    return sorted(sizes, reverse=True)
+
+
+def build_topomap(frames, xy, yaw, policy, *, every=EVERY, context_size=5, stride=3,
+                  radius_m=8.0, min_gap=3, q=0.95, to_frame=None, log=print):
+    """One continuous trace -> the topological map.
+
+    frames (T, H, W, 3) uint8, xy (T, 2) and yaw (T,) radians are the trace's own
+    odometry; `policy` is a VintPolicy (crop85, pair_dists); `to_frame` maps a
+    trace frame to the eval's frame size before ViNT's crop. -> dict with
+    node_step, node_xy, node_yaw, ctx85 (N, context+1, H, W, 3) uint8 crops,
+    edges (E, 3) [u, v, predicted distance] and a summary."""
+    frames = np.asarray(frames)
+    xy = np.asarray(xy, np.float64)
+    yaw = np.asarray(yaw, np.float64)
+    steps = node_steps(len(frames), every)
+    ctx_idx = [context_steps(t, context_size, stride) for t in steps]
+    need = sorted({s for c in ctx_idx for s in c})
+    crops = {s: policy.crop85(to_frame(frames[s]) if to_frame else frames[s]) for s in need}
+    ctx85 = np.stack([np.stack([crops[s] for s in c]) for c in ctx_idx])
+    node_img = ctx85[:, -1]
+    n = len(steps)
+    seq = sequential_edges(n)
+    seq_d = policy.pair_dists(ctx85[[u for u, _ in seq]], node_img[[v for _, v in seq]])
+    tau = calibrate_close(seq_d, q)
+    log(f"[Topomap] {len(frames)} steps -> {n} nodes; drive links {len(seq)}: ViNT distance "
+        f"to the next node median {np.median(seq_d):.2f}, q{q:g} tau = {tau:.2f}")
+    cand = loop_candidates(xy[steps], yaw[steps], radius_m=radius_m, min_gap=min_gap)
+    cand_d = (policy.pair_dists(ctx85[[u for u, _ in cand]], node_img[[v for _, v in cand]])
+              if cand else np.zeros(0))
+    edges = build_graph(seq, seq_d, cand, cand_d, tau)
+    kept = len(edges) - len(seq)
+    sizes = scc_sizes(n, edges)
+    summary = {"steps": int(len(frames)), "nodes": int(n), "every": int(every),
+               "drive_links": len(seq), "seq_dist_median": float(np.median(seq_d)),
+               "tau": float(tau), "q": float(q), "radius_m": float(radius_m),
+               "min_gap": int(min_gap), "revisit_candidates": len(cand),
+               "kept_revisits": int(kept), "edges": len(edges),
+               "scc_largest": int(sizes[0]), "scc_largest_frac": float(sizes[0] / n),
+               "scc_count": len(sizes)}
+    log(f"[Topomap] revisit candidates {len(cand)} (odometry), kept by ViNT {kept}; "
+        f"largest strongly connected component {sizes[0]}/{n} = {sizes[0] / n:.1%}")
+    return {"node_step": steps, "node_xy": xy[steps], "node_yaw": yaw[steps], "ctx85": ctx85,
+            "edges": np.asarray(edges, np.float32).reshape(-1, 3), "summary": summary}
 
 
 class TopoNavigator:

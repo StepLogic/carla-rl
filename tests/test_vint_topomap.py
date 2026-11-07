@@ -18,9 +18,9 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 sys.path.insert(0, os.path.join(ROOT, "src"))
 
-from torch_rl.vint_topomap import (TopoNavigator, build_graph, calibrate_close,  # noqa: E402
-                                   context_steps, loop_candidates, node_steps,
-                                   sequential_edges, shortest_path)
+from torch_rl.vint_topomap import (TopoNavigator, build_graph, build_topomap,  # noqa: E402
+                                   calibrate_close, context_steps, loop_candidates,
+                                   node_steps, scc_sizes, sequential_edges, shortest_path)
 
 
 def test_a_node_every_second_at_ten_hertz():
@@ -67,6 +67,47 @@ def test_shortest_path_is_dijkstra_and_none_when_unreachable():
     assert shortest_path(4, edges, 0, 3) == [0, 1, 2, 3]
     assert shortest_path(4, edges, 3, 0) is None
     assert shortest_path(4, edges, 2, 2) == [2]
+
+
+def test_strongly_connected_component_sizes():
+    edges = [(0, 1, 1), (1, 2, 1), (2, 0, 1), (2, 3, 1)]
+    assert scc_sizes(4, edges) == [3, 1]
+
+
+class _PlacePolicy:
+    """Stand-in ViNT: a frame's value is its PLACE (metres along the road), so the
+    predicted distance from a context to a goal is how far ahead the goal's place
+    is, and behind is 'far'."""
+
+    def crop85(self, f):
+        return np.asarray(f, np.uint8)
+
+    def pair_dists(self, ctxs, goals):
+        here = ctxs[:, -1, 0, 0, 0].astype(float)
+        there = goals[:, 0, 0, 0].astype(float)
+        ahead = there - here
+        return np.where(ahead >= 0, ahead / 4.0, 20.0)   # 4 m per ViNT step, behind = far
+
+
+def test_build_topomap_links_a_road_driven_twice():
+    # 0..39 m east (0.4 m/step, 100 steps), a 100-step detour far away, then 0..39 m again
+    road = np.arange(100) * 0.4
+    x = np.concatenate([road, np.full(100, 500.0), road])
+    y = np.concatenate([np.zeros(100), np.linspace(0, 300, 100), np.zeros(100)])
+    place = np.concatenate([road, np.full(100, 200.0), road])
+    frames = np.repeat(place.astype(np.uint8)[:, None, None, None], 2, axis=1).repeat(2, axis=2).repeat(3, axis=3)
+    xy = np.stack([x, y], 1)
+    yaw = np.zeros(len(x))
+    m = build_topomap(frames, xy, yaw, _PlacePolicy(), every=10, radius_m=2.0, min_gap=3, q=0.95,
+                      log=lambda *a: None)
+    n = len(m["node_step"])
+    assert n == 30 and m["ctx85"].shape == (30, 6, 2, 2, 3)
+    e = {(int(u), int(v)) for u, v, _ in m["edges"]}
+    assert all((i, i + 1) in e for i in range(n - 1))               # the drive
+    assert (0, 20) in e and (20, 0) in e                              # same place, twice
+    assert m["summary"]["tau"] > 0 and m["summary"]["kept_revisits"] >= 2
+    assert m["summary"]["scc_largest_frac"] > 0.5
+    assert shortest_path(n, m["edges"].tolist(), 25, 5) is not None   # a loop closes back
 
 
 def test_the_navigator_follows_navigate_py():

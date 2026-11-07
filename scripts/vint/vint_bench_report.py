@@ -107,6 +107,19 @@ def near_pass_share(rows, within_m=2.0):
                for r in rows.values()) / n if n else float("nan")
 
 
+def approach_stats(rows, within_m=2.0):
+    """Getting near vs arriving: episodes that passed within 2 m (any speed), how
+    many of them became 1 m arrivals, their median speed at the closest approach,
+    and how far the near passes that did not arrive missed by (median)."""
+    near = [r for r in rows.values()
+            if r.get("closest_m") is not None and float(r["closest_m"]) <= within_m]
+    miss = [float(r["closest_m"]) for r in near if not r["reached"]]
+    return {"near": len(near), "converted": sum(bool(r["reached"]) for r in near),
+            "speed_near_med_kmh": _med([float(r["speed_at_closest_kmh"]) for r in near
+                                        if r.get("speed_at_closest_kmh") is not None]),
+            "miss_m_med": _med(miss)}
+
+
 def end_mix(rows):
     out = {e: 0 for e in ENDS + ("clock/other",)}
     for r in rows.values():
@@ -185,6 +198,16 @@ def main(argv=None):
             print(f"| {town} | {band} | {arm} | {speed_kmh(rows):.1f} | "
                   f"{near_pass_share(rows):.2f} | {m['reached']} | {m['crossing']} | "
                   f"{m['off_road']} | {m['collision']} | {m['clock/other']} |")
+
+    print("\n### Getting near vs arriving (diagnostic)")
+    print("| Town | Band | Arm | Passed within 2 m | Of those, arrived at 1 m "
+          "| Speed at closest, median (km/h) | Near-pass miss, median (m) |")
+    print("|---|---|---|---|---|---|---|")
+    for town, band, topo, mapless in cells:
+        for arm, rows in (("Topomap", topo), ("Mapless", mapless)):
+            a = approach_stats(rows)
+            print(f"| {town} | {band} | {arm} | {a['near']} | {a['converted']} | "
+                  f"{a['speed_near_med_kmh']:.1f} | {a['miss_m_med']:.2f} |")
 
 
 if __name__ == "__main__":

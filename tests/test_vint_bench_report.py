@@ -75,3 +75,14 @@ def test_near_pass_share_counts_closest_approach_within_2m_at_any_speed():
     rows = {1: dict(_row(1, True), closest_m=0.4), 2: dict(_row(2, False), closest_m=1.6),
             3: dict(_row(3, False), closest_m=7.0), 4: dict(_row(4, False), closest_m=None)}
     assert rep.near_pass_share(rows) == pytest.approx(0.5)
+
+
+def test_approach_stats_separate_getting_near_from_arriving():
+    rows = {1: dict(_row(1, True), closest_m=0.5, speed_at_closest_kmh=6.0),
+            2: dict(_row(2, False), closest_m=1.4, speed_at_closest_kmh=12.0),
+            3: dict(_row(3, False), closest_m=1.8, speed_at_closest_kmh=10.0),
+            4: dict(_row(4, False), closest_m=9.0, speed_at_closest_kmh=15.0)}
+    a = rep.approach_stats(rows)
+    assert a["near"] == 3 and a["converted"] == 1
+    assert a["speed_near_med_kmh"] == pytest.approx(10.0)
+    assert a["miss_m_med"] == pytest.approx(1.6)          # near passes that did not arrive

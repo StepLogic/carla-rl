@@ -220,11 +220,22 @@ def il_finetune_prepare(agent, buf, root, towns, *, warmup_updates, chunk_b, chu
     # expert_replay (user 2026-11-05, mixed_replay.MixedReplay): the executed
     # expert steps go to a replay of their own and the agent's `buf` starts empty.
     replay = buf if expert_replay is None else expert_replay
-    n_exec = fill_buffer(replay, paths, which="exec")
+    # IL_PRELOAD_TRANSFORM (2026-11-07, after the critic-slope diagnosis): a
+    # torch_rl.slope_diag variant applied to the recorded episodes on their way
+    # into the REPLAY -- the critic's data. The cloning labels stay whole.
+    tname = os.environ.get("IL_PRELOAD_TRANSFORM", "")
+    transform = None
+    if tname:
+        from torch_rl.slope_diag import VARIANTS
+        if tname not in VARIANTS:
+            raise SystemExit(f"IL_PRELOAD_TRANSFORM={tname!r}: not one of {sorted(VARIANTS)}")
+        transform = VARIANTS[tname]
+    n_exec = fill_buffer(replay, paths, which="exec", transform=transform)
     act_dim = int(load_episode(paths[0])["act_label"].shape[1])
     expert_buf, n_lab = _buffer(paths, act_dim, agent.device, seed=1)
-    log(f"[IL] preload {root}: {len(paths)} episodes -> replay +{n_exec} executed steps, "
-        f"expert buffer {n_lab} labelled steps")
+    log(f"[IL] preload {root}: {len(paths)} episodes -> replay +{n_exec} executed steps"
+        + (f" (IL_PRELOAD_TRANSFORM={tname}: {replay.episodes} episodes kept)" if tname else "")
+        + f", expert buffer {n_lab} labelled steps")
     K = int(agent.cfg.burn_in)
     t0 = time.time()
     agent.set_warmup(True)

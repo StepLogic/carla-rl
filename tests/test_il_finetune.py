@@ -139,6 +139,48 @@ def test_il_finetune_prepare_preloads_warms_up_and_returns_the_hook(tmp_path, mo
     assert any(not torch.equal(a, b) for a, b in zip(actor0, agent.actor.parameters()))
 
 
+def test_preload_transform_filters_the_replay_preload(tmp_path, monkeypatch):
+    """IL_PRELOAD_TRANSFORM names a torch_rl.slope_diag variant applied to the
+    recorded episodes on their way into the REPLAY (the critic's data; user
+    2026-11-07 after the critic-slope diagnosis): here one that leaves out the
+    episode with seed 100001."""
+    from tests.test_bc_trainer import _shards, _small_pixel_agent
+    from torch_rl import pixel_rows as pxr
+    from torch_rl import slope_diag
+    from torch_rl.bc_trainer import il_finetune_prepare
+    from torch_rl.episode_buffer import DeviceEpisodeBuffer
+    _shards(tmp_path / "data")                                 # 3 episodes x 10 steps
+    monkeypatch.setenv("REPLAY_DEVICE", "cpu")
+    monkeypatch.setitem(slope_diag.VARIANTS, "drop_100001",
+                        lambda ep: None if int(ep["seed"]) == 100001 else ep)
+    monkeypatch.setenv("IL_PRELOAD_TRANSFORM", "drop_100001")
+    agent = _small_pixel_agent(pxr.BINOC_DIM, 2)
+    buf = DeviceEpisodeBuffer(pxr.mono_row_dim(), 2, 200, "cpu", goal_dim=pxr.PIX)
+    logs = []
+    il_finetune_prepare(agent, buf, str(tmp_path / "data"), ["Town05"],
+                        warmup_updates=1, chunk_b=2, chunk_t=4, w0=0.0,
+                        decay_updates=10, bc_chunks=2, bc_len=4, aug=None, log=logs.append)
+    assert buf.size == 20 and buf.episodes == 2
+    assert any("drop_100001" in m for m in logs)
+
+
+def test_an_unknown_preload_transform_is_refused(tmp_path, monkeypatch):
+    from tests.test_bc_trainer import _shards, _small_pixel_agent
+    from torch_rl import pixel_rows as pxr
+    from torch_rl.bc_trainer import il_finetune_prepare
+    from torch_rl.episode_buffer import DeviceEpisodeBuffer
+    _shards(tmp_path / "data")
+    monkeypatch.setenv("REPLAY_DEVICE", "cpu")
+    monkeypatch.setenv("IL_PRELOAD_TRANSFORM", "no_such_variant")
+    agent = _small_pixel_agent(pxr.BINOC_DIM, 2)
+    buf = DeviceEpisodeBuffer(pxr.mono_row_dim(), 2, 200, "cpu", goal_dim=pxr.PIX)
+    with pytest.raises(SystemExit, match="IL_PRELOAD_TRANSFORM"):
+        il_finetune_prepare(agent, buf, str(tmp_path / "data"), ["Town05"],
+                            warmup_updates=1, chunk_b=2, chunk_t=4, w0=0.0,
+                            decay_updates=10, bc_chunks=2, bc_len=4, aug=None,
+                            log=lambda m: None)
+
+
 def test_trainer_wires_the_preload_warmup_and_hook():
     """main(): prepare before either loop, hook after every update in both."""
     s = open(os.path.join(ROOT, "train_carla_sac.py")).read()

@@ -74,6 +74,10 @@ def main():
     # METRIC GAP NODES REMOVED (user 2026-11-07: "remove metric gap node"): only the
     # image-coverage gap nodes remain. --gap-m > 0 restores the metric rule.
     ap.add_argument("--gap-m", type=float, default=0.0)
+    ap.add_argument("--match-total", action=argparse.BooleanOptionalAction, default=True,
+                    help="uniform / random key counts chosen so their key + image-gap TOTAL "
+                         "equals entropy's (default; --no-match-total matches key counts only, "
+                         "Habitat's rule, as the 2026-11-07 frozen run used)")
     ap.add_argument("--drive-visit-m", type=float, default=8.0,
                     help="a candidate visits a node this close (aligned) for the drive edges")
     ap.add_argument("--max-edge-m", type=float, default=25.0)
@@ -140,23 +144,52 @@ def main():
                 keys.append(int(k))
     n = len(keys)
     view = {"pos": pos, "yaw": yaw}
-    _sp, uni = im.match_uniform(view, n)
-    rnd = im.place_random(view, n, seed=a.seed)
+
+    def with_image_gaps(key):
+        """2a. IMAGE-COVERAGE GAP NODES: greedily add the worst-covered candidate
+        until every candidate scores >= thr to some node. -> (nodes, n_gap)."""
+        nodes = list(dict.fromkeys(int(x) for x in key))
+        cover = sims_to(nodes).max(1).values
+        added = 0
+        while True:
+            w = int(torch.argmin(cover))
+            if float(cover[w]) >= thr:
+                return nodes, added
+            nodes.append(w); added += 1
+            cover = torch.maximum(cover, (D @ D[w]).float())     # half matmul: no fp32 copy of D
+
+    def total_matched(place, target):
+        """MATCH THE TOTAL (user 2026-11-07: "ensure number of nodes in uniform map
+        matched entropy's"): the key count whose key + image-gap TOTAL is closest to
+        `target`, by bisection on the key count. -> (keys, total)."""
+        lo, hi, best = 1, max(target, 2), None
+        while lo <= hi:
+            mid = (lo + hi) // 2
+            k = list(map(int, place(mid)))
+            tot = len(with_image_gaps(k)[0])
+            if best is None or abs(tot - target) < abs(best[1] - target):
+                best = (k, tot)
+            if tot == target:
+                break
+            lo, hi = (mid + 1, hi) if tot < target else (lo, mid - 1)
+        return best
+
+    ent_total = len(with_image_gaps(keys)[0])
+    if a.match_total:
+        uni, uni_total = total_matched(lambda m: im.match_uniform(view, m)[1], ent_total)
+        rnd, rnd_total = total_matched(lambda m: im.place_random(view, m, seed=a.seed), ent_total)
+        _sp = im.match_uniform(view, len(uni))[0]
+        print(f"[ImgMap] TOTAL matched to entropy's {ent_total}: uniform {len(uni)} keys -> {uni_total} "
+              f"(spacing {_sp:.2f} m); random {len(rnd)} keys -> {rnd_total}", flush=True)
+    else:
+        _sp, uni = im.match_uniform(view, n)
+        rnd = im.place_random(view, n, seed=a.seed)
     print(f"[ImgMap] key nodes: entropy MAD {len(mad)} -> {n} image-distinct; uniform {len(uni)} "
           f"(spacing {_sp:.2f} m); random {len(rnd)}", flush=True)
 
     rows = []
     for name, key in (("entropy", keys), ("uniform", list(map(int, uni))), ("random", list(map(int, rnd)))):
-        nodes = list(dict.fromkeys(key))
-        # 2a. IMAGE-COVERAGE GAP NODES
-        cover = sims_to(nodes).max(1).values
-        img_gap = 0
-        while True:
-            w = int(torch.argmin(cover))
-            if float(cover[w]) >= thr:
-                break
-            nodes.append(w); img_gap += 1
-            cover = torch.maximum(cover, (D @ D[w]).float())     # half matmul: no fp32 copy of D
+        nodes, img_gap = with_image_gaps(key)
         # 2b. METRIC GAP (aligned, gap_m)
         before = len(nodes)
         kind = {int(x): "key" for x in key}
@@ -218,7 +251,7 @@ def main():
         meta = {"placement": name, "town": a.town, "trace": a.trace, "image_rules": True,
                 "threshold": round(thr, 3), "far_false_2pct": round(thr_far, 3), "same_place_median": round(same_med, 3),
                 "dedupe": a.dedupe, "label_floor": a.label_floor, "label_radius_m": a.label_radius_m,
-                "key_nodes": len(key), "image_gap_nodes": img_gap, "metric_gap_nodes": met_gap,
+                "key_nodes": len(key), "image_gap_nodes": img_gap, "match_total": bool(a.match_total), "metric_gap_nodes": met_gap,
                 "gap_m": a.gap_m, "drive_visit_m": a.drive_visit_m, "edges_rejected_turn": rej_turn, "edges_rejected_length": rej_len,
                 "max_edge_m": a.max_edge_m, "cand_m": a.cand_m,
                 "edges_image_transition": n_img, "edges_drive": len(gd.edges),

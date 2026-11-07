@@ -1,0 +1,5402 @@
+[
+ {
+  "town": "Town02",
+  "seed": 31000,
+  "bin": "easy",
+  "route_m": 22.34,
+  "euclid_m": 22.0,
+  "kind": "straight",
+  "band": "easy"
+ },
+ {
+  "town": "Town02",
+  "seed": 31001,
+  "bin": "easy",
+  "route_m": 21.0,
+  "euclid_m": 21.0,
+  "kind": "straight",
+  "band": "easy"
+ },
+ {
+  "town": "Town02",
+  "seed": 31002,
+  "bin": "easy",
+  "route_m": 22.0,
+  "euclid_m": 22.0,
+  "kind": "straight",
+  "band": "easy"
+ },
+ {
+  "town": "Town02",
+  "seed": 31004,
+  "bin": "easy",
+  "route_m": 21.0,
+  "euclid_m": 21.0,
+  "kind": "straight",
+  "band": "easy"
+ },
+ {
+  "town": "Town02",
+  "seed": 31005,
+  "bin": "easy",
+  "route_m": 19.52,
+  "euclid_m": 19.0,
+  "kind": "straight",
+  "band": "easy"
+ },
+ {
+  "town": "Town02",
+  "seed": 31006,
+  "bin": "easy",
+  "route_m": 13.83,
+  "euclid_m": 11.57,
+  "kind": "straight",
+  "band": "easy"
+ },
+ {
+  "town": "Town02",
+  "seed": 31007,
+  "bin": "easy",
+  "route_m": 15.06,
+  "euclid_m": 13.32,
+  "kind": "straight",
+  "band": "easy"
+ },
+ {
+  "town": "Town02",
+  "seed": 31008,
+  "bin": "easy",
+  "route_m": 20.02,
+  "euclid_m": 17.75,
+  "kind": "straight",
+  "band": "easy"
+ },
+ {
+  "town": "Town02",
+  "seed": 31009,
+  "bin": "easy",
+  "route_m": 23.0,
+  "euclid_m": 23.0,
+  "kind": "straight",
+  "band": "easy"
+ },
+ {
+  "town": "Town02",
+  "seed": 31010,
+  "bin": "easy",
+  "route_m": 19.0,
+  "euclid_m": 19.0,
+  "kind": "straight",
+  "band": "easy"
+ },
+ {
+  "town": "Town02",
+  "seed": 31011,
+  "bin": "easy",
+  "route_m": 20.28,
+  "euclid_m": 19.89,
+  "kind": "straight",
+  "band": "easy"
+ },
+ {
+  "town": "Town02",
+  "seed": 31012,
+  "bin": "easy",
+  "route_m": 23.0,
+  "euclid_m": 23.0,
+  "kind": "straight",
+  "band": "easy"
+ },
+ {
+  "town": "Town02",
+  "seed": 31013,
+  "bin": "easy",
+  "route_m": 19.0,
+  "euclid_m": 19.0,
+  "kind": "straight",
+  "band": "easy"
+ },
+ {
+  "town": "Town02",
+  "seed": 31014,
+  "bin": "easy",
+  "route_m": 21.0,
+  "euclid_m": 21.0,
+  "kind": "straight",
+  "band": "easy"
+ },
+ {
+  "town": "Town02",
+  "seed": 31016,
+  "bin": "easy",
+  "route_m": 18.83,
+  "euclid_m": 15.12,
+  "kind": "curved",
+  "band": "easy"
+ },
+ {
+  "town": "Town02",
+  "seed": 31017,
+  "bin": "easy",
+  "route_m": 23.72,
+  "euclid_m": 18.97,
+  "kind": "curved",
+  "band": "easy"
+ },
+ {
+  "town": "Town02",
+  "seed": 31018,
+  "bin": "easy",
+  "route_m": 20.0,
+  "euclid_m": 20.0,
+  "kind": "straight",
+  "band": "easy"
+ },
+ {
+  "town": "Town02",
+  "seed": 31019,
+  "bin": "easy",
+  "route_m": 23.0,
+  "euclid_m": 23.0,
+  "kind": "straight",
+  "band": "easy"
+ },
+ {
+  "town": "Town02",
+  "seed": 31020,
+  "bin": "easy",
+  "route_m": 22.0,
+  "euclid_m": 22.0,
+  "kind": "straight",
+  "band": "easy"
+ },
+ {
+  "town": "Town02",
+  "seed": 31022,
+  "bin": "easy",
+  "route_m": 20.67,
+  "euclid_m": 19.76,
+  "kind": "straight",
+  "band": "easy"
+ },
+ {
+  "town": "Town02",
+  "seed": 31023,
+  "bin": "easy",
+  "route_m": 23.25,
+  "euclid_m": 23.21,
+  "kind": "straight",
+  "band": "easy"
+ },
+ {
+  "town": "Town02",
+  "seed": 31024,
+  "bin": "easy",
+  "route_m": 17.06,
+  "euclid_m": 15.48,
+  "kind": "straight",
+  "band": "easy"
+ },
+ {
+  "town": "Town02",
+  "seed": 31025,
+  "bin": "easy",
+  "route_m": 21.28,
+  "euclid_m": 20.89,
+  "kind": "straight",
+  "band": "easy"
+ },
+ {
+  "town": "Town02",
+  "seed": 31027,
+  "bin": "easy",
+  "route_m": 20.83,
+  "euclid_m": 16.58,
+  "kind": "curved",
+  "band": "easy"
+ },
+ {
+  "town": "Town02",
+  "seed": 31028,
+  "bin": "easy",
+  "route_m": 19.0,
+  "euclid_m": 19.0,
+  "kind": "straight",
+  "band": "easy"
+ },
+ {
+  "town": "Town02",
+  "seed": 31029,
+  "bin": "easy",
+  "route_m": 24.0,
+  "euclid_m": 24.0,
+  "kind": "straight",
+  "band": "easy"
+ },
+ {
+  "town": "Town02",
+  "seed": 31031,
+  "bin": "easy",
+  "route_m": 16.83,
+  "euclid_m": 13.02,
+  "kind": "curved",
+  "band": "easy"
+ },
+ {
+  "town": "Town02",
+  "seed": 31032,
+  "bin": "easy",
+  "route_m": 19.0,
+  "euclid_m": 19.0,
+  "kind": "straight",
+  "band": "easy"
+ },
+ {
+  "town": "Town02",
+  "seed": 31033,
+  "bin": "easy",
+  "route_m": 21.87,
+  "euclid_m": 18.62,
+  "kind": "straight",
+  "band": "easy"
+ },
+ {
+  "town": "Town02",
+  "seed": 31034,
+  "bin": "easy",
+  "route_m": 19.6,
+  "euclid_m": 17.41,
+  "kind": "straight",
+  "band": "easy"
+ },
+ {
+  "town": "Town02",
+  "seed": 31035,
+  "bin": "easy",
+  "route_m": 24.0,
+  "euclid_m": 24.0,
+  "kind": "straight",
+  "band": "easy"
+ },
+ {
+  "town": "Town02",
+  "seed": 31036,
+  "bin": "easy",
+  "route_m": 19.1,
+  "euclid_m": 18.92,
+  "kind": "straight",
+  "band": "easy"
+ },
+ {
+  "town": "Town02",
+  "seed": 31037,
+  "bin": "easy",
+  "route_m": 23.0,
+  "euclid_m": 23.0,
+  "kind": "straight",
+  "band": "easy"
+ },
+ {
+  "town": "Town02",
+  "seed": 31038,
+  "bin": "easy",
+  "route_m": 22.0,
+  "euclid_m": 22.0,
+  "kind": "straight",
+  "band": "easy"
+ },
+ {
+  "town": "Town02",
+  "seed": 31041,
+  "bin": "easy",
+  "route_m": 16.99,
+  "euclid_m": 16.41,
+  "kind": "straight",
+  "band": "easy"
+ },
+ {
+  "town": "Town02",
+  "seed": 31042,
+  "bin": "easy",
+  "route_m": 21.0,
+  "euclid_m": 21.0,
+  "kind": "straight",
+  "band": "easy"
+ },
+ {
+  "town": "Town02",
+  "seed": 31043,
+  "bin": "easy",
+  "route_m": 22.76,
+  "euclid_m": 22.66,
+  "kind": "straight",
+  "band": "easy"
+ },
+ {
+  "town": "Town02",
+  "seed": 31044,
+  "bin": "easy",
+  "route_m": 23.0,
+  "euclid_m": 23.0,
+  "kind": "straight",
+  "band": "easy"
+ },
+ {
+  "town": "Town02",
+  "seed": 31045,
+  "bin": "easy",
+  "route_m": 14.83,
+  "euclid_m": 12.07,
+  "kind": "curved",
+  "band": "easy"
+ },
+ {
+  "town": "Town02",
+  "seed": 31046,
+  "bin": "easy",
+  "route_m": 24.09,
+  "euclid_m": 20.04,
+  "kind": "curved",
+  "band": "easy"
+ },
+ {
+  "town": "Town02",
+  "seed": 31047,
+  "bin": "easy",
+  "route_m": 21.35,
+  "euclid_m": 16.34,
+  "kind": "curved",
+  "band": "easy"
+ },
+ {
+  "town": "Town02",
+  "seed": 31048,
+  "bin": "easy",
+  "route_m": 20.56,
+  "euclid_m": 17.71,
+  "kind": "straight",
+  "band": "easy"
+ },
+ {
+  "town": "Town02",
+  "seed": 31049,
+  "bin": "easy",
+  "route_m": 18.69,
+  "euclid_m": 17.8,
+  "kind": "straight",
+  "band": "easy"
+ },
+ {
+  "town": "Town02",
+  "seed": 31050,
+  "bin": "easy",
+  "route_m": 19.0,
+  "euclid_m": 19.0,
+  "kind": "straight",
+  "band": "easy"
+ },
+ {
+  "town": "Town02",
+  "seed": 31052,
+  "bin": "easy",
+  "route_m": 19.0,
+  "euclid_m": 19.0,
+  "kind": "straight",
+  "band": "easy"
+ },
+ {
+  "town": "Town02",
+  "seed": 31053,
+  "bin": "easy",
+  "route_m": 24.0,
+  "euclid_m": 24.0,
+  "kind": "straight",
+  "band": "easy"
+ },
+ {
+  "town": "Town02",
+  "seed": 31054,
+  "bin": "easy",
+  "route_m": 18.32,
+  "euclid_m": 18.0,
+  "kind": "straight",
+  "band": "easy"
+ },
+ {
+  "town": "Town02",
+  "seed": 31055,
+  "bin": "easy",
+  "route_m": 18.6,
+  "euclid_m": 14.52,
+  "kind": "curved",
+  "band": "easy"
+ },
+ {
+  "town": "Town02",
+  "seed": 31056,
+  "bin": "easy",
+  "route_m": 18.0,
+  "euclid_m": 18.0,
+  "kind": "straight",
+  "band": "easy"
+ },
+ {
+  "town": "Town02",
+  "seed": 31057,
+  "bin": "easy",
+  "route_m": 22.0,
+  "euclid_m": 22.0,
+  "kind": "straight",
+  "band": "easy"
+ },
+ {
+  "town": "Town02",
+  "seed": 31058,
+  "bin": "easy",
+  "route_m": 22.31,
+  "euclid_m": 20.8,
+  "kind": "straight",
+  "band": "easy"
+ },
+ {
+  "town": "Town02",
+  "seed": 31059,
+  "bin": "easy",
+  "route_m": 24.41,
+  "euclid_m": 23.0,
+  "kind": "straight",
+  "band": "easy"
+ },
+ {
+  "town": "Town02",
+  "seed": 31060,
+  "bin": "easy",
+  "route_m": 20.0,
+  "euclid_m": 20.0,
+  "kind": "straight",
+  "band": "easy"
+ },
+ {
+  "town": "Town02",
+  "seed": 31061,
+  "bin": "easy",
+  "route_m": 20.43,
+  "euclid_m": 15.72,
+  "kind": "curved",
+  "band": "easy"
+ },
+ {
+  "town": "Town02",
+  "seed": 31062,
+  "bin": "easy",
+  "route_m": 20.0,
+  "euclid_m": 20.0,
+  "kind": "straight",
+  "band": "easy"
+ },
+ {
+  "town": "Town02",
+  "seed": 31063,
+  "bin": "easy",
+  "route_m": 22.08,
+  "euclid_m": 18.17,
+  "kind": "curved",
+  "band": "easy"
+ },
+ {
+  "town": "Town02",
+  "seed": 31065,
+  "bin": "easy",
+  "route_m": 21.09,
+  "euclid_m": 17.78,
+  "kind": "straight",
+  "band": "easy"
+ },
+ {
+  "town": "Town02",
+  "seed": 31066,
+  "bin": "easy",
+  "route_m": 16.89,
+  "euclid_m": 16.78,
+  "kind": "straight",
+  "band": "easy"
+ },
+ {
+  "town": "Town02",
+  "seed": 31068,
+  "bin": "easy",
+  "route_m": 19.0,
+  "euclid_m": 19.0,
+  "kind": "straight",
+  "band": "easy"
+ },
+ {
+  "town": "Town02",
+  "seed": 31069,
+  "bin": "easy",
+  "route_m": 20.83,
+  "euclid_m": 15.98,
+  "kind": "curved",
+  "band": "easy"
+ },
+ {
+  "town": "Town02",
+  "seed": 31070,
+  "bin": "easy",
+  "route_m": 21.84,
+  "euclid_m": 20.0,
+  "kind": "straight",
+  "band": "easy"
+ },
+ {
+  "town": "Town02",
+  "seed": 31071,
+  "bin": "easy",
+  "route_m": 19.91,
+  "euclid_m": 14.87,
+  "kind": "curved",
+  "band": "easy"
+ },
+ {
+  "town": "Town02",
+  "seed": 31072,
+  "bin": "easy",
+  "route_m": 19.01,
+  "euclid_m": 18.48,
+  "kind": "straight",
+  "band": "easy"
+ },
+ {
+  "town": "Town02",
+  "seed": 31073,
+  "bin": "easy",
+  "route_m": 11.0,
+  "euclid_m": 11.0,
+  "kind": "straight",
+  "band": "easy"
+ },
+ {
+  "town": "Town02",
+  "seed": 31074,
+  "bin": "easy",
+  "route_m": 23.0,
+  "euclid_m": 23.0,
+  "kind": "straight",
+  "band": "easy"
+ },
+ {
+  "town": "Town02",
+  "seed": 31075,
+  "bin": "easy",
+  "route_m": 17.66,
+  "euclid_m": 15.99,
+  "kind": "straight",
+  "band": "easy"
+ },
+ {
+  "town": "Town02",
+  "seed": 31076,
+  "bin": "easy",
+  "route_m": 16.96,
+  "euclid_m": 15.4,
+  "kind": "straight",
+  "band": "easy"
+ },
+ {
+  "town": "Town02",
+  "seed": 31077,
+  "bin": "easy",
+  "route_m": 24.53,
+  "euclid_m": 19.31,
+  "kind": "curved",
+  "band": "easy"
+ },
+ {
+  "town": "Town02",
+  "seed": 31078,
+  "bin": "easy",
+  "route_m": 24.41,
+  "euclid_m": 19.76,
+  "kind": "curved",
+  "band": "easy"
+ },
+ {
+  "town": "Town02",
+  "seed": 31080,
+  "bin": "easy",
+  "route_m": 20.0,
+  "euclid_m": 20.0,
+  "kind": "straight",
+  "band": "easy"
+ },
+ {
+  "town": "Town02",
+  "seed": 31081,
+  "bin": "easy",
+  "route_m": 13.83,
+  "euclid_m": 11.49,
+  "kind": "curved",
+  "band": "easy"
+ },
+ {
+  "town": "Town02",
+  "seed": 31082,
+  "bin": "easy",
+  "route_m": 19.83,
+  "euclid_m": 15.96,
+  "kind": "curved",
+  "band": "easy"
+ },
+ {
+  "town": "Town02",
+  "seed": 31083,
+  "bin": "easy",
+  "route_m": 15.45,
+  "euclid_m": 14.5,
+  "kind": "straight",
+  "band": "easy"
+ },
+ {
+  "town": "Town02",
+  "seed": 31084,
+  "bin": "easy",
+  "route_m": 10.0,
+  "euclid_m": 10.0,
+  "kind": "straight",
+  "band": "easy"
+ },
+ {
+  "town": "Town02",
+  "seed": 31085,
+  "bin": "easy",
+  "route_m": 22.0,
+  "euclid_m": 22.0,
+  "kind": "straight",
+  "band": "easy"
+ },
+ {
+  "town": "Town02",
+  "seed": 31086,
+  "bin": "easy",
+  "route_m": 21.36,
+  "euclid_m": 19.8,
+  "kind": "straight",
+  "band": "easy"
+ },
+ {
+  "town": "Town02",
+  "seed": 31087,
+  "bin": "easy",
+  "route_m": 24.0,
+  "euclid_m": 24.0,
+  "kind": "straight",
+  "band": "easy"
+ },
+ {
+  "town": "Town02",
+  "seed": 31089,
+  "bin": "easy",
+  "route_m": 23.6,
+  "euclid_m": 23.0,
+  "kind": "straight",
+  "band": "easy"
+ },
+ {
+  "town": "Town02",
+  "seed": 31090,
+  "bin": "easy",
+  "route_m": 18.0,
+  "euclid_m": 18.0,
+  "kind": "straight",
+  "band": "easy"
+ },
+ {
+  "town": "Town02",
+  "seed": 31091,
+  "bin": "easy",
+  "route_m": 22.0,
+  "euclid_m": 22.0,
+  "kind": "straight",
+  "band": "easy"
+ },
+ {
+  "town": "Town02",
+  "seed": 31092,
+  "bin": "easy",
+  "route_m": 12.0,
+  "euclid_m": 12.0,
+  "kind": "straight",
+  "band": "easy"
+ },
+ {
+  "town": "Town02",
+  "seed": 31093,
+  "bin": "easy",
+  "route_m": 14.0,
+  "euclid_m": 14.0,
+  "kind": "straight",
+  "band": "easy"
+ },
+ {
+  "town": "Town02",
+  "seed": 31094,
+  "bin": "easy",
+  "route_m": 22.0,
+  "euclid_m": 22.0,
+  "kind": "straight",
+  "band": "easy"
+ },
+ {
+  "town": "Town02",
+  "seed": 31095,
+  "bin": "easy",
+  "route_m": 19.91,
+  "euclid_m": 14.87,
+  "kind": "curved",
+  "band": "easy"
+ },
+ {
+  "town": "Town02",
+  "seed": 31096,
+  "bin": "easy",
+  "route_m": 15.83,
+  "euclid_m": 13.25,
+  "kind": "straight",
+  "band": "easy"
+ },
+ {
+  "town": "Town02",
+  "seed": 31097,
+  "bin": "easy",
+  "route_m": 20.53,
+  "euclid_m": 16.84,
+  "kind": "curved",
+  "band": "easy"
+ },
+ {
+  "town": "Town02",
+  "seed": 31098,
+  "bin": "easy",
+  "route_m": 18.23,
+  "euclid_m": 17.66,
+  "kind": "straight",
+  "band": "easy"
+ },
+ {
+  "town": "Town02",
+  "seed": 31099,
+  "bin": "easy",
+  "route_m": 20.08,
+  "euclid_m": 16.62,
+  "kind": "curved",
+  "band": "easy"
+ },
+ {
+  "town": "Town02",
+  "seed": 31100,
+  "bin": "easy",
+  "route_m": 14.83,
+  "euclid_m": 12.45,
+  "kind": "straight",
+  "band": "easy"
+ },
+ {
+  "town": "Town02",
+  "seed": 31101,
+  "bin": "easy",
+  "route_m": 17.91,
+  "euclid_m": 13.33,
+  "kind": "curved",
+  "band": "easy"
+ },
+ {
+  "town": "Town02",
+  "seed": 31103,
+  "bin": "easy",
+  "route_m": 24.0,
+  "euclid_m": 24.0,
+  "kind": "straight",
+  "band": "easy"
+ },
+ {
+  "town": "Town02",
+  "seed": 31104,
+  "bin": "easy",
+  "route_m": 24.09,
+  "euclid_m": 20.76,
+  "kind": "straight",
+  "band": "easy"
+ },
+ {
+  "town": "Town02",
+  "seed": 31105,
+  "bin": "easy",
+  "route_m": 18.0,
+  "euclid_m": 18.0,
+  "kind": "straight",
+  "band": "easy"
+ },
+ {
+  "town": "Town02",
+  "seed": 31106,
+  "bin": "easy",
+  "route_m": 19.7,
+  "euclid_m": 17.87,
+  "kind": "straight",
+  "band": "easy"
+ },
+ {
+  "town": "Town02",
+  "seed": 31107,
+  "bin": "easy",
+  "route_m": 23.08,
+  "euclid_m": 18.73,
+  "kind": "curved",
+  "band": "easy"
+ },
+ {
+  "town": "Town02",
+  "seed": 31108,
+  "bin": "easy",
+  "route_m": 16.28,
+  "euclid_m": 16.26,
+  "kind": "straight",
+  "band": "easy"
+ },
+ {
+  "town": "Town02",
+  "seed": 31111,
+  "bin": "easy",
+  "route_m": 10.0,
+  "euclid_m": 10.0,
+  "kind": "straight",
+  "band": "easy"
+ },
+ {
+  "town": "Town02",
+  "seed": 31112,
+  "bin": "easy",
+  "route_m": 17.53,
+  "euclid_m": 16.28,
+  "kind": "straight",
+  "band": "easy"
+ },
+ {
+  "town": "Town02",
+  "seed": 31114,
+  "bin": "easy",
+  "route_m": 23.68,
+  "euclid_m": 23.1,
+  "kind": "straight",
+  "band": "easy"
+ },
+ {
+  "town": "Town02",
+  "seed": 31115,
+  "bin": "easy",
+  "route_m": 19.0,
+  "euclid_m": 19.0,
+  "kind": "straight",
+  "band": "easy"
+ },
+ {
+  "town": "Town02",
+  "seed": 32000,
+  "bin": "medium",
+  "route_m": 32.0,
+  "euclid_m": 32.0,
+  "kind": "straight",
+  "band": "medium"
+ },
+ {
+  "town": "Town02",
+  "seed": 32001,
+  "bin": "medium",
+  "route_m": 37.0,
+  "euclid_m": 37.0,
+  "kind": "straight",
+  "band": "medium"
+ },
+ {
+  "town": "Town02",
+  "seed": 32002,
+  "bin": "medium",
+  "route_m": 45.5,
+  "euclid_m": 44.09,
+  "kind": "straight",
+  "band": "medium"
+ },
+ {
+  "town": "Town02",
+  "seed": 32004,
+  "bin": "medium",
+  "route_m": 39.03,
+  "euclid_m": 35.55,
+  "kind": "straight",
+  "band": "medium"
+ },
+ {
+  "town": "Town02",
+  "seed": 32005,
+  "bin": "medium",
+  "route_m": 34.09,
+  "euclid_m": 27.22,
+  "kind": "curved",
+  "band": "medium"
+ },
+ {
+  "town": "Town02",
+  "seed": 32006,
+  "bin": "medium",
+  "route_m": 38.08,
+  "euclid_m": 29.27,
+  "kind": "curved",
+  "band": "medium"
+ },
+ {
+  "town": "Town02",
+  "seed": 32007,
+  "bin": "medium",
+  "route_m": 30.0,
+  "euclid_m": 30.0,
+  "kind": "straight",
+  "band": "medium"
+ },
+ {
+  "town": "Town02",
+  "seed": 32008,
+  "bin": "medium",
+  "route_m": 29.99,
+  "euclid_m": 29.36,
+  "kind": "straight",
+  "band": "medium"
+ },
+ {
+  "town": "Town02",
+  "seed": 32009,
+  "bin": "medium",
+  "route_m": 43.99,
+  "euclid_m": 43.99,
+  "kind": "straight",
+  "band": "medium"
+ },
+ {
+  "town": "Town02",
+  "seed": 32010,
+  "bin": "medium",
+  "route_m": 45.05,
+  "euclid_m": 43.74,
+  "kind": "straight",
+  "band": "medium"
+ },
+ {
+  "town": "Town02",
+  "seed": 32012,
+  "bin": "medium",
+  "route_m": 39.83,
+  "euclid_m": 36.43,
+  "kind": "straight",
+  "band": "medium"
+ },
+ {
+  "town": "Town02",
+  "seed": 32014,
+  "bin": "medium",
+  "route_m": 32.1,
+  "euclid_m": 31.9,
+  "kind": "straight",
+  "band": "medium"
+ },
+ {
+  "town": "Town02",
+  "seed": 32015,
+  "bin": "medium",
+  "route_m": 47.1,
+  "euclid_m": 40.12,
+  "kind": "straight",
+  "band": "medium"
+ },
+ {
+  "town": "Town02",
+  "seed": 32016,
+  "bin": "medium",
+  "route_m": 49.4,
+  "euclid_m": 48.0,
+  "kind": "straight",
+  "band": "medium"
+ },
+ {
+  "town": "Town02",
+  "seed": 32017,
+  "bin": "medium",
+  "route_m": 43.17,
+  "euclid_m": 34.65,
+  "kind": "curved",
+  "band": "medium"
+ },
+ {
+  "town": "Town02",
+  "seed": 32018,
+  "bin": "medium",
+  "route_m": 28.6,
+  "euclid_m": 25.48,
+  "kind": "straight",
+  "band": "medium"
+ },
+ {
+  "town": "Town02",
+  "seed": 32019,
+  "bin": "medium",
+  "route_m": 46.2,
+  "euclid_m": 34.91,
+  "kind": "curved",
+  "band": "medium"
+ },
+ {
+  "town": "Town02",
+  "seed": 32020,
+  "bin": "medium",
+  "route_m": 30.83,
+  "euclid_m": 24.71,
+  "kind": "curved",
+  "band": "medium"
+ },
+ {
+  "town": "Town02",
+  "seed": 32021,
+  "bin": "medium",
+  "route_m": 34.66,
+  "euclid_m": 32.95,
+  "kind": "straight",
+  "band": "medium"
+ },
+ {
+  "town": "Town02",
+  "seed": 32023,
+  "bin": "medium",
+  "route_m": 26.67,
+  "euclid_m": 25.6,
+  "kind": "straight",
+  "band": "medium"
+ },
+ {
+  "town": "Town02",
+  "seed": 32024,
+  "bin": "medium",
+  "route_m": 25.02,
+  "euclid_m": 21.2,
+  "kind": "straight",
+  "band": "medium"
+ },
+ {
+  "town": "Town02",
+  "seed": 32025,
+  "bin": "medium",
+  "route_m": 29.0,
+  "euclid_m": 29.0,
+  "kind": "straight",
+  "band": "medium"
+ },
+ {
+  "town": "Town02",
+  "seed": 32026,
+  "bin": "medium",
+  "route_m": 29.09,
+  "euclid_m": 23.9,
+  "kind": "curved",
+  "band": "medium"
+ },
+ {
+  "town": "Town02",
+  "seed": 32027,
+  "bin": "medium",
+  "route_m": 31.91,
+  "euclid_m": 31.8,
+  "kind": "straight",
+  "band": "medium"
+ },
+ {
+  "town": "Town02",
+  "seed": 32028,
+  "bin": "medium",
+  "route_m": 29.84,
+  "euclid_m": 28.0,
+  "kind": "straight",
+  "band": "medium"
+ },
+ {
+  "town": "Town02",
+  "seed": 32030,
+  "bin": "medium",
+  "route_m": 40.81,
+  "euclid_m": 39.96,
+  "kind": "straight",
+  "band": "medium"
+ },
+ {
+  "town": "Town02",
+  "seed": 32031,
+  "bin": "medium",
+  "route_m": 30.83,
+  "euclid_m": 24.7,
+  "kind": "curved",
+  "band": "medium"
+ },
+ {
+  "town": "Town02",
+  "seed": 32032,
+  "bin": "medium",
+  "route_m": 30.83,
+  "euclid_m": 24.11,
+  "kind": "curved",
+  "band": "medium"
+ },
+ {
+  "town": "Town02",
+  "seed": 32033,
+  "bin": "medium",
+  "route_m": 30.09,
+  "euclid_m": 25.62,
+  "kind": "straight",
+  "band": "medium"
+ },
+ {
+  "town": "Town02",
+  "seed": 32035,
+  "bin": "medium",
+  "route_m": 45.61,
+  "euclid_m": 36.61,
+  "kind": "curved",
+  "band": "medium"
+ },
+ {
+  "town": "Town02",
+  "seed": 32036,
+  "bin": "medium",
+  "route_m": 38.99,
+  "euclid_m": 38.99,
+  "kind": "straight",
+  "band": "medium"
+ },
+ {
+  "town": "Town02",
+  "seed": 32037,
+  "bin": "medium",
+  "route_m": 41.36,
+  "euclid_m": 40.0,
+  "kind": "straight",
+  "band": "medium"
+ },
+ {
+  "town": "Town02",
+  "seed": 32038,
+  "bin": "medium",
+  "route_m": 29.0,
+  "euclid_m": 29.0,
+  "kind": "straight",
+  "band": "medium"
+ },
+ {
+  "town": "Town02",
+  "seed": 32039,
+  "bin": "medium",
+  "route_m": 36.15,
+  "euclid_m": 34.86,
+  "kind": "straight",
+  "band": "medium"
+ },
+ {
+  "town": "Town02",
+  "seed": 32040,
+  "bin": "medium",
+  "route_m": 46.99,
+  "euclid_m": 46.99,
+  "kind": "straight",
+  "band": "medium"
+ },
+ {
+  "town": "Town02",
+  "seed": 32041,
+  "bin": "medium",
+  "route_m": 43.0,
+  "euclid_m": 43.0,
+  "kind": "straight",
+  "band": "medium"
+ },
+ {
+  "town": "Town02",
+  "seed": 32042,
+  "bin": "medium",
+  "route_m": 29.16,
+  "euclid_m": 28.45,
+  "kind": "straight",
+  "band": "medium"
+ },
+ {
+  "town": "Town02",
+  "seed": 32043,
+  "bin": "medium",
+  "route_m": 38.0,
+  "euclid_m": 38.0,
+  "kind": "straight",
+  "band": "medium"
+ },
+ {
+  "town": "Town02",
+  "seed": 32045,
+  "bin": "medium",
+  "route_m": 43.09,
+  "euclid_m": 36.33,
+  "kind": "straight",
+  "band": "medium"
+ },
+ {
+  "town": "Town02",
+  "seed": 32046,
+  "bin": "medium",
+  "route_m": 45.83,
+  "euclid_m": 41.64,
+  "kind": "straight",
+  "band": "medium"
+ },
+ {
+  "town": "Town02",
+  "seed": 32047,
+  "bin": "medium",
+  "route_m": 41.05,
+  "euclid_m": 39.74,
+  "kind": "straight",
+  "band": "medium"
+ },
+ {
+  "town": "Town02",
+  "seed": 32048,
+  "bin": "medium",
+  "route_m": 48.71,
+  "euclid_m": 46.1,
+  "kind": "straight",
+  "band": "medium"
+ },
+ {
+  "town": "Town02",
+  "seed": 32049,
+  "bin": "medium",
+  "route_m": 27.52,
+  "euclid_m": 27.0,
+  "kind": "straight",
+  "band": "medium"
+ },
+ {
+  "town": "Town02",
+  "seed": 32050,
+  "bin": "medium",
+  "route_m": 26.0,
+  "euclid_m": 26.0,
+  "kind": "straight",
+  "band": "medium"
+ },
+ {
+  "town": "Town02",
+  "seed": 32051,
+  "bin": "medium",
+  "route_m": 45.0,
+  "euclid_m": 45.0,
+  "kind": "straight",
+  "band": "medium"
+ },
+ {
+  "town": "Town02",
+  "seed": 32052,
+  "bin": "medium",
+  "route_m": 47.0,
+  "euclid_m": 47.0,
+  "kind": "straight",
+  "band": "medium"
+ },
+ {
+  "town": "Town02",
+  "seed": 32053,
+  "bin": "medium",
+  "route_m": 37.13,
+  "euclid_m": 31.73,
+  "kind": "straight",
+  "band": "medium"
+ },
+ {
+  "town": "Town02",
+  "seed": 32054,
+  "bin": "medium",
+  "route_m": 40.83,
+  "euclid_m": 36.91,
+  "kind": "straight",
+  "band": "medium"
+ },
+ {
+  "town": "Town02",
+  "seed": 32055,
+  "bin": "medium",
+  "route_m": 43.0,
+  "euclid_m": 43.0,
+  "kind": "straight",
+  "band": "medium"
+ },
+ {
+  "town": "Town02",
+  "seed": 32056,
+  "bin": "medium",
+  "route_m": 49.84,
+  "euclid_m": 46.04,
+  "kind": "straight",
+  "band": "medium"
+ },
+ {
+  "town": "Town02",
+  "seed": 32057,
+  "bin": "medium",
+  "route_m": 44.31,
+  "euclid_m": 38.43,
+  "kind": "straight",
+  "band": "medium"
+ },
+ {
+  "town": "Town02",
+  "seed": 32058,
+  "bin": "medium",
+  "route_m": 28.0,
+  "euclid_m": 28.0,
+  "kind": "straight",
+  "band": "medium"
+ },
+ {
+  "town": "Town02",
+  "seed": 32059,
+  "bin": "medium",
+  "route_m": 33.0,
+  "euclid_m": 33.0,
+  "kind": "straight",
+  "band": "medium"
+ },
+ {
+  "town": "Town02",
+  "seed": 32060,
+  "bin": "medium",
+  "route_m": 31.89,
+  "euclid_m": 31.78,
+  "kind": "straight",
+  "band": "medium"
+ },
+ {
+  "town": "Town02",
+  "seed": 32061,
+  "bin": "medium",
+  "route_m": 38.16,
+  "euclid_m": 36.61,
+  "kind": "straight",
+  "band": "medium"
+ },
+ {
+  "town": "Town02",
+  "seed": 32062,
+  "bin": "medium",
+  "route_m": 32.0,
+  "euclid_m": 32.0,
+  "kind": "straight",
+  "band": "medium"
+ },
+ {
+  "town": "Town02",
+  "seed": 32063,
+  "bin": "medium",
+  "route_m": 42.0,
+  "euclid_m": 42.0,
+  "kind": "straight",
+  "band": "medium"
+ },
+ {
+  "town": "Town02",
+  "seed": 32064,
+  "bin": "medium",
+  "route_m": 32.67,
+  "euclid_m": 31.69,
+  "kind": "straight",
+  "band": "medium"
+ },
+ {
+  "town": "Town02",
+  "seed": 32065,
+  "bin": "medium",
+  "route_m": 44.14,
+  "euclid_m": 41.33,
+  "kind": "straight",
+  "band": "medium"
+ },
+ {
+  "town": "Town02",
+  "seed": 32067,
+  "bin": "medium",
+  "route_m": 49.09,
+  "euclid_m": 42.6,
+  "kind": "straight",
+  "band": "medium"
+ },
+ {
+  "town": "Town02",
+  "seed": 32068,
+  "bin": "medium",
+  "route_m": 40.6,
+  "euclid_m": 37.38,
+  "kind": "straight",
+  "band": "medium"
+ },
+ {
+  "town": "Town02",
+  "seed": 32069,
+  "bin": "medium",
+  "route_m": 40.0,
+  "euclid_m": 40.0,
+  "kind": "straight",
+  "band": "medium"
+ },
+ {
+  "town": "Town02",
+  "seed": 32070,
+  "bin": "medium",
+  "route_m": 37.84,
+  "euclid_m": 36.0,
+  "kind": "straight",
+  "band": "medium"
+ },
+ {
+  "town": "Town02",
+  "seed": 32071,
+  "bin": "medium",
+  "route_m": 32.7,
+  "euclid_m": 30.91,
+  "kind": "straight",
+  "band": "medium"
+ },
+ {
+  "town": "Town02",
+  "seed": 32072,
+  "bin": "medium",
+  "route_m": 26.0,
+  "euclid_m": 26.0,
+  "kind": "straight",
+  "band": "medium"
+ },
+ {
+  "town": "Town02",
+  "seed": 32073,
+  "bin": "medium",
+  "route_m": 30.52,
+  "euclid_m": 30.0,
+  "kind": "straight",
+  "band": "medium"
+ },
+ {
+  "town": "Town02",
+  "seed": 32074,
+  "bin": "medium",
+  "route_m": 36.81,
+  "euclid_m": 35.19,
+  "kind": "straight",
+  "band": "medium"
+ },
+ {
+  "town": "Town02",
+  "seed": 32075,
+  "bin": "medium",
+  "route_m": 32.0,
+  "euclid_m": 32.0,
+  "kind": "straight",
+  "band": "medium"
+ },
+ {
+  "town": "Town02",
+  "seed": 32076,
+  "bin": "medium",
+  "route_m": 44.41,
+  "euclid_m": 38.24,
+  "kind": "straight",
+  "band": "medium"
+ },
+ {
+  "town": "Town02",
+  "seed": 32077,
+  "bin": "medium",
+  "route_m": 27.84,
+  "euclid_m": 27.09,
+  "kind": "straight",
+  "band": "medium"
+ },
+ {
+  "town": "Town02",
+  "seed": 32079,
+  "bin": "medium",
+  "route_m": 30.95,
+  "euclid_m": 23.53,
+  "kind": "curved",
+  "band": "medium"
+ },
+ {
+  "town": "Town02",
+  "seed": 32080,
+  "bin": "medium",
+  "route_m": 47.41,
+  "euclid_m": 41.14,
+  "kind": "straight",
+  "band": "medium"
+ },
+ {
+  "town": "Town02",
+  "seed": 32081,
+  "bin": "medium",
+  "route_m": 39.09,
+  "euclid_m": 33.13,
+  "kind": "straight",
+  "band": "medium"
+ },
+ {
+  "town": "Town02",
+  "seed": 32082,
+  "bin": "medium",
+  "route_m": 39.83,
+  "euclid_m": 33.39,
+  "kind": "straight",
+  "band": "medium"
+ },
+ {
+  "town": "Town02",
+  "seed": 32083,
+  "bin": "medium",
+  "route_m": 44.0,
+  "euclid_m": 44.0,
+  "kind": "straight",
+  "band": "medium"
+ },
+ {
+  "town": "Town02",
+  "seed": 32084,
+  "bin": "medium",
+  "route_m": 36.0,
+  "euclid_m": 36.0,
+  "kind": "straight",
+  "band": "medium"
+ },
+ {
+  "town": "Town02",
+  "seed": 32085,
+  "bin": "medium",
+  "route_m": 34.0,
+  "euclid_m": 34.0,
+  "kind": "straight",
+  "band": "medium"
+ },
+ {
+  "town": "Town02",
+  "seed": 32086,
+  "bin": "medium",
+  "route_m": 35.83,
+  "euclid_m": 32.48,
+  "kind": "straight",
+  "band": "medium"
+ },
+ {
+  "town": "Town02",
+  "seed": 32087,
+  "bin": "medium",
+  "route_m": 43.0,
+  "euclid_m": 43.0,
+  "kind": "straight",
+  "band": "medium"
+ },
+ {
+  "town": "Town02",
+  "seed": 32088,
+  "bin": "medium",
+  "route_m": 29.0,
+  "euclid_m": 29.0,
+  "kind": "straight",
+  "band": "medium"
+ },
+ {
+  "town": "Town02",
+  "seed": 32089,
+  "bin": "medium",
+  "route_m": 26.89,
+  "euclid_m": 26.78,
+  "kind": "straight",
+  "band": "medium"
+ },
+ {
+  "town": "Town02",
+  "seed": 32090,
+  "bin": "medium",
+  "route_m": 31.67,
+  "euclid_m": 30.2,
+  "kind": "straight",
+  "band": "medium"
+ },
+ {
+  "town": "Town02",
+  "seed": 32091,
+  "bin": "medium",
+  "route_m": 34.16,
+  "euclid_m": 31.26,
+  "kind": "straight",
+  "band": "medium"
+ },
+ {
+  "town": "Town02",
+  "seed": 32092,
+  "bin": "medium",
+  "route_m": 30.26,
+  "euclid_m": 29.96,
+  "kind": "straight",
+  "band": "medium"
+ },
+ {
+  "town": "Town02",
+  "seed": 32093,
+  "bin": "medium",
+  "route_m": 38.0,
+  "euclid_m": 38.0,
+  "kind": "straight",
+  "band": "medium"
+ },
+ {
+  "town": "Town02",
+  "seed": 32094,
+  "bin": "medium",
+  "route_m": 34.83,
+  "euclid_m": 27.57,
+  "kind": "curved",
+  "band": "medium"
+ },
+ {
+  "town": "Town02",
+  "seed": 32096,
+  "bin": "medium",
+  "route_m": 45.83,
+  "euclid_m": 39.21,
+  "kind": "straight",
+  "band": "medium"
+ },
+ {
+  "town": "Town02",
+  "seed": 32097,
+  "bin": "medium",
+  "route_m": 42.65,
+  "euclid_m": 39.96,
+  "kind": "straight",
+  "band": "medium"
+ },
+ {
+  "town": "Town02",
+  "seed": 32099,
+  "bin": "medium",
+  "route_m": 43.61,
+  "euclid_m": 35.75,
+  "kind": "curved",
+  "band": "medium"
+ },
+ {
+  "town": "Town02",
+  "seed": 32100,
+  "bin": "medium",
+  "route_m": 30.0,
+  "euclid_m": 30.0,
+  "kind": "straight",
+  "band": "medium"
+ },
+ {
+  "town": "Town02",
+  "seed": 32101,
+  "bin": "medium",
+  "route_m": 27.15,
+  "euclid_m": 24.93,
+  "kind": "straight",
+  "band": "medium"
+ },
+ {
+  "town": "Town02",
+  "seed": 32102,
+  "bin": "medium",
+  "route_m": 41.0,
+  "euclid_m": 41.0,
+  "kind": "straight",
+  "band": "medium"
+ },
+ {
+  "town": "Town02",
+  "seed": 32103,
+  "bin": "medium",
+  "route_m": 36.09,
+  "euclid_m": 28.74,
+  "kind": "curved",
+  "band": "medium"
+ },
+ {
+  "town": "Town02",
+  "seed": 32104,
+  "bin": "medium",
+  "route_m": 38.0,
+  "euclid_m": 38.0,
+  "kind": "straight",
+  "band": "medium"
+ },
+ {
+  "town": "Town02",
+  "seed": 32105,
+  "bin": "medium",
+  "route_m": 31.83,
+  "euclid_m": 27.54,
+  "kind": "straight",
+  "band": "medium"
+ },
+ {
+  "town": "Town02",
+  "seed": 32106,
+  "bin": "medium",
+  "route_m": 43.0,
+  "euclid_m": 43.0,
+  "kind": "straight",
+  "band": "medium"
+ },
+ {
+  "town": "Town02",
+  "seed": 32107,
+  "bin": "medium",
+  "route_m": 29.0,
+  "euclid_m": 29.0,
+  "kind": "straight",
+  "band": "medium"
+ },
+ {
+  "town": "Town02",
+  "seed": 32108,
+  "bin": "medium",
+  "route_m": 45.99,
+  "euclid_m": 45.99,
+  "kind": "straight",
+  "band": "medium"
+ },
+ {
+  "town": "Town02",
+  "seed": 32109,
+  "bin": "medium",
+  "route_m": 28.1,
+  "euclid_m": 24.15,
+  "kind": "straight",
+  "band": "medium"
+ },
+ {
+  "town": "Town02",
+  "seed": 32111,
+  "bin": "medium",
+  "route_m": 26.4,
+  "euclid_m": 25.0,
+  "kind": "straight",
+  "band": "medium"
+ },
+ {
+  "town": "Town02",
+  "seed": 33000,
+  "bin": "hard",
+  "route_m": 62.09,
+  "euclid_m": 56.34,
+  "kind": "straight",
+  "band": "hard"
+ },
+ {
+  "town": "Town02",
+  "seed": 33001,
+  "bin": "hard",
+  "route_m": 80.66,
+  "euclid_m": 46.45,
+  "kind": "curved",
+  "band": "hard"
+ },
+ {
+  "town": "Town02",
+  "seed": 33002,
+  "bin": "hard",
+  "route_m": 82.09,
+  "euclid_m": 75.44,
+  "kind": "straight",
+  "band": "hard"
+ },
+ {
+  "town": "Town02",
+  "seed": 33003,
+  "bin": "hard",
+  "route_m": 74.64,
+  "euclid_m": 73.66,
+  "kind": "straight",
+  "band": "hard"
+ },
+ {
+  "town": "Town02",
+  "seed": 33004,
+  "bin": "hard",
+  "route_m": 71.67,
+  "euclid_m": 70.64,
+  "kind": "straight",
+  "band": "hard"
+ },
+ {
+  "town": "Town02",
+  "seed": 33005,
+  "bin": "hard",
+  "route_m": 55.1,
+  "euclid_m": 43.36,
+  "kind": "curved",
+  "band": "hard"
+ },
+ {
+  "town": "Town02",
+  "seed": 33006,
+  "bin": "hard",
+  "route_m": 65.07,
+  "euclid_m": 64.47,
+  "kind": "straight",
+  "band": "hard"
+ },
+ {
+  "town": "Town02",
+  "seed": 33007,
+  "bin": "hard",
+  "route_m": 55.0,
+  "euclid_m": 55.0,
+  "kind": "straight",
+  "band": "hard"
+ },
+ {
+  "town": "Town02",
+  "seed": 33008,
+  "bin": "hard",
+  "route_m": 88.84,
+  "euclid_m": 87.0,
+  "kind": "straight",
+  "band": "hard"
+ },
+ {
+  "town": "Town02",
+  "seed": 33009,
+  "bin": "hard",
+  "route_m": 87.07,
+  "euclid_m": 72.5,
+  "kind": "curved",
+  "band": "hard"
+ },
+ {
+  "town": "Town02",
+  "seed": 33010,
+  "bin": "hard",
+  "route_m": 65.66,
+  "euclid_m": 45.95,
+  "kind": "curved",
+  "band": "hard"
+ },
+ {
+  "town": "Town02",
+  "seed": 33011,
+  "bin": "hard",
+  "route_m": 93.31,
+  "euclid_m": 85.78,
+  "kind": "straight",
+  "band": "hard"
+ },
+ {
+  "town": "Town02",
+  "seed": 33012,
+  "bin": "hard",
+  "route_m": 57.84,
+  "euclid_m": 56.0,
+  "kind": "straight",
+  "band": "hard"
+ },
+ {
+  "town": "Town02",
+  "seed": 33013,
+  "bin": "hard",
+  "route_m": 64.25,
+  "euclid_m": 56.29,
+  "kind": "straight",
+  "band": "hard"
+ },
+ {
+  "town": "Town02",
+  "seed": 33014,
+  "bin": "hard",
+  "route_m": 62.82,
+  "euclid_m": 59.53,
+  "kind": "straight",
+  "band": "hard"
+ },
+ {
+  "town": "Town02",
+  "seed": 33015,
+  "bin": "hard",
+  "route_m": 87.83,
+  "euclid_m": 64.82,
+  "kind": "curved",
+  "band": "hard"
+ },
+ {
+  "town": "Town02",
+  "seed": 33016,
+  "bin": "hard",
+  "route_m": 63.09,
+  "euclid_m": 57.81,
+  "kind": "straight",
+  "band": "hard"
+ },
+ {
+  "town": "Town02",
+  "seed": 33017,
+  "bin": "hard",
+  "route_m": 69.4,
+  "euclid_m": 54.88,
+  "kind": "curved",
+  "band": "hard"
+ },
+ {
+  "town": "Town02",
+  "seed": 33018,
+  "bin": "hard",
+  "route_m": 93.09,
+  "euclid_m": 70.46,
+  "kind": "curved",
+  "band": "hard"
+ },
+ {
+  "town": "Town02",
+  "seed": 33019,
+  "bin": "hard",
+  "route_m": 51.4,
+  "euclid_m": 51.24,
+  "kind": "straight",
+  "band": "hard"
+ },
+ {
+  "town": "Town02",
+  "seed": 33020,
+  "bin": "hard",
+  "route_m": 66.0,
+  "euclid_m": 66.0,
+  "kind": "straight",
+  "band": "hard"
+ },
+ {
+  "town": "Town02",
+  "seed": 33021,
+  "bin": "hard",
+  "route_m": 55.83,
+  "euclid_m": 48.48,
+  "kind": "straight",
+  "band": "hard"
+ },
+ {
+  "town": "Town02",
+  "seed": 33022,
+  "bin": "hard",
+  "route_m": 95.57,
+  "euclid_m": 69.72,
+  "kind": "curved",
+  "band": "hard"
+ },
+ {
+  "town": "Town02",
+  "seed": 33023,
+  "bin": "hard",
+  "route_m": 94.0,
+  "euclid_m": 94.0,
+  "kind": "straight",
+  "band": "hard"
+ },
+ {
+  "town": "Town02",
+  "seed": 33024,
+  "bin": "hard",
+  "route_m": 56.09,
+  "euclid_m": 49.2,
+  "kind": "straight",
+  "band": "hard"
+ },
+ {
+  "town": "Town02",
+  "seed": 33025,
+  "bin": "hard",
+  "route_m": 77.01,
+  "euclid_m": 76.48,
+  "kind": "straight",
+  "band": "hard"
+ },
+ {
+  "town": "Town02",
+  "seed": 33026,
+  "bin": "hard",
+  "route_m": 67.09,
+  "euclid_m": 60.14,
+  "kind": "straight",
+  "band": "hard"
+ },
+ {
+  "town": "Town02",
+  "seed": 33027,
+  "bin": "hard",
+  "route_m": 74.83,
+  "euclid_m": 66.99,
+  "kind": "straight",
+  "band": "hard"
+ },
+ {
+  "town": "Town02",
+  "seed": 33028,
+  "bin": "hard",
+  "route_m": 95.22,
+  "euclid_m": 65.85,
+  "kind": "curved",
+  "band": "hard"
+ },
+ {
+  "town": "Town02",
+  "seed": 33029,
+  "bin": "hard",
+  "route_m": 81.0,
+  "euclid_m": 81.0,
+  "kind": "straight",
+  "band": "hard"
+ },
+ {
+  "town": "Town02",
+  "seed": 33030,
+  "bin": "hard",
+  "route_m": 83.83,
+  "euclid_m": 60.97,
+  "kind": "curved",
+  "band": "hard"
+ },
+ {
+  "town": "Town02",
+  "seed": 33031,
+  "bin": "hard",
+  "route_m": 66.64,
+  "euclid_m": 65.52,
+  "kind": "straight",
+  "band": "hard"
+ },
+ {
+  "town": "Town02",
+  "seed": 33032,
+  "bin": "hard",
+  "route_m": 62.39,
+  "euclid_m": 60.99,
+  "kind": "straight",
+  "band": "hard"
+ },
+ {
+  "town": "Town02",
+  "seed": 33033,
+  "bin": "hard",
+  "route_m": 83.11,
+  "euclid_m": 68.83,
+  "kind": "curved",
+  "band": "hard"
+ },
+ {
+  "town": "Town02",
+  "seed": 33034,
+  "bin": "hard",
+  "route_m": 93.18,
+  "euclid_m": 62.27,
+  "kind": "curved",
+  "band": "hard"
+ },
+ {
+  "town": "Town02",
+  "seed": 33035,
+  "bin": "hard",
+  "route_m": 55.4,
+  "euclid_m": 54.0,
+  "kind": "straight",
+  "band": "hard"
+ },
+ {
+  "town": "Town02",
+  "seed": 33036,
+  "bin": "hard",
+  "route_m": 71.83,
+  "euclid_m": 67.63,
+  "kind": "straight",
+  "band": "hard"
+ },
+ {
+  "town": "Town02",
+  "seed": 33037,
+  "bin": "hard",
+  "route_m": 85.66,
+  "euclid_m": 62.22,
+  "kind": "curved",
+  "band": "hard"
+ },
+ {
+  "town": "Town02",
+  "seed": 33038,
+  "bin": "hard",
+  "route_m": 79.36,
+  "euclid_m": 69.2,
+  "kind": "straight",
+  "band": "hard"
+ },
+ {
+  "town": "Town02",
+  "seed": 33039,
+  "bin": "hard",
+  "route_m": 88.88,
+  "euclid_m": 87.56,
+  "kind": "straight",
+  "band": "hard"
+ },
+ {
+  "town": "Town02",
+  "seed": 33040,
+  "bin": "hard",
+  "route_m": 53.59,
+  "euclid_m": 47.47,
+  "kind": "straight",
+  "band": "hard"
+ },
+ {
+  "town": "Town02",
+  "seed": 33041,
+  "bin": "hard",
+  "route_m": 82.81,
+  "euclid_m": 80.0,
+  "kind": "straight",
+  "band": "hard"
+ },
+ {
+  "town": "Town02",
+  "seed": 33042,
+  "bin": "hard",
+  "route_m": 89.82,
+  "euclid_m": 73.31,
+  "kind": "curved",
+  "band": "hard"
+ },
+ {
+  "town": "Town02",
+  "seed": 33043,
+  "bin": "hard",
+  "route_m": 80.75,
+  "euclid_m": 72.3,
+  "kind": "straight",
+  "band": "hard"
+ },
+ {
+  "town": "Town02",
+  "seed": 33044,
+  "bin": "hard",
+  "route_m": 96.27,
+  "euclid_m": 93.19,
+  "kind": "straight",
+  "band": "hard"
+ },
+ {
+  "town": "Town02",
+  "seed": 33045,
+  "bin": "hard",
+  "route_m": 59.0,
+  "euclid_m": 59.0,
+  "kind": "straight",
+  "band": "hard"
+ },
+ {
+  "town": "Town02",
+  "seed": 33046,
+  "bin": "hard",
+  "route_m": 83.0,
+  "euclid_m": 83.0,
+  "kind": "straight",
+  "band": "hard"
+ },
+ {
+  "town": "Town02",
+  "seed": 33047,
+  "bin": "hard",
+  "route_m": 79.89,
+  "euclid_m": 57.57,
+  "kind": "curved",
+  "band": "hard"
+ },
+ {
+  "town": "Town02",
+  "seed": 33048,
+  "bin": "hard",
+  "route_m": 79.09,
+  "euclid_m": 73.45,
+  "kind": "straight",
+  "band": "hard"
+ },
+ {
+  "town": "Town02",
+  "seed": 33049,
+  "bin": "hard",
+  "route_m": 76.92,
+  "euclid_m": 59.64,
+  "kind": "curved",
+  "band": "hard"
+ },
+ {
+  "town": "Town02",
+  "seed": 33050,
+  "bin": "hard",
+  "route_m": 70.66,
+  "euclid_m": 48.27,
+  "kind": "curved",
+  "band": "hard"
+ },
+ {
+  "town": "Town02",
+  "seed": 33052,
+  "bin": "hard",
+  "route_m": 66.93,
+  "euclid_m": 58.29,
+  "kind": "straight",
+  "band": "hard"
+ },
+ {
+  "town": "Town02",
+  "seed": 33053,
+  "bin": "hard",
+  "route_m": 74.79,
+  "euclid_m": 46.98,
+  "kind": "curved",
+  "band": "hard"
+ },
+ {
+  "town": "Town02",
+  "seed": 33054,
+  "bin": "hard",
+  "route_m": 72.83,
+  "euclid_m": 61.13,
+  "kind": "straight",
+  "band": "hard"
+ },
+ {
+  "town": "Town02",
+  "seed": 33055,
+  "bin": "hard",
+  "route_m": 55.0,
+  "euclid_m": 55.0,
+  "kind": "straight",
+  "band": "hard"
+ },
+ {
+  "town": "Town02",
+  "seed": 33056,
+  "bin": "hard",
+  "route_m": 65.0,
+  "euclid_m": 65.0,
+  "kind": "straight",
+  "band": "hard"
+ },
+ {
+  "town": "Town02",
+  "seed": 33057,
+  "bin": "hard",
+  "route_m": 79.88,
+  "euclid_m": 63.47,
+  "kind": "curved",
+  "band": "hard"
+ },
+ {
+  "town": "Town02",
+  "seed": 33058,
+  "bin": "hard",
+  "route_m": 67.0,
+  "euclid_m": 67.0,
+  "kind": "straight",
+  "band": "hard"
+ },
+ {
+  "town": "Town02",
+  "seed": 33060,
+  "bin": "hard",
+  "route_m": 61.93,
+  "euclid_m": 59.29,
+  "kind": "straight",
+  "band": "hard"
+ },
+ {
+  "town": "Town02",
+  "seed": 33061,
+  "bin": "hard",
+  "route_m": 63.39,
+  "euclid_m": 61.99,
+  "kind": "straight",
+  "band": "hard"
+ },
+ {
+  "town": "Town02",
+  "seed": 33062,
+  "bin": "hard",
+  "route_m": 97.92,
+  "euclid_m": 75.66,
+  "kind": "curved",
+  "band": "hard"
+ },
+ {
+  "town": "Town02",
+  "seed": 33063,
+  "bin": "hard",
+  "route_m": 89.98,
+  "euclid_m": 67.62,
+  "kind": "curved",
+  "band": "hard"
+ },
+ {
+  "town": "Town02",
+  "seed": 33064,
+  "bin": "hard",
+  "route_m": 97.92,
+  "euclid_m": 75.67,
+  "kind": "curved",
+  "band": "hard"
+ },
+ {
+  "town": "Town02",
+  "seed": 33065,
+  "bin": "hard",
+  "route_m": 73.0,
+  "euclid_m": 73.0,
+  "kind": "straight",
+  "band": "hard"
+ },
+ {
+  "town": "Town02",
+  "seed": 33066,
+  "bin": "hard",
+  "route_m": 76.1,
+  "euclid_m": 56.6,
+  "kind": "curved",
+  "band": "hard"
+ },
+ {
+  "town": "Town02",
+  "seed": 33067,
+  "bin": "hard",
+  "route_m": 79.83,
+  "euclid_m": 70.64,
+  "kind": "straight",
+  "band": "hard"
+ },
+ {
+  "town": "Town02",
+  "seed": 33068,
+  "bin": "hard",
+  "route_m": 75.19,
+  "euclid_m": 53.31,
+  "kind": "curved",
+  "band": "hard"
+ },
+ {
+  "town": "Town02",
+  "seed": 33069,
+  "bin": "hard",
+  "route_m": 93.92,
+  "euclid_m": 70.78,
+  "kind": "curved",
+  "band": "hard"
+ },
+ {
+  "town": "Town02",
+  "seed": 33070,
+  "bin": "hard",
+  "route_m": 74.84,
+  "euclid_m": 55.77,
+  "kind": "curved",
+  "band": "hard"
+ },
+ {
+  "town": "Town02",
+  "seed": 33071,
+  "bin": "hard",
+  "route_m": 89.83,
+  "euclid_m": 67.92,
+  "kind": "curved",
+  "band": "hard"
+ },
+ {
+  "town": "Town02",
+  "seed": 33072,
+  "bin": "hard",
+  "route_m": 71.92,
+  "euclid_m": 56.98,
+  "kind": "curved",
+  "band": "hard"
+ },
+ {
+  "town": "Town02",
+  "seed": 33073,
+  "bin": "hard",
+  "route_m": 61.32,
+  "euclid_m": 61.0,
+  "kind": "straight",
+  "band": "hard"
+ },
+ {
+  "town": "Town02",
+  "seed": 33074,
+  "bin": "hard",
+  "route_m": 64.27,
+  "euclid_m": 59.76,
+  "kind": "straight",
+  "band": "hard"
+ },
+ {
+  "town": "Town02",
+  "seed": 33075,
+  "bin": "hard",
+  "route_m": 54.83,
+  "euclid_m": 47.51,
+  "kind": "straight",
+  "band": "hard"
+ },
+ {
+  "town": "Town02",
+  "seed": 33076,
+  "bin": "hard",
+  "route_m": 80.16,
+  "euclid_m": 76.91,
+  "kind": "straight",
+  "band": "hard"
+ },
+ {
+  "town": "Town02",
+  "seed": 33077,
+  "bin": "hard",
+  "route_m": 80.93,
+  "euclid_m": 63.17,
+  "kind": "curved",
+  "band": "hard"
+ },
+ {
+  "town": "Town02",
+  "seed": 33078,
+  "bin": "hard",
+  "route_m": 98.45,
+  "euclid_m": 95.27,
+  "kind": "straight",
+  "band": "hard"
+ },
+ {
+  "town": "Town02",
+  "seed": 33079,
+  "bin": "hard",
+  "route_m": 63.83,
+  "euclid_m": 56.43,
+  "kind": "straight",
+  "band": "hard"
+ },
+ {
+  "town": "Town02",
+  "seed": 33080,
+  "bin": "hard",
+  "route_m": 64.28,
+  "euclid_m": 57.91,
+  "kind": "straight",
+  "band": "hard"
+ },
+ {
+  "town": "Town02",
+  "seed": 33081,
+  "bin": "hard",
+  "route_m": 91.74,
+  "euclid_m": 54.25,
+  "kind": "curved",
+  "band": "hard"
+ },
+ {
+  "town": "Town02",
+  "seed": 33082,
+  "bin": "hard",
+  "route_m": 80.83,
+  "euclid_m": 61.56,
+  "kind": "curved",
+  "band": "hard"
+ },
+ {
+  "town": "Town02",
+  "seed": 33083,
+  "bin": "hard",
+  "route_m": 99.52,
+  "euclid_m": 99.0,
+  "kind": "straight",
+  "band": "hard"
+ },
+ {
+  "town": "Town02",
+  "seed": 33084,
+  "bin": "hard",
+  "route_m": 66.14,
+  "euclid_m": 64.34,
+  "kind": "straight",
+  "band": "hard"
+ },
+ {
+  "town": "Town02",
+  "seed": 33085,
+  "bin": "hard",
+  "route_m": 65.02,
+  "euclid_m": 60.5,
+  "kind": "straight",
+  "band": "hard"
+ },
+ {
+  "town": "Town02",
+  "seed": 33086,
+  "bin": "hard",
+  "route_m": 68.79,
+  "euclid_m": 49.32,
+  "kind": "curved",
+  "band": "hard"
+ },
+ {
+  "town": "Town02",
+  "seed": 33087,
+  "bin": "hard",
+  "route_m": 69.52,
+  "euclid_m": 46.65,
+  "kind": "curved",
+  "band": "hard"
+ },
+ {
+  "town": "Town02",
+  "seed": 33088,
+  "bin": "hard",
+  "route_m": 95.09,
+  "euclid_m": 89.22,
+  "kind": "straight",
+  "band": "hard"
+ },
+ {
+  "town": "Town02",
+  "seed": 33089,
+  "bin": "hard",
+  "route_m": 70.83,
+  "euclid_m": 52.47,
+  "kind": "curved",
+  "band": "hard"
+ },
+ {
+  "town": "Town02",
+  "seed": 33090,
+  "bin": "hard",
+  "route_m": 60.83,
+  "euclid_m": 45.7,
+  "kind": "curved",
+  "band": "hard"
+ },
+ {
+  "town": "Town02",
+  "seed": 33091,
+  "bin": "hard",
+  "route_m": 61.99,
+  "euclid_m": 61.33,
+  "kind": "straight",
+  "band": "hard"
+ },
+ {
+  "town": "Town02",
+  "seed": 33092,
+  "bin": "hard",
+  "route_m": 75.45,
+  "euclid_m": 55.82,
+  "kind": "curved",
+  "band": "hard"
+ },
+ {
+  "town": "Town02",
+  "seed": 33093,
+  "bin": "hard",
+  "route_m": 73.83,
+  "euclid_m": 64.14,
+  "kind": "straight",
+  "band": "hard"
+ },
+ {
+  "town": "Town02",
+  "seed": 33094,
+  "bin": "hard",
+  "route_m": 98.09,
+  "euclid_m": 73.58,
+  "kind": "curved",
+  "band": "hard"
+ },
+ {
+  "town": "Town02",
+  "seed": 33095,
+  "bin": "hard",
+  "route_m": 79.69,
+  "euclid_m": 63.41,
+  "kind": "curved",
+  "band": "hard"
+ },
+ {
+  "town": "Town02",
+  "seed": 33096,
+  "bin": "hard",
+  "route_m": 53.0,
+  "euclid_m": 53.0,
+  "kind": "straight",
+  "band": "hard"
+ },
+ {
+  "town": "Town02",
+  "seed": 33097,
+  "bin": "hard",
+  "route_m": 88.82,
+  "euclid_m": 65.53,
+  "kind": "curved",
+  "band": "hard"
+ },
+ {
+  "town": "Town02",
+  "seed": 33098,
+  "bin": "hard",
+  "route_m": 86.24,
+  "euclid_m": 83.79,
+  "kind": "straight",
+  "band": "hard"
+ },
+ {
+  "town": "Town02",
+  "seed": 33099,
+  "bin": "hard",
+  "route_m": 52.83,
+  "euclid_m": 39.01,
+  "kind": "curved",
+  "band": "hard"
+ },
+ {
+  "town": "Town02",
+  "seed": 33100,
+  "bin": "hard",
+  "route_m": 86.36,
+  "euclid_m": 61.3,
+  "kind": "curved",
+  "band": "hard"
+ },
+ {
+  "town": "Town02",
+  "seed": 33101,
+  "bin": "hard",
+  "route_m": 78.59,
+  "euclid_m": 77.09,
+  "kind": "straight",
+  "band": "hard"
+ },
+ {
+  "town": "Town03",
+  "seed": 31001,
+  "bin": "easy",
+  "route_m": 19.77,
+  "euclid_m": 19.73,
+  "kind": "straight",
+  "band": "easy"
+ },
+ {
+  "town": "Town03",
+  "seed": 31002,
+  "bin": "easy",
+  "route_m": 19.86,
+  "euclid_m": 17.0,
+  "kind": "straight",
+  "band": "easy"
+ },
+ {
+  "town": "Town03",
+  "seed": 31003,
+  "bin": "easy",
+  "route_m": 12.0,
+  "euclid_m": 12.0,
+  "kind": "straight",
+  "band": "easy"
+ },
+ {
+  "town": "Town03",
+  "seed": 31005,
+  "bin": "easy",
+  "route_m": 19.0,
+  "euclid_m": 19.0,
+  "kind": "straight",
+  "band": "easy"
+ },
+ {
+  "town": "Town03",
+  "seed": 31006,
+  "bin": "easy",
+  "route_m": 14.77,
+  "euclid_m": 14.66,
+  "kind": "straight",
+  "band": "easy"
+ },
+ {
+  "town": "Town03",
+  "seed": 31008,
+  "bin": "easy",
+  "route_m": 22.0,
+  "euclid_m": 17.25,
+  "kind": "curved",
+  "band": "easy"
+ },
+ {
+  "town": "Town03",
+  "seed": 31009,
+  "bin": "easy",
+  "route_m": 21.22,
+  "euclid_m": 17.99,
+  "kind": "straight",
+  "band": "easy"
+ },
+ {
+  "town": "Town03",
+  "seed": 31010,
+  "bin": "easy",
+  "route_m": 14.0,
+  "euclid_m": 14.0,
+  "kind": "straight",
+  "band": "easy"
+ },
+ {
+  "town": "Town03",
+  "seed": 31011,
+  "bin": "easy",
+  "route_m": 17.05,
+  "euclid_m": 16.21,
+  "kind": "straight",
+  "band": "easy"
+ },
+ {
+  "town": "Town03",
+  "seed": 31012,
+  "bin": "easy",
+  "route_m": 19.18,
+  "euclid_m": 15.8,
+  "kind": "curved",
+  "band": "easy"
+ },
+ {
+  "town": "Town03",
+  "seed": 31013,
+  "bin": "easy",
+  "route_m": 21.0,
+  "euclid_m": 21.0,
+  "kind": "straight",
+  "band": "easy"
+ },
+ {
+  "town": "Town03",
+  "seed": 31014,
+  "bin": "easy",
+  "route_m": 21.0,
+  "euclid_m": 21.0,
+  "kind": "straight",
+  "band": "easy"
+ },
+ {
+  "town": "Town03",
+  "seed": 31015,
+  "bin": "easy",
+  "route_m": 22.0,
+  "euclid_m": 22.0,
+  "kind": "straight",
+  "band": "easy"
+ },
+ {
+  "town": "Town03",
+  "seed": 31016,
+  "bin": "easy",
+  "route_m": 24.53,
+  "euclid_m": 21.37,
+  "kind": "straight",
+  "band": "easy"
+ },
+ {
+  "town": "Town03",
+  "seed": 31017,
+  "bin": "easy",
+  "route_m": 22.08,
+  "euclid_m": 19.42,
+  "kind": "straight",
+  "band": "easy"
+ },
+ {
+  "town": "Town03",
+  "seed": 31018,
+  "bin": "easy",
+  "route_m": 18.05,
+  "euclid_m": 18.01,
+  "kind": "straight",
+  "band": "easy"
+ },
+ {
+  "town": "Town03",
+  "seed": 31019,
+  "bin": "easy",
+  "route_m": 20.76,
+  "euclid_m": 19.13,
+  "kind": "straight",
+  "band": "easy"
+ },
+ {
+  "town": "Town03",
+  "seed": 31020,
+  "bin": "easy",
+  "route_m": 21.38,
+  "euclid_m": 18.93,
+  "kind": "straight",
+  "band": "easy"
+ },
+ {
+  "town": "Town03",
+  "seed": 31021,
+  "bin": "easy",
+  "route_m": 22.76,
+  "euclid_m": 22.75,
+  "kind": "straight",
+  "band": "easy"
+ },
+ {
+  "town": "Town03",
+  "seed": 31022,
+  "bin": "easy",
+  "route_m": 20.85,
+  "euclid_m": 19.14,
+  "kind": "straight",
+  "band": "easy"
+ },
+ {
+  "town": "Town03",
+  "seed": 31023,
+  "bin": "easy",
+  "route_m": 21.21,
+  "euclid_m": 17.05,
+  "kind": "curved",
+  "band": "easy"
+ },
+ {
+  "town": "Town03",
+  "seed": 31024,
+  "bin": "easy",
+  "route_m": 12.0,
+  "euclid_m": 12.0,
+  "kind": "straight",
+  "band": "easy"
+ },
+ {
+  "town": "Town03",
+  "seed": 31025,
+  "bin": "easy",
+  "route_m": 16.24,
+  "euclid_m": 16.12,
+  "kind": "straight",
+  "band": "easy"
+ },
+ {
+  "town": "Town03",
+  "seed": 31026,
+  "bin": "easy",
+  "route_m": 17.62,
+  "euclid_m": 16.0,
+  "kind": "straight",
+  "band": "easy"
+ },
+ {
+  "town": "Town03",
+  "seed": 31027,
+  "bin": "easy",
+  "route_m": 24.68,
+  "euclid_m": 24.0,
+  "kind": "straight",
+  "band": "easy"
+ },
+ {
+  "town": "Town03",
+  "seed": 31028,
+  "bin": "easy",
+  "route_m": 19.78,
+  "euclid_m": 19.0,
+  "kind": "straight",
+  "band": "easy"
+ },
+ {
+  "town": "Town03",
+  "seed": 31029,
+  "bin": "easy",
+  "route_m": 13.21,
+  "euclid_m": 11.14,
+  "kind": "straight",
+  "band": "easy"
+ },
+ {
+  "town": "Town03",
+  "seed": 31031,
+  "bin": "easy",
+  "route_m": 22.54,
+  "euclid_m": 21.59,
+  "kind": "straight",
+  "band": "easy"
+ },
+ {
+  "town": "Town03",
+  "seed": 31032,
+  "bin": "easy",
+  "route_m": 12.0,
+  "euclid_m": 12.0,
+  "kind": "straight",
+  "band": "easy"
+ },
+ {
+  "town": "Town03",
+  "seed": 31033,
+  "bin": "easy",
+  "route_m": 19.0,
+  "euclid_m": 19.0,
+  "kind": "straight",
+  "band": "easy"
+ },
+ {
+  "town": "Town03",
+  "seed": 31034,
+  "bin": "easy",
+  "route_m": 23.02,
+  "euclid_m": 22.0,
+  "kind": "straight",
+  "band": "easy"
+ },
+ {
+  "town": "Town03",
+  "seed": 31035,
+  "bin": "easy",
+  "route_m": 24.85,
+  "euclid_m": 19.67,
+  "kind": "curved",
+  "band": "easy"
+ },
+ {
+  "town": "Town03",
+  "seed": 31036,
+  "bin": "easy",
+  "route_m": 17.42,
+  "euclid_m": 17.21,
+  "kind": "straight",
+  "band": "easy"
+ },
+ {
+  "town": "Town03",
+  "seed": 31037,
+  "bin": "easy",
+  "route_m": 10.87,
+  "euclid_m": 10.86,
+  "kind": "straight",
+  "band": "easy"
+ },
+ {
+  "town": "Town03",
+  "seed": 31038,
+  "bin": "easy",
+  "route_m": 22.0,
+  "euclid_m": 22.0,
+  "kind": "straight",
+  "band": "easy"
+ },
+ {
+  "town": "Town03",
+  "seed": 31039,
+  "bin": "easy",
+  "route_m": 20.49,
+  "euclid_m": 16.99,
+  "kind": "curved",
+  "band": "easy"
+ },
+ {
+  "town": "Town03",
+  "seed": 31040,
+  "bin": "easy",
+  "route_m": 22.44,
+  "euclid_m": 22.36,
+  "kind": "straight",
+  "band": "easy"
+ },
+ {
+  "town": "Town03",
+  "seed": 31041,
+  "bin": "easy",
+  "route_m": 19.42,
+  "euclid_m": 19.23,
+  "kind": "straight",
+  "band": "easy"
+ },
+ {
+  "town": "Town03",
+  "seed": 31042,
+  "bin": "easy",
+  "route_m": 21.0,
+  "euclid_m": 21.0,
+  "kind": "straight",
+  "band": "easy"
+ },
+ {
+  "town": "Town03",
+  "seed": 31045,
+  "bin": "easy",
+  "route_m": 10.76,
+  "euclid_m": 10.68,
+  "kind": "straight",
+  "band": "easy"
+ },
+ {
+  "town": "Town03",
+  "seed": 31046,
+  "bin": "easy",
+  "route_m": 13.74,
+  "euclid_m": 11.61,
+  "kind": "straight",
+  "band": "easy"
+ },
+ {
+  "town": "Town03",
+  "seed": 31047,
+  "bin": "easy",
+  "route_m": 18.25,
+  "euclid_m": 14.9,
+  "kind": "curved",
+  "band": "easy"
+ },
+ {
+  "town": "Town03",
+  "seed": 31048,
+  "bin": "easy",
+  "route_m": 13.6,
+  "euclid_m": 11.94,
+  "kind": "straight",
+  "band": "easy"
+ },
+ {
+  "town": "Town03",
+  "seed": 31049,
+  "bin": "easy",
+  "route_m": 22.82,
+  "euclid_m": 21.39,
+  "kind": "straight",
+  "band": "easy"
+ },
+ {
+  "town": "Town03",
+  "seed": 31050,
+  "bin": "easy",
+  "route_m": 13.46,
+  "euclid_m": 13.0,
+  "kind": "straight",
+  "band": "easy"
+ },
+ {
+  "town": "Town03",
+  "seed": 31054,
+  "bin": "easy",
+  "route_m": 18.0,
+  "euclid_m": 18.0,
+  "kind": "straight",
+  "band": "easy"
+ },
+ {
+  "town": "Town03",
+  "seed": 31055,
+  "bin": "easy",
+  "route_m": 20.21,
+  "euclid_m": 20.11,
+  "kind": "straight",
+  "band": "easy"
+ },
+ {
+  "town": "Town03",
+  "seed": 31056,
+  "bin": "easy",
+  "route_m": 17.97,
+  "euclid_m": 17.97,
+  "kind": "straight",
+  "band": "easy"
+ },
+ {
+  "town": "Town03",
+  "seed": 31057,
+  "bin": "easy",
+  "route_m": 22.79,
+  "euclid_m": 22.58,
+  "kind": "straight",
+  "band": "easy"
+ },
+ {
+  "town": "Town03",
+  "seed": 31058,
+  "bin": "easy",
+  "route_m": 21.67,
+  "euclid_m": 21.22,
+  "kind": "straight",
+  "band": "easy"
+ },
+ {
+  "town": "Town03",
+  "seed": 31059,
+  "bin": "easy",
+  "route_m": 23.0,
+  "euclid_m": 23.0,
+  "kind": "straight",
+  "band": "easy"
+ },
+ {
+  "town": "Town03",
+  "seed": 31060,
+  "bin": "easy",
+  "route_m": 20.08,
+  "euclid_m": 20.07,
+  "kind": "straight",
+  "band": "easy"
+ },
+ {
+  "town": "Town03",
+  "seed": 31061,
+  "bin": "easy",
+  "route_m": 20.0,
+  "euclid_m": 20.0,
+  "kind": "straight",
+  "band": "easy"
+ },
+ {
+  "town": "Town03",
+  "seed": 31062,
+  "bin": "easy",
+  "route_m": 20.68,
+  "euclid_m": 20.53,
+  "kind": "straight",
+  "band": "easy"
+ },
+ {
+  "town": "Town03",
+  "seed": 31063,
+  "bin": "easy",
+  "route_m": 23.06,
+  "euclid_m": 18.45,
+  "kind": "curved",
+  "band": "easy"
+ },
+ {
+  "town": "Town03",
+  "seed": 31064,
+  "bin": "easy",
+  "route_m": 22.0,
+  "euclid_m": 22.0,
+  "kind": "straight",
+  "band": "easy"
+ },
+ {
+  "town": "Town03",
+  "seed": 31065,
+  "bin": "easy",
+  "route_m": 21.0,
+  "euclid_m": 21.0,
+  "kind": "straight",
+  "band": "easy"
+ },
+ {
+  "town": "Town03",
+  "seed": 31066,
+  "bin": "easy",
+  "route_m": 17.94,
+  "euclid_m": 17.94,
+  "kind": "straight",
+  "band": "easy"
+ },
+ {
+  "town": "Town03",
+  "seed": 31067,
+  "bin": "easy",
+  "route_m": 24.11,
+  "euclid_m": 24.1,
+  "kind": "straight",
+  "band": "easy"
+ },
+ {
+  "town": "Town03",
+  "seed": 31068,
+  "bin": "easy",
+  "route_m": 19.0,
+  "euclid_m": 19.0,
+  "kind": "straight",
+  "band": "easy"
+ },
+ {
+  "town": "Town03",
+  "seed": 31069,
+  "bin": "easy",
+  "route_m": 18.0,
+  "euclid_m": 18.0,
+  "kind": "straight",
+  "band": "easy"
+ },
+ {
+  "town": "Town03",
+  "seed": 31070,
+  "bin": "easy",
+  "route_m": 21.91,
+  "euclid_m": 20.01,
+  "kind": "straight",
+  "band": "easy"
+ },
+ {
+  "town": "Town03",
+  "seed": 31071,
+  "bin": "easy",
+  "route_m": 13.99,
+  "euclid_m": 11.98,
+  "kind": "straight",
+  "band": "easy"
+ },
+ {
+  "town": "Town03",
+  "seed": 31072,
+  "bin": "easy",
+  "route_m": 18.84,
+  "euclid_m": 18.84,
+  "kind": "straight",
+  "band": "easy"
+ },
+ {
+  "town": "Town03",
+  "seed": 31073,
+  "bin": "easy",
+  "route_m": 11.0,
+  "euclid_m": 11.0,
+  "kind": "straight",
+  "band": "easy"
+ },
+ {
+  "town": "Town03",
+  "seed": 31074,
+  "bin": "easy",
+  "route_m": 21.07,
+  "euclid_m": 18.45,
+  "kind": "straight",
+  "band": "easy"
+ },
+ {
+  "town": "Town03",
+  "seed": 31075,
+  "bin": "easy",
+  "route_m": 20.22,
+  "euclid_m": 20.0,
+  "kind": "straight",
+  "band": "easy"
+ },
+ {
+  "town": "Town03",
+  "seed": 31077,
+  "bin": "easy",
+  "route_m": 21.0,
+  "euclid_m": 21.0,
+  "kind": "straight",
+  "band": "easy"
+ },
+ {
+  "town": "Town03",
+  "seed": 31078,
+  "bin": "easy",
+  "route_m": 21.0,
+  "euclid_m": 21.0,
+  "kind": "straight",
+  "band": "easy"
+ },
+ {
+  "town": "Town03",
+  "seed": 31079,
+  "bin": "easy",
+  "route_m": 17.04,
+  "euclid_m": 16.03,
+  "kind": "straight",
+  "band": "easy"
+ },
+ {
+  "town": "Town03",
+  "seed": 31080,
+  "bin": "easy",
+  "route_m": 20.0,
+  "euclid_m": 20.0,
+  "kind": "straight",
+  "band": "easy"
+ },
+ {
+  "town": "Town03",
+  "seed": 31081,
+  "bin": "easy",
+  "route_m": 19.0,
+  "euclid_m": 17.0,
+  "kind": "straight",
+  "band": "easy"
+ },
+ {
+  "town": "Town03",
+  "seed": 31082,
+  "bin": "easy",
+  "route_m": 22.99,
+  "euclid_m": 22.99,
+  "kind": "straight",
+  "band": "easy"
+ },
+ {
+  "town": "Town03",
+  "seed": 31083,
+  "bin": "easy",
+  "route_m": 15.0,
+  "euclid_m": 15.0,
+  "kind": "straight",
+  "band": "easy"
+ },
+ {
+  "town": "Town03",
+  "seed": 31084,
+  "bin": "easy",
+  "route_m": 15.0,
+  "euclid_m": 15.0,
+  "kind": "straight",
+  "band": "easy"
+ },
+ {
+  "town": "Town03",
+  "seed": 31085,
+  "bin": "easy",
+  "route_m": 12.99,
+  "euclid_m": 12.82,
+  "kind": "straight",
+  "band": "easy"
+ },
+ {
+  "town": "Town03",
+  "seed": 31087,
+  "bin": "easy",
+  "route_m": 24.15,
+  "euclid_m": 24.15,
+  "kind": "straight",
+  "band": "easy"
+ },
+ {
+  "town": "Town03",
+  "seed": 31088,
+  "bin": "easy",
+  "route_m": 24.0,
+  "euclid_m": 24.0,
+  "kind": "straight",
+  "band": "easy"
+ },
+ {
+  "town": "Town03",
+  "seed": 31089,
+  "bin": "easy",
+  "route_m": 23.0,
+  "euclid_m": 23.0,
+  "kind": "straight",
+  "band": "easy"
+ },
+ {
+  "town": "Town03",
+  "seed": 31090,
+  "bin": "easy",
+  "route_m": 14.0,
+  "euclid_m": 14.0,
+  "kind": "straight",
+  "band": "easy"
+ },
+ {
+  "town": "Town03",
+  "seed": 31091,
+  "bin": "easy",
+  "route_m": 22.0,
+  "euclid_m": 21.99,
+  "kind": "straight",
+  "band": "easy"
+ },
+ {
+  "town": "Town03",
+  "seed": 31092,
+  "bin": "easy",
+  "route_m": 10.0,
+  "euclid_m": 10.0,
+  "kind": "straight",
+  "band": "easy"
+ },
+ {
+  "town": "Town03",
+  "seed": 31093,
+  "bin": "easy",
+  "route_m": 16.02,
+  "euclid_m": 15.0,
+  "kind": "straight",
+  "band": "easy"
+ },
+ {
+  "town": "Town03",
+  "seed": 31095,
+  "bin": "easy",
+  "route_m": 17.65,
+  "euclid_m": 17.02,
+  "kind": "straight",
+  "band": "easy"
+ },
+ {
+  "town": "Town03",
+  "seed": 31096,
+  "bin": "easy",
+  "route_m": 21.24,
+  "euclid_m": 19.53,
+  "kind": "straight",
+  "band": "easy"
+ },
+ {
+  "town": "Town03",
+  "seed": 31097,
+  "bin": "easy",
+  "route_m": 23.0,
+  "euclid_m": 23.0,
+  "kind": "straight",
+  "band": "easy"
+ },
+ {
+  "town": "Town03",
+  "seed": 31098,
+  "bin": "easy",
+  "route_m": 18.54,
+  "euclid_m": 18.53,
+  "kind": "straight",
+  "band": "easy"
+ },
+ {
+  "town": "Town03",
+  "seed": 31099,
+  "bin": "easy",
+  "route_m": 21.0,
+  "euclid_m": 21.0,
+  "kind": "straight",
+  "band": "easy"
+ },
+ {
+  "town": "Town03",
+  "seed": 31100,
+  "bin": "easy",
+  "route_m": 17.75,
+  "euclid_m": 15.73,
+  "kind": "straight",
+  "band": "easy"
+ },
+ {
+  "town": "Town03",
+  "seed": 31101,
+  "bin": "easy",
+  "route_m": 20.23,
+  "euclid_m": 16.16,
+  "kind": "curved",
+  "band": "easy"
+ },
+ {
+  "town": "Town03",
+  "seed": 31102,
+  "bin": "easy",
+  "route_m": 22.6,
+  "euclid_m": 22.13,
+  "kind": "straight",
+  "band": "easy"
+ },
+ {
+  "town": "Town03",
+  "seed": 31103,
+  "bin": "easy",
+  "route_m": 17.18,
+  "euclid_m": 17.0,
+  "kind": "straight",
+  "band": "easy"
+ },
+ {
+  "town": "Town03",
+  "seed": 31104,
+  "bin": "easy",
+  "route_m": 22.56,
+  "euclid_m": 20.49,
+  "kind": "straight",
+  "band": "easy"
+ },
+ {
+  "town": "Town03",
+  "seed": 31105,
+  "bin": "easy",
+  "route_m": 14.51,
+  "euclid_m": 13.93,
+  "kind": "straight",
+  "band": "easy"
+ },
+ {
+  "town": "Town03",
+  "seed": 31106,
+  "bin": "easy",
+  "route_m": 16.86,
+  "euclid_m": 16.64,
+  "kind": "straight",
+  "band": "easy"
+ },
+ {
+  "town": "Town03",
+  "seed": 31107,
+  "bin": "easy",
+  "route_m": 11.0,
+  "euclid_m": 11.0,
+  "kind": "straight",
+  "band": "easy"
+ },
+ {
+  "town": "Town03",
+  "seed": 31108,
+  "bin": "easy",
+  "route_m": 17.6,
+  "euclid_m": 17.54,
+  "kind": "straight",
+  "band": "easy"
+ },
+ {
+  "town": "Town03",
+  "seed": 31109,
+  "bin": "easy",
+  "route_m": 22.15,
+  "euclid_m": 20.92,
+  "kind": "straight",
+  "band": "easy"
+ },
+ {
+  "town": "Town03",
+  "seed": 31110,
+  "bin": "easy",
+  "route_m": 22.03,
+  "euclid_m": 18.65,
+  "kind": "straight",
+  "band": "easy"
+ },
+ {
+  "town": "Town03",
+  "seed": 31111,
+  "bin": "easy",
+  "route_m": 20.23,
+  "euclid_m": 16.66,
+  "kind": "curved",
+  "band": "easy"
+ },
+ {
+  "town": "Town03",
+  "seed": 32000,
+  "bin": "medium",
+  "route_m": 41.99,
+  "euclid_m": 37.54,
+  "kind": "straight",
+  "band": "medium"
+ },
+ {
+  "town": "Town03",
+  "seed": 32001,
+  "bin": "medium",
+  "route_m": 41.88,
+  "euclid_m": 36.72,
+  "kind": "straight",
+  "band": "medium"
+ },
+ {
+  "town": "Town03",
+  "seed": 32002,
+  "bin": "medium",
+  "route_m": 40.61,
+  "euclid_m": 36.01,
+  "kind": "straight",
+  "band": "medium"
+ },
+ {
+  "town": "Town03",
+  "seed": 32003,
+  "bin": "medium",
+  "route_m": 48.81,
+  "euclid_m": 47.35,
+  "kind": "straight",
+  "band": "medium"
+ },
+ {
+  "town": "Town03",
+  "seed": 32004,
+  "bin": "medium",
+  "route_m": 35.0,
+  "euclid_m": 35.0,
+  "kind": "straight",
+  "band": "medium"
+ },
+ {
+  "town": "Town03",
+  "seed": 32005,
+  "bin": "medium",
+  "route_m": 30.92,
+  "euclid_m": 30.91,
+  "kind": "straight",
+  "band": "medium"
+ },
+ {
+  "town": "Town03",
+  "seed": 32006,
+  "bin": "medium",
+  "route_m": 27.0,
+  "euclid_m": 27.0,
+  "kind": "straight",
+  "band": "medium"
+ },
+ {
+  "town": "Town03",
+  "seed": 32007,
+  "bin": "medium",
+  "route_m": 46.0,
+  "euclid_m": 46.0,
+  "kind": "straight",
+  "band": "medium"
+ },
+ {
+  "town": "Town03",
+  "seed": 32008,
+  "bin": "medium",
+  "route_m": 48.32,
+  "euclid_m": 46.56,
+  "kind": "straight",
+  "band": "medium"
+ },
+ {
+  "town": "Town03",
+  "seed": 32009,
+  "bin": "medium",
+  "route_m": 44.0,
+  "euclid_m": 44.0,
+  "kind": "straight",
+  "band": "medium"
+ },
+ {
+  "town": "Town03",
+  "seed": 32010,
+  "bin": "medium",
+  "route_m": 43.49,
+  "euclid_m": 40.87,
+  "kind": "straight",
+  "band": "medium"
+ },
+ {
+  "town": "Town03",
+  "seed": 32011,
+  "bin": "medium",
+  "route_m": 26.71,
+  "euclid_m": 26.0,
+  "kind": "straight",
+  "band": "medium"
+ },
+ {
+  "town": "Town03",
+  "seed": 32012,
+  "bin": "medium",
+  "route_m": 47.95,
+  "euclid_m": 46.83,
+  "kind": "straight",
+  "band": "medium"
+ },
+ {
+  "town": "Town03",
+  "seed": 32013,
+  "bin": "medium",
+  "route_m": 42.84,
+  "euclid_m": 33.37,
+  "kind": "curved",
+  "band": "medium"
+ },
+ {
+  "town": "Town03",
+  "seed": 32014,
+  "bin": "medium",
+  "route_m": 30.43,
+  "euclid_m": 30.35,
+  "kind": "straight",
+  "band": "medium"
+ },
+ {
+  "town": "Town03",
+  "seed": 32016,
+  "bin": "medium",
+  "route_m": 36.99,
+  "euclid_m": 35.06,
+  "kind": "straight",
+  "band": "medium"
+ },
+ {
+  "town": "Town03",
+  "seed": 32017,
+  "bin": "medium",
+  "route_m": 40.15,
+  "euclid_m": 32.19,
+  "kind": "curved",
+  "band": "medium"
+ },
+ {
+  "town": "Town03",
+  "seed": 32018,
+  "bin": "medium",
+  "route_m": 30.95,
+  "euclid_m": 30.95,
+  "kind": "straight",
+  "band": "medium"
+ },
+ {
+  "town": "Town03",
+  "seed": 32019,
+  "bin": "medium",
+  "route_m": 45.76,
+  "euclid_m": 36.22,
+  "kind": "curved",
+  "band": "medium"
+ },
+ {
+  "town": "Town03",
+  "seed": 32020,
+  "bin": "medium",
+  "route_m": 47.26,
+  "euclid_m": 39.95,
+  "kind": "straight",
+  "band": "medium"
+ },
+ {
+  "town": "Town03",
+  "seed": 32021,
+  "bin": "medium",
+  "route_m": 49.22,
+  "euclid_m": 49.0,
+  "kind": "straight",
+  "band": "medium"
+ },
+ {
+  "town": "Town03",
+  "seed": 32022,
+  "bin": "medium",
+  "route_m": 49.0,
+  "euclid_m": 49.0,
+  "kind": "straight",
+  "band": "medium"
+ },
+ {
+  "town": "Town03",
+  "seed": 32023,
+  "bin": "medium",
+  "route_m": 29.0,
+  "euclid_m": 27.75,
+  "kind": "straight",
+  "band": "medium"
+ },
+ {
+  "town": "Town03",
+  "seed": 32024,
+  "bin": "medium",
+  "route_m": 27.92,
+  "euclid_m": 27.92,
+  "kind": "straight",
+  "band": "medium"
+ },
+ {
+  "town": "Town03",
+  "seed": 32025,
+  "bin": "medium",
+  "route_m": 30.24,
+  "euclid_m": 29.48,
+  "kind": "straight",
+  "band": "medium"
+ },
+ {
+  "town": "Town03",
+  "seed": 32026,
+  "bin": "medium",
+  "route_m": 28.53,
+  "euclid_m": 24.45,
+  "kind": "straight",
+  "band": "medium"
+ },
+ {
+  "town": "Town03",
+  "seed": 32027,
+  "bin": "medium",
+  "route_m": 43.77,
+  "euclid_m": 43.62,
+  "kind": "straight",
+  "band": "medium"
+ },
+ {
+  "town": "Town03",
+  "seed": 32028,
+  "bin": "medium",
+  "route_m": 28.56,
+  "euclid_m": 26.46,
+  "kind": "straight",
+  "band": "medium"
+ },
+ {
+  "town": "Town03",
+  "seed": 32029,
+  "bin": "medium",
+  "route_m": 44.24,
+  "euclid_m": 43.2,
+  "kind": "straight",
+  "band": "medium"
+ },
+ {
+  "town": "Town03",
+  "seed": 32030,
+  "bin": "medium",
+  "route_m": 39.0,
+  "euclid_m": 39.0,
+  "kind": "straight",
+  "band": "medium"
+ },
+ {
+  "town": "Town03",
+  "seed": 32031,
+  "bin": "medium",
+  "route_m": 31.88,
+  "euclid_m": 25.5,
+  "kind": "curved",
+  "band": "medium"
+ },
+ {
+  "town": "Town03",
+  "seed": 32032,
+  "bin": "medium",
+  "route_m": 35.57,
+  "euclid_m": 33.99,
+  "kind": "straight",
+  "band": "medium"
+ },
+ {
+  "town": "Town03",
+  "seed": 32034,
+  "bin": "medium",
+  "route_m": 27.33,
+  "euclid_m": 21.04,
+  "kind": "curved",
+  "band": "medium"
+ },
+ {
+  "town": "Town03",
+  "seed": 32035,
+  "bin": "medium",
+  "route_m": 39.51,
+  "euclid_m": 37.95,
+  "kind": "straight",
+  "band": "medium"
+ },
+ {
+  "town": "Town03",
+  "seed": 32036,
+  "bin": "medium",
+  "route_m": 36.61,
+  "euclid_m": 34.01,
+  "kind": "straight",
+  "band": "medium"
+ },
+ {
+  "town": "Town03",
+  "seed": 32037,
+  "bin": "medium",
+  "route_m": 37.71,
+  "euclid_m": 34.69,
+  "kind": "straight",
+  "band": "medium"
+ },
+ {
+  "town": "Town03",
+  "seed": 32038,
+  "bin": "medium",
+  "route_m": 40.86,
+  "euclid_m": 40.81,
+  "kind": "straight",
+  "band": "medium"
+ },
+ {
+  "town": "Town03",
+  "seed": 32039,
+  "bin": "medium",
+  "route_m": 45.0,
+  "euclid_m": 44.98,
+  "kind": "straight",
+  "band": "medium"
+ },
+ {
+  "town": "Town03",
+  "seed": 32040,
+  "bin": "medium",
+  "route_m": 47.26,
+  "euclid_m": 47.0,
+  "kind": "straight",
+  "band": "medium"
+ },
+ {
+  "town": "Town03",
+  "seed": 32041,
+  "bin": "medium",
+  "route_m": 43.0,
+  "euclid_m": 43.0,
+  "kind": "straight",
+  "band": "medium"
+ },
+ {
+  "town": "Town03",
+  "seed": 32042,
+  "bin": "medium",
+  "route_m": 33.09,
+  "euclid_m": 30.48,
+  "kind": "straight",
+  "band": "medium"
+ },
+ {
+  "town": "Town03",
+  "seed": 32043,
+  "bin": "medium",
+  "route_m": 38.0,
+  "euclid_m": 38.0,
+  "kind": "straight",
+  "band": "medium"
+ },
+ {
+  "town": "Town03",
+  "seed": 32045,
+  "bin": "medium",
+  "route_m": 40.0,
+  "euclid_m": 40.0,
+  "kind": "straight",
+  "band": "medium"
+ },
+ {
+  "town": "Town03",
+  "seed": 32046,
+  "bin": "medium",
+  "route_m": 44.72,
+  "euclid_m": 43.1,
+  "kind": "straight",
+  "band": "medium"
+ },
+ {
+  "town": "Town03",
+  "seed": 32047,
+  "bin": "medium",
+  "route_m": 41.99,
+  "euclid_m": 38.83,
+  "kind": "straight",
+  "band": "medium"
+ },
+ {
+  "town": "Town03",
+  "seed": 32048,
+  "bin": "medium",
+  "route_m": 46.0,
+  "euclid_m": 46.0,
+  "kind": "straight",
+  "band": "medium"
+ },
+ {
+  "town": "Town03",
+  "seed": 32049,
+  "bin": "medium",
+  "route_m": 26.49,
+  "euclid_m": 26.48,
+  "kind": "straight",
+  "band": "medium"
+ },
+ {
+  "town": "Town03",
+  "seed": 32050,
+  "bin": "medium",
+  "route_m": 34.0,
+  "euclid_m": 34.0,
+  "kind": "straight",
+  "band": "medium"
+ },
+ {
+  "town": "Town03",
+  "seed": 32051,
+  "bin": "medium",
+  "route_m": 47.75,
+  "euclid_m": 39.82,
+  "kind": "straight",
+  "band": "medium"
+ },
+ {
+  "town": "Town03",
+  "seed": 32052,
+  "bin": "medium",
+  "route_m": 47.01,
+  "euclid_m": 47.01,
+  "kind": "straight",
+  "band": "medium"
+ },
+ {
+  "town": "Town03",
+  "seed": 32053,
+  "bin": "medium",
+  "route_m": 34.0,
+  "euclid_m": 34.0,
+  "kind": "straight",
+  "band": "medium"
+ },
+ {
+  "town": "Town03",
+  "seed": 32054,
+  "bin": "medium",
+  "route_m": 33.53,
+  "euclid_m": 29.57,
+  "kind": "straight",
+  "band": "medium"
+ },
+ {
+  "town": "Town03",
+  "seed": 32056,
+  "bin": "medium",
+  "route_m": 47.0,
+  "euclid_m": 47.0,
+  "kind": "straight",
+  "band": "medium"
+ },
+ {
+  "town": "Town03",
+  "seed": 32057,
+  "bin": "medium",
+  "route_m": 40.36,
+  "euclid_m": 39.18,
+  "kind": "straight",
+  "band": "medium"
+ },
+ {
+  "town": "Town03",
+  "seed": 32059,
+  "bin": "medium",
+  "route_m": 35.54,
+  "euclid_m": 31.56,
+  "kind": "straight",
+  "band": "medium"
+ },
+ {
+  "town": "Town03",
+  "seed": 32060,
+  "bin": "medium",
+  "route_m": 39.22,
+  "euclid_m": 33.85,
+  "kind": "straight",
+  "band": "medium"
+ },
+ {
+  "town": "Town03",
+  "seed": 32061,
+  "bin": "medium",
+  "route_m": 35.89,
+  "euclid_m": 35.82,
+  "kind": "straight",
+  "band": "medium"
+ },
+ {
+  "town": "Town03",
+  "seed": 32062,
+  "bin": "medium",
+  "route_m": 32.0,
+  "euclid_m": 32.0,
+  "kind": "straight",
+  "band": "medium"
+ },
+ {
+  "town": "Town03",
+  "seed": 32063,
+  "bin": "medium",
+  "route_m": 41.0,
+  "euclid_m": 37.99,
+  "kind": "straight",
+  "band": "medium"
+ },
+ {
+  "town": "Town03",
+  "seed": 32064,
+  "bin": "medium",
+  "route_m": 26.1,
+  "euclid_m": 24.98,
+  "kind": "straight",
+  "band": "medium"
+ },
+ {
+  "town": "Town03",
+  "seed": 32065,
+  "bin": "medium",
+  "route_m": 41.49,
+  "euclid_m": 41.46,
+  "kind": "straight",
+  "band": "medium"
+ },
+ {
+  "town": "Town03",
+  "seed": 32066,
+  "bin": "medium",
+  "route_m": 38.0,
+  "euclid_m": 38.0,
+  "kind": "straight",
+  "band": "medium"
+ },
+ {
+  "town": "Town03",
+  "seed": 32067,
+  "bin": "medium",
+  "route_m": 36.0,
+  "euclid_m": 36.0,
+  "kind": "straight",
+  "band": "medium"
+ },
+ {
+  "town": "Town03",
+  "seed": 32068,
+  "bin": "medium",
+  "route_m": 42.88,
+  "euclid_m": 42.88,
+  "kind": "straight",
+  "band": "medium"
+ },
+ {
+  "town": "Town03",
+  "seed": 32070,
+  "bin": "medium",
+  "route_m": 46.9,
+  "euclid_m": 45.01,
+  "kind": "straight",
+  "band": "medium"
+ },
+ {
+  "town": "Town03",
+  "seed": 32071,
+  "bin": "medium",
+  "route_m": 32.71,
+  "euclid_m": 26.98,
+  "kind": "curved",
+  "band": "medium"
+ },
+ {
+  "town": "Town03",
+  "seed": 32072,
+  "bin": "medium",
+  "route_m": 26.03,
+  "euclid_m": 26.03,
+  "kind": "straight",
+  "band": "medium"
+ },
+ {
+  "town": "Town03",
+  "seed": 32073,
+  "bin": "medium",
+  "route_m": 38.21,
+  "euclid_m": 29.68,
+  "kind": "curved",
+  "band": "medium"
+ },
+ {
+  "town": "Town03",
+  "seed": 32074,
+  "bin": "medium",
+  "route_m": 31.13,
+  "euclid_m": 27.34,
+  "kind": "straight",
+  "band": "medium"
+ },
+ {
+  "town": "Town03",
+  "seed": 32075,
+  "bin": "medium",
+  "route_m": 46.53,
+  "euclid_m": 43.96,
+  "kind": "straight",
+  "band": "medium"
+ },
+ {
+  "town": "Town03",
+  "seed": 32076,
+  "bin": "medium",
+  "route_m": 26.0,
+  "euclid_m": 26.0,
+  "kind": "straight",
+  "band": "medium"
+ },
+ {
+  "town": "Town03",
+  "seed": 32077,
+  "bin": "medium",
+  "route_m": 49.53,
+  "euclid_m": 49.41,
+  "kind": "straight",
+  "band": "medium"
+ },
+ {
+  "town": "Town03",
+  "seed": 32079,
+  "bin": "medium",
+  "route_m": 26.37,
+  "euclid_m": 24.6,
+  "kind": "straight",
+  "band": "medium"
+ },
+ {
+  "town": "Town03",
+  "seed": 32080,
+  "bin": "medium",
+  "route_m": 26.0,
+  "euclid_m": 26.0,
+  "kind": "straight",
+  "band": "medium"
+ },
+ {
+  "town": "Town03",
+  "seed": 32081,
+  "bin": "medium",
+  "route_m": 27.5,
+  "euclid_m": 27.4,
+  "kind": "straight",
+  "band": "medium"
+ },
+ {
+  "town": "Town03",
+  "seed": 32082,
+  "bin": "medium",
+  "route_m": 29.0,
+  "euclid_m": 29.0,
+  "kind": "straight",
+  "band": "medium"
+ },
+ {
+  "town": "Town03",
+  "seed": 32083,
+  "bin": "medium",
+  "route_m": 34.08,
+  "euclid_m": 32.19,
+  "kind": "straight",
+  "band": "medium"
+ },
+ {
+  "town": "Town03",
+  "seed": 32084,
+  "bin": "medium",
+  "route_m": 27.12,
+  "euclid_m": 27.11,
+  "kind": "straight",
+  "band": "medium"
+ },
+ {
+  "town": "Town03",
+  "seed": 32085,
+  "bin": "medium",
+  "route_m": 34.02,
+  "euclid_m": 29.87,
+  "kind": "straight",
+  "band": "medium"
+ },
+ {
+  "town": "Town03",
+  "seed": 32086,
+  "bin": "medium",
+  "route_m": 36.15,
+  "euclid_m": 35.58,
+  "kind": "straight",
+  "band": "medium"
+ },
+ {
+  "town": "Town03",
+  "seed": 32087,
+  "bin": "medium",
+  "route_m": 42.64,
+  "euclid_m": 34.31,
+  "kind": "curved",
+  "band": "medium"
+ },
+ {
+  "town": "Town03",
+  "seed": 32088,
+  "bin": "medium",
+  "route_m": 32.91,
+  "euclid_m": 26.63,
+  "kind": "curved",
+  "band": "medium"
+ },
+ {
+  "town": "Town03",
+  "seed": 32089,
+  "bin": "medium",
+  "route_m": 28.0,
+  "euclid_m": 28.0,
+  "kind": "straight",
+  "band": "medium"
+ },
+ {
+  "town": "Town03",
+  "seed": 32090,
+  "bin": "medium",
+  "route_m": 40.73,
+  "euclid_m": 40.49,
+  "kind": "straight",
+  "band": "medium"
+ },
+ {
+  "town": "Town03",
+  "seed": 32091,
+  "bin": "medium",
+  "route_m": 40.0,
+  "euclid_m": 40.0,
+  "kind": "straight",
+  "band": "medium"
+ },
+ {
+  "town": "Town03",
+  "seed": 32092,
+  "bin": "medium",
+  "route_m": 29.0,
+  "euclid_m": 29.0,
+  "kind": "straight",
+  "band": "medium"
+ },
+ {
+  "town": "Town03",
+  "seed": 32093,
+  "bin": "medium",
+  "route_m": 31.16,
+  "euclid_m": 30.06,
+  "kind": "straight",
+  "band": "medium"
+ },
+ {
+  "town": "Town03",
+  "seed": 32094,
+  "bin": "medium",
+  "route_m": 43.0,
+  "euclid_m": 43.0,
+  "kind": "straight",
+  "band": "medium"
+ },
+ {
+  "town": "Town03",
+  "seed": 32095,
+  "bin": "medium",
+  "route_m": 35.02,
+  "euclid_m": 34.0,
+  "kind": "straight",
+  "band": "medium"
+ },
+ {
+  "town": "Town03",
+  "seed": 32096,
+  "bin": "medium",
+  "route_m": 37.74,
+  "euclid_m": 34.99,
+  "kind": "straight",
+  "band": "medium"
+ },
+ {
+  "town": "Town03",
+  "seed": 32097,
+  "bin": "medium",
+  "route_m": 27.54,
+  "euclid_m": 27.49,
+  "kind": "straight",
+  "band": "medium"
+ },
+ {
+  "town": "Town03",
+  "seed": 32098,
+  "bin": "medium",
+  "route_m": 42.85,
+  "euclid_m": 34.92,
+  "kind": "curved",
+  "band": "medium"
+ },
+ {
+  "town": "Town03",
+  "seed": 32099,
+  "bin": "medium",
+  "route_m": 28.93,
+  "euclid_m": 28.58,
+  "kind": "straight",
+  "band": "medium"
+ },
+ {
+  "town": "Town03",
+  "seed": 32100,
+  "bin": "medium",
+  "route_m": 29.22,
+  "euclid_m": 29.0,
+  "kind": "straight",
+  "band": "medium"
+ },
+ {
+  "town": "Town03",
+  "seed": 32101,
+  "bin": "medium",
+  "route_m": 31.02,
+  "euclid_m": 30.0,
+  "kind": "straight",
+  "band": "medium"
+ },
+ {
+  "town": "Town03",
+  "seed": 32102,
+  "bin": "medium",
+  "route_m": 26.96,
+  "euclid_m": 24.65,
+  "kind": "straight",
+  "band": "medium"
+ },
+ {
+  "town": "Town03",
+  "seed": 32103,
+  "bin": "medium",
+  "route_m": 32.3,
+  "euclid_m": 30.12,
+  "kind": "straight",
+  "band": "medium"
+ },
+ {
+  "town": "Town03",
+  "seed": 32104,
+  "bin": "medium",
+  "route_m": 44.69,
+  "euclid_m": 38.22,
+  "kind": "straight",
+  "band": "medium"
+ },
+ {
+  "town": "Town03",
+  "seed": 32106,
+  "bin": "medium",
+  "route_m": 43.0,
+  "euclid_m": 43.0,
+  "kind": "straight",
+  "band": "medium"
+ },
+ {
+  "town": "Town03",
+  "seed": 32107,
+  "bin": "medium",
+  "route_m": 27.57,
+  "euclid_m": 21.84,
+  "kind": "curved",
+  "band": "medium"
+ },
+ {
+  "town": "Town03",
+  "seed": 33000,
+  "bin": "hard",
+  "route_m": 64.52,
+  "euclid_m": 56.68,
+  "kind": "straight",
+  "band": "hard"
+ },
+ {
+  "town": "Town03",
+  "seed": 33001,
+  "bin": "hard",
+  "route_m": 76.75,
+  "euclid_m": 62.92,
+  "kind": "curved",
+  "band": "hard"
+ },
+ {
+  "town": "Town03",
+  "seed": 33002,
+  "bin": "hard",
+  "route_m": 55.21,
+  "euclid_m": 51.33,
+  "kind": "straight",
+  "band": "hard"
+ },
+ {
+  "town": "Town03",
+  "seed": 33003,
+  "bin": "hard",
+  "route_m": 65.0,
+  "euclid_m": 65.0,
+  "kind": "straight",
+  "band": "hard"
+ },
+ {
+  "town": "Town03",
+  "seed": 33004,
+  "bin": "hard",
+  "route_m": 93.04,
+  "euclid_m": 92.56,
+  "kind": "straight",
+  "band": "hard"
+ },
+ {
+  "town": "Town03",
+  "seed": 33005,
+  "bin": "hard",
+  "route_m": 72.0,
+  "euclid_m": 72.0,
+  "kind": "straight",
+  "band": "hard"
+ },
+ {
+  "town": "Town03",
+  "seed": 33006,
+  "bin": "hard",
+  "route_m": 96.0,
+  "euclid_m": 96.0,
+  "kind": "straight",
+  "band": "hard"
+ },
+ {
+  "town": "Town03",
+  "seed": 33008,
+  "bin": "hard",
+  "route_m": 87.0,
+  "euclid_m": 87.0,
+  "kind": "straight",
+  "band": "hard"
+ },
+ {
+  "town": "Town03",
+  "seed": 33009,
+  "bin": "hard",
+  "route_m": 81.25,
+  "euclid_m": 63.95,
+  "kind": "curved",
+  "band": "hard"
+ },
+ {
+  "town": "Town03",
+  "seed": 33010,
+  "bin": "hard",
+  "route_m": 74.75,
+  "euclid_m": 64.53,
+  "kind": "straight",
+  "band": "hard"
+ },
+ {
+  "town": "Town03",
+  "seed": 33011,
+  "bin": "hard",
+  "route_m": 88.0,
+  "euclid_m": 88.0,
+  "kind": "straight",
+  "band": "hard"
+ },
+ {
+  "town": "Town03",
+  "seed": 33012,
+  "bin": "hard",
+  "route_m": 51.46,
+  "euclid_m": 50.0,
+  "kind": "straight",
+  "band": "hard"
+ },
+ {
+  "town": "Town03",
+  "seed": 33013,
+  "bin": "hard",
+  "route_m": 52.26,
+  "euclid_m": 50.77,
+  "kind": "straight",
+  "band": "hard"
+ },
+ {
+  "town": "Town03",
+  "seed": 33014,
+  "bin": "hard",
+  "route_m": 77.62,
+  "euclid_m": 55.15,
+  "kind": "curved",
+  "band": "hard"
+ },
+ {
+  "town": "Town03",
+  "seed": 33015,
+  "bin": "hard",
+  "route_m": 81.75,
+  "euclid_m": 69.11,
+  "kind": "straight",
+  "band": "hard"
+ },
+ {
+  "town": "Town03",
+  "seed": 33016,
+  "bin": "hard",
+  "route_m": 81.03,
+  "euclid_m": 69.84,
+  "kind": "straight",
+  "band": "hard"
+ },
+ {
+  "town": "Town03",
+  "seed": 33017,
+  "bin": "hard",
+  "route_m": 87.04,
+  "euclid_m": 71.31,
+  "kind": "curved",
+  "band": "hard"
+ },
+ {
+  "town": "Town03",
+  "seed": 33018,
+  "bin": "hard",
+  "route_m": 90.02,
+  "euclid_m": 90.0,
+  "kind": "straight",
+  "band": "hard"
+ },
+ {
+  "town": "Town03",
+  "seed": 33019,
+  "bin": "hard",
+  "route_m": 52.0,
+  "euclid_m": 52.0,
+  "kind": "straight",
+  "band": "hard"
+ },
+ {
+  "town": "Town03",
+  "seed": 33020,
+  "bin": "hard",
+  "route_m": 64.34,
+  "euclid_m": 56.13,
+  "kind": "straight",
+  "band": "hard"
+ },
+ {
+  "town": "Town03",
+  "seed": 33021,
+  "bin": "hard",
+  "route_m": 57.46,
+  "euclid_m": 53.32,
+  "kind": "straight",
+  "band": "hard"
+ },
+ {
+  "town": "Town03",
+  "seed": 33022,
+  "bin": "hard",
+  "route_m": 99.0,
+  "euclid_m": 99.0,
+  "kind": "straight",
+  "band": "hard"
+ },
+ {
+  "town": "Town03",
+  "seed": 33023,
+  "bin": "hard",
+  "route_m": 71.02,
+  "euclid_m": 71.01,
+  "kind": "straight",
+  "band": "hard"
+ },
+ {
+  "town": "Town03",
+  "seed": 33024,
+  "bin": "hard",
+  "route_m": 52.63,
+  "euclid_m": 47.28,
+  "kind": "straight",
+  "band": "hard"
+ },
+ {
+  "town": "Town03",
+  "seed": 33025,
+  "bin": "hard",
+  "route_m": 52.99,
+  "euclid_m": 52.99,
+  "kind": "straight",
+  "band": "hard"
+ },
+ {
+  "town": "Town03",
+  "seed": 33026,
+  "bin": "hard",
+  "route_m": 56.62,
+  "euclid_m": 47.95,
+  "kind": "straight",
+  "band": "hard"
+ },
+ {
+  "town": "Town03",
+  "seed": 33027,
+  "bin": "hard",
+  "route_m": 71.69,
+  "euclid_m": 67.58,
+  "kind": "straight",
+  "band": "hard"
+ },
+ {
+  "town": "Town03",
+  "seed": 33028,
+  "bin": "hard",
+  "route_m": 63.0,
+  "euclid_m": 63.0,
+  "kind": "straight",
+  "band": "hard"
+ },
+ {
+  "town": "Town03",
+  "seed": 33029,
+  "bin": "hard",
+  "route_m": 80.64,
+  "euclid_m": 68.25,
+  "kind": "straight",
+  "band": "hard"
+ },
+ {
+  "town": "Town03",
+  "seed": 33030,
+  "bin": "hard",
+  "route_m": 87.46,
+  "euclid_m": 87.24,
+  "kind": "straight",
+  "band": "hard"
+ },
+ {
+  "town": "Town03",
+  "seed": 33031,
+  "bin": "hard",
+  "route_m": 69.85,
+  "euclid_m": 69.85,
+  "kind": "straight",
+  "band": "hard"
+ },
+ {
+  "town": "Town03",
+  "seed": 33032,
+  "bin": "hard",
+  "route_m": 76.26,
+  "euclid_m": 76.0,
+  "kind": "straight",
+  "band": "hard"
+ },
+ {
+  "town": "Town03",
+  "seed": 33033,
+  "bin": "hard",
+  "route_m": 74.07,
+  "euclid_m": 68.77,
+  "kind": "straight",
+  "band": "hard"
+ },
+ {
+  "town": "Town03",
+  "seed": 33034,
+  "bin": "hard",
+  "route_m": 66.0,
+  "euclid_m": 66.0,
+  "kind": "straight",
+  "band": "hard"
+ },
+ {
+  "town": "Town03",
+  "seed": 33035,
+  "bin": "hard",
+  "route_m": 55.86,
+  "euclid_m": 54.0,
+  "kind": "straight",
+  "band": "hard"
+ },
+ {
+  "town": "Town03",
+  "seed": 33036,
+  "bin": "hard",
+  "route_m": 94.83,
+  "euclid_m": 65.73,
+  "kind": "curved",
+  "band": "hard"
+ },
+ {
+  "town": "Town03",
+  "seed": 33037,
+  "bin": "hard",
+  "route_m": 98.56,
+  "euclid_m": 83.62,
+  "kind": "straight",
+  "band": "hard"
+ },
+ {
+  "town": "Town03",
+  "seed": 33038,
+  "bin": "hard",
+  "route_m": 66.35,
+  "euclid_m": 64.22,
+  "kind": "straight",
+  "band": "hard"
+ },
+ {
+  "town": "Town03",
+  "seed": 33039,
+  "bin": "hard",
+  "route_m": 80.2,
+  "euclid_m": 75.08,
+  "kind": "straight",
+  "band": "hard"
+ },
+ {
+  "town": "Town03",
+  "seed": 33040,
+  "bin": "hard",
+  "route_m": 53.74,
+  "euclid_m": 47.94,
+  "kind": "straight",
+  "band": "hard"
+ },
+ {
+  "town": "Town03",
+  "seed": 33041,
+  "bin": "hard",
+  "route_m": 77.45,
+  "euclid_m": 74.08,
+  "kind": "straight",
+  "band": "hard"
+ },
+ {
+  "town": "Town03",
+  "seed": 33042,
+  "bin": "hard",
+  "route_m": 84.99,
+  "euclid_m": 61.46,
+  "kind": "curved",
+  "band": "hard"
+ },
+ {
+  "town": "Town03",
+  "seed": 33043,
+  "bin": "hard",
+  "route_m": 56.75,
+  "euclid_m": 50.03,
+  "kind": "straight",
+  "band": "hard"
+ },
+ {
+  "town": "Town03",
+  "seed": 33044,
+  "bin": "hard",
+  "route_m": 92.94,
+  "euclid_m": 72.91,
+  "kind": "curved",
+  "band": "hard"
+ },
+ {
+  "town": "Town03",
+  "seed": 33045,
+  "bin": "hard",
+  "route_m": 59.0,
+  "euclid_m": 59.0,
+  "kind": "straight",
+  "band": "hard"
+ },
+ {
+  "town": "Town03",
+  "seed": 33046,
+  "bin": "hard",
+  "route_m": 83.0,
+  "euclid_m": 82.98,
+  "kind": "straight",
+  "band": "hard"
+ },
+ {
+  "town": "Town03",
+  "seed": 33047,
+  "bin": "hard",
+  "route_m": 88.03,
+  "euclid_m": 70.16,
+  "kind": "curved",
+  "band": "hard"
+ },
+ {
+  "town": "Town03",
+  "seed": 33048,
+  "bin": "hard",
+  "route_m": 95.58,
+  "euclid_m": 91.86,
+  "kind": "straight",
+  "band": "hard"
+ },
+ {
+  "town": "Town03",
+  "seed": 33050,
+  "bin": "hard",
+  "route_m": 77.2,
+  "euclid_m": 70.0,
+  "kind": "straight",
+  "band": "hard"
+ },
+ {
+  "town": "Town03",
+  "seed": 33051,
+  "bin": "hard",
+  "route_m": 59.23,
+  "euclid_m": 46.6,
+  "kind": "curved",
+  "band": "hard"
+ },
+ {
+  "town": "Town03",
+  "seed": 33052,
+  "bin": "hard",
+  "route_m": 57.52,
+  "euclid_m": 55.9,
+  "kind": "straight",
+  "band": "hard"
+ },
+ {
+  "town": "Town03",
+  "seed": 33053,
+  "bin": "hard",
+  "route_m": 57.82,
+  "euclid_m": 26.99,
+  "kind": "curved",
+  "band": "hard"
+ },
+ {
+  "town": "Town03",
+  "seed": 33054,
+  "bin": "hard",
+  "route_m": 53.87,
+  "euclid_m": 48.38,
+  "kind": "straight",
+  "band": "hard"
+ },
+ {
+  "town": "Town03",
+  "seed": 33055,
+  "bin": "hard",
+  "route_m": 82.16,
+  "euclid_m": 72.0,
+  "kind": "straight",
+  "band": "hard"
+ },
+ {
+  "town": "Town03",
+  "seed": 33056,
+  "bin": "hard",
+  "route_m": 61.46,
+  "euclid_m": 57.72,
+  "kind": "straight",
+  "band": "hard"
+ },
+ {
+  "town": "Town03",
+  "seed": 33057,
+  "bin": "hard",
+  "route_m": 85.0,
+  "euclid_m": 85.0,
+  "kind": "straight",
+  "band": "hard"
+ },
+ {
+  "town": "Town03",
+  "seed": 33058,
+  "bin": "hard",
+  "route_m": 92.83,
+  "euclid_m": 73.77,
+  "kind": "curved",
+  "band": "hard"
+ },
+ {
+  "town": "Town03",
+  "seed": 33059,
+  "bin": "hard",
+  "route_m": 98.03,
+  "euclid_m": 78.72,
+  "kind": "curved",
+  "band": "hard"
+ },
+ {
+  "town": "Town03",
+  "seed": 33060,
+  "bin": "hard",
+  "route_m": 57.14,
+  "euclid_m": 50.47,
+  "kind": "straight",
+  "band": "hard"
+ },
+ {
+  "town": "Town03",
+  "seed": 33061,
+  "bin": "hard",
+  "route_m": 83.2,
+  "euclid_m": 65.84,
+  "kind": "curved",
+  "band": "hard"
+ },
+ {
+  "town": "Town03",
+  "seed": 33063,
+  "bin": "hard",
+  "route_m": 96.92,
+  "euclid_m": 75.77,
+  "kind": "curved",
+  "band": "hard"
+ },
+ {
+  "town": "Town03",
+  "seed": 33064,
+  "bin": "hard",
+  "route_m": 96.95,
+  "euclid_m": 83.98,
+  "kind": "straight",
+  "band": "hard"
+ },
+ {
+  "town": "Town03",
+  "seed": 33065,
+  "bin": "hard",
+  "route_m": 62.04,
+  "euclid_m": 62.03,
+  "kind": "straight",
+  "band": "hard"
+ },
+ {
+  "town": "Town03",
+  "seed": 33066,
+  "bin": "hard",
+  "route_m": 64.0,
+  "euclid_m": 64.0,
+  "kind": "straight",
+  "band": "hard"
+ },
+ {
+  "town": "Town03",
+  "seed": 33067,
+  "bin": "hard",
+  "route_m": 77.9,
+  "euclid_m": 66.06,
+  "kind": "straight",
+  "band": "hard"
+ },
+ {
+  "town": "Town03",
+  "seed": 33068,
+  "bin": "hard",
+  "route_m": 66.24,
+  "euclid_m": 60.94,
+  "kind": "straight",
+  "band": "hard"
+ },
+ {
+  "town": "Town03",
+  "seed": 33069,
+  "bin": "hard",
+  "route_m": 91.78,
+  "euclid_m": 84.89,
+  "kind": "straight",
+  "band": "hard"
+ },
+ {
+  "town": "Town03",
+  "seed": 33070,
+  "bin": "hard",
+  "route_m": 74.09,
+  "euclid_m": 73.28,
+  "kind": "straight",
+  "band": "hard"
+ },
+ {
+  "town": "Town03",
+  "seed": 33071,
+  "bin": "hard",
+  "route_m": 93.0,
+  "euclid_m": 93.0,
+  "kind": "straight",
+  "band": "hard"
+ },
+ {
+  "town": "Town03",
+  "seed": 33072,
+  "bin": "hard",
+  "route_m": 73.62,
+  "euclid_m": 72.0,
+  "kind": "straight",
+  "band": "hard"
+ },
+ {
+  "town": "Town03",
+  "seed": 33073,
+  "bin": "hard",
+  "route_m": 83.1,
+  "euclid_m": 82.6,
+  "kind": "straight",
+  "band": "hard"
+ },
+ {
+  "town": "Town03",
+  "seed": 33075,
+  "bin": "hard",
+  "route_m": 56.26,
+  "euclid_m": 47.25,
+  "kind": "straight",
+  "band": "hard"
+ },
+ {
+  "town": "Town03",
+  "seed": 33076,
+  "bin": "hard",
+  "route_m": 83.45,
+  "euclid_m": 80.77,
+  "kind": "straight",
+  "band": "hard"
+ },
+ {
+  "town": "Town03",
+  "seed": 33077,
+  "bin": "hard",
+  "route_m": 53.0,
+  "euclid_m": 53.0,
+  "kind": "straight",
+  "band": "hard"
+ },
+ {
+  "town": "Town03",
+  "seed": 33078,
+  "bin": "hard",
+  "route_m": 97.73,
+  "euclid_m": 83.78,
+  "kind": "straight",
+  "band": "hard"
+ },
+ {
+  "town": "Town03",
+  "seed": 33079,
+  "bin": "hard",
+  "route_m": 51.0,
+  "euclid_m": 51.0,
+  "kind": "straight",
+  "band": "hard"
+ },
+ {
+  "town": "Town03",
+  "seed": 33080,
+  "bin": "hard",
+  "route_m": 82.44,
+  "euclid_m": 78.32,
+  "kind": "straight",
+  "band": "hard"
+ },
+ {
+  "town": "Town03",
+  "seed": 33081,
+  "bin": "hard",
+  "route_m": 84.95,
+  "euclid_m": 70.69,
+  "kind": "curved",
+  "band": "hard"
+ },
+ {
+  "town": "Town03",
+  "seed": 33082,
+  "bin": "hard",
+  "route_m": 56.05,
+  "euclid_m": 43.53,
+  "kind": "curved",
+  "band": "hard"
+ },
+ {
+  "town": "Town03",
+  "seed": 33083,
+  "bin": "hard",
+  "route_m": 84.51,
+  "euclid_m": 71.0,
+  "kind": "straight",
+  "band": "hard"
+ },
+ {
+  "town": "Town03",
+  "seed": 33084,
+  "bin": "hard",
+  "route_m": 50.22,
+  "euclid_m": 46.88,
+  "kind": "straight",
+  "band": "hard"
+ },
+ {
+  "town": "Town03",
+  "seed": 33086,
+  "bin": "hard",
+  "route_m": 61.74,
+  "euclid_m": 56.91,
+  "kind": "straight",
+  "band": "hard"
+ },
+ {
+  "town": "Town03",
+  "seed": 33087,
+  "bin": "hard",
+  "route_m": 67.44,
+  "euclid_m": 62.12,
+  "kind": "straight",
+  "band": "hard"
+ },
+ {
+  "town": "Town03",
+  "seed": 33088,
+  "bin": "hard",
+  "route_m": 89.47,
+  "euclid_m": 64.12,
+  "kind": "curved",
+  "band": "hard"
+ },
+ {
+  "town": "Town03",
+  "seed": 33089,
+  "bin": "hard",
+  "route_m": 95.18,
+  "euclid_m": 95.18,
+  "kind": "straight",
+  "band": "hard"
+ },
+ {
+  "town": "Town03",
+  "seed": 33090,
+  "bin": "hard",
+  "route_m": 61.33,
+  "euclid_m": 52.03,
+  "kind": "straight",
+  "band": "hard"
+ },
+ {
+  "town": "Town03",
+  "seed": 33091,
+  "bin": "hard",
+  "route_m": 63.48,
+  "euclid_m": 61.19,
+  "kind": "straight",
+  "band": "hard"
+ },
+ {
+  "town": "Town03",
+  "seed": 33092,
+  "bin": "hard",
+  "route_m": 69.0,
+  "euclid_m": 69.0,
+  "kind": "straight",
+  "band": "hard"
+ },
+ {
+  "town": "Town03",
+  "seed": 33093,
+  "bin": "hard",
+  "route_m": 78.34,
+  "euclid_m": 77.0,
+  "kind": "straight",
+  "band": "hard"
+ },
+ {
+  "town": "Town03",
+  "seed": 33094,
+  "bin": "hard",
+  "route_m": 94.8,
+  "euclid_m": 75.2,
+  "kind": "curved",
+  "band": "hard"
+ },
+ {
+  "town": "Town03",
+  "seed": 33095,
+  "bin": "hard",
+  "route_m": 89.6,
+  "euclid_m": 86.79,
+  "kind": "straight",
+  "band": "hard"
+ },
+ {
+  "town": "Town03",
+  "seed": 33096,
+  "bin": "hard",
+  "route_m": 53.0,
+  "euclid_m": 53.0,
+  "kind": "straight",
+  "band": "hard"
+ },
+ {
+  "town": "Town03",
+  "seed": 33097,
+  "bin": "hard",
+  "route_m": 92.0,
+  "euclid_m": 92.0,
+  "kind": "straight",
+  "band": "hard"
+ },
+ {
+  "town": "Town03",
+  "seed": 33098,
+  "bin": "hard",
+  "route_m": 90.0,
+  "euclid_m": 90.0,
+  "kind": "straight",
+  "band": "hard"
+ },
+ {
+  "town": "Town03",
+  "seed": 33099,
+  "bin": "hard",
+  "route_m": 57.34,
+  "euclid_m": 56.0,
+  "kind": "straight",
+  "band": "hard"
+ },
+ {
+  "town": "Town03",
+  "seed": 33101,
+  "bin": "hard",
+  "route_m": 82.02,
+  "euclid_m": 81.0,
+  "kind": "straight",
+  "band": "hard"
+ },
+ {
+  "town": "Town03",
+  "seed": 33102,
+  "bin": "hard",
+  "route_m": 89.0,
+  "euclid_m": 89.0,
+  "kind": "straight",
+  "band": "hard"
+ },
+ {
+  "town": "Town03",
+  "seed": 33103,
+  "bin": "hard",
+  "route_m": 86.87,
+  "euclid_m": 68.52,
+  "kind": "curved",
+  "band": "hard"
+ },
+ {
+  "town": "Town03",
+  "seed": 33104,
+  "bin": "hard",
+  "route_m": 98.56,
+  "euclid_m": 98.42,
+  "kind": "straight",
+  "band": "hard"
+ },
+ {
+  "town": "Town03",
+  "seed": 33105,
+  "bin": "hard",
+  "route_m": 61.56,
+  "euclid_m": 55.21,
+  "kind": "straight",
+  "band": "hard"
+ }
+]

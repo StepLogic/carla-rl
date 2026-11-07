@@ -95,3 +95,75 @@ def test_lookahead_hands_over_the_true_goal_near_the_end():
     nav = im.Navigator(g, path, switch_m=4.0, lookahead_m=12.0)
     nav.look_ahead((1.0, 0.0))
     assert nav.final and nav.subgoal_m((1.0, 0.0)) is None
+
+
+def test_off_road_distance_rule_is_off_by_default_and_junction_only():
+    # user 2026-11-06 "use distance rule": inside a junction an off-road reading
+    # counts only beyond OFF_ROAD_JUNCTION_M from the nearest Driving-lane centre
+    src = open(os.path.join(ROOT, "src", "configs", "train_env_config_v4_image_goal.py")).read()
+    assert 'OFF_ROAD_JUNCTION_M = float(os.environ.get("OFF_ROAD_JUNCTION_M", 0.0) or 0.0)' in src
+    body = src.split("self.off_road = wp is None")[1].split("self.lane_marking_types")[0]
+    assert "self.off_road_raw = self.off_road" in body
+    assert "if self.off_road and OFF_ROAD_JUNCTION_M > 0:" in body
+    assert "_pwp.is_junction" in body and "<= OFF_ROAD_JUNCTION_M" in body
+    assert "lane_type=carla.LaneType.Driving" in body
+    cs = open(os.path.join(ROOT, "src", "vae_nav", "core_state.py")).read()
+    assert 'info["off_road_raw"]' in cs
+
+
+def test_replan_is_off_by_default_and_relocalises_to_the_same_goal_node():
+    src = open(os.path.join(ROOT, "train_carla_sac.py")).read()
+    assert 'EVAL_MAP_REPLAN = int(os.environ.get("EVAL_MAP_REPLAN", 0) or 0)' in src
+    body = src.split("def run_eval(")[1].split("\ndef ")[0]
+    assert "elif nav is not None and EVAL_MAP_REPLAN > 0 and not nav.final:" in body
+    assert 'gmap.path(s2, map_row["map_goal_node"])' in body       # same goal node
+    assert "nav.k = len(nav.path)" in body                          # else the real goal
+    assert "leg_steps, replans, replan_log = 0, 0, []" in body      # reset per episode
+
+
+def test_lane_graph_can_require_every_junction_turn():
+    from vae_nav.coverage_tour import lane_graph
+
+    class W:
+        def __init__(self, x):
+            class L: pass
+            self.transform = type("T", (), {"location": L()})()
+            self.transform.location.x, self.transform.location.y = x, 0.0
+
+    class G:
+        def __init__(self):
+            import networkx as nx
+            self._graph = nx.DiGraph()
+            T = type("K", (), {"name": "LANEFOLLOW"})
+            self._graph.add_edge(0, 1, type=T, entry_waypoint=W(0), exit_waypoint=W(10), path=[], intersection=False)
+            self._graph.add_edge(1, 2, type=T, entry_waypoint=W(10), exit_waypoint=W(15), path=[], intersection=True)
+    _e, lanes_only, _w = lane_graph(G())
+    _e, every_turn, _w = lane_graph(G(), junctions=True)
+    assert lanes_only == [(0, 1)] and sorted(every_turn) == [(0, 1), (1, 2)]
+
+
+def test_joint_localisation_picks_the_branch_the_goal_is_on():
+    # a fork: straight-on 0->1->2 (east), right turn 0->3->4 (south). The car sits
+    # at the fork already turning right; its nearest aligned node is on the
+    # straight-on branch, but the goal is down the right turn.
+    nodes = [{"pos": (0.0, 0.0), "yaw": 0.0, "idx": 0},
+             {"pos": (5.0, 0.0), "yaw": 0.0, "idx": 1},
+             {"pos": (10.0, 0.0), "yaw": 0.0, "idx": 2},
+             {"pos": (3.0, 3.0), "yaw": np.pi / 3, "idx": 3},
+             {"pos": (4.0, 9.0), "yaw": np.pi / 2, "idx": 4}]
+    edges = {(0, 1): 1.0, (1, 2): 1.0, (0, 3): 1.0, (3, 4): 1.0}
+    g = im.Graph(nodes, edges, {})
+    car, yaw, goal = (4.2, 0.6), np.radians(25), (4.0, 11.0)
+    assert g.nearest(car, yaw) == 1                       # the old rule: straight on
+    assert g.path(1, 4) is None                           # ...and the turn is behind it
+    s, t, route = g.localise(car, yaw, goal)
+    assert (s, t) == (3, 4) and route == [3, 4]
+    assert g.localise((50.0, 50.0), 0.0, goal) == (None, None, None)
+
+
+def test_joint_localisation_is_off_by_default_in_the_benchmark():
+    src = open(os.path.join(ROOT, "train_carla_sac.py")).read()
+    assert 'EVAL_MAP_JOINT_LOCALISE = os.environ.get("EVAL_MAP_JOINT_LOCALISE", "0") == "1"' in src
+    body = src.split("def run_eval(")[1].split("\ndef ")[0]
+    assert "gmap.localise(hp, hy, info[\"goal_pos\"]" in body
+    assert "s_node = gmap.nearest(hp, hy, radius=EVAL_MAP_START_M)" in body   # the default path

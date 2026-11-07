@@ -154,12 +154,41 @@ SPEED_SCALE_KMH = 20.0
 MONO_CHW = os.environ.get("MONO_CHW", "0") == "1"
 
 
+# PRIVILEGED CRITIC (user 2026-11-07, "lets try privileged critic"), PRIV_OBS=1:
+# the row becomes [frame | mode | (speed) | dist/PRIV_SCALE_M | known | binoc],
+# dist the ALONG-ROAD metres to the current goal (info["route_remaining_m"]), and
+# known 0 where there is none (explore mode, an eval, a recorded episode whose
+# goal was never saved). The critic reads both columns; the GRU and the actor
+# never do (mono_core_state_cols / mono_actor_state_cols). Why: the warm-up
+# critic credited the expert's braking approach for the +100 arrival because it
+# could not see how far the goal was (offline diagnosis, slope_diag).
+PRIV_OBS = os.environ.get("PRIV_OBS", "0") == "1"
+PRIV_SCALE_M = 25.0                 # goals are 5-25 m ahead
+PRIV_CLIP = 4.0                     # 100 m
+
+
 def n_extra_state() -> int:
-    """State columns between the mode bit and the binoc: 1 with SPEED_OBS."""
-    return 1 if SPEED_OBS else 0
+    """State columns between the mode bit and the binoc: 1 with SPEED_OBS, 2
+    more with PRIV_OBS."""
+    return (1 if SPEED_OBS else 0) + (2 if PRIV_OBS else 0)
 
 
-def mono_row(frame: np.ndarray, mode, binoc, speed_kmh=None) -> np.ndarray:
+def mono_priv_cols():
+    """The state columns only the critic reads (dist, known); () without PRIV_OBS."""
+    if not PRIV_OBS:
+        return ()
+    first = 1 + (1 if SPEED_OBS else 0)
+    return (first, first + 1)
+
+
+def priv_values(priv_m):
+    """The two privileged columns for a route distance in metres (None = unknown)."""
+    if priv_m is None:
+        return np.zeros(2, np.float32)
+    return np.asarray([min(max(float(priv_m), 0.0) / PRIV_SCALE_M, PRIV_CLIP), 1.0], np.float32)
+
+
+def mono_row(frame: np.ndarray, mode, binoc, speed_kmh=None, priv_m=None) -> np.ndarray:
     """One replay row for the binocular+monocular arm: [frame | mode | binoc],
     or [frame | mode | speed | binoc] with SPEED_OBS (speed_kmh then required:
     the car's speed when the frame was taken, info["speed_kmh"]).
@@ -192,6 +221,8 @@ def mono_row(frame: np.ndarray, mode, binoc, speed_kmh=None) -> np.ndarray:
             raise ValueError("SPEED_OBS=1: mono_row needs speed_kmh (info['speed_kmh']); "
                              "a row without it would mislead the policy about the car's speed")
         parts.append(np.asarray([float(speed_kmh) / SPEED_SCALE_KMH], np.float32))
+    if PRIV_OBS:
+        parts.append(priv_values(priv_m))
     parts.append(b)
     return np.concatenate(parts).astype(np.float32)
 
@@ -210,5 +241,15 @@ def mono_row_dim(binoc_dim: int = BINOC_DIM) -> int:
 
 def mono_core_state_cols(binoc_dim: int = BINOC_DIM):
     """The GRU's state columns: everything after the mode bit (speed with
-    SPEED_OBS, then the binoc)."""
-    return tuple(range(1, 1 + n_extra_state() + int(binoc_dim)))
+    SPEED_OBS, then the binoc) except PRIV_OBS's critic-only columns."""
+    priv = set(mono_priv_cols())
+    return tuple(c for c in range(1, 1 + n_extra_state() + int(binoc_dim)) if c not in priv)
+
+
+def mono_actor_state_cols(binoc_dim: int = BINOC_DIM):
+    """The actor's state columns with PRIV_OBS (all but the critic-only ones);
+    None without it -- the actor reads the whole block, as every earlier run."""
+    if not PRIV_OBS:
+        return None
+    priv = set(mono_priv_cols())
+    return tuple(c for c in range(mono_state_dim(binoc_dim)) if c not in priv)

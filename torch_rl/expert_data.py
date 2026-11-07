@@ -136,18 +136,45 @@ def stop_cut(act_label, speed, run=STOP_RUN, min_kmh=STOP_MIN_KMH):
     return int(cand[0]) if len(cand) else T
 
 
-def fill_buffer(buf, paths, which="label", env_id=0):
+def frame_goal_distances(ep):
+    """PRIV_OBS (privileged critic, 2026-11-07): per frame (T + 1 of them), the
+    driven-path metres to the goal, where the recording knows it -- an episode
+    that ended 'reached' AND terminal stopped at its goal (inside the 2 m radius,
+    slow), so the goal is about where it stopped. None for every other episode
+    (its goal was never saved), including an arrival cut short by
+    slope_diag.cut_arrival (no longer terminal). pos[t] is where the car was
+    AFTER step t, so frame k >= 1 is at pos[k-1] and the reset frame is read at
+    pos[0]."""
+    if not (ep["end"] == "reached" and bool(ep["terminal"])):
+        return None
+    pos = np.asarray(ep["pos"], np.float64).reshape(-1, 2)
+    if len(pos) == 0:
+        return None
+    seg = np.linalg.norm(np.diff(pos, axis=0), axis=1)
+    to_end = np.concatenate([np.cumsum(seg[::-1])[::-1], [0.0]])     # pos[j] -> the stop
+    return np.concatenate([[to_end[0]], to_end])
+
+
+def fill_buffer(buf, paths, which="label", env_id=0, transform=None):
     """Load episodes into a DeviceEpisodeBuffer exactly as the trainer would
     have added them. `which`: "label" (cloning) or "exec" (replay). Returns the
     number of transitions added; empty episodes are skipped. For cloning, an
     episode is cut before a stop-forever label tail (stop_cut) and the cut
-    episode counts as truncated; replay keeps every executed step."""
+    episode counts as truncated; replay keeps every executed step.
+
+    `transform` (optional, offline diagnostics): episode -> episode, or None to
+    leave the episode out, applied to each loaded episode before anything else
+    (torch_rl.slope_diag)."""
     if which not in ("label", "exec"):
         raise ValueError(f"which must be 'label' or 'exec', got {which!r}")
     key = "act_label" if which == "label" else "act_exec"
     added = 0
     for path in paths:
         ep = load_episode(path)
+        if transform is not None:
+            ep = transform(ep)
+            if ep is None:
+                continue
         T = len(ep["act_exec"])
         cut = False
         if which == "label":
@@ -161,10 +188,12 @@ def fill_buffer(buf, paths, which="label", env_id=0):
         # reset frame, taken at rest -- the pairing live rows read from
         # info["speed_kmh"].
         frame_kmh = np.concatenate([[0.0], np.asarray(ep["speed"], np.float32)])
+        dist = frame_goal_distances(ep) if pxr.PRIV_OBS else None
         # A plain float: mono_row does float(mode), which on a 1-element array
         # raises numpy's array-to-scalar DeprecationWarning (same row either way).
         rows = [pxr.mono_row(ep["frames"][t], float(mode), ep["binoc"][t].astype(np.float32),
-                             speed_kmh=float(frame_kmh[t]))
+                             speed_kmh=float(frame_kmh[t]),
+                             priv_m=None if dist is None else float(dist[t]))
                 for t in range(T + 1)]
         term, trunc = (False, True) if cut else (bool(ep["terminal"]), bool(ep["truncated"]))
         for t in range(T):

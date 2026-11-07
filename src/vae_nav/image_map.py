@@ -222,6 +222,47 @@ class Graph:
         best = min(((dist[c] + d[c], c) for c in cands if c in dist), default=None)
         return None if best is None else int(best[1])
 
+    def localise(self, pos, yaw, goal_pos, start_radius=NEAREST_M, goal_radius=NEAREST_M):
+        """-> (start node, goal node, path) chosen JOINTLY, or (None, None, None).
+
+        Every heading-aligned node within `start_radius` of the car is a start
+        candidate, every node within `goal_radius` of the goal a goal candidate;
+        the pair whose route is shortest in METRES -- car -> start node -> ...
+        -> goal node -> goal, along node positions -- wins. Inside a junction the
+        car's position cannot tell which branch it is on, but its goal can: the
+        nearest-node start put a car already turning right onto the straight-on
+        lane, from where the goal's lane was a 245 m loop away (Town02 seed
+        21008, 19.7 m road route). Independent of the edge costs, so it is the
+        same choice under unit or metre costs."""
+        p = np.asarray(pos, np.float64)[:2]
+        g = np.asarray(goal_pos, np.float64)[:2]
+        ds = np.hypot(*(self._xy - p).T)
+        ok = ds <= start_radius
+        if yaw is not None:
+            ok &= _aligned(self._yaw, yaw)
+        starts = np.flatnonzero(ok).tolist()
+        dg = np.hypot(*(self._xy - g).T)
+        goals = set(np.flatnonzero(dg <= goal_radius).tolist())
+        best = None
+        for s in starts:
+            dist = self._dijkstra(s)
+            prev = dict(self._prev)
+            for t in goals:
+                if t not in dist:
+                    continue
+                route = [t]
+                while route[-1] != s:
+                    route.append(prev[route[-1]])
+                route = route[::-1]
+                xy = self._xy[route]
+                m = float(ds[s] + np.hypot(*np.diff(xy, axis=0).T).sum() + dg[t]) if len(route) > 1 \
+                    else float(ds[s] + dg[t])
+                if best is None or m < best[0]:
+                    best = (m, s, t, route)
+        if best is None:
+            return None, None, None
+        return best[1], best[2], best[3]
+
     # -- planning
     def _dijkstra(self, src, dst=None):
         dist, prev, pq = {src: 0.0}, {}, [(0.0, src)]

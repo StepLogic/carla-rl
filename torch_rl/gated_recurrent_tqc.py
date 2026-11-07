@@ -252,6 +252,12 @@ class GatedRecurrentTQCConfig:
     # against mean((tanh(mu(s_E)) - a_E)^2) on expert labels, one optimizer --
     # because a cloning step on its own Adam ignores its weight. 0 = off.
     actor_bc_alpha: float = 0.0
+    # PRIVILEGED CRITIC (user 2026-11-07, "lets try privileged critic"): the state
+    # columns the ACTOR reads; the rest of the state block (PRIV_OBS's route
+    # distance to the goal) reaches the critic through goal_cols and nothing
+    # else -- not the actor, not the GRU that feeds it. Must keep the mode bit
+    # and cover core_state_cols. None = the whole block, every earlier run.
+    actor_state_cols: Optional[Tuple[int, ...]] = None
     discount: float = 0.99
     discount_e: float = 0.99
     tau: float = 0.005
@@ -409,6 +415,23 @@ class GatedRecurrentTQCConfig:
                              "must step at least every update (1) or every N-th (N > 1)")
         if float(self.actor_bc_alpha) < 0.0:
             raise ValueError(f"actor_bc_alpha={self.actor_bc_alpha}: 0 (off) or > 0")
+        if self.actor_state_cols is not None:
+            cols = tuple(int(c) for c in np.asarray(tuple(self.actor_state_cols),
+                                                    dtype=np.int64).ravel())
+            bad = [c for c in cols if not 0 <= c < self.state_dim]
+            if bad:
+                raise ValueError(f"actor_state_cols {bad} outside the {self.state_dim}-d state")
+            if len(set(cols)) != len(cols):
+                raise ValueError(f"actor_state_cols {cols} repeats a column")
+            if self.mode_index not in cols:
+                raise ValueError(f"actor_state_cols must keep the mode bit (state index "
+                                 f"{self.mode_index}): the actor acts per mode")
+            hidden_from_actor = sorted(set(self.core_state_cols) - set(cols))
+            if hidden_from_actor:
+                raise ValueError(f"core_state_cols {hidden_from_actor} are not in actor_state_cols: "
+                                 "the GRU's state is the actor's input, so a column the actor "
+                                 "may not read must not reach the GRU either")
+            self.actor_state_cols = cols
         # The ResNet reads one RGB frame; vc2's channel-stacked goal grid is VC-1 tokens.
         if self.mono_encoder == "resnet" and self.goal_tokens:
             raise ValueError("mono_encoder=resnet is debit-only: goal_tokens must be False")
@@ -539,8 +562,14 @@ class GatedRecurrentTQC:
                             + len(cfg.core_state_cols), cfg.hidden).to(dev)
         log_std_bounds = ((LOG_STD_MIN, LOG_STD_MAX) if cfg.actor_log_std is None
                           else (cfg.actor_log_std, cfg.actor_log_std))
-        self.actor = Actor(cfg.hidden + cfg.state_dim, cfg.action_dim, cfg.mlp,
-                           log_std_bounds=log_std_bounds).to(dev)
+        # actor_state_cols: the actor reads h and only those state columns of the
+        # [h | state] vector every caller hands it (privileged critic).
+        actor_cols = (None if cfg.actor_state_cols is None else
+                      list(range(cfg.hidden)) + [cfg.hidden + c for c in cfg.actor_state_cols])
+        self.actor = Actor(cfg.hidden + (cfg.state_dim if actor_cols is None
+                                         else len(cfg.actor_state_cols)),
+                           cfg.action_dim, cfg.mlp, log_std_bounds=log_std_bounds,
+                           in_cols=actor_cols).to(dev)
         self.critics_g = QuantileCritics(cfg.hidden + len(cfg.goal_cols), cfg.action_dim,
                                          cfg.n_critics, cfg.n_quantiles, cfg.mlp,
                                          dropout=cfg.critic_dropout,
@@ -1319,6 +1348,15 @@ class GatedRecurrentTQC:
 
     _CRITIC_PARTS = ("critics_g", "critics_e", "critics_g_targ", "critics_e_targ", "opt_critic")
 
+    def _apply_configured_lrs(self) -> None:
+        """Every optimiser's learning rate from the config: LR for the critic and
+        the actor, ALPHA_LR (0 = follow LR) for the temperatures."""
+        alpha_lr = float(self.cfg.alpha_lr) or float(self.cfg.lr)
+        for name, lr in (("opt_critic", float(self.cfg.lr)), ("opt_actor", float(self.cfg.lr)),
+                         ("opt_temp_g", alpha_lr), ("opt_temp_e", alpha_lr)):
+            for group in getattr(self, name).param_groups:
+                group["lr"] = lr
+
     def load(self, in_dir: str, fresh_critics_on_mismatch: bool = False) -> None:
         """`fresh_critics_on_mismatch` (warm starts and clone inits, 2026-11-06):
         when the checkpoint's critics have a different architecture -- made
@@ -1339,6 +1377,11 @@ class GatedRecurrentTQC:
         for n in self.modules_list + self._OPTIMISERS:
             if n not in skip:
                 getattr(self, n).load_state_dict(blob[n])
+        # torch's Optimizer.load_state_dict restores the SAVED param-group
+        # hyperparameters, lr included: re-apply the configured rates, so a warm
+        # start with a new LR / ALPHA_LR gets them (run L, user 2026-11-07:
+        # "increase temperature learning rate") and a resume is unchanged.
+        self._apply_configured_lrs()
         # In place: the compiled update holds these very tensors.
         with torch.no_grad():
             for n in self._TENSORS:

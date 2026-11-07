@@ -35,8 +35,11 @@ def test_the_state_block_is_the_MODE_BIT_AND_NOTHING_ELSE():
     full left lock for 800k steps."""
     s = src()
     # The mode goes through _net_mode (HIDE_MODE_BIT, v34): still the mode bit
-    # and nothing else, now optionally held at 1 for the network.
-    assert 'pxr.mono_row(i["debit_cur"], _net_mode(o["mode"]), o["binoc"],\n                            speed_kmh=_speed_kmh(i))' in s
+    # and nothing else, now optionally held at 1 for the network. priv_m
+    # (PRIV_OBS, 2026-11-07) fills CRITIC-ONLY columns the actor and the GRU never
+    # read (tests/test_priv_critic.py, tests/test_priv_obs.py).
+    assert ('pxr.mono_row(i["debit_cur"], _net_mode(o["mode"]), o["binoc"],\n'
+            '                            speed_kmh=_speed_kmh(i), priv_m=_priv_m(o, i))') in s
     assert 'o["vector"]' not in s and 'o["state"]' not in s
     assert "mode_index=0" in s
 
@@ -159,8 +162,11 @@ def test_a_preflight_banner_is_printed_before_stepping():
     banner = s[i:j]
     assert "env.action_space" in s or "_box = env.action_space" in s, \
         "the banner must print the SPACE, not the env vars meant to shape it"
+    # "no steer/throttle": the state block carries no action feedback (user
+    # 2026-10-14). It replaced "mode bit ONLY" on 2026-11-07, when the banner
+    # began listing speed (SPEED_OBS) and the critic-only PRIV_OBS columns.
     for want in ("towns=", "seed=", "action box", "checkpoints ->", "reward:",
-                 "HELD OUT", "FROZEN", "mode bit ONLY"):
+                 "HELD OUT", "FROZEN", "no steer/throttle", "actor view = "):
         assert want in banner, want
 
 

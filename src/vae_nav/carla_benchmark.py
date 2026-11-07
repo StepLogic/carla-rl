@@ -192,7 +192,10 @@ class EpisodeTracker:
         self._np = np
         self.goal = np.asarray(goal_pos, np.float64)[:2]
         self.prev = np.asarray(start_pos, np.float64)[:2]
-        self.max_speed = float(max_speed)
+        # 0 (or less) = NO speed condition, as GOAL_ARRIVAL_MAX_SPEED=0 means in
+        # the reward (gated_reward._stopped_enough; user 2026-11-07, "drop the
+        # 5km/h rule").
+        self.max_speed = float(max_speed) if float(max_speed) > 0.0 else float("inf")
         self.radius, self.radius_2m = float(radius), float(radius_2m)
         self.t = 0
         self.path_m = 0.0

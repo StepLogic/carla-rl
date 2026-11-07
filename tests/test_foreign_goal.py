@@ -117,4 +117,7 @@ def test_the_network_rows_use_the_hidden_mode():
     src = open(os.path.join(ROOT, "train_carla_sac.py")).read()
     assert 'HIDE_MODE_BIT = os.environ.get("HIDE_MODE_BIT", "0") == "1"' in src
     assert src.count("_net_mode(") >= 4             # def + training + eval + trace rows
-    assert 'pxr.mono_row(i["debit_cur"], _net_mode(o["mode"]), o["binoc"],\n                            speed_kmh=_speed_kmh(i))' in src
+    # priv_m (PRIV_OBS, 2026-11-07) reads the TRUE mode, but only for the
+    # critic-only goal-distance columns; the network's mode bit stays _net_mode's.
+    assert ('pxr.mono_row(i["debit_cur"], _net_mode(o["mode"]), o["binoc"],\n'
+            '                            speed_kmh=_speed_kmh(i), priv_m=_priv_m(o, i))') in src

@@ -11,7 +11,7 @@ C=${TRACE_CLONE:-$HOME/carla-rl/checkpoints/il_bc_c0/step_15000}
 for town in ${TRACE_TOWNS:-Town02 Town03}; do
   case $town in Town02) port=7100;; Town03) port=7200;; *) port=7300;; esac
   echo "=== EXPERT TRACE $town port $port clone $C ==="
-  REWARD_OVERLAY=slurm/expert_trace.env ENV_TOWNS=$town EVAL_FROM=$C \
+  REWARD_OVERLAY=${TRACE_ENV:-slurm/expert_trace.env} ENV_TOWNS=$town EVAL_FROM=$C \
     RUN_NAME=expert_trace_$town CARLA_PORT=$port bash slurm/train_sac.sbatch
   echo "=== EXPERT TRACE $town rc=$? ==="
 done

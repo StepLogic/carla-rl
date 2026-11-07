@@ -199,6 +199,10 @@ EVAL_MAP_RESET_HIDDEN = os.environ.get("EVAL_MAP_RESET_HIDDEN", "0") == "1"
 # a failure without driving; the row carries map_fallback=<why>. Default "" keeps
 # every earlier benchmark's rule (end="unroutable", a failure).
 EVAL_MAP_FALLBACK = os.environ.get("EVAL_MAP_FALLBACK", "")
+# EVAL_MAP_LOOKAHEAD_M (uniform-map debugging, 2026-11-06): aim at the first route
+# node at least this far ahead (image_map.Navigator lookahead_m), so the subgoal
+# image is inside c0's trained 5-25 m goal band. 0 = off.
+EVAL_MAP_LOOKAHEAD_M = float(os.environ.get("EVAL_MAP_LOOKAHEAD_M", 0.0) or 0.0)
 if EVAL_MAP_FALLBACK not in ("", "mapless"):
     raise ValueError(f"EVAL_MAP_FALLBACK={EVAL_MAP_FALLBACK!r}: use '' or 'mapless'")
 # EXPERT RECORDING (imitation-first plan, 2026-11-04; see run_record and
@@ -1631,7 +1635,9 @@ def run_eval(env, agent, pxr, server, out_root):
                 continue
             if route is not None:
                 final_frame = goal_wrapper.latched_goal()
-                nav = image_map.Navigator(gmap, route, switch_m=EVAL_MAP_SWITCH_M)
+                nav = image_map.Navigator(gmap, route, switch_m=EVAL_MAP_SWITCH_M,
+                                          lookahead_m=EVAL_MAP_LOOKAHEAD_M)
+                nav.look_ahead(hp)            # the first leg (no-op when off)
 
                 def _aim():
                     f = final_frame if nav.final else map_frames[nav.current()]
@@ -1743,7 +1749,12 @@ def run_eval(env, agent, pxr, server, out_root):
                      "straight_m": None if l_straight is None else round(l_straight, 2),
                      "path_m": round(path_m, 2), "spl": spl_i, "video": path,
                      **({} if nav is None else {**map_row, "map_switches": nav.switches,
-                                                "map_final": bool(nav.final)}),
+                                                "map_final": bool(nav.final),
+                                                "map_k": int(nav.k),
+                                                "subgoal_m_at_end": (None if nav.subgoal_m(pos) is None
+                                                                     else round(nav.subgoal_m(pos), 2))}),
+                     "end_xy": [round(float(v), 2) for v in np.asarray(pos, np.float64)[:2]],
+                     "end_in_junction": bool(info.get("in_junction", False)),
                      **(map_row if nav is None and map_row is not None else {}),
                      **(chain_summary(chain_goals, info, end,
                                       float(os.environ.get("GOAL_CHAIN_M", 200.0) or 200.0))

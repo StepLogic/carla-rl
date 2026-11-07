@@ -343,8 +343,15 @@ class Navigator:
     aligned when given) advances past it -- a car that skips a node is not made
     to go back for it."""
 
-    def __init__(self, graph, path, switch_m=4.0):
+    def __init__(self, graph, path, switch_m=4.0, lookahead_m=0.0):
         self.g, self.path, self.switch_m = graph, list(path), float(switch_m)
+        # LOOKAHEAD (2026-11-06, uniform-map debugging): subgoals as LEGS -- on
+        # reaching a subgoal, jump to the first path node at least this far
+        # (straight line) from the car and hold it, so the subgoal image sits
+        # inside the policy's trained goal band (c0: 5-25 m) instead of the next
+        # node ~3 m ahead. Past the last node the true goal is handed over, as
+        # without it. 0 = off, every earlier benchmark.
+        self.lookahead_m = float(lookahead_m)
         self.k = 1                    # index of the current subgoal in path
         self.switches = 0
 
@@ -369,8 +376,31 @@ class Navigator:
         if hit is None:
             return False
         self.k = hit + 1
+        self.look_ahead(p)
         self.switches += 1
         return True
+
+    def look_ahead(self, pos):
+        """LEGS: once the car has reached its subgoal (update) -- and once at the
+        start -- jump to the first path node at least `lookahead_m` away, then
+        HOLD it until the car is within switch_m. The subgoal stays between
+        lookahead_m and switch_m ahead and changes every ~(lookahead_m - switch_m)
+        metres, instead of every node. -> True if the subgoal moved."""
+        if self.lookahead_m <= 0:
+            return False
+        p, k0 = np.asarray(pos, np.float64)[:2], self.k
+        while not self.final and np.hypot(
+                *(np.asarray(self.g.nodes[self.path[self.k]]["pos"]) - p)) < self.lookahead_m:
+            self.k += 1
+        return self.k != k0
+
+    def subgoal_m(self, pos):
+        """Straight-line metres from `pos` to the current subgoal node (None once
+        the true goal has been handed over)."""
+        if self.final:
+            return None
+        return float(np.hypot(*(np.asarray(self.g.nodes[self.path[self.k]]["pos"])
+                               - np.asarray(pos, np.float64)[:2])))
 
 
 # ---- SGM over sparse critic values -----------------------------------------------

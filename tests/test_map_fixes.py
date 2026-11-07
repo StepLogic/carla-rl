@@ -65,3 +65,33 @@ def test_gap_nodes_are_never_placed_on_expert_recovery_frames():
     tr["driver"][10:60] = 1
     idx, _ = b.with_gaps([0], tr, 4.0)
     assert not (tr["driver"][idx] == 1).any()
+
+
+def _line_graph(n=30, step=3.0):
+    nodes = [{"pos": (i * step, 0.0), "yaw": 0.0, "idx": i} for i in range(n)]
+    edges = {(i, i + 1): step for i in range(n - 1)}
+    return im.Graph(nodes, edges, {}), list(range(n))
+
+
+def test_lookahead_off_keeps_the_old_navigator():
+    g, path = _line_graph()
+    nav = im.Navigator(g, path, switch_m=4.0)
+    assert nav.current() == 1
+    assert nav.update((3.0, 0.0), 0.0) and nav.current() == 3    # nodes 1, 2 within 4 m
+
+
+def test_lookahead_aims_at_the_first_node_that_far_ahead():
+    g, path = _line_graph()
+    nav = im.Navigator(g, path, switch_m=4.0, lookahead_m=12.0)
+    assert nav.look_ahead((0.0, 0.0)) and nav.current() == 4      # the first leg: 12 m
+    assert not nav.update((5.0, 0.0), 0.0)                        # 7 m off: hold it
+    assert not nav.update((7.9, 0.0), 0.0)                        # 4.1 m: still held
+    assert nav.update((8.5, 0.0), 0.0) and nav.current() == 7     # reached: 21 - 8.5 >= 12
+    assert abs(nav.subgoal_m((8.5, 0.0)) - 12.5) < 1e-9
+
+
+def test_lookahead_hands_over_the_true_goal_near_the_end():
+    g, path = _line_graph(n=5)                                    # last node at 12 m
+    nav = im.Navigator(g, path, switch_m=4.0, lookahead_m=12.0)
+    nav.look_ahead((1.0, 0.0))
+    assert nav.final and nav.subgoal_m((1.0, 0.0)) is None

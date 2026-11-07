@@ -78,3 +78,43 @@ How the method reached this form, all on the development seeds:
 - Habitat's thresholds needed scaling to our camera.
 
 The development-seed numbers are not reported as results.
+
+## Entropy vs uniform placement (same frozen configuration, same 600 fresh episodes)
+- **Entropy map:** `maps_expert_jx_img/entropy`. Key nodes come from online MAD on c0's explore entropy along the same expert tour, with count matched to uniform, plus image gap nodes. Town02 has 464 nodes, Town03 1,491.
+- **Mapless rows** are the same runs as above.
+
+**Image localisation (main):**
+
+| | Mapless | Uniform | Entropy | Entropy-only / uniform-only wins | p |
+|---|---|---|---|---|---|
+| Town02 easy | 0.73 | 0.78 | 0.78 | 7 / 7 | 1.0 |
+| Town02 medium | 0.68 | 0.73 | 0.75 | 6 / 4 | 0.75 |
+| Town02 hard | 0.45 | 0.60 | 0.59 | 6 / 7 | 1.0 |
+| Town03 easy | 0.67 | 0.69 | 0.66 | 8 / 11 | 0.65 |
+| Town03 medium | 0.57 | 0.60 | 0.61 | 9 / 8 | 1.0 |
+| Town03 hard | 0.39 | 0.46 | 0.49 | 11 / 8 | 0.65 |
+| Hard, pooled (200) | 0.42 | 0.53 | 0.54 | 17 / 15 | 0.86 |
+
+**Pooled, entropy vs mapless:**
+
+| Band | Entropy-only / mapless-only wins | p |
+|---|---|---|
+| Easy | 19 / 15 | 0.61 |
+| Medium | 30 / 19 | 0.15 |
+| Hard | 37 / 13 | 0.0009 |
+
+**Oracle (pose) localisation:**
+
+| | Mapless | Uniform | Entropy |
+|---|---|---|---|
+| Town02 easy | 0.73 | 0.81 | 0.80 |
+| Town02 medium | 0.68 | 0.81 | 0.86 |
+| Town02 hard | 0.45 | 0.64 | 0.55 |
+| Town03 easy | 0.67 | 0.73 | 0.67 |
+| Town03 medium | 0.57 | 0.67 | 0.64 |
+| Town03 hard | 0.39 | 0.55 | 0.46 |
+
+- **Pooled hard:** entropy 0.505 vs uniform 0.595; entropy-only / uniform-only wins 10 / 28, p 0.005.
+- **This is NOT a clean placement effect.** The oracle localises within 8 m by true pose, and the entropy map's sparser coverage (key nodes cluster at junctions; no metric gap nodes) left 27 episodes with no node within 8 m, which fell back to mapless (uniform: 0). Image localisation has no radius and does not suffer this.
+
+**Finding:** with pose-free image localisation, entropy placement equals uniform in every band (pooled p 0.73 / 0.70 / 0.86). Both beat mapless only on long routes. This matches Habitat (uniform is the most consistent placer). Entropy placement adds no measurable benefit for this policy.

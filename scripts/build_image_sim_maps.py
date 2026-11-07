@@ -198,7 +198,10 @@ def main():
         # loop and the graph fell to 65-98% connected; the union keeps the loop whole
         # while the image still picks the nodes and adds the links it sees.
         sub = {"pos": pos, "yaw": yaw, "seg": drv, "jumped": set()}
-        gd = im.build_graph(sub, nodes, max_turn_deg=90.0)
+        # visit radius = the gap / localisation radius (job 464483: with the default
+        # 3 m, a multi-lane stretch covered only by the NEXT lane's node was never
+        # "visited", and a drive edge jumped 45-84 m over it in Town03)
+        gd = im.build_graph(sub, nodes, visit_m=a.gap_m, max_turn_deg=90.0)
         n_img = len(edges)
         for e, w in gd.edges.items():
             edges[e] = min(edges.get(e, np.inf), w)

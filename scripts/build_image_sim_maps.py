@@ -14,7 +14,8 @@ true pose, so a change in results comes from the map alone.
                IMAGE-DISTINCT in trace order (a key scoring >= --dedupe, 0.55, to
                an accepted key is dropped); uniform / random matched to that count
   2 gap nodes  greedily add the worst-covered candidate until every candidate
-               scores >= THRESHOLD to some node; then the metric --gap-m (8 m,
+               scores >= THRESHOLD to some node; then (only with --gap-m > 0,
+               off by default since 2026-11-07) the metric --gap-m (8 m,
                aligned) the peer advised for roads
   3 edges      TRANSITION edges: each candidate is labelled with its best node
                (score >= --label-floor, 0.40); an edge wherever consecutive
@@ -70,7 +71,11 @@ def main():
     ap.add_argument("--label-radius-m", type=float, default=25.0,
                     help="a frame's label is the best node among those within this many metres and "
                          "heading-aligned (90 deg): image chooses, pose only rules out far lookalikes")
-    ap.add_argument("--gap-m", type=float, default=8.0)
+    # METRIC GAP NODES REMOVED (user 2026-11-07: "remove metric gap node"): only the
+    # image-coverage gap nodes remain. --gap-m > 0 restores the metric rule.
+    ap.add_argument("--gap-m", type=float, default=0.0)
+    ap.add_argument("--drive-visit-m", type=float, default=8.0,
+                    help="a candidate visits a node this close (aligned) for the drive edges")
     ap.add_argument("--max-edge-m", type=float, default=25.0)
     ap.add_argument("--edge-cost", choices=("unit", "metres"), default="unit",
                     help="unit (user 2026-11-07: 'each edge cost should be uniform', as the "
@@ -156,7 +161,8 @@ def main():
         before = len(nodes)
         kind = {int(x): "key" for x in key}
         kind.update({int(x): "image_gap" for x in nodes if int(x) not in kind})
-        nodes = list(map(int, im.place_uniform(view, a.gap_m, seed_nodes=nodes)))
+        if a.gap_m > 0:
+            nodes = list(map(int, im.place_uniform(view, a.gap_m, seed_nodes=nodes)))
         kind.update({int(x): "metric_gap" for x in nodes if int(x) not in kind})
         met_gap = len(nodes) - before
         # 3. TRANSITION EDGES
@@ -201,7 +207,7 @@ def main():
         # visit radius = the gap / localisation radius (job 464483: with the default
         # 3 m, a multi-lane stretch covered only by the NEXT lane's node was never
         # "visited", and a drive edge jumped 45-84 m over it in Town03)
-        gd = im.build_graph(sub, nodes, visit_m=a.gap_m, max_turn_deg=90.0)
+        gd = im.build_graph(sub, nodes, visit_m=a.drive_visit_m, max_turn_deg=90.0)
         n_img = len(edges)
         for e, w in gd.edges.items():
             edges[e] = min(edges.get(e, np.inf), w)
@@ -213,7 +219,7 @@ def main():
                 "threshold": round(thr, 3), "far_false_2pct": round(thr_far, 3), "same_place_median": round(same_med, 3),
                 "dedupe": a.dedupe, "label_floor": a.label_floor, "label_radius_m": a.label_radius_m,
                 "key_nodes": len(key), "image_gap_nodes": img_gap, "metric_gap_nodes": met_gap,
-                "gap_m": a.gap_m, "edges_rejected_turn": rej_turn, "edges_rejected_length": rej_len,
+                "gap_m": a.gap_m, "drive_visit_m": a.drive_visit_m, "edges_rejected_turn": rej_turn, "edges_rejected_length": rej_len,
                 "max_edge_m": a.max_edge_m, "cand_m": a.cand_m,
                 "edges_image_transition": n_img, "edges_drive": len(gd.edges),
                 "edge_cost": a.edge_cost}

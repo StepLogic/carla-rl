@@ -74,10 +74,15 @@ def main():
     # METRIC GAP NODES REMOVED (user 2026-11-07: "remove metric gap node"): only the
     # image-coverage gap nodes remain. --gap-m > 0 restores the metric rule.
     ap.add_argument("--gap-m", type=float, default=0.0)
-    ap.add_argument("--match-total", action=argparse.BooleanOptionalAction, default=True,
+    ap.add_argument("--match-total", action=argparse.BooleanOptionalAction, default=False,
                     help="uniform / random key counts chosen so their key + image-gap TOTAL "
-                         "equals entropy's (default; --no-match-total matches key counts only, "
-                         "Habitat's rule, as the 2026-11-07 frozen run used)")
+                         "equals entropy's. Off by default (user 2026-11-07 stopped it: key-count "
+                         "matching, Habitat's rule, as the frozen run used)")
+    ap.add_argument("--uniform-spacing", type=float, default=8.0,
+                    help="FIXED uniform key-node spacing in metres, the same in every CARLA "
+                         "experiment (user 2026-11-07: 'use a fixed number for all CARLA "
+                         "experiments ... for uniform'); 0 = match entropy's key count instead "
+                         "(the frozen run's maps)")
     ap.add_argument("--drive-visit-m", type=float, default=8.0,
                     help="a candidate visits a node this close (aligned) for the drive edges")
     ap.add_argument("--max-edge-m", type=float, default=25.0)
@@ -184,6 +189,8 @@ def main():
     else:
         _sp, uni = im.match_uniform(view, n)
         rnd = im.place_random(view, n, seed=a.seed)
+    if a.uniform_spacing > 0:
+        _sp, uni = a.uniform_spacing, im.place_uniform(view, a.uniform_spacing)
     print(f"[ImgMap] key nodes: entropy MAD {len(mad)} -> {n} image-distinct; uniform {len(uni)} "
           f"(spacing {_sp:.2f} m); random {len(rnd)}", flush=True)
 
@@ -251,7 +258,9 @@ def main():
         meta = {"placement": name, "town": a.town, "trace": a.trace, "image_rules": True,
                 "threshold": round(thr, 3), "far_false_2pct": round(thr_far, 3), "same_place_median": round(same_med, 3),
                 "dedupe": a.dedupe, "label_floor": a.label_floor, "label_radius_m": a.label_radius_m,
-                "key_nodes": len(key), "image_gap_nodes": img_gap, "match_total": bool(a.match_total), "metric_gap_nodes": met_gap,
+                "key_nodes": len(key), "image_gap_nodes": img_gap, "match_total": bool(a.match_total),
+                **({"uniform_spacing_m": round(float(_sp), 3),
+                    "uniform_spacing_fixed": bool(a.uniform_spacing > 0)} if name == "uniform" else {}), "metric_gap_nodes": met_gap,
                 "gap_m": a.gap_m, "drive_visit_m": a.drive_visit_m, "edges_rejected_turn": rej_turn, "edges_rejected_length": rej_len,
                 "max_edge_m": a.max_edge_m, "cand_m": a.cand_m,
                 "edges_image_transition": n_img, "edges_drive": len(gd.edges),

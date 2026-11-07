@@ -229,7 +229,9 @@ class VintTopoEpisode:
         self.info = {"start_node": s, "goal_node": g, "start_dist": round(float(s_d[s]), 2),
                      "goal_dist": round(float(g_d[g]), 2),
                      "route_nodes": None if path is None else len(path), "route_cost": cost,
-                     "fallback": fallback, "final_at": None}
+                     "fallback": fallback, "final_at": None,
+                     "route": None if path is None else [int(x) for x in path]}
+        self.idx_max = 0
         return self.row()
 
     def act(self, driver, cur_frame, goal_frame, speed_kmh):
@@ -243,22 +245,37 @@ class VintTopoEpisode:
         nodes = [self.nav.path[i] for i in w]
         d, wps = self.policy.dists_to_goals(driver.context(), self.node_img[nodes])
         tgt = self.nav.step(d)
+        self.idx_max = max(self.idx_max, self.nav.closest)
         j = tgt - w.start
         if self.nav.final and self.info["final_at"] is None:
             self.info["final_at"] = self.t
         return driver.control(d[j], wps[j], speed_kmh)
 
     def row(self):
-        return dict(self.info)
+        """The planner's own record (not privileged): localisation, the route and
+        the navigator's position on it (route_idx_end / route_idx_max)."""
+        nav = self.nav
+        return {**self.info, "route_idx_end": None if nav is None else int(nav.closest),
+                "route_idx_max": None if nav is None else int(self.idx_max)}
 
-    def diagnostics(self, start_xy, goal_xy):
+    def diagnostics(self, start_xy, goal_xy, end_xy=None):
         """PRIVILEGED, for reporting only (never used to drive): how far the chosen
-        start and goal nodes' trace positions are from the true start and goal."""
+        start and goal nodes' trace positions are from the true start and goal, and
+        (end_xy) the route node nearest the car's end position -- with route_idx_end
+        it tells a navigator lost on the map from a car that lost the lane."""
         xy = self.tmap["node_xy"]
-        return {"privileged_start_node_err_m": float(np.linalg.norm(
-                    xy[self.info["start_node"]] - np.asarray(start_xy, np.float64)[:2])),
-                "privileged_goal_node_err_m": float(np.linalg.norm(
-                    xy[self.info["goal_node"]] - np.asarray(goal_xy, np.float64)[:2]))}
+        out = {"privileged_start_node_err_m": float(np.linalg.norm(
+                   xy[self.info["start_node"]] - np.asarray(start_xy, np.float64)[:2])),
+               "privileged_goal_node_err_m": float(np.linalg.norm(
+                   xy[self.info["goal_node"]] - np.asarray(goal_xy, np.float64)[:2]))}
+        route = self.info.get("route")
+        if end_xy is not None and route:
+            gaps = np.linalg.norm(np.asarray(xy, np.float64)[route]
+                                  - np.asarray(end_xy, np.float64)[:2], axis=1)
+            i = int(np.argmin(gaps))
+            out.update({"privileged_end_route_idx": i,
+                        "privileged_end_route_err_m": float(gaps[i])})
+        return out
 
 
 class TopoNavigator:

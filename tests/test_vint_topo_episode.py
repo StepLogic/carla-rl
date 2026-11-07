@@ -108,3 +108,34 @@ def test_privileged_diagnostics_are_separate_and_labelled():
     diag = ep.diagnostics(start_xy=(4.5, 0.0), goal_xy=(15.0, 0.0))
     assert diag == {"privileged_start_node_err_m": pytest.approx(0.5),
                     "privileged_goal_node_err_m": pytest.approx(1.0)}
+
+
+def test_the_row_keeps_the_route_and_how_far_along_it_the_navigator_got():
+    """Diagnostic (not privileged): the planned route and the navigator's own
+    position on it, so a failure can be read as lost-on-the-map or lost-the-lane."""
+    ep = VintTopoEpisode(_tmap(), Policy())
+    ep.start(_img(1), _img(4))
+    assert ep.row()["route"] == [1, 2, 3, 4]
+    assert ep.row()["route_idx_end"] == 0 and ep.row()["route_idx_max"] == 0
+    drv = Driver()
+    for place in (1, 2):
+        ep.act(drv, _img(place), _img(4), speed_kmh=10.0)
+    assert ep.row()["route_idx_end"] == 2 and ep.row()["route_idx_max"] == 2
+
+
+def test_a_mapless_fallback_has_no_route_position():
+    ep = VintTopoEpisode(_tmap(back=False), Policy())
+    ep.start(_img(4), _img(1))
+    r = ep.row()
+    assert r["route"] is None and r["route_idx_end"] is None and r["route_idx_max"] is None
+
+
+def test_privileged_end_position_along_the_route():
+    """PRIVILEGED, reporting only: the route node nearest the car's end position."""
+    tm = _tmap()
+    tm["node_xy"] = np.stack([np.arange(6) * 4.0, np.zeros(6)], 1)
+    ep = VintTopoEpisode(tm, Policy())
+    ep.start(_img(1), _img(4))                     # route nodes 1..4 at x = 4, 8, 12, 16
+    diag = ep.diagnostics(start_xy=(4.5, 0.0), goal_xy=(15.0, 0.0), end_xy=(9.0, 1.0))
+    assert diag["privileged_end_route_idx"] == 1   # node 2 (x = 8) is route index 1
+    assert diag["privileged_end_route_err_m"] == pytest.approx(2 ** 0.5)

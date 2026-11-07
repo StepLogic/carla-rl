@@ -1847,7 +1847,9 @@ def run_eval(env, agent, pxr, server, out_root):
                               f"dist={lv['dist_steps']:.1f}st/{lv['dist_s']:.1f}s "
                               f"wps={lv['wps']} tgt=({lv['target'][0]:+.2f},{lv['target'][1]:+.2f}) "
                               f"ang={np.degrees(lv['angle']):+.0f} steer={lv['steer']:+.2f} "
-                              f"thr={lv['throttle']:.2f} v*={lv['target_kmh']:.1f}", flush=True)
+                              f"thr={lv['throttle']:.2f} v*={lv['target_kmh']:.1f}"
+                              + ("" if topo is None or topo.nav is None else
+                                 f" node={topo.nav.closest}/{topo.nav.goal}"), flush=True)
                 else:
                     row = pxr.mono_row(info["debit_cur"], _net_mode(obs["mode"]), obs["binoc"],
                                        speed_kmh=_speed_kmh(info))
@@ -1958,7 +1960,7 @@ def run_eval(env, agent, pxr, server, out_root):
         if topo is not None:
             topo_row = topo.row()
             if gpos is not None and start_poses.get("start_xy") is not None:
-                topo_row.update(topo.diagnostics(start_poses["start_xy"], gpos))
+                topo_row.update(topo.diagnostics(start_poses["start_xy"], gpos, end_xy=pos))
         rows.append({"episode": k, "seed": seed, "town": TOWNS[0], "end": end,
                      **start_poses,
                      **{key: ep[key] for key in ("bin", "kind", "band") if key in ep},

@@ -109,3 +109,8 @@ def test_vint_may_run_map_evals():
     i = main_src.index('if EVAL_POLICY == "vint":')
     block = main_src[i:main_src.index("agent = build_agent(", i)]
     assert "EVAL_MAP_DIR or" not in block
+
+
+def test_the_topomap_row_gets_the_end_position_diagnostic():
+    body = SRC[SRC.index("\ndef run_eval("):SRC.index("\ndef coverage_perturbation(")]
+    assert 'topo.diagnostics(start_poses["start_xy"], gpos, end_xy=pos)' in body

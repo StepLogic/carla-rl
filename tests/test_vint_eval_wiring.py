@@ -48,3 +48,47 @@ def test_run_eval_takes_the_pixel_path_for_a_pixel_policy():
     body = SRC[SRC.index("\ndef run_eval("):SRC.index("\ndef coverage_perturbation(")]
     assert 'getattr(agent, "drives_from_pixels", False)' in body
     assert "agent.act_env(" in body and "pixel_frames(info, pxr)" in body
+
+
+# ------------------------------------------------- map navigation (user 2026-11-07)
+class _Gru:
+    drives_from_pixels = False
+
+    def __init__(self):
+        self.resets = 0
+
+    def reset_hidden(self, n):
+        self.resets += 1
+        return "fresh"
+
+
+class _Pixels(_Gru):
+    drives_from_pixels = True
+
+
+def test_a_subgoal_switch_resets_c0s_gru_but_keeps_vints_frames():
+    from train_carla_sac import subgoal_reset
+    c0 = _Gru()
+    assert subgoal_reset(c0, "old") == "fresh" and c0.resets == 1
+    vint = _Pixels()
+    assert subgoal_reset(vint, "old") == "old" and vint.resets == 0
+
+
+def test_every_map_reset_in_run_eval_goes_through_subgoal_reset():
+    body = SRC[SRC.index("\ndef run_eval("):SRC.index("\ndef coverage_perturbation(")]
+    assert body.count("hidden = subgoal_reset(agent, hidden)") == 3
+    assert "if EVAL_MAP_RESET_HIDDEN:\n                            hidden = agent.reset_hidden(1)" not in body
+    assert "if EVAL_MAP_RESET_HIDDEN:\n                        hidden = agent.reset_hidden(1)" not in body
+
+
+def test_vint_slows_only_for_the_final_goal_on_a_map():
+    body = SRC[SRC.index("\ndef run_eval("):SRC.index("\ndef coverage_perturbation(")]
+    i = body.index("agent.act_env(")
+    assert "agent.final_goal = nav is None or bool(nav.final)" in body[i - 400:i]
+
+
+def test_vint_may_run_map_evals():
+    main_src = SRC[SRC.index("\ndef main():"):]
+    i = main_src.index('if EVAL_POLICY == "vint":')
+    block = main_src[i:main_src.index("agent = build_agent(", i)]
+    assert "EVAL_MAP_DIR or" not in block

@@ -125,6 +125,23 @@ def test_it_accelerates_from_rest_and_brakes_into_a_near_goal():
     assert d.last["dist_s"] == pytest.approx(0.6)
 
 
+def test_an_intermediate_map_node_is_driven_at_cruise_not_approached():
+    """Map navigation (EVAL_MAP_DIR): subgoal nodes ~6 m apart would otherwise read
+    as 'goal 2 s away' at every node and the car would crawl the whole route --
+    a speed change the mapless arm does not get. Only the real goal is approached."""
+    d = ViNTDriver(FakePolicy(dist_steps=2.0), LOW, HIGH, cruise_kmh=15.0, step_s=0.3)
+    d.reset_hidden(1)
+    d.final_goal = False
+    d.act_env(_frame(1), _frame(2), speed_kmh=10.0)
+    assert d.last["target_kmh"] == pytest.approx(15.0)
+    d.final_goal = True
+    d.act_env(_frame(1), _frame(2), speed_kmh=10.0)
+    assert d.last["target_kmh"] == pytest.approx(6.0)
+    d.final_goal = False
+    d.reset_hidden(1)                                   # a new episode starts on its final goal
+    assert d.final_goal is True
+
+
 def test_actions_are_clipped_to_the_env_box():
     low, high = np.array([-0.5, -0.2], np.float32), np.array([0.5, 0.4], np.float32)
     d = ViNTDriver(FakePolicy(dist_steps=20.0), low, high)

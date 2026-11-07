@@ -504,6 +504,17 @@ def _speed_kmh(info):
     return float(info.get("speed_kmh", 0.0) or 0.0)
 
 
+def subgoal_reset(agent, hidden):
+    """EVAL_MAP_RESET_HIDDEN at a map subgoal switch or replan. c0's GRU restarts
+    (as Habitat resets DEBiT's per subgoal). A pixel policy (EVAL_POLICY=vint)
+    keeps its observation context: its recent frames are not about the goal, and
+    clearing them mid-drive would show it a car at rest -- only its goal image
+    changes. A documented difference between the two arms' reset rules."""
+    if getattr(agent, "drives_from_pixels", False):
+        return hidden
+    return agent.reset_hidden(1)
+
+
 def pixel_frames(info, pxr):
     """(current, goal) frames exactly as run_record stored them for training --
     pxr.to_frame(..., MONO_IMG) as uint8 -- for a policy that reads pixels
@@ -1798,7 +1809,10 @@ def run_eval(env, agent, pxr, server, out_root):
         while True:
             while end is None:
                 if getattr(agent, "drives_from_pixels", False):
-                    # EVAL_POLICY=vint: frames in, env action out (vint_driver).
+                    # EVAL_POLICY=vint: frames in, env action out (vint_driver). On a
+                    # map it cruises toward intermediate nodes and approaches only
+                    # the real goal (the planner's own state, not privileged).
+                    agent.final_goal = nav is None or bool(nav.final)
                     a_env = agent.act_env(*pixel_frames(info, pxr), _speed_kmh(info))
                     if VINT_DEBUG and t % VINT_DEBUG_EVERY == 0:
                         lv = agent.last
@@ -1844,12 +1858,12 @@ def run_eval(env, agent, pxr, server, out_root):
                     if ev is not None:
                         goal_blk = _aim()
                         if EVAL_MAP_RESET_HIDDEN:
-                            hidden = agent.reset_hidden(1)
+                            hidden = subgoal_reset(agent, hidden)
                 elif nav is not None and nav.update(pos, float(info.get("hero_yaw", 0.0) or 0.0)):
                     goal_blk = _aim()
                     leg_steps = 0
                     if EVAL_MAP_RESET_HIDDEN:
-                        hidden = agent.reset_hidden(1)
+                        hidden = subgoal_reset(agent, hidden)
                 elif nav is not None and EVAL_MAP_REPLAN > 0 and not nav.final:
                     leg_steps += 1
                     sg = nav.subgoal_m(pos)
@@ -1872,7 +1886,7 @@ def run_eval(env, agent, pxr, server, out_root):
                         goal_blk = _aim()
                         leg_steps = 0
                         if EVAL_MAP_RESET_HIDDEN:
-                            hidden = agent.reset_hidden(1)
+                            hidden = subgoal_reset(agent, hidden)
                 moved = float(np.linalg.norm(pos - prev_pos))
                 path_m += moved
                 prev_pos = pos
@@ -2260,9 +2274,11 @@ def main():
         if not EVAL_FROM:
             raise ValueError("EVAL_POLICY=vint needs EVAL_FROM: a ViNT checkpoint dir "
                              "(model.pth + vint.json)")
-        if EVAL_MAP_DIR or EVAL_TRACE or EVAL_SGM_TRACE or EXPERT_RECORD or EXPERT_TRACE:
-            raise ValueError("EVAL_POLICY=vint drives plain goal evals only: no map, "
-                             "trace or recording")
+        # Goal evals, mapless or on a map (EVAL_MAP_DIR: the subgoal images reach it
+        # through info["debit_goal"]); never traces or recording.
+        if EVAL_TRACE or EVAL_SGM_TRACE or EXPERT_RECORD or EXPERT_TRACE:
+            raise ValueError("EVAL_POLICY=vint drives goal evals only (mapless or "
+                             "EVAL_MAP_DIR): no trace or recording")
         if ACT_DIM != 2:
             raise ValueError(f"EVAL_POLICY=vint drives (steer, throttle), not a {ACT_DIM}-d action")
         from torch_rl.vint_driver import ViNTDriver, load_vint_policy

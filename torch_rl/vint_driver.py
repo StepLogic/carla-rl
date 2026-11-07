@@ -118,11 +118,18 @@ class ViNTDriver:
         self.reset_hidden(1)
 
     def reset_hidden(self, n=1):
-        """A new episode: no frame history, fresh controllers, wheels straight."""
+        """A new episode: no frame history, fresh controllers, wheels straight, and
+        the goal image is the episode's own (final) goal."""
         self.frames.clear()
         self.lat = PID(*self._lat_gains, dt=self.dt)
         self.lon = PID(*self._lon_gains, dt=self.dt)
         self.past_steer = 0.0
+        # final_goal (map navigation): False while the goal image is an
+        # intermediate map node, which is driven at cruise -- nodes ~6 m apart
+        # would otherwise each read as "goal 2 s away" and the car would crawl
+        # the whole route, a speed change the mapless arm does not get. The
+        # planner's own state, not a privileged signal.
+        self.final_goal = True
         return None
 
     def context(self):
@@ -144,7 +151,8 @@ class ViNTDriver:
         steer = min(max(steer, self.past_steer - 0.1), self.past_steer + 0.1)
         steer = max(-self.max_steer, min(self.max_steer, steer))
         self.past_steer = steer
-        target_kmh = approach_kmh_from_time(dist_s, self.cruise_kmh)
+        target_kmh = (approach_kmh_from_time(dist_s, self.cruise_kmh) if self.final_goal
+                      else self.cruise_kmh)
         acc = self.lon.step(target_kmh - speed)
         throttle = min(acc, self.max_throttle) if acc >= 0.0 else -min(-acc, self.max_brake)
         action = np.clip(np.array([steer, throttle], np.float32), self.low, self.high)

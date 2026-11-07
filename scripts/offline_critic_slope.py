@@ -55,8 +55,27 @@ DELTAS = (-0.4, -0.2, -0.1, -0.05, 0.0, 0.05, 0.1, 0.2, 0.4)
 TOWNS = ("Town01", "Town04", "Town05", "Town10HD")
 
 
-def build_agent(config_dir, init_dir, device, seed):
+def parse_overrides(pairs):
+    """--set KEY=VALUE pairs -> {key: value}, VALUE read as JSON when it parses
+    (numbers, true/false, lists) and as a string otherwise."""
+    out = {}
+    for p in pairs or ():
+        if "=" not in p:
+            raise SystemExit(f"--set {p!r}: expected KEY=VALUE")
+        k, v = p.split("=", 1)
+        try:
+            out[k] = json.loads(v)
+        except json.JSONDecodeError:
+            out[k] = v
+    return out
+
+
+def build_agent(config_dir, init_dir, device, seed, overrides=None):
     d = json.load(open(os.path.join(config_dir, "config.json")))
+    unknown = set(overrides or {}) - set(d)
+    if unknown:
+        raise SystemExit(f"--set {sorted(unknown)}: not fields of {config_dir}/config.json")
+    d.update(overrides or {})
     d.update(device=device, compile=False)
     cfg = GatedRecurrentSACConfig(**d)
     rows_state = pxr.mono_state_dim(pxr.BINOC_DIM)
@@ -169,12 +188,16 @@ def main():
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--probe-root", default=None,
                     help="root of the six probe shards (default: the first --roots)")
+    ap.add_argument("--set", action="append", default=[], metavar="KEY=VALUE",
+                    help="override a config.json field, e.g. subset_size=1 (REDQ: the "
+                         "target is one random critic, no min) or subset_size=10")
     ap.add_argument("--out", required=True)
     args = ap.parse_args()
     dev = "cuda" if torch.cuda.is_available() else "cpu"
     os.makedirs(args.out, exist_ok=True)
+    overrides = parse_overrides(args.set)
 
-    agent = build_agent(args.config, args.init, dev, args.seed)
+    agent = build_agent(args.config, args.init, dev, args.seed, overrides)
     paths = episode_paths(os.pathsep.join(args.roots), args.towns)
     cap = sum(_episode_rows(p) for p in paths)          # transforms only shorten or drop
     buf = DeviceEpisodeBuffer(pxr.mono_row_dim(pxr.BINOC_DIM), 2, cap, dev, seed=args.seed,
@@ -191,7 +214,8 @@ def main():
     probe = (sorted(glob.glob(os.path.join(probe_root, "Town05", "ep_*.npz")))[:3]
              + sorted(glob.glob(os.path.join(probe_root, "Town01", "ep_*.npz")))[:3])
     res = slope(agent, probe, dev)
-    res.update(variant=args.variant, roots=args.roots, towns=args.towns, updates=args.updates,
+    res.update(variant=args.variant, overrides=overrides, roots=args.roots, towns=args.towns,
+               updates=args.updates,
                episodes=int(buf.episodes), steps=int(n), seed=args.seed, warmup=trace,
                config=args.config, init=args.init, probe=probe)
     with open(os.path.join(args.out, "slope.json"), "w") as fh:

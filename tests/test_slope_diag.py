@@ -113,3 +113,24 @@ def test_variants_name_one_change_each():
     assert set(VARIANTS) >= {"baseline", "no_arrival", "expert_only"}
     ep = _ep(T=40)
     assert len(VARIANTS["no_arrival"](ep)["act_exec"]) < 40
+
+
+def _script():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        "offline_critic_slope", os.path.join(ROOT, "scripts", "offline_critic_slope.py"))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_set_overrides_parse_as_json_values():
+    """--set subset_size=1 is the REDQ arm (user 2026-11-07: "should we disable
+    redq"): the config field must arrive as an int, not the string "1"."""
+    parse = _script().parse_overrides
+    assert parse(["subset_size=1"]) == {"subset_size": 1}
+    assert parse(["discount=0.95", "one_critic=true"]) == {"discount": 0.95, "one_critic": True}
+    assert parse(["algo=sac"]) == {"algo": "sac"}
+    assert parse([]) == {}
+    with pytest.raises(SystemExit):
+        parse(["subset_size"])

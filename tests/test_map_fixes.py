@@ -109,3 +109,13 @@ def test_off_road_distance_rule_is_off_by_default_and_junction_only():
     assert "lane_type=carla.LaneType.Driving" in body
     cs = open(os.path.join(ROOT, "src", "vae_nav", "core_state.py")).read()
     assert 'info["off_road_raw"]' in cs
+
+
+def test_replan_is_off_by_default_and_relocalises_to_the_same_goal_node():
+    src = open(os.path.join(ROOT, "train_carla_sac.py")).read()
+    assert 'EVAL_MAP_REPLAN = int(os.environ.get("EVAL_MAP_REPLAN", 0) or 0)' in src
+    body = src.split("def run_eval(")[1].split("\ndef ")[0]
+    assert "elif nav is not None and EVAL_MAP_REPLAN > 0 and not nav.final:" in body
+    assert 'gmap.path(s2, map_row["map_goal_node"])' in body       # same goal node
+    assert "nav.k = len(nav.path)" in body                          # else the real goal
+    assert "leg_steps, replans, replan_log = 0, 0, []" in body      # reset per episode

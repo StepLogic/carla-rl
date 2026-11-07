@@ -203,6 +203,17 @@ EVAL_MAP_FALLBACK = os.environ.get("EVAL_MAP_FALLBACK", "")
 # node at least this far ahead (image_map.Navigator lookahead_m), so the subgoal
 # image is inside c0's trained 5-25 m goal band. 0 = off.
 EVAL_MAP_LOOKAHEAD_M = float(os.environ.get("EVAL_MAP_LOOKAHEAD_M", 0.0) or 0.0)
+# EVAL_MAP_REPLAN = R (the Habitat peer's relocalise-and-replan, 2026-11-07): when
+# a leg stalls (no subgoal switch for EVAL_MAP_LEG_STEPS steps) or the car is off
+# its route (current subgoal more than EVAL_MAP_OFFROUTE_M away), relocalise to
+# the nearest aligned node by true pose and plan to the same goal node again, up
+# to R times; after that, or with no route, hand over the real goal image. On
+# the uniform-map hard band 14 of Town02's 16 out-of-time endings were c0 lost
+# off its route (4.4x the route driven, subgoal > 15 m away) with a navigator
+# that kept showing a subgoal it had turned away from. 0 = off.
+EVAL_MAP_REPLAN = int(os.environ.get("EVAL_MAP_REPLAN", 0) or 0)
+EVAL_MAP_LEG_STEPS = int(os.environ.get("EVAL_MAP_LEG_STEPS", 100) or 100)
+EVAL_MAP_OFFROUTE_M = float(os.environ.get("EVAL_MAP_OFFROUTE_M", 15.0) or 15.0)
 if EVAL_MAP_FALLBACK not in ("", "mapless"):
     raise ValueError(f"EVAL_MAP_FALLBACK={EVAL_MAP_FALLBACK!r}: use '' or 'mapless'")
 # EXPERT RECORDING (imitation-first plan, 2026-11-04; see run_record and
@@ -1604,6 +1615,7 @@ def run_eval(env, agent, pxr, server, out_root):
         goal_blk = pxr.goal_block(info["debit_goal"])
         start_poses = _poses(info)
         nav = map_row = None
+        leg_steps, replans, replan_log = 0, 0, []
         if gmap is not None:
             hp = np.asarray(info.get("hero_pos", (0.0, 0.0)), np.float64)[:2]
             hy = float(info.get("hero_yaw", 0.0) or 0.0)
@@ -1691,8 +1703,32 @@ def run_eval(env, agent, pxr, server, out_root):
                     tracker.step(pos, float(info.get("speed_kmh", 0.0) or 0.0))
                 if nav is not None and nav.update(pos, float(info.get("hero_yaw", 0.0) or 0.0)):
                     goal_blk = _aim()
+                    leg_steps = 0
                     if EVAL_MAP_RESET_HIDDEN:
                         hidden = agent.reset_hidden(1)
+                elif nav is not None and EVAL_MAP_REPLAN > 0 and not nav.final:
+                    leg_steps += 1
+                    sg = nav.subgoal_m(pos)
+                    if leg_steps >= EVAL_MAP_LEG_STEPS or (sg is not None and sg > EVAL_MAP_OFFROUTE_M):
+                        # RELOCALISE AND REPLAN, or hand over the real goal.
+                        why_re = "stall" if leg_steps >= EVAL_MAP_LEG_STEPS else "off_route"
+                        r2 = None
+                        if replans < EVAL_MAP_REPLAN:
+                            replans += 1
+                            s2 = gmap.nearest(pos[:2], float(info.get("hero_yaw", 0.0) or 0.0),
+                                              radius=EVAL_MAP_START_M)
+                            r2 = gmap.path(s2, map_row["map_goal_node"]) if s2 is not None else None
+                        if r2 is not None and len(r2) > 1:
+                            nav = image_map.Navigator(gmap, r2, switch_m=EVAL_MAP_SWITCH_M,
+                                                      lookahead_m=EVAL_MAP_LOOKAHEAD_M)
+                            nav.look_ahead(pos)
+                        else:
+                            nav.k = len(nav.path)     # give up on the map: the real goal
+                        replan_log.append({"t": t, "why": why_re, "ok": r2 is not None})
+                        goal_blk = _aim()
+                        leg_steps = 0
+                        if EVAL_MAP_RESET_HIDDEN:
+                            hidden = agent.reset_hidden(1)
                 moved = float(np.linalg.norm(pos - prev_pos))
                 path_m += moved
                 prev_pos = pos
@@ -1751,6 +1787,7 @@ def run_eval(env, agent, pxr, server, out_root):
                      **({} if nav is None else {**map_row, "map_switches": nav.switches,
                                                 "map_final": bool(nav.final),
                                                 "map_k": int(nav.k),
+                                                "map_replans": replan_log,
                                                 "subgoal_m_at_end": (None if nav.subgoal_m(pos) is None
                                                                      else round(nav.subgoal_m(pos), 2))}),
                      "end_xy": [round(float(v), 2) for v in np.asarray(pos, np.float64)[:2]],

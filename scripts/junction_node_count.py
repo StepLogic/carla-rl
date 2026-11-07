@@ -31,7 +31,7 @@ def main():
     srv = CarlaServer(a.port, quality="Low", log_dir=os.path.dirname(os.path.abspath(a.out)))
     srv.start(); srv.wait_ready()
     try:
-        c = carla.Client("localhost", a.port); c.set_timeout(120.0)
+        c = carla.Client("localhost", a.port); c.set_timeout(300.0)
         world = c.load_world(a.town); cmap = world.get_map()
         open(f"{a.out}_{a.town}.xodr", "w").write(cmap.to_opendrive())
 

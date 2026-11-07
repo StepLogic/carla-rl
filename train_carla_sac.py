@@ -1779,8 +1779,8 @@ def run_eval(env, agent, pxr, server, out_root):
                                                 "subgoal_m_at_end": (None if nav.subgoal_m(pos) is None
                                                                      else round(nav.subgoal_m(pos), 2))}),
                      "end_xy": [round(float(v), 2) for v in np.asarray(pos, np.float64)[:2]],
-                     # ViNT's own goal-distance estimate at the end (EVAL_POLICY=vint)
-                     **({"vint_dist_end_m": round(float(agent.last.get("dist_m", float("nan"))), 2)}
+                     # ViNT's own time-to-goal estimate at the end (EVAL_POLICY=vint)
+                     **({"vint_dist_end_s": round(float(agent.last.get("dist_s", float("nan"))), 2)}
                         if getattr(agent, "drives_from_pixels", False) else {}),
                      "end_in_junction": bool(info.get("in_junction", False)),
                      **(map_row if nav is None and map_row is not None else {}),
@@ -2109,6 +2109,7 @@ def main():
         policy, meta = load_vint_policy(EVAL_FROM, device=DEVICE)
         agent = ViNTDriver(policy, env.action_space.low, env.action_space.high,
                            context_size=meta["context_size"], stride=meta["stride"],
+                           step_s=meta["stride"] * meta["frame_dt_s"],
                            cruise_kmh=EXPERT_TARGET_KMH)
         print(f"  POLICY: ViNT {EVAL_FROM} | context {meta['context_size']} frames x stride "
               f"{meta['stride']}, {meta['metric_step_m']:g} m/frame | the expert's PID "

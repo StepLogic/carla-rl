@@ -27,6 +27,8 @@ def vint_meta(cfg, summary):
     meta = {k: cfg[k] for k in ARCH_KEYS}
     meta.update({"image_size": list(cfg["image_size"]), "stride": int(dc["waypoint_spacing"]),
                  "metric_step_m": float(summary["metric_waypoint_spacing_m"]),
+                 # the shards hold one frame per env step, 0.1 s (CARLA's fixed delta)
+                 "frame_dt_s": 0.1,
                  "dataset": name, "normalize": bool(cfg.get("normalize", True))})
     return meta
 

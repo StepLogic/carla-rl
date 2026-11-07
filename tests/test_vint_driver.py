@@ -24,19 +24,41 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 sys.path.insert(0, os.path.join(ROOT, "src"))
 
-from torch_rl.vint_driver import PID, ViNTDriver, pick_waypoint, signed_angle  # noqa: E402
+from torch_rl.vint_driver import (PID, ViNTDriver, approach_kmh_from_time,  # noqa: E402
+                                  pick_waypoint, signed_angle)
 
 LOW, HIGH = np.array([-1.0, -1.0], np.float32), np.array([1.0, 1.0], np.float32)
 STRAIGHT = np.array([[1.1 * k, 0.0] for k in range(1, 6)])
 
 
 class FakePolicy:
-    def __init__(self, dist_m=50.0, wps=STRAIGHT):
-        self.dist_m, self.wps, self.calls = dist_m, np.asarray(wps, float), []
+    """(goal distance in ViNT steps, waypoints in metres)."""
+
+    def __init__(self, dist_steps=20.0, wps=STRAIGHT):
+        self.dist_steps, self.wps, self.calls = dist_steps, np.asarray(wps, float), []
 
     def __call__(self, ctx, goal):
         self.calls.append((list(ctx), goal))
-        return self.dist_m, self.wps
+        return self.dist_steps, self.wps
+
+
+def test_the_time_profile_is_the_experts_distance_profile_driven_in_time():
+    """ViNT's distance is TIME to the goal (frame steps), learned from the expert
+    slowing down: 15 km/h until 10 m, linearly to 6 km/h at 3 m, then 6 km/h.
+    Driving that profile, the time left is 1.8 s at 3 m and ~4.37 s at 10 m."""
+    from vae_nav.expert_oracle import BasicAgentExpert
+    assert approach_kmh_from_time(0.0, 15.0) == pytest.approx(6.0)
+    assert approach_kmh_from_time(1.8, 15.0) == pytest.approx(6.0)
+    assert approach_kmh_from_time(4.37, 15.0) == pytest.approx(15.0, abs=0.02)
+    assert approach_kmh_from_time(30.0, 15.0) == pytest.approx(15.0)
+    # at every distance on the ramp, the time left maps back to the expert's speed
+    vf, vc = 6 / 3.6, 15 / 3.6
+    k = (vc - vf) / 7.0
+    for d in (3.5, 5.0, 8.0, 9.9):
+        v = vf + k * (d - 3.0)
+        t = 3.0 / vf + np.log(v / vf) / k
+        assert approach_kmh_from_time(t, 15.0) == pytest.approx(
+            BasicAgentExpert.approach_speed_kmh(d, 15.0), rel=1e-6)
 
 
 def _frame(v):
@@ -93,18 +115,19 @@ def test_a_waypoint_to_the_left_steers_left_and_the_rate_is_limited():
 
 
 def test_it_accelerates_from_rest_and_brakes_into_a_near_goal():
-    d = ViNTDriver(FakePolicy(dist_m=60.0), LOW, HIGH, cruise_kmh=15.0)
+    d = ViNTDriver(FakePolicy(dist_steps=20.0), LOW, HIGH, cruise_kmh=15.0, step_s=0.3)
     d.reset_hidden(1)
     assert d.act_env(_frame(1), _frame(2), speed_kmh=0.0)[1] == pytest.approx(0.75)
-    d = ViNTDriver(FakePolicy(dist_m=2.0), LOW, HIGH, cruise_kmh=15.0)
+    d = ViNTDriver(FakePolicy(dist_steps=2.0), LOW, HIGH, cruise_kmh=15.0, step_s=0.3)
     d.reset_hidden(1)
     a = d.act_env(_frame(1), _frame(2), speed_kmh=15.0)
     assert a[1] < 0 and d.last["target_kmh"] == pytest.approx(6.0)  # the expert's final approach
+    assert d.last["dist_s"] == pytest.approx(0.6)
 
 
 def test_actions_are_clipped_to_the_env_box():
     low, high = np.array([-0.5, -0.2], np.float32), np.array([0.5, 0.4], np.float32)
-    d = ViNTDriver(FakePolicy(dist_m=60.0), low, high)
+    d = ViNTDriver(FakePolicy(dist_steps=20.0), low, high)
     d.reset_hidden(1)
     a = d.act_env(_frame(1), _frame(2), speed_kmh=0.0)
     assert a.dtype == np.float32 and a[1] == pytest.approx(0.4)

@@ -61,6 +61,31 @@ def signed_angle(target_xy):
     return math.atan2(-y, x)
 
 
+def approach_kmh_from_time(t_s, cruise_kmh, final_kmh=None, slow_from_m=None, final_at_m=None):
+    """BasicAgentExpert's approach profile, indexed by TIME to the goal.
+
+    ViNT's distance head predicts temporal distance -- frames, learned from the
+    expert slowing down into its goals -- not metres. The expert's target falls
+    linearly with distance, from cruise at slow_from_m to final_kmh at final_at_m,
+    and stays at final_kmh inside. Driving that profile, the time left at
+    distance d is T(d) = final_at_m / v_f inside, plus ln(v(d) / v_f) / k on the
+    ramp (k = dv/ds); inverting T gives the speed for a predicted time, so a
+    frame count is never read as metres at cruise speed (which near the goal,
+    where the expert is slow, would arrive too fast)."""
+    from vae_nav.expert_oracle import BasicAgentExpert as E
+    cruise = float(cruise_kmh) / 3.6
+    final = min(E.FINAL_APPROACH_KMH if final_kmh is None else float(final_kmh),
+                float(cruise_kmh)) / 3.6
+    lo = E.APPROACH_FINAL_AT_M if final_at_m is None else float(final_at_m)
+    hi = E.APPROACH_SLOW_FROM_M if slow_from_m is None else float(slow_from_m)
+    t = max(0.0, float(t_s))
+    t_inside = lo / final
+    if t <= t_inside or cruise <= final:
+        return final * 3.6 if t <= t_inside else cruise * 3.6
+    k = (cruise - final) / (hi - lo)
+    return min(final * math.exp(k * (t - t_inside)), cruise) * 3.6
+
+
 def pick_waypoint(waypoints_m, min_dist_m):
     """The first waypoint at least min_dist_m away, else the last."""
     w = np.asarray(waypoints_m, np.float64)
@@ -70,11 +95,12 @@ def pick_waypoint(waypoints_m, min_dist_m):
 
 class ViNTDriver:
     """Context frames in, env action out. `policy(ctx_frames, goal_frame)` ->
-    (goal distance in metres, (L, 2) waypoints in metres, ViNT frame)."""
+    (goal distance in ViNT steps, (L, 2) waypoints in metres, ViNT frame); one
+    ViNT step is `step_s` seconds (stride x the 0.1 s frame interval)."""
 
     drives_from_pixels = True
 
-    def __init__(self, policy, low, high, *, context_size=5, stride=3, cruise_kmh=15.0,
+    def __init__(self, policy, low, high, *, context_size=5, stride=3, step_s=0.3, cruise_kmh=15.0,
                  lateral=(1.95, 0.05, 0.2), longitudinal=(1.0, 0.05, 0.0), dt=0.05,
                  max_steer=0.8, max_throttle=0.75, max_brake=0.3,
                  base_lookahead_m=3.0, lookahead_s=0.5):
@@ -82,6 +108,7 @@ class ViNTDriver:
         self.low = np.asarray(low, np.float32)
         self.high = np.asarray(high, np.float32)
         self.context_size, self.stride = int(context_size), int(stride)
+        self.step_s = float(step_s)
         self.cruise_kmh = float(cruise_kmh)
         self._lat_gains, self._lon_gains, self.dt = lateral, longitudinal, float(dt)
         self.max_steer, self.max_throttle, self.max_brake = max_steer, max_throttle, max_brake
@@ -107,9 +134,9 @@ class ViNTDriver:
                 for j in range(self.context_size, -1, -1)]
 
     def act_env(self, cur_frame, goal_frame, speed_kmh):
-        from vae_nav.expert_oracle import BasicAgentExpert
         self.frames.append(np.asarray(cur_frame))
-        dist_m, wps = self.policy(self.context(), np.asarray(goal_frame))
+        dist_steps, wps = self.policy(self.context(), np.asarray(goal_frame))
+        dist_s = max(0.0, float(dist_steps)) * self.step_s
         speed = max(0.0, float(speed_kmh))
         target = pick_waypoint(wps, self.base_lookahead_m + self.lookahead_s * speed / 3.6)
         angle = signed_angle(target)
@@ -117,11 +144,12 @@ class ViNTDriver:
         steer = min(max(steer, self.past_steer - 0.1), self.past_steer + 0.1)
         steer = max(-self.max_steer, min(self.max_steer, steer))
         self.past_steer = steer
-        target_kmh = BasicAgentExpert.approach_speed_kmh(max(0.0, float(dist_m)), self.cruise_kmh)
+        target_kmh = approach_kmh_from_time(dist_s, self.cruise_kmh)
         acc = self.lon.step(target_kmh - speed)
         throttle = min(acc, self.max_throttle) if acc >= 0.0 else -min(-acc, self.max_brake)
         action = np.clip(np.array([steer, throttle], np.float32), self.low, self.high)
-        self.last = {"dist_m": float(dist_m), "target": [float(target[0]), float(target[1])],
+        self.last = {"dist_steps": float(dist_steps), "dist_s": dist_s,
+                     "target": [float(target[0]), float(target[1])],
                      "angle": angle, "target_kmh": float(target_kmh),
                      "steer": float(action[0]), "throttle": float(action[1])}
         return action
@@ -163,6 +191,7 @@ def load_vint_policy(ckpt_dir, device="cuda"):
         obs = torch.cat([prep(f) for f in ctx], dim=0)[None].to(device)
         g = prep(goal)[None].to(device)
         dist, act = model(obs, g)
-        return float(dist.reshape(-1)[0]) * scale, act[0, :, :2].float().cpu().numpy() * scale
+        # distance stays in ViNT steps (time); waypoints become metres
+        return float(dist.reshape(-1)[0]), act[0, :, :2].float().cpu().numpy() * scale
 
     return policy, meta

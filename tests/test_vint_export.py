@@ -17,6 +17,7 @@ def test_vint_meta_comes_from_the_training_config_and_the_data_summary():
     cfg = yaml.safe_load(open(os.path.join(ROOT, "scripts", "vint", "vint_carla_expert.yaml")))
     meta = vint_meta(cfg, {"metric_waypoint_spacing_m": 0.3712})
     assert meta["stride"] == 3 and meta["metric_step_m"] == 0.3712
+    assert meta["frame_dt_s"] == 0.1          # the shards are 10 Hz env steps
     assert meta["context_size"] == 5 and meta["len_traj_pred"] == 5
     assert meta["image_size"] == [85, 64] and meta["dataset"] == "carla_expert"
     assert meta["mha_num_attention_layers"] == 4 and meta["obs_encoder"] == "efficientnet-b0"

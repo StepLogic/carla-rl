@@ -40,6 +40,8 @@ def test_main_builds_the_vint_driver_before_any_sac_agent():
     i_vint = main_src.index('if EVAL_POLICY == "vint":')
     assert i_vint < main_src.index("agent = build_agent(")
     assert "load_vint_policy(EVAL_FROM" in main_src[i_vint:]
+    # ViNT's distance is in steps of stride frames, 0.1 s each
+    assert 'step_s=meta["stride"] * meta["frame_dt_s"]' in main_src[i_vint:]
 
 
 def test_run_eval_takes_the_pixel_path_for_a_pixel_policy():

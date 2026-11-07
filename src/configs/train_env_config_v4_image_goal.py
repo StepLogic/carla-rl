@@ -202,6 +202,18 @@ LANE_STRICT = os.environ.get("LANE_STRICT", "1") == "1"
 # shorter. The rate stays in the [Why] breakdown either way, so the trade is
 # measurable rather than invisible.
 WEDGE_ON_OFF_ROAD = os.environ.get("WEDGE_ON_OFF_ROAD", "1") == "1"
+# OFF_ROAD_JUNCTION_M (user 2026-11-06: "use distance rule"). Off-road is
+# get_waypoint(..., project_to_road=False) is None: the car's centre on no
+# Driving lane polygon. INSIDE A JUNCTION that fires on asphalt -- a turn a
+# little wider or tighter than CARLA's connector strip. Measured on c0's
+# long-route map runs: 74 of 81 off-road faults were in a junction, every one
+# 1.75-3 m from a lane centre (never on a kerb or sidewalk), and the expert's
+# clean coverage tours raised it 66 / 144 times. With this > 0, an off-road
+# reading INSIDE A JUNCTION counts only when the car's centre is more than this
+# many metres from the nearest Driving-lane centre (3.5 = a lane width: up a
+# kerb or onto a sidewalk). Outside junctions nothing changes. The raw reading
+# stays in self.off_road_raw. 0 = off, every earlier run.
+OFF_ROAD_JUNCTION_M = float(os.environ.get("OFF_ROAD_JUNCTION_M", 0.0) or 0.0)
 # THE IMAGE-GOAL TASK REGIME (user spec 2026-09-18). One flag, three effects,
 # all required together or the task is incoherent:
 #
@@ -904,6 +916,18 @@ class STBL3Experiment(BaseExperiment):
         # it would silently change those episodes' termination behaviour.
         # core_state.py ORs this into the sparse path's lane_invasion.
         self.off_road = wp is None
+        self.off_road_raw = self.off_road
+        if self.off_road and OFF_ROAD_JUNCTION_M > 0:
+            try:
+                _loc = hero.get_transform().location
+                _pwp = core.map.get_waypoint(_loc, project_to_road=True,
+                                             lane_type=carla.LaneType.Driving)
+                if _pwp is not None and _pwp.is_junction:
+                    _c = _pwp.transform.location
+                    if ((_loc.x - _c.x) ** 2 + (_loc.y - _c.y) ** 2) ** 0.5 <= OFF_ROAD_JUNCTION_M:
+                        self.off_road = False     # on junction asphalt, not off it
+            except Exception:
+                pass                              # fail closed: keep the raw reading
 
         # ADDITIVE: record WHICH markings were crossed. diff_lane above is left
         # exactly as it was so the dense-reward CORL experiments are unaffected;

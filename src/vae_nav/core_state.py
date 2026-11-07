@@ -204,6 +204,8 @@ class CoreStateWrapper(Wrapper):
         info["target_speed_kmh"] = float(getattr(experiment, "target_speed", 0.0) or 0.0)
 
         off_road = bool(getattr(experiment, "off_road", False))
+        # the reading before OFF_ROAD_JUNCTION_M's distance rule, for logging
+        info["off_road_raw"] = bool(getattr(experiment, "off_road_raw", off_road))
         sensor_illegal = bool(
             raw_lane and (not types or any(
                 t.split(".")[-1] in illegal for t in types)))

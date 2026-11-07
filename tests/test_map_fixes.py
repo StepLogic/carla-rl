@@ -95,3 +95,17 @@ def test_lookahead_hands_over_the_true_goal_near_the_end():
     nav = im.Navigator(g, path, switch_m=4.0, lookahead_m=12.0)
     nav.look_ahead((1.0, 0.0))
     assert nav.final and nav.subgoal_m((1.0, 0.0)) is None
+
+
+def test_off_road_distance_rule_is_off_by_default_and_junction_only():
+    # user 2026-11-06 "use distance rule": inside a junction an off-road reading
+    # counts only beyond OFF_ROAD_JUNCTION_M from the nearest Driving-lane centre
+    src = open(os.path.join(ROOT, "src", "configs", "train_env_config_v4_image_goal.py")).read()
+    assert 'OFF_ROAD_JUNCTION_M = float(os.environ.get("OFF_ROAD_JUNCTION_M", 0.0) or 0.0)' in src
+    body = src.split("self.off_road = wp is None")[1].split("self.lane_marking_types")[0]
+    assert "self.off_road_raw = self.off_road" in body
+    assert "if self.off_road and OFF_ROAD_JUNCTION_M > 0:" in body
+    assert "_pwp.is_junction" in body and "<= OFF_ROAD_JUNCTION_M" in body
+    assert "lane_type=carla.LaneType.Driving" in body
+    cs = open(os.path.join(ROOT, "src", "vae_nav", "core_state.py")).read()
+    assert 'info["off_road_raw"]' in cs

@@ -39,6 +39,9 @@ def main():
     ap.add_argument("--config", required=True)
     ap.add_argument("--summary", required=True)
     ap.add_argument("--out", required=True)
+    ap.add_argument("--link", action="store_true",
+                    help="symlink model.pth to the training checkpoint instead of copying "
+                         "(a 430 MB copy takes minutes on CephFS)")
     a = ap.parse_args()
     cfg = yaml.safe_load(open(a.config))
     meta = vint_meta(cfg, json.load(open(a.summary)))
@@ -46,7 +49,13 @@ def main():
         raise SystemExit("the driver un-normalises waypoints; a normalize=False model needs another path")
     meta["source_checkpoint"] = a.ckpt
     os.makedirs(a.out, exist_ok=True)
-    shutil.copyfile(a.ckpt, os.path.join(a.out, "model.pth"))
+    dst = os.path.join(a.out, "model.pth")
+    if a.link:
+        if os.path.lexists(dst):
+            os.remove(dst)
+        os.symlink(os.path.abspath(a.ckpt), dst)
+    else:
+        shutil.copyfile(a.ckpt, dst)
     with open(os.path.join(a.out, "vint.json"), "w") as fh:
         json.dump(meta, fh, indent=1)
     print(f"exported {a.ckpt} -> {a.out}: stride {meta['stride']}, "

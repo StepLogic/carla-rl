@@ -35,5 +35,22 @@ def test_the_export_writes_model_and_meta(tmp_path):
                        capture_output=True, text=True, env={**os.environ, "CUDA_VISIBLE_DEVICES": ""})
     assert r.returncode == 0, r.stderr
     assert (out / "model.pth").read_bytes() == b"weights"
+    assert not os.path.islink(out / "model.pth")
     meta = json.loads((out / "vint.json").read_text())
     assert meta["metric_step_m"] == 0.37 and meta["source_checkpoint"] == str(ck)
+
+
+def test_link_mode_points_at_the_training_checkpoint(tmp_path):
+    """430 MB copies take minutes on CephFS; --link exports in an instant."""
+    ck = tmp_path / "3.pth"
+    ck.write_bytes(b"w3")
+    summ = tmp_path / "summary.json"
+    summ.write_text(json.dumps({"metric_waypoint_spacing_m": 0.37}))
+    out = tmp_path / "epoch_3"
+    r = subprocess.run([sys.executable, os.path.join(ROOT, "scripts", "vint", "export_vint_ckpt.py"),
+                        "--ckpt", str(ck), "--summary", str(summ), "--out", str(out), "--link",
+                        "--config", os.path.join(ROOT, "scripts", "vint", "vint_carla_expert.yaml")],
+                       capture_output=True, text=True, env={**os.environ, "CUDA_VISIBLE_DEVICES": ""})
+    assert r.returncode == 0, r.stderr
+    assert os.path.islink(out / "model.pth") and os.readlink(out / "model.pth") == str(ck)
+    assert (out / "model.pth").read_bytes() == b"w3"

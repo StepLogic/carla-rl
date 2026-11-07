@@ -25,8 +25,12 @@ released ViNT weights; evaluate with c0's paired protocol.
 | 6 | .350 / .000 | .500 / .000 | 34 | .0400 |
 | 9 | .350 / .000 | .500 / .000 | 34 | .0400 |
 | 14 | .375 / .000 | .375 / .000 | 30 | .0399 |
-| 19 | (pending) | | | |
+| 19 | .350 / .000 | .350 / .000 | 28 | .0389 |
 | c0 step 15000 | .675 / .100 | .900 / .050 | 63 | -- |
+
+Epoch 1 has the most validation successes, so it is the one tested held-out.
+The lowest test waypoint loss (epoch 19) drove worst: the offline loss does not
+predict driving here.
 
 ## Held-out (epoch 1)
 

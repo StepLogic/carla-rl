@@ -159,3 +159,11 @@ def test_joint_localisation_picks_the_branch_the_goal_is_on():
     s, t, route = g.localise(car, yaw, goal)
     assert (s, t) == (3, 4) and route == [3, 4]
     assert g.localise((50.0, 50.0), 0.0, goal) == (None, None, None)
+
+
+def test_joint_localisation_is_off_by_default_in_the_benchmark():
+    src = open(os.path.join(ROOT, "train_carla_sac.py")).read()
+    assert 'EVAL_MAP_JOINT_LOCALISE = os.environ.get("EVAL_MAP_JOINT_LOCALISE", "0") == "1"' in src
+    body = src.split("def run_eval(")[1].split("\ndef ")[0]
+    assert "gmap.localise(hp, hy, info[\"goal_pos\"]" in body
+    assert "s_node = gmap.nearest(hp, hy, radius=EVAL_MAP_START_M)" in body   # the default path

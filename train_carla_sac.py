@@ -212,6 +212,14 @@ EVAL_MAP_LOOKAHEAD_M = float(os.environ.get("EVAL_MAP_LOOKAHEAD_M", 0.0) or 0.0)
 # off its route (4.4x the route driven, subgoal > 15 m away) with a navigator
 # that kept showing a subgoal it had turned away from. 0 = off.
 EVAL_MAP_REPLAN = int(os.environ.get("EVAL_MAP_REPLAN", 0) or 0)
+# EVAL_MAP_JOINT_LOCALISE=1 (2026-11-07): start and goal nodes chosen JOINTLY
+# (image_map.Graph.localise): the pair of an aligned node within
+# EVAL_MAP_START_M of the car and a node within EVAL_MAP_GOAL_M of the goal with
+# the shortest metric route. On the Town02 uniform image-rule map it took the
+# planned paths over 1.3x the road route from 19 / 2 / 0 (easy / medium / hard,
+# worst 12x: a car already turning right snapped to the straight-on lane) to 0,
+# worst 1.2x. 0 = the nearest-node start of every earlier benchmark.
+EVAL_MAP_JOINT_LOCALISE = os.environ.get("EVAL_MAP_JOINT_LOCALISE", "0") == "1"
 EVAL_MAP_LEG_STEPS = int(os.environ.get("EVAL_MAP_LEG_STEPS", 100) or 100)
 EVAL_MAP_OFFROUTE_M = float(os.environ.get("EVAL_MAP_OFFROUTE_M", 15.0) or 15.0)
 if EVAL_MAP_FALLBACK not in ("", "mapless"):
@@ -1639,10 +1647,15 @@ def run_eval(env, agent, pxr, server, out_root):
         if gmap is not None:
             hp = np.asarray(info.get("hero_pos", (0.0, 0.0)), np.float64)[:2]
             hy = float(info.get("hero_yaw", 0.0) or 0.0)
-            s_node = gmap.nearest(hp, hy, radius=EVAL_MAP_START_M)
-            g_node = (gmap.goal_node(s_node, info["goal_pos"], radius=EVAL_MAP_GOAL_M)
-                      if info.get("goal_pos") is not None else None)
-            route = gmap.path(s_node, g_node)
+            if EVAL_MAP_JOINT_LOCALISE and info.get("goal_pos") is not None:
+                s_node, g_node, route = gmap.localise(hp, hy, info["goal_pos"],
+                                                      start_radius=EVAL_MAP_START_M,
+                                                      goal_radius=EVAL_MAP_GOAL_M)
+            else:
+                s_node = gmap.nearest(hp, hy, radius=EVAL_MAP_START_M)
+                g_node = (gmap.goal_node(s_node, info["goal_pos"], radius=EVAL_MAP_GOAL_M)
+                          if info.get("goal_pos") is not None else None)
+                route = gmap.path(s_node, g_node)
             map_row = {"map_start_node": s_node, "map_goal_node": g_node,
                        "map_hops": None if route is None else len(route) - 1,
                        "map_route_m": None if route is None else round(gmap.length(route), 2)}

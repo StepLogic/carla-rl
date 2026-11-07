@@ -35,6 +35,7 @@ from vae_nav.carla_benchmark import holm, mcnemar_p  # noqa: E402
 
 STEP_S = 0.1          # one env step (CARLA fixed delta)
 OFF_ROUTE_M = 5.0     # farther than this from every route node = off the route
+LOC_OK_M = 8.0        # node "within 8 m" of the true start/goal, as the c0 table
 BANDS = ("easy", "medium", "hard")
 ENDS = ("reached", "crossing", "off_road", "collision")
 
@@ -84,9 +85,9 @@ def topo_diag(rows):
             "no_route": sum(t.get("fallback") == "no route" for _, t in tv),
             "same_node": sum(t.get("fallback") == "same node" for _, t in tv),
             "start_err_med_m": _med(s_err),
-            "start_within_5m": sum(e <= 5.0 for e in s_err) / max(len(s_err), 1),
+            "start_within_8m": sum(e <= LOC_OK_M for e in s_err) / max(len(s_err), 1),
             "goal_err_med_m": _med(g_err),
-            "goal_within_5m": sum(e <= 5.0 for e in g_err) / max(len(g_err), 1),
+            "goal_within_8m": sum(e <= LOC_OK_M for e in g_err) / max(len(g_err), 1),
             "final_leg": sum(t.get("final_at") is not None for _, t in tv) / max(n, 1),
             "routed_fails": len(fails), "off_route_fails": len(off),
             "belief_gap_med_nodes": _med(gaps)}
@@ -155,15 +156,15 @@ def main(argv=None):
               f"{s['spl_mapless']:.3f} |")
 
     print("\n### Topomap arm: fallbacks and PRIVILEGED diagnostics (reporting only)")
-    print("| Town | Band | n | No route | Same node | Start node err med (m) | Start <=5 m "
-          "| Goal node err med (m) | Goal <=5 m | Final leg reached | Routed fails "
+    print("| Town | Band | n | No route | Same node | Start node err med (m) | Start <=8 m "
+          "| Goal node err med (m) | Goal <=8 m | Final leg reached | Routed fails "
           f"| Ended >{OFF_ROUTE_M:g} m off route | Navigator-vs-true route gap med (nodes) |")
     print("|---|---|---|---|---|---|---|---|---|---|---|---|---|")
     for town, band, topo, _ in cells:
         d = topo_diag(topo)
         print(f"| {town} | {band} | {d['n']} | {d['no_route']} | {d['same_node']} | "
-              f"{d['start_err_med_m']:.1f} | {d['start_within_5m']:.2f} | "
-              f"{d['goal_err_med_m']:.1f} | {d['goal_within_5m']:.2f} | {d['final_leg']:.2f} | "
+              f"{d['start_err_med_m']:.1f} | {d['start_within_8m']:.2f} | "
+              f"{d['goal_err_med_m']:.1f} | {d['goal_within_8m']:.2f} | {d['final_leg']:.2f} | "
               f"{d['routed_fails']} | {d['off_route_fails']} | {d['belief_gap_med_nodes']:.1f} |")
 
     print("\n### Speed and end mix")

@@ -50,8 +50,8 @@ def test_fallbacks_and_localisation_diagnostics():
     d = rep.topo_diag(rows)
     assert (d["no_route"], d["same_node"]) == (1, 1)
     assert d["start_err_med_m"] == pytest.approx(2.5)
-    assert d["start_within_5m"] == pytest.approx(0.75)
-    assert d["goal_within_5m"] == pytest.approx(0.75)
+    assert d["start_within_8m"] == pytest.approx(0.75)
+    assert d["goal_within_8m"] == pytest.approx(0.75)
     assert d["final_leg"] == pytest.approx(0.25)        # final_at set in 1 of 4
     # failed routed episodes: seed 4 only; it ended 12 m off its route
     assert d["routed_fails"] == 1 and d["off_route_fails"] == 1

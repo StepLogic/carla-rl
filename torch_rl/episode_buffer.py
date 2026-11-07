@@ -208,6 +208,11 @@ class DeviceEpisodeBuffer:
 
         self._episodes: List = []   # ended episodes, FIFO (oldest first): (start, n, mode)
         self._write = 0             # next free row
+        # PINNED RECORDINGS (user 2026-11-07: prerecorded data must never be
+        # overwritten): rows [0, _pin_end) hold episodes pin() froze; the ring of
+        # later episodes wraps back to _pin_end, never to 0. 0 = nothing pinned.
+        self._pin_end = 0
+        self._wrapped = False       # the ring has wrapped at least once
         self._size = 0              # transitions in ended + open episodes (mirrors EpisodeBuffer.size)
         self._open: Dict[int, _OpenEpisode] = {}   # env_id -> its one open episode
         self._goals: Dict[int, torch.Tensor] = {}  # episode start row -> (goal_dim,) fp16 on store_device
@@ -393,17 +398,39 @@ class DeviceEpisodeBuffer:
             self._row_n[start:start + n] = n
             self._prio[start:start + n] = self._prio_max
 
+    def pin(self) -> int:
+        """Freeze every episode now in the ring (user 2026-11-07: "PRERECORDED DATA
+        ... IS NOT OVERWRITTEN"): later episodes wrap back to the row after them
+        instead of to row 0, so these rows are never evicted, and sample_chunks flags
+        chunks drawn from them `prerecorded` (the SAC temperature skips those). Call
+        once, right after a preload, with no episode open. Returns the pinned rows.
+        A replay sized to its recordings (MixedReplay's expert side) may be pinned
+        whole; it then refuses further episodes rather than overwrite one."""
+        if self._open:
+            raise ValueError(f"pin() with episodes still open (env ids {sorted(self._open)})")
+        if self._pin_end:
+            raise ValueError("pin() was already called on this buffer")
+        if self._wrapped:
+            raise ValueError("the preload wrapped the ring, so some of it was already "
+                             "overwritten: raise the capacity above the recordings")
+        self._pin_end = self._write
+        return self._pin_end
+
     def _reserve_rows(self, n: int) -> int:
         """Choose the start row for n+1 new rows, wrapping and evicting overlapping
-        (whole, FIFO) episodes as needed. Raises if the episode can never fit."""
+        (whole, FIFO) episodes as needed. Raises if the episode can never fit.
+        Pinned rows [0, _pin_end) are outside the ring: it wraps to _pin_end."""
         rows_needed = n + 1
-        if rows_needed > self.capacity:
+        free = self.capacity - self._pin_end
+        if rows_needed > free:
             raise ValueError(
-                f"episode of {n} transitions needs {rows_needed} rows > capacity {self.capacity}"
+                f"episode of {n} transitions needs {rows_needed} rows > the {free} rows "
+                f"after the {self._pin_end} pinned ones (capacity {self.capacity})"
             )
         start = self._write
         if start + rows_needed > self.capacity:
-            start = 0   # wrap; rows [self._write, capacity) become an unused gap
+            start = self._pin_end   # wrap; rows [self._write, capacity) become an unused gap
+            self._wrapped = True
         end = start + rows_needed
 
         # A full scan (not just the FIFO front) is required for correctness: with
@@ -547,6 +574,9 @@ class DeviceEpisodeBuffer:
             "masks": masks,
             "valid": valid_t,
             "mode": torch.from_numpy(mode_out).to(dev),
+            # 1 for a chunk from a pinned (recorded) episode: the SAC temperature
+            # never steps on those rows (user 2026-11-07). All 0 without pin().
+            "prerecorded": torch.from_numpy((starts < self._pin_end).astype(np.float32)).to(dev),
         }
         if self.goal_dim > 0:
             # One row per episode, looked up by the chunk's episode start row.

@@ -231,11 +231,18 @@ def il_finetune_prepare(agent, buf, root, towns, *, warmup_updates, chunk_b, chu
             raise SystemExit(f"IL_PRELOAD_TRANSFORM={tname!r}: not one of {sorted(VARIANTS)}")
         transform = VARIANTS[tname]
     n_exec = fill_buffer(replay, paths, which="exec", transform=transform)
+    # USER RULE 2026-11-07: "WHEN USING PRERECORDED DATA WITH SAC ENSURE PRERECORDED
+    # DATA DOES NOT UPDATE TEMPERATURE AND IS NOT OVERWRITTEN". Pinned, the recorded
+    # rows stay in the replay for good (online data rings after them) and their
+    # chunks come out flagged `prerecorded`, which the temperature step skips.
+    pinned = replay.pin()
     act_dim = int(load_episode(paths[0])["act_label"].shape[1])
     expert_buf, n_lab = _buffer(paths, act_dim, agent.device, seed=1)
     log(f"[IL] preload {root}: {len(paths)} episodes -> replay +{n_exec} executed steps"
         + (f" (IL_PRELOAD_TRANSFORM={tname}: {replay.episodes} episodes kept)" if tname else "")
         + f", expert buffer {n_lab} labelled steps")
+    log(f"[IL] the {pinned} recorded rows are PINNED (never overwritten; online data rings "
+        f"through the other {replay.capacity - pinned}) and never update the temperature")
     K = int(agent.cfg.burn_in)
     t0 = time.time()
     agent.set_warmup(True)

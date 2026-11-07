@@ -536,6 +536,11 @@ class GatedRecurrentTQC:
         # per-chunk TD priorities (B,) it produced (None without PER).
         self._is_w = None
         self.last_td_prio = None
+        # Prerecorded-data rule (user 2026-11-07): the chunk's `prerecorded` flags
+        # (B,) for this update -- the temperature never steps on those rows -- and
+        # the goal temperature's row mask that update used (telemetry, tests).
+        self._prerec = None
+        self.last_temp_rows = None
         # Reseeds the GLOBAL torch RNG, as RecurrentTQC does: construction
         # order below is load-bearing for reproducibility.
         torch.manual_seed(cfg.seed)
@@ -1035,6 +1040,8 @@ class GatedRecurrentTQC:
             self._bc_x, self._bc_a = self._bc_inputs(self._actor_bc_source())
         self._is_w = (chunk["is_weight"].to(device=self.device, dtype=torch.float32)
                       if "is_weight" in chunk else None)
+        self._prerec = (chunk["prerecorded"].to(device=self.device, dtype=torch.float32)
+                        if "prerecorded" in chunk else None)
         out = self._update(*args)
         td = out.pop("td_prio", None)
         self.last_td_prio = None if td is None else td.detach().float().cpu().numpy()
@@ -1112,7 +1119,16 @@ class GatedRecurrentTQC:
         # config.cache_size_limit (8), and padded windows make the counts
         # differ almost every batch. Two bools specialise at most three ways.
         # Counts stay tensors (every masked mean divides by m.sum()).
-        has_g, has_e = (torch.stack([m_g.sum(), m_e.sum()]) > 0).tolist()
+        # The temperatures' rows: each mode's rows minus the PRERECORDED chunks'
+        # (user 2026-11-07: recorded data never updates the temperature). In the
+        # same single sync, as two more bools.
+        online = (None if self._prerec is None
+                  else (1.0 - self._prerec).repeat_interleave(T))
+        mt_g = m_g if online is None else m_g * online
+        mt_e = m_e if online is None else m_e * online
+        has_g, has_e, has_tg, has_te = (
+            torch.stack([m_g.sum(), m_e.sum(), mt_g.sum(), mt_e.sum()]) > 0).tolist()
+        self.last_temp_rows = mt_g.detach()
 
         # Nothing valid to train on (mode is 0/1, so m_g + m_e == valid): skip
         # without touching any optimiser, so Adam's stale momentum cannot move
@@ -1279,16 +1295,18 @@ class GatedRecurrentTQC:
             # grads are only ever from the critic loss (as in RecurrentTQC).
             self.opt_critic.zero_grad(set_to_none=True)
 
-            # Temperatures: a mode absent from the batch takes no step at all.
+            # Temperatures: a mode absent from the batch takes no step at all, and
+            # neither does one whose rows here are all PRERECORDED (user
+            # 2026-11-07) -- only the agent's own rows move alpha.
             lp = logp.detach()
             temp_loss_g = temp_loss_e = zero
-            if has_g:
-                temp_loss_g = _masked_mean(self.log_alpha_g.exp() * (-lp - cfg.target_entropy), m_g)
+            if has_tg:
+                temp_loss_g = _masked_mean(self.log_alpha_g.exp() * (-lp - cfg.target_entropy), mt_g)
                 self.opt_temp_g.zero_grad(set_to_none=True)
                 temp_loss_g.backward()
                 self.opt_temp_g.step()
-            if has_e:
-                temp_loss_e = _masked_mean(self.log_alpha_e.exp() * (-lp - cfg.target_entropy_e), m_e)
+            if has_te:
+                temp_loss_e = _masked_mean(self.log_alpha_e.exp() * (-lp - cfg.target_entropy_e), mt_e)
                 self.opt_temp_e.zero_grad(set_to_none=True)
                 temp_loss_e.backward()
                 self.opt_temp_e.step()

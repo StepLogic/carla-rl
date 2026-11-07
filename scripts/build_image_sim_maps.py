@@ -36,6 +36,7 @@ import torch
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(os.path.dirname(HERE), "src"))
+sys.path.insert(0, os.path.dirname(HERE))                   # torch_rl lives at the repo root
 sys.path.insert(0, HERE)
 from vae_nav import image_map as im  # noqa: E402
 from vae_nav import online_maps  # noqa: E402

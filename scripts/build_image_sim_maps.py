@@ -182,6 +182,16 @@ def main():
                     edges[e] = min(edges.get(e, np.inf), max(since, 1e-3))
             if k != last:
                 last, since = k, 0.0
+        # DRIVE EDGES as well: the trace's own node-to-node visits (image_map.build_graph,
+        # the pose rule of every earlier map, with the opposite-lane guard). Job 464472:
+        # with transition edges alone each rejected label jump cut the one closed tour
+        # loop and the graph fell to 65-98% connected; the union keeps the loop whole
+        # while the image still picks the nodes and adds the links it sees.
+        sub = {"pos": pos, "yaw": yaw, "seg": drv, "jumped": set()}
+        gd = im.build_graph(sub, nodes, max_turn_deg=90.0)
+        n_img = len(edges)
+        for e, w in gd.edges.items():
+            edges[e] = min(edges.get(e, np.inf), w)
         gnodes = [{"pos": (float(pos[s][0]), float(pos[s][1])), "yaw": float(yaw[s]),
                    "idx": int(S[s])} for s in nodes]
         meta = {"placement": name, "town": a.town, "trace": a.trace, "image_rules": True,
@@ -189,7 +199,8 @@ def main():
                 "dedupe": a.dedupe, "label_floor": a.label_floor, "label_radius_m": a.label_radius_m,
                 "key_nodes": len(key), "image_gap_nodes": img_gap, "metric_gap_nodes": met_gap,
                 "gap_m": a.gap_m, "edges_rejected_turn": rej_turn, "edges_rejected_length": rej_len,
-                "max_edge_m": a.max_edge_m, "cand_m": a.cand_m}
+                "max_edge_m": a.max_edge_m, "cand_m": a.cand_m,
+                "edges_image_transition": n_img, "edges_drive": len(gd.edges)}
         g = im.Graph(gnodes, {k: float(v) for k, v in edges.items()}, meta)
         d = os.path.join(a.out, name); os.makedirs(d, exist_ok=True)
         g.save(os.path.join(d, f"{a.town}.json"))

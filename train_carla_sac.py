@@ -77,6 +77,19 @@ REPLAY_DEVICE = os.environ.get("REPLAY_DEVICE", "cuda")
 # crossing on open road, off-road, or a collision -- the same crossing rule the
 # training reward fines, so "crossing" means the same thing in both.
 EVAL_FROM = os.environ.get("EVAL_FROM", "")
+
+
+# EVAL_POLICY (user 2026-11-07: train ViNT on c0's expert data, evaluate it like
+# c0). "sac" = the learner at EVAL_FROM, as always. "vint" = EVAL_FROM is a ViNT
+# checkpoint dir (model.pth + vint.json) driven by torch_rl.vint_driver: run_eval's
+# episodes, faults and scoring are unchanged, only the action source differs.
+def validate_eval_policy(name):
+    if name not in ("sac", "vint"):
+        raise ValueError(f"EVAL_POLICY={name!r}: use 'sac' or 'vint'")
+    return name
+
+
+EVAL_POLICY = validate_eval_policy(os.environ.get("EVAL_POLICY", "sac"))
 # INIT_FROM (user 2026-11-01, "resume v30 and train for longer"): start TRAINING
 # from a checkpoint -- every module and target, both temperatures, all four
 # optimisers and the update counter. The replay buffer is NOT in a checkpoint,
@@ -446,6 +459,14 @@ def _speed_kmh(info):
     0 when absent -- at a reset the car stands still, which is also what the
     recorded episodes pair with their first frame."""
     return float(info.get("speed_kmh", 0.0) or 0.0)
+
+
+def pixel_frames(info, pxr):
+    """(current, goal) frames exactly as run_record stored them for training --
+    pxr.to_frame(..., MONO_IMG) as uint8 -- for a policy that reads pixels
+    (EVAL_POLICY=vint; ViNT learned from those recorded frames)."""
+    return (pxr.to_frame(info["debit_cur"], pxr.MONO_IMG).astype(np.uint8),
+            pxr.to_frame(info["debit_goal"], pxr.MONO_IMG).astype(np.uint8))
 
 
 def _fault(info):
@@ -1665,12 +1686,16 @@ def run_eval(env, agent, pxr, server, out_root):
         chain_goals = 0
         while True:
             while end is None:
-                row = pxr.mono_row(info["debit_cur"], _net_mode(obs["mode"]), obs["binoc"],
-                                   speed_kmh=_speed_kmh(info))
-                action, hidden = agent.act(row, hidden, goal=goal_blk,
-                                           deterministic=EVAL_NOISE_SCALE <= 0,
-                                           noise_scale=EVAL_NOISE_SCALE)
-                a_env = to_env(np.asarray(action, np.float32), box)
+                if getattr(agent, "drives_from_pixels", False):
+                    # EVAL_POLICY=vint: frames in, env action out (vint_driver).
+                    a_env = agent.act_env(*pixel_frames(info, pxr), _speed_kmh(info))
+                else:
+                    row = pxr.mono_row(info["debit_cur"], _net_mode(obs["mode"]), obs["binoc"],
+                                       speed_kmh=_speed_kmh(info))
+                    action, hidden = agent.act(row, hidden, goal=goal_blk,
+                                               deterministic=EVAL_NOISE_SCALE <= 0,
+                                               noise_scale=EVAL_NOISE_SCALE)
+                    a_env = to_env(np.asarray(action, np.float32), box)
                 vid.add(info["debit_cur"], info["debit_goal"], t, mode, 0.0, a_env, ret)
                 obs, r, term, trunc, info = env.step(a_env)
                 ret += float(r)
@@ -1754,6 +1779,9 @@ def run_eval(env, agent, pxr, server, out_root):
                                                 "subgoal_m_at_end": (None if nav.subgoal_m(pos) is None
                                                                      else round(nav.subgoal_m(pos), 2))}),
                      "end_xy": [round(float(v), 2) for v in np.asarray(pos, np.float64)[:2]],
+                     # ViNT's own goal-distance estimate at the end (EVAL_POLICY=vint)
+                     **({"vint_dist_end_m": round(float(agent.last.get("dist_m", float("nan"))), 2)}
+                        if getattr(agent, "drives_from_pixels", False) else {}),
                      "end_in_junction": bool(info.get("in_junction", False)),
                      **(map_row if nav is None and map_row is not None else {}),
                      **(chain_summary(chain_goals, info, end,
@@ -2068,6 +2096,25 @@ def main():
     # first ("shapes (2,) (3,)") and the smoke run the second ("the expanded
     # size of the tensor (2) must match the existing size (3)").
     ACT_DIM = int(env.action_space.shape[0])
+    if EVAL_POLICY == "vint":
+        if not EVAL_FROM:
+            raise ValueError("EVAL_POLICY=vint needs EVAL_FROM: a ViNT checkpoint dir "
+                             "(model.pth + vint.json)")
+        if EVAL_MAP_DIR or EVAL_TRACE or EVAL_SGM_TRACE or EXPERT_RECORD or EXPERT_TRACE:
+            raise ValueError("EVAL_POLICY=vint drives plain goal evals only: no map, "
+                             "trace or recording")
+        if ACT_DIM != 2:
+            raise ValueError(f"EVAL_POLICY=vint drives (steer, throttle), not a {ACT_DIM}-d action")
+        from torch_rl.vint_driver import ViNTDriver, load_vint_policy
+        policy, meta = load_vint_policy(EVAL_FROM, device=DEVICE)
+        agent = ViNTDriver(policy, env.action_space.low, env.action_space.high,
+                           context_size=meta["context_size"], stride=meta["stride"],
+                           cruise_kmh=EXPERT_TARGET_KMH)
+        print(f"  POLICY: ViNT {EVAL_FROM} | context {meta['context_size']} frames x stride "
+              f"{meta['stride']}, {meta['metric_step_m']:g} m/frame | the expert's PID "
+              f"controller at {EXPERT_TARGET_KMH:g} km/h | action box "
+              f"{env.action_space.low.tolist()}..{env.action_space.high.tolist()}", flush=True)
+        return run_eval(env, agent, pxr, server, OUT)
     agent = build_agent(binoc_dim, ACT_DIM, critic_layer_norm=checkpoint_critic_layer_norm(EVAL_FROM) if EVAL_FROM else None)
     require_critic_layernorm(agent.cfg.critic_layer_norm,
                              training=not (EVAL_FROM or EXPERT_RECORD))

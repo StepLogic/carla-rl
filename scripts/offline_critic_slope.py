@@ -77,6 +77,15 @@ def build_agent(config_dir, init_dir, device, seed, overrides=None):
         raise SystemExit(f"--set {sorted(unknown)}: not fields of {config_dir}/config.json")
     d.update(overrides or {})
     d.update(device=device, compile=False)
+    if pxr.PRIV_OBS:
+        # PRIVILEGED CRITIC (2026-11-07): the rows carry the goal distance for the
+        # critic alone; the views come from the layout, as build_agent sets them.
+        # c0's actor and GRU still load: they read the same columns in the same
+        # order, the two new ones skipped.
+        S = pxr.mono_state_dim(pxr.BINOC_DIM)
+        d.update(state_dim=S, core_state_cols=list(pxr.mono_core_state_cols(pxr.BINOC_DIM)),
+                 goal_cols=list(range(S)),
+                 actor_state_cols=list(pxr.mono_actor_state_cols(pxr.BINOC_DIM)))
     cfg = GatedRecurrentSACConfig(**d)
     rows_state = pxr.mono_state_dim(pxr.BINOC_DIM)
     if cfg.state_dim != rows_state:
@@ -117,7 +126,8 @@ def slope(agent, probe_paths, device, n_batches=4, chunk_b=16, length=40):
     K = int(cfg.burn_in)
     gain = {(d, dl): [] for d in (0, 1) for dl in DELTAS}
     best, modes, agree, per_critic = {0: [], 1: []}, [], {0: [], 1: []}, {0: [], 1: []}
-    q0s, pi_gap = [], []
+    q0s, pi_gap, known = [], [], []
+    kcol = pxr.mono_priv_cols()[1] if pxr.PRIV_OBS else None
     for _ in range(n_batches):
         ch = lbuf.sample_chunks(chunk_b, length + K, K)
         obs, keep, valid, actions = (ch[k].to(device=device, dtype=torch.float32)
@@ -138,6 +148,8 @@ def slope(agent, probe_paths, device, n_batches=4, chunk_b=16, length=40):
         q0 = q0k.mean(0)
         q0s.append(q0[v].cpu().numpy())
         modes.append(st[:, 0][v].cpu().numpy())
+        if kcol is not None:
+            known.append(st[:, kcol][v].cpu().numpy())
         for d in (0, 1):
             per = []
             for dl in DELTAS:
@@ -172,6 +184,13 @@ def slope(agent, probe_paths, device, n_batches=4, chunk_b=16, length=40):
             "per_critic_gain_at_-0.20": np.mean(np.stack(per_critic[d]), 0).tolist(),
             "critics_agree_on_sign_at_-0.20": float(np.concatenate(agree[d]).mean()),
         }
+        if known:
+            k = np.concatenate(known) > 0.5
+            for tag, m in (("known_distance", k), ("unknown_distance", ~k)):
+                out[name][f"mean_gain_{tag}"] = (
+                    {f"{dl:+.2f}": float(g[dl][m].mean()) for dl in DELTAS} if m.any() else None)
+    if known:
+        out["known_distance_states"] = int((np.concatenate(known) > 0.5).sum())
     return out
 
 
@@ -226,6 +245,11 @@ def main():
         print(f"[slope] {name:8s} best offset not 0 in {r['best_offset_not_zero']:.0%} "
               f"(mean {r['mean_best_offset']:+.3f}); critics agree on the sign at -0.2 in "
               f"{r['critics_agree_on_sign_at_-0.20']:.0%}")
+        for tag in ("known_distance", "unknown_distance"):
+            gk = r.get(f"mean_gain_{tag}")
+            if gk:
+                print(f"[slope] {name:8s} {tag:16s} "
+                      + "  ".join(f"{k}:{v:+.3f}" for k, v in gk.items()))
     print(f"[slope] Q(expert) {res['q_expert_mean']:.2f}, Q(actor) - Q(expert) "
           f"{res['q_actor_minus_expert']:+.3f} over {res['states']} states "
           f"({res['goal_states']} goal mode)", flush=True)

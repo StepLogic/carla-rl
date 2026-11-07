@@ -463,6 +463,21 @@ def _speed_kmh(info):
     return float(info.get("speed_kmh", 0.0) or 0.0)
 
 
+def _priv_m(obs, info):
+    """PRIV_OBS (privileged critic, user 2026-11-07): the along-road metres to the
+    current goal for a GOAL-mode row -- info["route_remaining_m"], which the env
+    publishes under ROUTE_POTENTIAL=1 -- and None (the critic reads 'unknown') in
+    explore mode, without a route, or with PRIV_OBS off. Read from the TRUE mode,
+    not the one HIDE_MODE_BIT shows the network. Only the critic ever sees it."""
+    from torch_rl import pixel_rows as pxr
+    if not pxr.PRIV_OBS:
+        return None
+    if float(np.asarray(obs["mode"], np.float32).reshape(-1)[0]) < 0.5:
+        return None
+    r = info.get("route_remaining_m")
+    return None if r is None else float(r)
+
+
 def _fault(info):
     """The eval fault rule: collision, off-road, or a lane crossing as the
     training reward reads one -- solid lines, curbs and grass anywhere, broken
@@ -1938,6 +1953,10 @@ def build_agent(binoc_dim, act_dim, critic_layer_norm=None):
         # actor chose them with -- and the mode bit, which one_critic
         # requires, is column 0 of it.
         goal_cols=tuple(range(state_dim)), explore_cols=(),
+        # PRIV_OBS (privileged critic, user 2026-11-07): the actor -- and, through
+        # core_state_cols, the GRU -- skip the critic-only goal-distance columns.
+        # None without PRIV_OBS: the actor reads the whole block, as before.
+        actor_state_cols=pxr.mono_actor_state_cols(binoc_dim),
         hidden=env_int("HIDDEN", 512),
         visual_dim=env_int("VISUAL_DIM", 512), mlp=(256, 256), burn_in=BURN_IN,
         device=DEVICE, compile=os.environ.get("TORCH_COMPILE", "0") == "1",
@@ -2247,7 +2266,7 @@ def main():
                 "info['binoc_encoded'] is False: the env wrapper has no DEBiT "
                 "encoder, so the binoc column would be zeros.")
         return pxr.mono_row(i["debit_cur"], _net_mode(o["mode"]), o["binoc"],
-                            speed_kmh=_speed_kmh(i))
+                            speed_kmh=_speed_kmh(i), priv_m=_priv_m(o, i))
 
     if IL_ALPHA0 > 0:
         print(f"  TEMPERATURE (IL_ALPHA0): {agent.alpha_g:g} from the checkpoint -> "

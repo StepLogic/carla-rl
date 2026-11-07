@@ -186,6 +186,15 @@ class ImageGoalHER:
             # goal, and is kept.
             B = b_cur.shape[1]
             row[-B:], nrow[-B:] = b_cur[k], b_nxt[k]
+            # PRIV_OBS (privileged critic): the critic's distance column becomes
+            # the path metres to the HINDSIGHT goal -- state t starts step t at
+            # cum[t-1], state t+1 at cum[t]; the goal is the state after step g.
+            priv = self.pxr.mono_priv_cols() if getattr(self.pxr, "PRIV_OBS", False) else ()
+            if priv:
+                d_row = cum[g] - (cum[t - 1] if t > 0 else 0.0)
+                d_nxt = cum[g] - cum[t]
+                row[P + priv[0]:P + priv[-1] + 1] = self.pxr.priv_values(d_row)
+                nrow[P + priv[0]:P + priv[-1] + 1] = self.pxr.priv_values(d_nxt)
             last = t == j
             if last:
                 # STOP_ACTION: the leg's last row is relabelled as an arrival,

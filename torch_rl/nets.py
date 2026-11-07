@@ -44,8 +44,18 @@ def _mlp(in_dim: int, hidden: Sequence[int], out_dim: int) -> nn.Sequential:
 
 class Actor(nn.Module):
     def __init__(self, state_dim: int, action_dim: int, hidden: Sequence[int] = (256, 256),
-                 log_std_bounds: Tuple[float, float] = (LOG_STD_MIN, LOG_STD_MAX)) -> None:
+                 log_std_bounds: Tuple[float, float] = (LOG_STD_MIN, LOG_STD_MAX),
+                 in_cols: Optional[Sequence[int]] = None) -> None:
+        """`in_cols` (privileged critic, 2026-11-07): the input columns the actor
+        reads, taken from whatever wider vector the caller hands it; `state_dim`
+        is then their count. A non-persistent buffer, so the state dict -- and
+        every checkpoint -- is the same either way. None = read it all."""
         super().__init__()
+        if in_cols is None:
+            self.in_cols_t = None
+        else:
+            self.register_buffer("in_cols_t", torch.as_tensor(list(in_cols), dtype=torch.long),
+                                 persistent=False)
         self.action_dim = int(action_dim)
         lo = torch.as_tensor(log_std_bounds[0], dtype=torch.float32)
         hi = torch.as_tensor(log_std_bounds[1], dtype=torch.float32)
@@ -62,6 +72,8 @@ class Actor(nn.Module):
         self.trunk = _mlp(state_dim, hidden, 2 * self.action_dim)
 
     def forward(self, s: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        if self.in_cols_t is not None:
+            s = s.index_select(-1, self.in_cols_t)
         mean, log_std = self.trunk(s).chunk(2, dim=-1)
         if self.per_dim:
             return mean, torch.minimum(torch.maximum(log_std, self.lo_t.to(log_std.dtype)),

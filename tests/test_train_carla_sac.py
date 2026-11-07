@@ -35,8 +35,11 @@ def test_the_state_block_is_the_MODE_BIT_AND_NOTHING_ELSE():
     full left lock for 800k steps."""
     s = src()
     # The mode goes through _net_mode (HIDE_MODE_BIT, v34): still the mode bit
-    # and nothing else, now optionally held at 1 for the network.
-    assert 'pxr.mono_row(i["debit_cur"], _net_mode(o["mode"]), o["binoc"],\n                            speed_kmh=_speed_kmh(i))' in s
+    # and nothing else, now optionally held at 1 for the network. priv_m
+    # (PRIV_OBS, 2026-11-07) fills CRITIC-ONLY columns the actor and the GRU never
+    # read (tests/test_priv_critic.py, tests/test_priv_obs.py).
+    assert ('pxr.mono_row(i["debit_cur"], _net_mode(o["mode"]), o["binoc"],\n'
+            '                            speed_kmh=_speed_kmh(i), priv_m=_priv_m(o, i))') in s
     assert 'o["vector"]' not in s and 'o["state"]' not in s
     assert "mode_index=0" in s
 

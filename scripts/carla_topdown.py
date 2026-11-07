@@ -42,7 +42,7 @@ def main():
     print(f"[TopDown] CARLA ready in {srv.wait_ready():.0f}s", flush=True)
     try:
         client = carla.Client("localhost", a.port)
-        client.set_timeout(120.0)
+        client.set_timeout(300.0)
         world = client.load_world(a.town)
         s = world.get_settings(); s.synchronous_mode = True; s.fixed_delta_seconds = 0.05
         world.apply_settings(s)

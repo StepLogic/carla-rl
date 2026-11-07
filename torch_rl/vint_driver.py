@@ -61,6 +61,23 @@ def signed_angle(target_xy):
     return math.atan2(-y, x)
 
 
+def oracle_aim_points(lane_priv, spacing=1.1346, n=5):
+    """PRIVILEGED diagnostic (VINT_ORACLE_AIM=1; development set only, never a
+    result): the true lane-centre aim points j * spacing ahead along a straight
+    lane, in ViNT's frame (x forward, y left), from the env's lane state
+    (vae_nav.lane_priv: [0] offset LEFT positive, [2]/[3] sin/cos of hero yaw -
+    lane yaw in CARLA's clockwise yaw, [12] 1.0 when a lane was found). Driving the
+    controller on these isolates it from ViNT's predictions. None without a lane."""
+    lp = np.asarray(lane_priv, np.float64).reshape(-1)
+    if lp.shape[0] < 13 or lp[12] < 0.5:
+        return None
+    off = float(lp[0])
+    h_left = -math.atan2(float(lp[2]), float(lp[3]))   # car vs lane, counter-clockwise +
+    c, s = math.cos(h_left), math.sin(h_left)
+    d = spacing * np.arange(1, n + 1, dtype=np.float64)
+    return np.stack([c * d - s * off, -s * d - c * off], 1)
+
+
 def approach_kmh_from_time(t_s, cruise_kmh, final_kmh=None, slow_from_m=None, final_at_m=None):
     """BasicAgentExpert's approach profile, indexed by TIME to the goal.
 

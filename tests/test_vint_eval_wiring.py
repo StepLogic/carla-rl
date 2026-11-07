@@ -114,3 +114,15 @@ def test_vint_may_run_map_evals():
 def test_the_topomap_row_gets_the_end_position_diagnostic():
     body = SRC[SRC.index("\ndef run_eval("):SRC.index("\ndef coverage_perturbation(")]
     assert 'topo.diagnostics(start_poses["start_xy"], gpos, end_xy=pos)' in body
+
+
+def test_oracle_aim_is_an_opt_in_privileged_diagnostic_of_the_mapless_branch():
+    """VINT_ORACLE_AIM=1: the controller steers at the true lane-centre aim points
+    (privileged; development diagnostics only) instead of ViNT's waypoints; ViNT's
+    distance still sets the speed. It refuses to run without the env's lane state."""
+    import train_carla_sac as m
+    assert m.VINT_ORACLE_AIM == (os.environ.get("VINT_ORACLE_AIM", "0") == "1")
+    body = SRC[SRC.index("\ndef run_eval("):SRC.index("\ndef coverage_perturbation(")]
+    assert "if VINT_ORACLE_AIM:" in body
+    assert 'oracle_aim_points(info["lane_priv"])' in body
+    assert "VINT_ORACLE_AIM=1 needs the env's lane state" in body

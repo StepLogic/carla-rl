@@ -94,6 +94,13 @@ EVAL_POLICY = validate_eval_policy(os.environ.get("EVAL_POLICY", "sac"))
 # target, steer, throttle, the speed target from the predicted time-to-goal).
 VINT_DEBUG = os.environ.get("VINT_DEBUG", "0") == "1"
 VINT_DEBUG_EVERY = env_int("VINT_DEBUG_EVERY", 1)
+# VINT_ORACLE_AIM=1 (PRIVILEGED diagnostic, development set only, never a result;
+# 2026-11-07 "can we fix it?"): the mapless ViNT controller steers at the true
+# lane-centre aim points (torch_rl.vint_driver.oracle_aim_points, from the env's
+# lane state -- needs lane geometry on, e.g. slurm/lanedbg_easy.env) instead of
+# ViNT's waypoints; ViNT's distance still sets the speed. A drift that remains is
+# the controller's, not ViNT's.
+VINT_ORACLE_AIM = os.environ.get("VINT_ORACLE_AIM", "0") == "1"
 # INIT_FROM (user 2026-11-01, "resume v30 and train for longer"): start TRAINING
 # from a checkpoint -- every module and target, both temperatures, all four
 # optimisers and the update counter. The replay buffer is NOT in a checkpoint,
@@ -1838,6 +1845,19 @@ def run_eval(env, agent, pxr, server, out_root):
                     if topo is not None:
                         # EVAL_VINT_TOPOMAP: ViNT's own map and navigate.py rule.
                         a_env = topo.act(agent, *pixel_frames(info, pxr), _speed_kmh(info))
+                    elif VINT_ORACLE_AIM:
+                        if "lane_priv" not in info:
+                            raise SystemExit("VINT_ORACLE_AIM=1 needs the env's lane state "
+                                             "(info['lane_priv']): turn lane geometry on, "
+                                             "e.g. REWARD_OVERLAY=slurm/lanedbg_easy.env")
+                        from torch_rl.vint_driver import oracle_aim_points
+                        agent.final_goal = nav is None or bool(nav.final)
+                        cur_f, goal_f = pixel_frames(info, pxr)
+                        agent.push(cur_f)
+                        d_or, w_or = agent.policy(agent.context(), np.asarray(goal_f))
+                        aim = oracle_aim_points(info["lane_priv"])
+                        a_env = agent.control(d_or, w_or if aim is None else aim,
+                                              _speed_kmh(info))
                     else:
                         agent.final_goal = nav is None or bool(nav.final)
                         a_env = agent.act_env(*pixel_frames(info, pxr), _speed_kmh(info))

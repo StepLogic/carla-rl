@@ -1,5 +1,27 @@
 # Fixing ViNT's lane keeping: lane-centre labels, start padding, DAgger (2026-11-07)
 
+## Held-out result (the one reported)
+The final ViNT (DAgger round-3 epoch 1, chosen on Town05/Town01 validation) was run ONCE on the fresh 600 episodes, the same episodes c0 was scored on.
+- Run by the mapping session: its commit 104062e, raw files in `results/map_fresh_2026-11-07/vint_final` (its commit adc9a33).
+- The user asked for this checkpoint only, with no per-round or development-set rows in the paper.
+
+Pooled over Town02 + Town03, SR / SPL at 1 m:
+
+| Fresh set | easy | medium | hard |
+|---|---|---|---|
+| **final ViNT, mapless** | **.51 / .49** | **.40 / .38** | .14 / .13 |
+| final ViNT, uniform map + image localisation | .33 / .31 | .25 / .24 | .14 / .14 |
+| **final ViNT, ViNT topomap** | .46 / .44 | .35 / .35 | **.26 / .26** |
+| ViNT v1 (its one-shot), mapless | .32 | .11 | .01 |
+| ViNT v1 (its one-shot), ViNT topomap | .29 | .14 | .03 |
+| c0 mapless | .70 | .63 | .42 |
+
+- Town02 alone: mapless .75 / .60 / .26, topomap .74 / .59 / .49, close to c0.
+- Town03 is weak, as on the development set.
+- c0's map with its navigator (subgoal switching, no approach between subgoals) suits ViNT worse than its own topomap. On hard episodes the topomap is ViNT's best arm.
+
+Everything below is the development record that led to this checkpoint.
+
 Follows `docs/vint_topomap_bench_2026-11-07.md`. There, ViNT scored 0.145 on the fresh map benchmark against c0's 0.582, ending mostly in line crossings. The user asked "can we fix it?", then "use DAGGER".
 
 Nothing here touches the fresh benchmark set. Development and validation sets only.

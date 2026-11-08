@@ -199,6 +199,32 @@ def il_bc_hook(agent, opt, expert_buf, n_chunks, length, w0, decay_updates,
     return hook
 
 
+def actor_freeze_hook(agent, updates, log=None):
+    """The online freeze WITHOUT a preload (user 2026-11-08, "start from c0 and freeze
+    encoder" / "also freeze GRU"): a warm start (INIT_FROM) whose replay starts empty
+    keeps the loaded actor still -- agent.set_warmup(True): no actor or temperature
+    step -- for its first `updates` online updates, so the fresh critic learns the
+    clone's own driving first; the `updates`-th call releases it, and every later
+    update trains the actor. A trunk held by set_trunk_frozen stays frozen.
+    Same semantics as il_bc_hook's freeze_updates, which needs a preload."""
+    count = [0]
+    n = int(updates)
+    if n > 0:
+        agent.set_warmup(True)
+
+    def hook():
+        k = count[0]
+        count[0] += 1
+        if k == n - 1:
+            agent.set_warmup(False)              # the next update trains the actor
+            if log is not None:
+                log(f"[WARM] actor freeze over after {n} critic-only updates: the "
+                    f"actor trains from the next update")
+        return None
+
+    return hook
+
+
 def il_finetune_prepare(agent, buf, root, towns, *, warmup_updates, chunk_b, chunk_t,
                         w0, decay_updates, bc_chunks, bc_len, aug=None, log=print,
                         online_freeze_updates=0, expert_replay=None):

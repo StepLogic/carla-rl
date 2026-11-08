@@ -2391,6 +2391,18 @@ def main():
         print("  TRUNK FROZEN (IL_FREEZE_TRUNK=1): encoder, action embedding and GRU "
               "take no gradient; actor head, critic heads and temperature train", flush=True)
     il_hook = None
+    if INIT_FROM and not IL_PRELOAD_ROOT and IL_ONLINE_FREEZE_UPDATES > 0:
+        # A warm start with an EMPTY replay (user 2026-11-08, "start from c0 and
+        # freeze encoder"): the loaded actor waits IL_ONLINE_FREEZE_UPDATES
+        # critic-only updates on its own driving before it moves (the warm-start
+        # rule; the preload path below does the same inside il_bc_hook).
+        from torch_rl.bc_trainer import actor_freeze_hook
+        il_hook = actor_freeze_hook(agent, IL_ONLINE_FREEZE_UPDATES,
+                                    log=lambda m: print(m, flush=True))
+        print(f"  ACTOR FREEZE (IL_ONLINE_FREEZE_UPDATES={IL_ONLINE_FREEZE_UPDATES}): the "
+              f"first {IL_ONLINE_FREEZE_UPDATES} updates train the critic only, on the "
+              f"loaded policy's own driving (updates start after {LEARNING_STARTS} steps)",
+              flush=True)
     if IL_PRELOAD_ROOT:
         from torch_rl.bc_trainer import il_finetune_prepare
         il_aug = None

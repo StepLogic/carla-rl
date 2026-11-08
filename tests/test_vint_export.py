@@ -23,6 +23,29 @@ def test_vint_meta_comes_from_the_training_config_and_the_data_summary():
     assert meta["mha_num_attention_layers"] == 4 and meta["obs_encoder"] == "efficientnet-b0"
 
 
+def test_a_dagger_config_with_two_datasets_exports_their_shared_stride():
+    """vint_carla_dagger1.yaml trains on carla_expert + carla_dagger1: both use
+    waypoint spacing 3 and the same normaliser, so the export records both names."""
+    import yaml
+    from export_vint_ckpt import vint_meta
+    cfg = yaml.safe_load(open(os.path.join(ROOT, "scripts", "vint", "vint_carla_dagger1.yaml")))
+    meta = vint_meta(cfg, {"metric_waypoint_spacing_m": 0.3782})
+    assert meta["stride"] == 3 and meta["dataset"] == "carla_expert+carla_dagger1"
+
+
+def test_datasets_with_different_strides_are_refused():
+    import pytest
+    from export_vint_ckpt import vint_meta
+    cfg = yaml_cfg = {"datasets": {"a": {"waypoint_spacing": 3}, "b": {"waypoint_spacing": 1}},
+                      "image_size": [85, 64], **{k: 0 for k in (
+                          "context_size", "len_traj_pred", "learn_angle", "obs_encoder",
+                          "obs_encoding_size", "late_fusion", "mha_num_attention_heads",
+                          "mha_num_attention_layers", "mha_ff_dim_factor")}}
+    del yaml_cfg
+    with pytest.raises(SystemExit):
+        vint_meta(cfg, {"metric_waypoint_spacing_m": 0.3782})
+
+
 def test_the_export_writes_model_and_meta(tmp_path):
     ck = tmp_path / "7.pth"
     ck.write_bytes(b"weights")

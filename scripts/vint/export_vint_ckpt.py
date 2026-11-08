@@ -23,9 +23,16 @@ ARCH_KEYS = ("context_size", "len_traj_pred", "learn_angle", "obs_encoder",
 
 
 def vint_meta(cfg, summary):
-    (name, dc), = cfg["datasets"].items()
+    """The eval's view of the training run. Several datasets (a DAgger round:
+    carla_expert + carla_dagger1) must share one waypoint stride -- the label
+    scale the driver un-normalises with; their names are joined with '+'."""
+    strides = {int(dc["waypoint_spacing"]) for dc in cfg["datasets"].values()}
+    if len(strides) != 1:
+        raise SystemExit(f"datasets with different waypoint strides {sorted(strides)}: the "
+                         "driver un-normalises with one")
+    name = "+".join(cfg["datasets"])
     meta = {k: cfg[k] for k in ARCH_KEYS}
-    meta.update({"image_size": list(cfg["image_size"]), "stride": int(dc["waypoint_spacing"]),
+    meta.update({"image_size": list(cfg["image_size"]), "stride": strides.pop(),
                  "metric_step_m": float(summary["metric_waypoint_spacing_m"]),
                  # the shards hold one frame per env step, 0.1 s (CARLA's fixed delta)
                  "frame_dt_s": 0.1,

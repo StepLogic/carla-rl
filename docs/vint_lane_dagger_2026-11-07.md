@@ -4,6 +4,29 @@ Follows `docs/vint_topomap_bench_2026-11-07.md`. There, ViNT scored 0.145 on the
 
 Nothing here touches the fresh benchmark set. Development and validation sets only.
 
+## Data and selection (verified on disk 2026-11-08)
+
+**Training data is only from the training towns.** Every training dataset comes from Town01, Town04, Town05 and Town10HD only:
+
+| Dataset | Content |
+|---|---|
+| expert `il_data` | 480 episodes per town |
+| DAgger rounds 1 / 2 / 3 | 300 / 300 / 150 episodes per town |
+| `carla_expert_lc.tar`, `carla_dagger{1,2,3}.tar` | zero Town02/Town03 frames |
+
+The recorder refuses the evaluation towns in code (`torch_rl/expert_record.HELD_OUT_TOWNS = ("Town02", "Town03")`).
+
+**Selection uses training-town validation only.** Every epoch choice uses c0's validation: Town05 + Town01, seeds 50000+.
+
+**Where the evaluation towns are used.** Town02/Town03 serve only to evaluate:
+- The development split (`bench_long_episodes.json`), used for lane checks and the development map set.
+- The map under test, built from the evaluation town's exploration drive. It trains no weights.
+- The fresh test set: not run again since ViNT v1's one-shot.
+
+**One lapse, disclosed.** The decision that DAgger round 2 beat round 1, which started round 3, also looked at Town02 development lane checks. On validation alone, 49 vs 47/80 is within noise.
+
+**The rule from here (user 2026-11-08):** decisions rest on training-town validation only. Round 3 gets the development map set only if its best epoch reaches >= 54/80, a threshold declared before its results.
+
 ## Diagnosis
 
 ### Offline: does ViNT steer back toward the lane?

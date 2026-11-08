@@ -32,8 +32,8 @@ mkdir -p "$LOCAL"
 trap 'rm -rf "$LOCAL"' EXIT
 t0=$(date +%s)
 tar -xf "$DATA_TAR" -C "$LOCAL" || { echo "=== tar failed"; exit 1; }
-# DATA_TAR2, DATA_TAR3: more datasets next to the first (DAgger rounds, carla_dagger<N>.tar).
-for extra in "${DATA_TAR2:-}" "${DATA_TAR3:-}"; do
+# DATA_TAR2..DATA_TAR4: more datasets next to the first (DAgger rounds, carla_dagger<N>.tar).
+for extra in "${DATA_TAR2:-}" "${DATA_TAR3:-}" "${DATA_TAR4:-}"; do
   if [ -n "$extra" ]; then
     tar -xf "$extra" -C "$LOCAL" || { echo "=== tar $extra failed"; exit 1; }
   fi

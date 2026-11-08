@@ -122,6 +122,8 @@ Settings:
 | **DAgger r1 e1, ViNT topomap** | **.68** | **.59** | **.49** | .33 | .11 | .00 |
 | DAgger r2 e2 (validation pick), mapless | .73 | .43 | .10 | .32 | .16 | .04 |
 | DAgger r2 e2 (validation pick), ViNT topomap | .71 | .66 | .49 | .25 | .12 | .03 |
+| **DAgger r3 e1 = FINAL, mapless** | **.82** | **.60** | .23 | .30 | .10 | .07 |
+| **DAgger r3 e1 = FINAL, ViNT topomap** | .76 | **.63** | **.50** | .21 | .16 | .06 |
 | c0 mapless (mapping session, development set) | .71 | .52 | .44 | | | |
 | c0 image map arm (same) | .80 | .71 | .65 | | | |
 
@@ -159,6 +161,16 @@ Settings:
 Epochs 0 and 1 were each evaluated twice on the same seeds (an early job and the follow-up overlapped). Run to run, the same checkpoint differs by up to 0.075 per town, which is the noise of one 40-episode validation.
 
 **Decision:** round-3 epoch 1 clears the bar in both runs, so it is the final ViNT. It gets the development map set: topomap tag `dagger3_e1`, label `vint_dev_dg3e1`.
+
+**Its development map set** (table above; reported only, chose nothing):
+- **Town02:**
+  - Mapless .82 / .60 / .23. That beats c0 mapless on easy and medium, but not hard (c0 .44).
+  - ViNT topomap .76 / .63 / .50. That beats c0 mapless in every cell; c0's image map is .80 / .71 / .65.
+- **Town03 (held out, 3.5 m lanes):** mapless .30 / .10 / .07, topomap .21 / .16 / .06. Failures are crossings (46-61 per 100) and off-road (22-33). ViNT's Town03 gap is the open problem.
+- **Handed over:** the checkpoints went to the mapping session, which is scoring dagger3_e1 ONLY on the fresh set.
+  - Arms: mapless, uniform + image localisation, vinttopo.
+  - No oracle row, per the user.
+  - Its development table is `tab:vint_dev` (its commit 339460d).
 
 **Final candidates on training-town validation** (true / 80):
 

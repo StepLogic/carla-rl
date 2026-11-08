@@ -206,8 +206,10 @@ def main():
 
     arms = [("entropy", keys), ("uniform", list(map(int, uni))), ("random", list(map(int, rnd)))]
     if "sgm_matched" in a.placements:
-        # SGM (user 2026-11-07, "add sgm map"): v30's goal-critic read between the
-        # trace's frames (slurm/sgm_pairs_single.sh -> <out>/sgm_pairs_<Town>.npz),
+        # SGM (user 2026-11-07, "add sgm map"): the LEARNED ViNT-style temporal
+        # distance (scripts/train_vint_distance.py -> checkpoints/sgm_distance;
+        # v30's goal critic was the earlier read, cancelled) between the trace's
+        # frames (scripts/sgm_distance_pairs.py -> <out>/sgm_pairs_<Town>.npz),
         # sgm_match with no spatial gate, key count matched to entropy's. Its members
         # are TRACE indices (candidates thinned at 0.8 m); each is mapped to the
         # nearest 0.5 m candidate frame here, so every rule after this is shared.

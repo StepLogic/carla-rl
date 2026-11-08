@@ -1,5 +1,5 @@
 % Topological-map navigation in CARLA. Numbers: docs/map_benchmark_fresh_2026-11-07.md,
-% raw results: results/map_fresh_2026-11-07/. Requires \usepackage{booktabs}.
+% raw results: results/map_fresh_2026-11-07/. Requires \usepackage{booktabs} and \usepackage[table]{xcolor}.
 \subsection{Navigating with a Topological Map}
 \label{sec:map_navigation}
 
@@ -58,25 +58,25 @@ Map & Loc. & SR & SPL & SR & SPL & SR & SPL \\
 \midrule
 \multicolumn{8}{l}{\textit{Imitation policy}} \\
 None & -- & 0.70 & 0.70 & 0.63 & 0.62 & 0.42 & 0.42 \\
-Uniform & Img & 0.74 & 0.73 & 0.67 & 0.66 & 0.53 & 0.53 \\
-Entropy & Img & 0.72 & 0.72 & 0.68 & 0.68 & 0.54 & 0.54 \\
+\rowcolor{gray!15}Uniform & Img & 0.74 & 0.73 & 0.67 & 0.66 & 0.53 & 0.53 \\
+\rowcolor{gray!15}Entropy & Img & 0.72 & 0.72 & 0.68 & 0.68 & 0.54 & 0.54 \\
 SGM & Img & 0.69 & 0.68 & 0.72 & 0.72 & 0.54 & 0.53 \\
-Uniform & Pose & 0.74 & 0.73 & 0.73 & 0.72 & 0.54 & 0.53 \\
-Entropy & Pose & 0.72 & 0.71 & 0.72 & 0.72 & 0.48 & 0.48 \\
+\rowcolor{gray!15}Uniform & Pose & 0.74 & 0.73 & 0.73 & 0.72 & 0.54 & 0.53 \\
+\rowcolor{gray!15}Entropy & Pose & 0.72 & 0.71 & 0.72 & 0.72 & 0.48 & 0.48 \\
 SGM & Pose & 0.70 & 0.69 & 0.73 & 0.73 & 0.56 & 0.56 \\
 \midrule
 \multicolumn{8}{l}{\textit{RL policy}} \\
 None & -- & -- & -- & -- & -- & -- & -- \\
-Uniform & Img & -- & -- & -- & -- & -- & -- \\
-Entropy & Img & -- & -- & -- & -- & -- & -- \\
+\rowcolor{gray!15}Uniform & Img & -- & -- & -- & -- & -- & -- \\
+\rowcolor{gray!15}Entropy & Img & -- & -- & -- & -- & -- & -- \\
 SGM & Img & -- & -- & -- & -- & -- & -- \\
-Uniform & Pose & -- & -- & -- & -- & -- & -- \\
-Entropy & Pose & -- & -- & -- & -- & -- & -- \\
+\rowcolor{gray!15}Uniform & Pose & -- & -- & -- & -- & -- & -- \\
+\rowcolor{gray!15}Entropy & Pose & -- & -- & -- & -- & -- & -- \\
 SGM & Pose & -- & -- & -- & -- & -- & -- \\
 \midrule
 \multicolumn{8}{l}{\textit{ViNT}~\cite{shah2023vint}} \\
 None & -- & 0.51 & 0.49 & 0.40 & 0.38 & 0.14 & 0.13 \\
-Uniform & Img & 0.33 & 0.31 & 0.25 & 0.24 & 0.14 & 0.14 \\
+\rowcolor{gray!15}Uniform & Img & 0.33 & 0.31 & 0.25 & 0.24 & 0.14 & 0.14 \\
 ViNT map & ViNT & 0.46 & 0.44 & 0.35 & 0.35 & 0.26 & 0.26 \\
 \bottomrule
 \end{tabular}

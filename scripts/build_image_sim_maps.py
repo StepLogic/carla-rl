@@ -83,6 +83,11 @@ def main():
                          "experiment (user 2026-11-07: 'use a fixed number for all CARLA "
                          "experiments ... for uniform'); 0 = match entropy's key count instead "
                          "(the frozen run's maps)")
+    ap.add_argument("--image-gaps", action=argparse.BooleanOptionalAction, default=True,
+                    help="add image-coverage gap nodes (default); --no-image-gaps builds KEY-ONLY "
+                         "maps (user 2026-11-08: oracle localisation without gap nodes)")
+    ap.add_argument("--sgm-iters", type=int, default=30,
+                    help="bisection steps for the SGM cutoff that matches entropy's key count")
     ap.add_argument("--placements", nargs="+", default=["entropy", "uniform", "random"],
                     choices=["entropy", "uniform", "random", "sgm_matched"],
                     help="which maps to WRITE (others are computed but not saved); "
@@ -158,6 +163,8 @@ def main():
         """2a. IMAGE-COVERAGE GAP NODES: greedily add the worst-covered candidate
         until every candidate scores >= thr to some node. -> (nodes, n_gap)."""
         nodes = list(dict.fromkeys(int(x) for x in key))
+        if not a.image_gaps:
+            return nodes, 0
         cover = sims_to(nodes).max(1).values
         added = 0
         while True:
@@ -207,7 +214,7 @@ def main():
         # nearest 0.5 m candidate frame here, so every rule after this is shared.
         z = np.load(os.path.join(a.out, f"sgm_pairs_{a.town}.npz"))
         _cut, keep, _sst = im.sgm_match(z["cand"], z["pairs"], z["q"], z["xy"], z["yaw"],
-                                        count=n, gate_m=None, iters=30)
+                                        count=n, gate_m=None, iters=a.sgm_iters)
         Sa = np.asarray(S)
         j = np.clip(np.searchsorted(Sa, np.asarray(keep)), 1, len(Sa) - 1)
         lo_, hi_ = j - 1, j

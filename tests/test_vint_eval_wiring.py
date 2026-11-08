@@ -126,3 +126,27 @@ def test_oracle_aim_is_an_opt_in_privileged_diagnostic_of_the_mapless_branch():
     assert "if VINT_ORACLE_AIM:" in body
     assert 'oracle_aim_points(info["lane_priv"])' in body
     assert "VINT_ORACLE_AIM=1 needs the env's lane state" in body
+
+
+def test_vint_can_drive_dagger_recording():
+    """User 2026-11-07 "use DAGGER": EXPERT_RECORD=1 EXPERT_DRIVER=policy with
+    EVAL_POLICY=vint records ViNT driving goal episodes (EXPERT_GOAL_ONLY), each
+    frame labelled with the expert plan's aim points (EXPERT_RECORD_AIM)."""
+    main_src = SRC[SRC.index("\ndef main():"):]
+    i = main_src.index('if EVAL_POLICY == "vint":')
+    block = main_src[i:main_src.index("agent = build_agent(", i)]
+    assert "return run_record(env, agent, pxr, server, OUT)" in block
+    assert '(EXPERT_RECORD and EXPERT_DRIVER != "policy")' in block
+    start = SRC.index("\ndef run_record(")
+    rec = SRC[start:SRC.index("\ndef ", start + 10)]
+    assert 'getattr(agent, "drives_from_pixels", False)' in rec
+    assert "agent.act_env(*pixel_frames(info, pxr), _speed_kmh(info))" in rec
+    assert "aim_from_plan(expert.plan_xy()" in rec
+    assert "EXPERT_SEED0 + (2 * k if EXPERT_GOAL_ONLY else k)" in rec
+
+
+def test_goal_only_recording_needs_an_even_first_seed():
+    import train_carla_sac as m
+    assert m.EXPERT_GOAL_ONLY == (os.environ.get("EXPERT_GOAL_ONLY", "0") == "1")
+    assert m.EXPERT_RECORD_AIM == (os.environ.get("EXPERT_RECORD_AIM", "0") == "1")
+    assert "EXPERT_GOAL_ONLY=1 needs an even EXPERT_SEED0" in SRC

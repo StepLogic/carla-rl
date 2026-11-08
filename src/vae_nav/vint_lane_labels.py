@@ -106,6 +106,27 @@ def lane_centre_labels(xy, yaw, poly, spacing=1.1346, n=5, stride=3, max_gap_m=2
     return pos, yw, ok
 
 
+def aim_from_plan(plan_xy, car_xy, spacing=1.1346, n=5, max_gap_m=4.0):
+    """DAgger labels (EXPERT_RECORD_AIM=1): the lane-centre aim points j * spacing
+    (j = 1..n) ahead of the car's projection on the expert's CURRENT plan -- the
+    route it would drive from here, replanned when the car strays -- with the
+    plan's heading there. CARLA coordinates in and out; yaw in CARLA's convention
+    (atan2 in CARLA x/y, radians). -> (aims (n, 2), yaws (n,), ok); not ok without
+    a plan or farther than max_gap_m from it (the frame is then left unlabelled)."""
+    plan = np.asarray(plan_xy, np.float64).reshape(-1, 2)
+    none = (np.zeros((n, 2)), np.zeros(n), False)
+    if len(plan) < 2 or float(_cum(plan)[-1]) <= 0.0:
+        return none
+    cum = _cum(plan)
+    s, gap = project(plan, np.asarray(car_xy, np.float64)[:2], cum)
+    if gap > max_gap_m:
+        return none
+    aims, yaws = np.zeros((n, 2)), np.zeros(n)
+    for j in range(1, n + 1):
+        aims[j - 1], yaws[j - 1] = point_at(plan, s + j * spacing, cum)
+    return aims, yaws, True
+
+
 def lane_polyline(cmap, xy_carla, step=0.5, extra_m=20.0, probe_m=10.0):
     """The lane centre of the route a recorded car drove, in CARLA coordinates:
     chained carla.Waypoint.next(step) from the lane under the first position; at a

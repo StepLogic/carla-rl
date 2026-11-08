@@ -26,6 +26,10 @@ from torch_rl import pixel_rows as pxr
 
 _STEP_KEYS = ("act_exec", "act_label", "reward", "speed", "pos")
 _STR_KEYS = ("driver", "end", "town")
+# OPTIONAL, per FRAME (EXPERT_RECORD_AIM=1, ViNT DAgger 2026-11-07): the expert
+# plan's lane-centre aim points (T+1, n, 2) CARLA x/y, their CARLA yaw (T+1, n),
+# and whether the frame has a label (T+1,) -- vae_nav.vint_lane_labels.aim_from_plan.
+_AIM_KEYS = ("aim", "aim_yaw", "aim_ok")
 
 
 def _check(ep):
@@ -53,6 +57,14 @@ def _check(ep):
         raise ValueError(f"goal must be pxr.goal_block (({pxr.PIX},)), got {goal.shape}")
     if int(ep["mode"]) not in (0, 1):
         raise ValueError(f"mode must be 0 or 1, got {ep['mode']!r}")
+    if any(k in ep for k in _AIM_KEYS):
+        aim, yaw, ok = (np.asarray(ep.get(k)) for k in _AIM_KEYS)
+        n = aim.shape[1] if aim.ndim == 3 else -1
+        if (aim.shape != (T + 1, n, 2) or aim.dtype != np.float32 or yaw.shape != (T + 1, n)
+                or yaw.dtype != np.float32 or ok.shape != (T + 1,) or ok.dtype != np.bool_):
+            raise ValueError(f"aim labels must cover every frame: aim (T+1, n, 2) float32, "
+                             f"aim_yaw (T+1, n) float32, aim_ok (T+1,) bool with T+1={T + 1}; "
+                             f"got {aim.shape} {aim.dtype}, {yaw.shape}, {ok.shape} {ok.dtype}")
 
 
 def save_episode(path, ep):
@@ -63,6 +75,8 @@ def save_episode(path, ep):
                truncated=np.bool_(ep["truncated"]), sigma=np.float32(ep["sigma"]),
                seed=np.int64(ep["seed"]))
     out.update({k: np.str_(ep[k]) for k in _STR_KEYS})
+    if "aim" in ep:
+        out.update({k: np.asarray(ep[k]) for k in _AIM_KEYS})
     os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
     tmp = path + ".tmp.npz"
     np.savez_compressed(tmp, **out)

@@ -69,6 +69,28 @@ def test_a_label_on_another_branch_than_the_car_took_keeps_the_recorded_path():
     assert not ok[t] and pos[t] == pytest.approx(xy[t:t + 16:3])
 
 
+def test_aim_points_from_the_experts_plan():
+    """DAgger labels (EXPERT_RECORD_AIM=1): the lane-centre aim points j * spacing
+    ahead of the car's projection on the expert's CURRENT plan, in CARLA
+    coordinates with CARLA yaw (clockwise, radians)."""
+    from vae_nav.vint_lane_labels import aim_from_plan
+    plan = np.stack([np.arange(0, 20, 2.0), np.zeros(10)], 1)        # along +x (CARLA)
+    aims, yaws, ok = aim_from_plan(plan, car_xy=(3.0, 0.8), spacing=SP, n=5)
+    assert ok
+    assert aims == pytest.approx(np.stack([3.0 + SP * np.arange(1, 6), np.zeros(5)], 1))
+    assert yaws == pytest.approx(np.zeros(5))
+    plan_s = np.stack([np.zeros(10), np.arange(0, 20, 2.0)], 1)      # along +y = south
+    _, yaws, _ = aim_from_plan(plan_s, car_xy=(0.0, 1.0), spacing=SP, n=5)
+    assert yaws == pytest.approx(np.full(5, math.pi / 2))             # CARLA yaw 90 deg
+
+
+def test_no_aim_without_a_plan_or_far_from_it():
+    from vae_nav.vint_lane_labels import aim_from_plan
+    assert not aim_from_plan(np.zeros((1, 2)), car_xy=(0.0, 0.0))[2]
+    plan = np.stack([np.arange(0, 20, 2.0), np.zeros(10)], 1)
+    assert not aim_from_plan(plan, car_xy=(5.0, 6.0), max_gap_m=4.0)[2]
+
+
 def test_a_car_far_from_its_lane_keeps_its_recorded_path():
     xy = np.array([[5.0, 4.0], [6.0, 4.0], [7.0, 4.0], [8.0, 4.0], [9.0, 4.0], [10.0, 4.0],
                    [11.0, 4.0], [12.0, 4.0], [13.0, 4.0], [14.0, 4.0], [15.0, 4.0],

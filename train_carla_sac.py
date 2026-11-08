@@ -290,6 +290,13 @@ EXPERT_EXPLORE_MAX_M = env_float("EXPERT_EXPLORE_MAX_M", 200.0)
 EXPERT_REPLAN_M = env_float("EXPERT_REPLAN_M", 3.0)
 EXPERT_RECORD_ROOT = os.environ.get(
     "EXPERT_RECORD_ROOT", os.path.expanduser("~/carla-rl/checkpoints/il_data"))
+# ViNT DAgger (user 2026-11-07, "use DAGGER"): EXPERT_GOAL_ONLY=1 records goal
+# episodes only (seeds EXPERT_SEED0 + 2k; episode_plan makes even seeds goal
+# episodes); EXPERT_RECORD_AIM=1 stores, per FRAME, the expert plan's lane-centre
+# aim points (vint_lane_labels.aim_from_plan on BasicAgentExpert.plan_xy, after
+# any replan) -- ViNT's waypoint labels for the frames the POLICY drove.
+EXPERT_GOAL_ONLY = os.environ.get("EXPERT_GOAL_ONLY", "0") == "1"
+EXPERT_RECORD_AIM = os.environ.get("EXPERT_RECORD_AIM", "0") == "1"
 # EXPERT TRACE (user 2026-11-06, "CAN YOU CREATE MAP FROM A SINGLE TRACE?" ->
 # "I am talking about evaluations"; see run_expert_trace, torch_rl.expert_trace
 # and vae_nav.coverage_tour). EXPERT_TRACE=1 with EVAL_FROM=<the clone> drives
@@ -1432,6 +1439,11 @@ def run_record(env, agent, pxr, server, out_root):
     assert_recordable_town(town)
     if EXPERT_DRIVER not in ("expert", "policy"):
         raise ValueError(f"EXPERT_DRIVER must be expert|policy, got {EXPERT_DRIVER!r}")
+    if EXPERT_GOAL_ONLY and EXPERT_SEED0 % 2:
+        raise ValueError("EXPERT_GOAL_ONLY=1 needs an even EXPERT_SEED0 (even seeds are "
+                         "the goal episodes of episode_plan)")
+    from vae_nav.vint_lane_labels import aim_from_plan
+    pixel_policy = EXPERT_DRIVER == "policy" and getattr(agent, "drives_from_pixels", False)
     gated = env
     while not isinstance(gated, GatedReward):
         gated = gated.env
@@ -1465,7 +1477,7 @@ def run_record(env, agent, pxr, server, out_root):
     expert, hero_id = None, None
     episodes, total, kept = [], 0, 0
     for k in range(EXPERT_RECORD_EPISODES):
-        seed = EXPERT_SEED0 + k
+        seed = EXPERT_SEED0 + (2 * k if EXPERT_GOAL_ONLY else k)
         plan = episode_plan(seed)
         sigma = effective_sigma(plan["sigma"], EXPERT_RECORD_DRY)
         burst.reset()                     # a coverage burst never spans two episodes
@@ -1488,12 +1500,18 @@ def run_record(env, agent, pxr, server, out_root):
         hidden = goal_blk = None
         if EXPERT_DRIVER == "policy":
             hidden = agent.reset_hidden(1)
-            goal_blk = pxr.goal_block(info["debit_goal"])
+            if not pixel_policy:
+                goal_blk = pxr.goal_block(info["debit_goal"])
         rec = {"frames": [pxr.to_frame(info["debit_cur"], pxr.MONO_IMG).astype(np.uint8)],
                "binoc": [np.asarray(obs["binoc"], np.float16)],
                "act_exec": [], "act_label": [], "reward": [], "speed": [], "pos": []}
         goal_frame = info["debit_goal"]
         prev = np.asarray(info.get("hero_pos", (0.0, 0.0)), np.float64)[:2]
+        aims = []                         # one per FRAME (EXPERT_RECORD_AIM)
+
+        def _aim(info_):
+            here = np.asarray(info_.get("hero_pos", prev), np.float64)[:2]
+            return aim_from_plan(expert.plan_xy(), here)
         path_m, end, terminal, truncated = 0.0, None, False, False
         # Goal episodes: how close the expert got and how fast it was going there
         # (the same EpisodeTracker the eval uses) -- the M0 gate's diagnosis.
@@ -1506,6 +1524,8 @@ def run_record(env, agent, pxr, server, out_root):
         while end is None:
             if EXPERT_DRIVER == "policy":
                 expert.replan_if_off_route(EXPERT_REPLAN_M)
+            if EXPERT_RECORD_AIM:
+                aims.append(_aim(info))   # this frame's label, after any replan
             a_exp = expert.act()
             if a_exp is None:
                 end = no_label_end(mode, len(rec["act_exec"]))
@@ -1513,10 +1533,16 @@ def run_record(env, agent, pxr, server, out_root):
                 break
             a_pol = None
             if EXPERT_DRIVER == "policy":
-                row = pxr.mono_row(info["debit_cur"], _net_mode(obs["mode"]), obs["binoc"],
-                               speed_kmh=_speed_kmh(info))
-                a_act, hidden = agent.act(row, hidden, goal=goal_blk, deterministic=True)
-                a_pol = to_env(np.asarray(a_act, np.float32), box)
+                if getattr(agent, "drives_from_pixels", False):
+                    # ViNT DAgger: frames in, env action out; it approaches the
+                    # episode's (only) goal, as in the mapless eval.
+                    agent.final_goal = True
+                    a_pol = agent.act_env(*pixel_frames(info, pxr), _speed_kmh(info))
+                else:
+                    row = pxr.mono_row(info["debit_cur"], _net_mode(obs["mode"]), obs["binoc"],
+                                       speed_kmh=_speed_kmh(info))
+                    a_act, hidden = agent.act(row, hidden, goal=goal_blk, deterministic=True)
+                    a_pol = to_env(np.asarray(a_act, np.float32), box)
             a_exec, a_label = record_step(EXPERT_DRIVER, a_pol, a_exp, sigma,
                                           rng, low, high,
                                           throttle_sigma=throttle_sigma, burst=burst, bias=bias)
@@ -1543,6 +1569,10 @@ def run_record(env, agent, pxr, server, out_root):
                 terminal = True
             elif trunc:
                 end, truncated = "clock", True
+        if EXPERT_RECORD_AIM and len(aims) < len(rec["frames"]):
+            if EXPERT_DRIVER == "policy":
+                expert.replan_if_off_route(EXPERT_REPLAN_M)
+            aims.append(_aim(info))       # the last frame's label
         n = len(rec["act_exec"])
         total += n
         approach = {}
@@ -1564,7 +1594,11 @@ def run_record(env, agent, pxr, server, out_root):
                 "pos": np.asarray(rec["pos"], np.float32).reshape(-1, 2),
                 "mode": np.int8(mode), "terminal": terminal, "truncated": truncated,
                 "goal": pxr.goal_block(goal_frame), "sigma": np.float32(sigma),
-                "driver": EXPERT_DRIVER, "end": end, "town": town, "seed": np.int64(seed)})
+                "driver": EXPERT_DRIVER, "end": end, "town": town, "seed": np.int64(seed),
+                **({"aim": np.asarray([a[0] for a in aims], np.float32),
+                    "aim_yaw": np.asarray([a[1] for a in aims], np.float32),
+                    "aim_ok": np.asarray([bool(a[2]) for a in aims], np.bool_)}
+                   if EXPERT_RECORD_AIM else {})})
             kept += n
         print(f"[Record {k + 1}/{EXPERT_RECORD_EPISODES}] seed={seed} "
               f"{'goal' if mode == 1 else 'explore'} sigma={sigma:g} end={end} "
@@ -2333,10 +2367,12 @@ def main():
             raise ValueError("EVAL_POLICY=vint needs EVAL_FROM: a ViNT checkpoint dir "
                              "(model.pth + vint.json)")
         # Goal evals, mapless or on a map (EVAL_MAP_DIR: the subgoal images reach it
-        # through info["debit_goal"]); never traces or recording.
-        if EVAL_TRACE or EVAL_SGM_TRACE or EXPERT_RECORD or EXPERT_TRACE:
-            raise ValueError("EVAL_POLICY=vint drives goal evals only (mapless or "
-                             "EVAL_MAP_DIR): no trace or recording")
+        # through info["debit_goal"]), and DAgger recording (user 2026-11-07, "use
+        # DAGGER": EXPERT_RECORD=1 EXPERT_DRIVER=policy, run_record); never traces.
+        if (EVAL_TRACE or EVAL_SGM_TRACE or EXPERT_TRACE
+                or (EXPERT_RECORD and EXPERT_DRIVER != "policy")):
+            raise ValueError("EVAL_POLICY=vint drives goal evals (mapless or EVAL_MAP_DIR) "
+                             "and DAgger recording (EXPERT_RECORD=1 EXPERT_DRIVER=policy) only")
         if ACT_DIM != 2:
             raise ValueError(f"EVAL_POLICY=vint drives (steer, throttle), not a {ACT_DIM}-d action")
         from torch_rl.vint_driver import ViNTDriver, load_vint_policy
@@ -2349,6 +2385,8 @@ def main():
               f"{meta['stride']}, {meta['metric_step_m']:g} m/frame | the expert's PID "
               f"controller at {EXPERT_TARGET_KMH:g} km/h | action box "
               f"{env.action_space.low.tolist()}..{env.action_space.high.tolist()}", flush=True)
+        if EXPERT_RECORD:
+            return run_record(env, agent, pxr, server, OUT)
         return run_eval(env, agent, pxr, server, OUT)
     agent = build_agent(binoc_dim, ACT_DIM, critic_layer_norm=checkpoint_critic_layer_norm(EVAL_FROM) if EVAL_FROM else None)
     require_critic_layernorm(agent.cfg.critic_layer_norm,

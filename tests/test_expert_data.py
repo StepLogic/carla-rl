@@ -57,6 +57,36 @@ def test_round_trip(tmp_path):
         assert back[k] == ep[k] and isinstance(back[k], str), k
 
 
+def test_optional_aim_labels_round_trip(tmp_path):
+    """EXPERT_RECORD_AIM=1 (ViNT DAgger): per FRAME, the expert plan's lane-centre aim
+    points (CARLA x, y), their CARLA yaw and whether the frame has a label."""
+    ep = _ep(T=3)
+    ep["aim"] = np.arange(4 * 5 * 2, dtype=np.float32).reshape(4, 5, 2)
+    ep["aim_yaw"] = np.zeros((4, 5), np.float32)
+    ep["aim_ok"] = np.array([True, True, False, True])
+    p = str(tmp_path / "ep_100000.npz")
+    save_episode(p, ep)
+    back = load_episode(p)
+    for k in ("aim", "aim_yaw", "aim_ok"):
+        assert np.array_equal(back[k], ep[k]), k
+    assert "aim" not in load_episode(_save(tmp_path, _ep(T=3)))      # optional
+
+
+def test_aim_labels_must_cover_every_frame(tmp_path):
+    ep = _ep(T=3)
+    ep["aim"] = np.zeros((3, 5, 2), np.float32)                         # T, not T+1
+    ep["aim_yaw"] = np.zeros((3, 5), np.float32)
+    ep["aim_ok"] = np.ones(3, bool)
+    with pytest.raises(ValueError, match="aim"):
+        save_episode(str(tmp_path / "e.npz"), ep)
+
+
+def _save(tmp_path, ep, name="plain.npz"):
+    p = str(tmp_path / name)
+    save_episode(p, ep)
+    return p
+
+
 def test_save_rejects_wrong_frame_shape(tmp_path):
     ep = _ep(T=3)
     ep["frames"] = np.zeros((4, 120, 120, 3), np.uint8)

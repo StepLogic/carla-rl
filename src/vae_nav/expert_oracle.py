@@ -497,6 +497,35 @@ class BasicAgentExpert(ExpertOracle):
             self.last_plan_error = "empty explore plan"
         return n
 
+    def plan_xy(self, back_m=3.0, ahead_m=8.0, step_m=1.0):
+        """The expert's CURRENT plan as an (M, 2) CARLA x/y polyline -- the local
+        planner's remaining waypoints, extended back_m behind the first along its
+        lane (so the car's projection falls inside) and ahead_m past the last --
+        for ViNT's DAgger aim labels (vint_lane_labels.aim_from_plan). (0, 2) when
+        there is no plan left (finished, or none)."""
+        if not self._planned:
+            return np.zeros((0, 2))
+        q = self._agent.get_local_planner()._waypoints_queue
+        if not len(q):
+            return np.zeros((0, 2))
+        wps = [w for w, _ in q]
+        head, w, d = [], wps[0], 0.0
+        while d < back_m:
+            prev = w.previous(step_m)
+            if not prev:
+                break
+            w, d = prev[0], d + step_m
+            head.append(w)
+        tail, w, d = [], wps[-1], 0.0
+        while d < ahead_m:
+            nxt = w.next(step_m)
+            if not nxt:
+                break
+            w, d = nxt[0], d + step_m
+            tail.append(w)
+        return np.asarray([(x.transform.location.x, x.transform.location.y)
+                           for x in head[::-1] + wps + tail], np.float64)
+
     def replan_if_off_route(self, max_off_m=3.0):
         """DAgger relabelling (imitation-first plan): BasicAgent only plans at
         reset and then follows that plan, so when the POLICY drives and drifts

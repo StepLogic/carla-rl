@@ -47,8 +47,7 @@ route, because a wrong turn almost always ends the episode by leaving the lane.
 \centering
 \caption{Success rate (SR) and success weighted by path length (SPL) on 200
 held-out episodes per band (Town02 and Town03, 100 each). Both localisation
-modes use the same maps and the same navigation rules. $^{*}$: SR $p<0.01$
-against the same policy without a map (paired exact McNemar).}
+modes use the same maps and the same navigation rules.}
 \label{tab:map_navigation}
 \begin{tabular}{lcccccc}
 \toprule
@@ -59,9 +58,9 @@ Method & SR & SPL & SR & SPL & SR & SPL \\
 \multicolumn{7}{l}{\textbf{Imitation policy}} \\
 No map & 0.70 & 0.70 & 0.63 & 0.62 & 0.42 & 0.42 \\
 \multicolumn{7}{l}{\textit{Image localisation}} \\
-\quad Uniform map & 0.74 & 0.73 & 0.67 & 0.66 & 0.53$^{*}$ & 0.53 \\
-\quad Entropy map & 0.72 & 0.72 & 0.68 & 0.68 & 0.54$^{*}$ & 0.54 \\
-\quad SGM map & 0.69 & 0.68 & 0.72$^{*}$ & 0.72 & 0.54$^{*}$ & 0.53 \\
+\quad Uniform map & 0.74 & 0.73 & 0.67 & 0.66 & 0.53 & 0.53 \\
+\quad Entropy map & 0.72 & 0.72 & 0.68 & 0.68 & 0.54 & 0.54 \\
+\quad SGM map & 0.69 & 0.68 & 0.72 & 0.72 & 0.54 & 0.53 \\
 \multicolumn{7}{l}{\textit{True-pose localisation (upper bound)}} \\
 \quad Uniform map & 0.74 & 0.73 & 0.73 & 0.72 & 0.54 & 0.53 \\
 \quad Entropy map & 0.72 & 0.71 & 0.72 & 0.72 & 0.48 & 0.48 \\

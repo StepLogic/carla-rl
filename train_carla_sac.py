@@ -253,6 +253,14 @@ EVAL_MAP_REPLAN = int(os.environ.get("EVAL_MAP_REPLAN", 0) or 0)
 # worst 12x: a car already turning right snapped to the straight-on lane) to 0,
 # worst 1.2x. 0 = the nearest-node start of every earlier benchmark.
 EVAL_MAP_JOINT_LOCALISE = os.environ.get("EVAL_MAP_JOINT_LOCALISE", "0") == "1"
+# EVAL_MAP_POSE_TOP1=1 (user 2026-11-08: the true-pose arm follows the image arm's
+# rules, only the localisation differs): start = the nearest heading-aligned node
+# to the car, goal = the nearest node to the goal (heading unknown), each chosen
+# on its own like the image arm's two top-1 matches, no radius; start == goal
+# node -> no route -> driven mapless. Overrides EVAL_MAP_JOINT_LOCALISE, whose
+# metric route choice has no lower bound without a radius: one node between car
+# and goal (start == goal, 0 hops) always won, so the map was never used.
+EVAL_MAP_POSE_TOP1 = os.environ.get("EVAL_MAP_POSE_TOP1", "0") == "1"
 # EVAL_MAP_LOCALISE=image (user 2026-11-07: pose localisation is the labelled
 # UPPER BOUND; the image-navigation result uses images only, "as close to habitat
 # as possible"). vae_nav.image_nav: start / goal node = TOP-1 AnyLoc match of the
@@ -1802,6 +1810,11 @@ def run_eval(env, agent, pxr, server, out_root):
                     "img_goal_err_m": (None if _gp is None else round(float(np.hypot(
                         *(gmap._xy[g_node] - np.asarray(_gp, np.float64)[:2]))), 2)),
                     "img_same_node": bool(s_node == g_node)}
+            elif EVAL_MAP_POSE_TOP1 and info.get("goal_pos") is not None:
+                s_node = gmap.nearest(hp, hy, radius=float("inf"))
+                g_node = gmap.nearest(info["goal_pos"], None, radius=float("inf"))
+                route = (gmap.path(s_node, g_node)
+                         if s_node is not None and g_node is not None and s_node != g_node else None)
             elif EVAL_MAP_JOINT_LOCALISE and info.get("goal_pos") is not None:
                 s_node, g_node, route = gmap.localise(hp, hy, info["goal_pos"],
                                                       start_radius=EVAL_MAP_START_M,

@@ -120,6 +120,8 @@ Settings:
 | ViNT v1, mapless | .21 | .09 | .00 | .30 | .06 | .02 |
 | **DAgger r1 e1, mapless** | **.65** | **.50** | **.19** | .23 | .08 | .02 |
 | **DAgger r1 e1, ViNT topomap** | **.68** | **.59** | **.49** | .33 | .11 | .00 |
+| DAgger r2 e2 (validation pick), mapless | .73 | .43 | .10 | .32 | .16 | .04 |
+| DAgger r2 e2 (validation pick), ViNT topomap | .71 | .66 | .49 | .25 | .12 | .03 |
 | c0 mapless (mapping session, development set) | .71 | .52 | .44 | | | |
 | c0 image map arm (same) | .80 | .71 | .65 | | | |
 
@@ -134,3 +136,16 @@ Settings:
 - Training: warm-started from round-1 epoch 1 on expert + dagger1 + dagger2, stopped after epoch 2.
 - Validation (true goal only): epoch 0 = 45 (T05 .40, T01 .725), epoch 1 = 45 (T05 .45, T01 .675). Round 1 epoch 1 had 47.
 - Epoch 2's checkpoint was truncated by the early stop (the cancel landed while CephFS was still writing it). It was restored from `latest.pth`, the same epoch, intact, and re-validated.
+- **Epoch 2 = 49/80 (T05 .475, T01 .75): the validation pick.**
+- On the development map set (rows above), round-2 epoch 2 is level with round-1 epoch 1 overall: mapless pooled .30 vs .28, ViNT topomap .38 vs .37. Its Town02 topomap row (.71/.66/.49) matches or beats c0 mapless in every Town02 cell.
+- Development lane checks, Town02 easy (reported only):
+  - |offset| median 0.20-0.25 m, against round 1's 0.58-0.94 m.
+  - Round 2's epochs score SR .70/.63/.47.
+- Round-1 epoch 1 on Town03 easy: |offset| median 0.57 m in 3.5 m lanes; Town02's lanes are 4.0 m.
+
+### DAgger round 3
+- Collection: one job, driven by round-2 epoch 2, 600 episodes in the training towns. ViNT arrival: Town01 .75, Town04 .64, Town05 .40, Town10HD .53.
+- Training: warm-started from round-2 epoch 2, stopped after epoch 2. This time the stop waits for the next epoch to start in the log, so the checkpoint is complete.
+- Decision (pre-declared): only Town05/Town01 validation. The development map set runs only if the best epoch reaches >= 54/80.
+
+_Pending._

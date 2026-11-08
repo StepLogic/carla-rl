@@ -118,3 +118,38 @@ The development-seed numbers are not reported as results.
 - **This is NOT a clean placement effect.** The oracle localises within 8 m by true pose, and the entropy map's sparser coverage (key nodes cluster at junctions; no metric gap nodes) left 27 episodes with no node within 8 m, which fell back to mapless (uniform: 0). Image localisation has no radius and does not suffer this.
 
 **Finding:** with pose-free image localisation, entropy placement equals uniform in every band (pooled p 0.73 / 0.70 / 0.86). Both beat mapless only on long routes. This matches Habitat (uniform is the most consistent placer). Entropy placement adds no measurable benefit for this policy.
+
+## SGM baseline with a ViNT-style distance function (same frozen configuration, same 600 fresh episodes)
+- **Distance function:** `scripts/train_vint_distance.py`, `checkpoints/sgm_distance`.
+  - Frozen DINOv2 ViT-B/14 class token + MLP on [a, b, a*b, |a-b|], classifying the temporal distance between two frames: 0–20 frames at a 3-step stride, plus FAR for pairs from different episodes. This is ViNT's distance-head recipe.
+  - Trained on c0's expert demonstrations from the TRAINING towns only (Town01/04/05/10HD; 1,920 episodes, 135,811 frames). Never Town02/Town03.
+  - Held-out validation (192 episodes): exact class 34.5%, within ±1 class 44.4%, expected-distance MAE 2.44 frames (≈ 3 m), far pairs recognised 98.0%.
+- **SGM map:** `maps_expert_jx_img/sgm_matched`.
+  - Pairs: candidates 0.8 m apart, aligned, within 25 m; q = predicted distance (`scripts/sgm_distance_pairs.py`).
+  - sgm_match with no spatial gate, cutoff bisected to entropy's key count; then the same image gap nodes, edges and unit cost as every map.
+  - Town02: 254 key + 182 gap = 436 nodes. Town03: 1,090 key + 476 gap = 1,566 nodes.
+
+**Success rate, pooled over both towns (200 episodes per band):**
+
+| | Mapless | Uniform | Entropy | SGM |
+|---|---|---|---|---|
+| Image, easy | 0.70 | 0.74 | 0.72 | 0.69 |
+| Image, medium | 0.63 | 0.67 | 0.68 | 0.72 |
+| Image, hard | 0.42 | 0.53 | 0.54 | 0.54 |
+| Oracle, easy | 0.70 | 0.77 | 0.74 | 0.76 |
+| Oracle, medium | 0.63 | 0.74 | 0.75 | 0.76 |
+| Oracle, hard | 0.42 | 0.60 | 0.51 | 0.50 |
+
+**Pooled exact McNemar, image localisation:**
+
+| SGM vs | Easy | Medium | Hard |
+|---|---|---|---|
+| Mapless | 18/21, p 0.75 | 33/14, p 0.008 | 38/15, p 0.002 |
+| Uniform | 9/19, p 0.09 | 18/7, p 0.043 | 15/14, p 1.0 |
+| Entropy | 10/17, p 0.25 | 15/7, p 0.13 | 13/14, p 1.0 |
+
+The medium-band p 0.043 does not survive a correction for the 9 placement comparisons.
+
+**Oracle:** SGM is below uniform on hard (5/24, p 0.0006), but this is confounded as for entropy: 18 SGM episodes found no node within the 8 m pose radius and fell back to mapless (uniform: 0).
+
+**Finding:** with pose-free image localisation, all three placements (uniform, entropy, SGM with a learnt temporal distance) reach the same success on long routes (0.53–0.54 vs mapless 0.42). No placement is reliably better than uniform spacing.

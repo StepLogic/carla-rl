@@ -47,37 +47,58 @@ route, because a wrong turn almost always ends the episode by leaving the lane.
 \centering
 \footnotesize
 \setlength{\tabcolsep}{3.5pt}
-\caption{SR and SPL on 200 held-out episodes per band (Town02 and Town03).
-Img: image localisation; Pose: true-pose localisation (upper bound).}
+\caption{SR and SPL on 200 held-out episodes per band (Town02 and Town03),
+localising by image.}
 \label{tab:map_navigation}
-\begin{tabular}{llcccccc}
+\begin{tabular}{lcccccc}
 \toprule
- & & \multicolumn{2}{c}{Easy} & \multicolumn{2}{c}{Medium} & \multicolumn{2}{c}{Hard} \\
-\cmidrule(lr){3-4}\cmidrule(lr){5-6}\cmidrule(lr){7-8}
-Map & Loc. & SR & SPL & SR & SPL & SR & SPL \\
+ & \multicolumn{2}{c}{Easy} & \multicolumn{2}{c}{Medium} & \multicolumn{2}{c}{Hard} \\
+\cmidrule(lr){2-3}\cmidrule(lr){4-5}\cmidrule(lr){6-7}
+Map & SR & SPL & SR & SPL & SR & SPL \\
 \midrule
-\multicolumn{8}{l}{\textit{Imitation policy}} \\
-None & -- & 0.70 & 0.70 & 0.63 & 0.62 & 0.42 & 0.42 \\
-\rowcolor{gray!15}Uniform & Img & 0.74 & 0.73 & 0.67 & 0.66 & 0.53 & 0.53 \\
-\rowcolor{gray!15}Entropy & Img & 0.72 & 0.72 & 0.68 & 0.68 & 0.54 & 0.54 \\
-SGM & Img & 0.69 & 0.68 & 0.72 & 0.72 & 0.54 & 0.53 \\
-\rowcolor{gray!15}Uniform & Pose & 0.74 & 0.73 & 0.73 & 0.72 & 0.54 & 0.53 \\
-\rowcolor{gray!15}Entropy & Pose & 0.72 & 0.71 & 0.72 & 0.72 & 0.48 & 0.48 \\
-SGM & Pose & 0.70 & 0.69 & 0.73 & 0.73 & 0.56 & 0.56 \\
+\multicolumn{7}{l}{\textit{Imitation policy}} \\
+None & 0.70 & 0.70 & 0.63 & 0.62 & 0.42 & 0.42 \\
+\rowcolor{gray!15}Uniform & 0.74 & 0.73 & 0.67 & 0.66 & 0.53 & 0.53 \\
+\rowcolor{gray!15}Entropy & 0.72 & 0.72 & 0.68 & 0.68 & 0.54 & 0.54 \\
+SGM & 0.69 & 0.68 & 0.72 & 0.72 & 0.54 & 0.53 \\
 \midrule
-\multicolumn{8}{l}{\textit{RL policy}} \\
-None & -- & -- & -- & -- & -- & -- & -- \\
-\rowcolor{gray!15}Uniform & Img & -- & -- & -- & -- & -- & -- \\
-\rowcolor{gray!15}Entropy & Img & -- & -- & -- & -- & -- & -- \\
-SGM & Img & -- & -- & -- & -- & -- & -- \\
-\rowcolor{gray!15}Uniform & Pose & -- & -- & -- & -- & -- & -- \\
-\rowcolor{gray!15}Entropy & Pose & -- & -- & -- & -- & -- & -- \\
-SGM & Pose & -- & -- & -- & -- & -- & -- \\
+\multicolumn{7}{l}{\textit{RL policy}} \\
+None & -- & -- & -- & -- & -- & -- \\
+\rowcolor{gray!15}Uniform & -- & -- & -- & -- & -- & -- \\
+\rowcolor{gray!15}Entropy & -- & -- & -- & -- & -- & -- \\
+SGM & -- & -- & -- & -- & -- & -- \\
 \midrule
-\multicolumn{8}{l}{\textit{ViNT}~\cite{shah2023vint}} \\
-None & -- & 0.51 & 0.49 & 0.40 & 0.38 & 0.14 & 0.13 \\
-\rowcolor{gray!15}Uniform & Img & 0.33 & 0.31 & 0.25 & 0.24 & 0.14 & 0.14 \\
-ViNT map & ViNT & 0.46 & 0.44 & 0.35 & 0.35 & 0.26 & 0.26 \\
+\multicolumn{7}{l}{\textit{ViNT}~\cite{shah2023vint}} \\
+None & 0.51 & 0.49 & 0.40 & 0.38 & 0.14 & 0.13 \\
+\rowcolor{gray!15}Uniform & 0.33 & 0.31 & 0.25 & 0.24 & 0.14 & 0.14 \\
+ViNT map & 0.46 & 0.44 & 0.35 & 0.35 & 0.26 & 0.26 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{table}[t]
+\centering
+\footnotesize
+\setlength{\tabcolsep}{3.5pt}
+\caption{Upper bound: the same maps and navigation rules as
+Table~\ref{tab:map_navigation}, localising by the true pose. SR and SPL on the
+same 200 held-out episodes per band.}
+\label{tab:map_navigation_pose}
+\begin{tabular}{lcccccc}
+\toprule
+ & \multicolumn{2}{c}{Easy} & \multicolumn{2}{c}{Medium} & \multicolumn{2}{c}{Hard} \\
+\cmidrule(lr){2-3}\cmidrule(lr){4-5}\cmidrule(lr){6-7}
+Map & SR & SPL & SR & SPL & SR & SPL \\
+\midrule
+\multicolumn{7}{l}{\textit{Imitation policy}} \\
+\rowcolor{gray!15}Uniform & 0.74 & 0.73 & 0.73 & 0.72 & 0.54 & 0.53 \\
+\rowcolor{gray!15}Entropy & 0.72 & 0.71 & 0.72 & 0.72 & 0.48 & 0.48 \\
+SGM & 0.70 & 0.69 & 0.73 & 0.73 & 0.56 & 0.56 \\
+\midrule
+\multicolumn{7}{l}{\textit{RL policy}} \\
+\rowcolor{gray!15}Uniform & -- & -- & -- & -- & -- & -- \\
+\rowcolor{gray!15}Entropy & -- & -- & -- & -- & -- & -- \\
+SGM & -- & -- & -- & -- & -- & -- \\
 \bottomrule
 \end{tabular}
 \end{table}

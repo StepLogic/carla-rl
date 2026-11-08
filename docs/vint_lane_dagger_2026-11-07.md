@@ -77,8 +77,37 @@ Results (run `vint_carla_lanecentre`, job 464612):
 
 | DAgger round 1 | Validation (true / 80) | Town02 easy SR | \|offset\| median | heading p90 | episodes with a crossing |
 |---|---|---|---|---|---|
-| epoch 0 | 35 (T05 .250, T01 .625) | **0.33** | 0.72 m | 25 deg | 15 |
+| epoch 0 | 35 (T05 .250, T01 .625) | 0.33 | 0.72 m | 25 deg | 15 |
+| **epoch 1** | **47** (T05 .475, T01 .700) | **0.47** | 0.76 m | 14 deg | 14 |
+| epoch 2 | 41 (T05 .350, T01 .675) | 0.43 | 0.58 m | 15 deg | 14 |
+| epoch 3 | 44 (T05 .400, T01 .700) | 0.43 | 0.94 m | 10 deg | 14 |
 | *c0* | *63* | *0.63* | *0.09 m* | *5 deg* | *8* |
 | *ViNT v1* | *37* | *0.20* | *1.04 m* | *178 deg* | *20* |
 
-_Epochs 1-3 pending._
+Wrong-goal arrival rate: 0 for every epoch. Round-1 epoch 1 is the pick, and it drove DAgger round 2.
+
+### Round-1 epoch 1 on the development map set
+Settings:
+- The 600 development episodes (`logs/bench_long_episodes.json`, never the fresh set), with the frozen benchmark settings and 1 m arrival.
+- One job per arm (`slurm/vint_bench_cells.sh`).
+- The ViNT topomap is rebuilt with this model. Town02: 1,234 nodes, tau 7.07, 2,770 revisits kept. Town03: 7,789 nodes, tau 10.94. Both fully connected.
+
+| Development set, SR at 1 m (100 per cell) | T02 easy | T02 medium | T02 hard | T03 easy | T03 medium | T03 hard |
+|---|---|---|---|---|---|---|
+| ViNT v1, mapless | .21 | .09 | .00 | .30 | .06 | .02 |
+| **DAgger r1 e1, mapless** | **.65** | **.50** | **.19** | .23 | .08 | .02 |
+| **DAgger r1 e1, ViNT topomap** | **.68** | **.59** | **.49** | .33 | .11 | .00 |
+| c0 mapless (mapping session, development set) | .71 | .52 | .44 | | | |
+| c0 image map arm (same) | .80 | .71 | .65 | | | |
+
+- **Town02:**
+  - Mapless ViNT roughly triples, reaching c0 mapless on easy and medium.
+  - With its own topomap, ViNT goes from .00 to .49 on hard, above c0 mapless on medium and hard.
+  - The near misses are mostly gone: SR at 1 m vs 2 m on easy is .65 / .75, against .21 / .50 before.
+- **Town03 does not improve.** Crossings (51-60 per cell) and off-road ends (25-38) still dominate. Town03 is held out, and DAgger collects only in the training towns.
+
+### DAgger round 2 (fast)
+- Collection: driven by round-1 epoch 1, 1,200 episodes, 8 jobs. ViNT arrival: Town01 .65-.67 (round 1 .48), Town04 .51-.53.
+- Training: warm-started from round-1 epoch 1 on expert + dagger1 + dagger2, stopped after epoch 2.
+- Validation (true goal only): epoch 0 = 45 (T05 .40, T01 .725), epoch 1 = 45 (T05 .45, T01 .675). Round 1 epoch 1 had 47.
+- Epoch 2's checkpoint was truncated by the early stop (the cancel landed while CephFS was still writing it). It was restored from `latest.pth`, the same epoch, intact, and re-validated.

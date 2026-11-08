@@ -287,7 +287,10 @@ class GatedRecurrentSAC(GatedRecurrentTQC):
         td3bc = ("" if a <= 0.0 else
                  f" | actor: TD3+BC in-loss cloning, critic term x {a:g}/mean|Q| plus "
                  f"mean (tanh(mu) - expert label)^2, one optimizer")
-        return self._describe_learner() + pin + delay + td3bc
+        fixed = float(self.cfg.fixed_alpha)
+        temp = ("" if fixed <= 0.0 else
+                f" | temperature FIXED at {fixed:g} (never updated, re-applied on load)")
+        return self._describe_learner() + pin + delay + td3bc + temp
 
     def _describe_learner(self) -> str:
         cfg = self.cfg

@@ -273,6 +273,12 @@ class GatedRecurrentTQCConfig:
     # Jacobian. target_entropy_box() prints the Box-space equivalent.
     target_entropy: float = -2.0
     target_entropy_e: float = -2.0
+    # FIXED_ALPHA (user 2026-11-08: "lets start with a fixed alpha", 0.02): > 0 holds
+    # BOTH temperatures at this value -- they start there, the temperature step is
+    # skipped and a checkpoint load re-applies it; 0 = learned against the targets
+    # above. Runs P/P2: the learned one fell 0.1 -> 1e-4 (the actor's entropy, ~1.3,
+    # never reached -2) and the evals fell with it after 50k.
+    fixed_alpha: float = 0.0
     actor_q_norm: bool = True
     q_norm_tau: float = 0.01
     q_norm_floor: float = 1e-3
@@ -593,8 +599,11 @@ class GatedRecurrentTQC:
         self.modules_list = tuple(m for m in self._MODULES
                                   if cfg.prev_action or not m.startswith("act_embed"))
 
-        self.log_alpha_g = nn.Parameter(torch.tensor(float(np.log(cfg.init_temperature)), device=dev))
-        self.log_alpha_e = nn.Parameter(torch.tensor(float(np.log(cfg.init_temperature_e)), device=dev))
+        fixed = float(cfg.fixed_alpha)
+        self.log_alpha_g = nn.Parameter(torch.tensor(
+            float(np.log(fixed if fixed > 0 else cfg.init_temperature)), device=dev))
+        self.log_alpha_e = nn.Parameter(torch.tensor(
+            float(np.log(fixed if fixed > 0 else cfg.init_temperature_e)), device=dev))
         # WITH ONE CRITIC THE SECOND ENSEMBLE IS NOT IN THE OPTIMISER. It is
         # still constructed, so the module list, the checkpoint format and the
         # construction RNG order are identical either way, but it receives no
@@ -1297,9 +1306,12 @@ class GatedRecurrentTQC:
 
             # Temperatures: a mode absent from the batch takes no step at all, and
             # neither does one whose rows here are all PRERECORDED (user
-            # 2026-11-07) -- only the agent's own rows move alpha.
+            # 2026-11-07) -- only the agent's own rows move alpha. A FIXED alpha
+            # (cfg.fixed_alpha > 0, user 2026-11-08) takes no step at all.
             lp = logp.detach()
             temp_loss_g = temp_loss_e = zero
+            if float(cfg.fixed_alpha) > 0.0:
+                has_tg = has_te = False
             if has_tg:
                 temp_loss_g = _masked_mean(self.log_alpha_g.exp() * (-lp - cfg.target_entropy), mt_g)
                 self.opt_temp_g.zero_grad(set_to_none=True)
@@ -1404,3 +1416,6 @@ class GatedRecurrentTQC:
         with torch.no_grad():
             for n in self._TENSORS:
                 getattr(self, n).copy_(blob[n].to(self.device))
+        # A FIXED alpha is the configured value, never the checkpoint's learned one.
+        if float(self.cfg.fixed_alpha) > 0.0:
+            self.set_temperature(float(self.cfg.fixed_alpha))

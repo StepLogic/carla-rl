@@ -2076,6 +2076,9 @@ def build_agent(binoc_dim, act_dim, critic_layer_norm=None):
         # pinned action improbable-looking, the only way to meet it is to keep
         # actions off the limits. User 2026-10-20, "try 2": v12 sets 0.
         target_entropy=env_float("TARGET_ENTROPY", -2.0),
+        # FIXED_ALPHA > 0 (user 2026-11-08): the temperature is held at this value
+        # and never updated (TARGET_ENTROPY and ALPHA_LR then do nothing).
+        fixed_alpha=env_float("FIXED_ALPHA", 0.0),
         actor_pretanh_l2=env_float("ACTOR_PRETANH_L2", 0.0),
         actor_pretanh_free=env_float("ACTOR_PRETANH_FREE", 1.5),
         # ALGO=iql (user 2026-11-06, torch_rl/iql.py): critic and actor queried
@@ -2295,8 +2298,11 @@ def main():
     _per_tr = CHUNK_B * CHUNK_T * UPDATES_PER / max(1, UPDATE_EVERY * len(TOWNS))
     print(f"  replay ratio: {UPDATES_PER} update(s) of {CHUNK_B}x{CHUNK_T} every "
           f"{UPDATE_EVERY} vec step(s) = {_per_tr:.0f} replayed samples per new "
-          f"transition | lr={cfg.lr:g} alpha_lr={cfg.alpha_lr or cfg.lr:g}"
-          + ("" if cfg.alpha_lr else " (follows lr)"), flush=True)
+          f"transition | lr={cfg.lr:g} "
+          + (f"alpha FIXED at {cfg.fixed_alpha:g} (no temperature updates)"
+             if cfg.fixed_alpha > 0 else
+             f"alpha_lr={cfg.alpha_lr or cfg.lr:g}" + ("" if cfg.alpha_lr else " (follows lr)")),
+          flush=True)
     print(f"  monocular (TRAINED): {agent.compress.describe()}", flush=True)
     print(f"  {describe_load(mono_report)}", flush=True)
     print(f"  binocular (FROZEN, precomputed in the env): {binoc_dim}-d -> GRU "

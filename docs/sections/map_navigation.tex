@@ -37,9 +37,10 @@ routes: on the hard band all three maps raise success from 0.42 to 0.53--0.54
 ($p \le 0.002$ against no map). On easy and medium routes the gain is small and
 not consistently significant, because the policy already reaches nearby goals
 on its own. The choice of nodes makes no measurable difference: entropy and SGM
-placement do not beat uniform spacing in any band. Localising by the true pose instead of by image, under the same
-navigation rules, changes success by at most 0.06 and is not significantly
-better, so image localisation is not what limits the system. SPL is within
+placement do not beat uniform spacing in any band. With ground-truth pose on maps of key nodes only
+(Table~\ref{tab:map_navigation_pose}), uniform keeps its gain on hard routes
+while entropy and SGM fall to the level of no map: without gap nodes their key
+nodes leave long stretches of road uncovered. SPL is within
 0.01 of SR everywhere: successful episodes drive at most 1.1 times the shortest
 route, because a wrong turn almost always ends the episode by leaving the lane.
 
@@ -48,7 +49,8 @@ route, because a wrong turn almost always ends the episode by leaving the lane.
 \footnotesize
 \setlength{\tabcolsep}{3.5pt}
 \caption{SR and SPL on 200 held-out episodes per band (Town02 and Town03),
-localising by image.}
+localising by image. Node budget per map: 255 key nodes in Town02 and 1104 in
+Town03 (SGM: 254 and 1090), plus 156--476 image-coverage gap nodes.}
 \label{tab:map_navigation}
 \begin{tabular}{lcccccc}
 \toprule
@@ -80,9 +82,10 @@ ViNT map & 0.46 & 0.44 & 0.35 & 0.35 & 0.26 & 0.26 \\
 \centering
 \footnotesize
 \setlength{\tabcolsep}{3.5pt}
-\caption{Upper bound: the same maps and navigation rules as
-Table~\ref{tab:map_navigation}, localising by the true pose. SR and SPL on the
-same 200 held-out episodes per band.}
+\caption{Upper bound: localising by the ground-truth pose on maps of key nodes
+only (no gap nodes). Node budget per map: 255 key nodes in Town02 and 1100--1121
+in Town03. Navigation rules as in Table~\ref{tab:map_navigation}. SR and SPL on
+the same 200 held-out episodes per band.}
 \label{tab:map_navigation_pose}
 \begin{tabular}{lcccccc}
 \toprule
@@ -91,9 +94,9 @@ same 200 held-out episodes per band.}
 Map & SR & SPL & SR & SPL & SR & SPL \\
 \midrule
 \multicolumn{7}{l}{\textit{Imitation policy}} \\
-\rowcolor{gray!15}Uniform & 0.74 & 0.73 & 0.73 & 0.72 & 0.54 & 0.53 \\
-\rowcolor{blue!12}Entropy & 0.72 & 0.71 & 0.72 & 0.72 & 0.48 & 0.48 \\
-SGM & 0.70 & 0.69 & 0.73 & 0.73 & 0.56 & 0.56 \\
+\rowcolor{gray!15}Uniform & 0.69 & 0.69 & 0.69 & 0.68 & 0.53 & 0.53 \\
+\rowcolor{blue!12}Entropy & 0.59 & 0.59 & 0.56 & 0.56 & 0.41 & 0.41 \\
+SGM & 0.68 & 0.67 & 0.57 & 0.56 & 0.41 & 0.41 \\
 \midrule
 \multicolumn{7}{l}{\textit{RL policy}} \\
 \rowcolor{gray!15}Uniform & -- & -- & -- & -- & -- & -- \\

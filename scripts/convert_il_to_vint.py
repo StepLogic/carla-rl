@@ -27,7 +27,8 @@ from multiprocessing import Pool
 import numpy as np
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "src"))
-from vae_nav.vint_data import FAULT_ENDS, encode_traj, episode_to_traj, write_traj  # noqa: E402
+from vae_nav.vint_data import (FAULT_ENDS, aim_cf_labels, encode_traj,  # noqa: E402
+                               episode_to_traj, write_traj)
 
 DATASET = "carla_expert"
 
@@ -51,11 +52,20 @@ def convert_one(job):
         return row, None
     d = np.linalg.norm(np.diff(xy, axis=0), axis=1)
     row["moving_steps_m"] = d[d > 0.05].round(4).tolist()
+    extra = None
+    if "aim" in z.files:
+        # DAgger (EXPERT_RECORD_AIM): the expert plan's aim points become the
+        # lane-centre labels; frames without one are skipped by the loader (cf_ok).
+        keep = len(frames)
+        p_cf, y_cf, ok_cf = aim_cf_labels(xy, yaw, z["aim"][:keep], z["aim_yaw"][:keep],
+                                          z["aim_ok"][:keep])
+        extra = {"cf_position": p_cf, "cf_yaw": y_cf, "cf_ok": ok_cf}
+        row["cf_ok_frames"] = int(ok_cf.sum())
     if out_root is None:
-        return row, encode_traj(frames, xy, yaw)
+        return row, encode_traj(frames, xy, yaw, extra=extra)
     folder = os.path.join(out_root, name)
     if not _complete(folder, len(frames)):
-        write_traj(folder, frames, xy, yaw)
+        write_traj(folder, frames, xy, yaw, extra=extra)
     return row, None
 
 
@@ -77,9 +87,16 @@ def main():
     ap.add_argument("--min-frames", type=int, default=31,
                     help="ViNT needs context*stride + len_pred*stride + 1 frames (5*3+5*3+1)")
     ap.add_argument("--workers", type=int, default=8)
+    ap.add_argument("--dataset", default=DATASET,
+                    help="the dataset's name in the tar (carla_dagger1 for a DAgger round)")
+    ap.add_argument("--metric-spacing", type=float, default=None,
+                    help="write this metric_waypoint_spacing instead of the measured one: "
+                         "lane-centre labels are defined at 3 x 0.3782 m whatever the "
+                         "speed the policy drove")
     a = ap.parse_args()
     if bool(a.tar) == bool(a.out or a.splits) or (a.out and not a.splits):
         ap.error("give --tar, or both --out and --splits")
+    dataset = a.dataset
     split = json.load(open(a.split))
     tf = None
     if a.tar:
@@ -101,10 +118,10 @@ def main():
                 kept.append(row)
                 if tf is not None:
                     for fname, data in files:
-                        _add_bytes(tf, f"{DATASET}/{row['name']}/{fname}", data)
+                        _add_bytes(tf, f"{dataset}/{row['name']}/{fname}", data)
             names = ("\n".join(r["name"] for r in kept) + "\n").encode()
             if tf is not None:
-                _add_bytes(tf, f"splits/{DATASET}/{part}/traj_names.txt", names)
+                _add_bytes(tf, f"splits/{dataset}/{part}/traj_names.txt", names)
             else:
                 d = os.path.join(a.splits, part)
                 os.makedirs(d, exist_ok=True)
@@ -115,13 +132,18 @@ def main():
                              "frames": int(sum(r["frames"] for r in kept)),
                              "fault_trimmed": int(sum(r["end"] in FAULT_ENDS for r in kept)),
                              "goal_mode": int(sum(r["mode"] == 1 for r in kept))}
+            if any("cf_ok_frames" in r for r in kept):
+                summary[part]["labelled_frames"] = int(sum(r.get("cf_ok_frames", 0) for r in kept))
             print(part, json.dumps(summary[part]), flush=True)
     steps = np.asarray(steps)
     summary["metric_waypoint_spacing_m"] = round(float(steps.mean()), 4)
     summary["moving_step_median_m"] = round(float(np.median(steps)), 4)
+    if a.metric_spacing is not None:
+        summary["measured_waypoint_spacing_m"] = summary["metric_waypoint_spacing_m"]
+        summary["metric_waypoint_spacing_m"] = float(a.metric_spacing)
     blob = json.dumps(summary, indent=1).encode()
     if tf is not None:
-        _add_bytes(tf, f"{DATASET}/summary.json", blob)
+        _add_bytes(tf, f"{dataset}/summary.json", blob)
         tf.close()
         os.replace(a.tar + ".part", a.tar)
     else:

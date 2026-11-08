@@ -85,10 +85,27 @@ def episode_to_traj(frames, pos, end, trim_frames=20, min_step_m=0.3):
     return frames[:keep], xy[:keep], yaw[:keep]
 
 
-def encode_traj(frames, xy, yaw, quality=95):
+def aim_cf_labels(xy, yaw, aim, aim_yaw, aim_ok):
+    """DAgger frames (EXPERT_RECORD_AIM, user 2026-11-07 "use DAGGER"): the
+    recorder's per-frame aim points (N, n, 2) CARLA x/y and CARLA yaw (N, n,
+    radians) -> ViNT's lane-centre label arrays in the trajectory's right-handed
+    frame: cf_position (N, n+1, 2) with entry 0 the car itself, cf_yaw (N, n+1)
+    unwrapped against the car's heading, cf_ok (N,) = the frame has a label."""
+    xy = np.asarray(xy, np.float64)
+    yaw = np.asarray(yaw, np.float64)
+    a = to_right_handed(np.asarray(aim, np.float64))
+    ay = -np.asarray(aim_yaw, np.float64)          # CARLA's clockwise yaw -> right-handed
+    d = (ay - yaw[:, None] + np.pi) % (2 * np.pi) - np.pi
+    pos = np.concatenate([xy[:, None, :], a], axis=1)
+    yw = np.concatenate([yaw[:, None], yaw[:, None] + d], axis=1)
+    return pos.astype(np.float32), yw.astype(np.float32), np.asarray(aim_ok, bool).copy()
+
+
+def encode_traj(frames, xy, yaw, quality=95, extra=None):
     """[(file name, bytes)]: 0.jpg .. N.jpg and traj_data.pkl, as ViNT's
     ViNT_Dataset reads them, encoded in memory (the --tar path never writes a
-    small file to the shared filesystem)."""
+    small file to the shared filesystem). `extra` arrays (e.g. the cf_* labels)
+    join traj_data.pkl."""
     import io
     from PIL import Image
     out = []
@@ -96,14 +113,15 @@ def encode_traj(frames, xy, yaw, quality=95):
         buf = io.BytesIO()
         Image.fromarray(np.asarray(f, np.uint8)).save(buf, format="JPEG", quality=int(quality))
         out.append((f"{k}.jpg", buf.getvalue()))
-    out.append(("traj_data.pkl", pickle.dumps({"position": np.asarray(xy, np.float32),
-                                               "yaw": np.asarray(yaw, np.float32)})))
+    data = {"position": np.asarray(xy, np.float32), "yaw": np.asarray(yaw, np.float32)}
+    data.update({k: np.asarray(v) for k, v in (extra or {}).items()})
+    out.append(("traj_data.pkl", pickle.dumps(data)))
     return out
 
 
-def write_traj(folder, frames, xy, yaw, quality=95):
+def write_traj(folder, frames, xy, yaw, quality=95, extra=None):
     """The files of encode_traj, written into `folder`."""
     os.makedirs(folder, exist_ok=True)
-    for name, data in encode_traj(frames, xy, yaw, quality=quality):
+    for name, data in encode_traj(frames, xy, yaw, quality=quality, extra=extra):
         with open(os.path.join(folder, name), "wb") as fh:
             fh.write(data)

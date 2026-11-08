@@ -8,6 +8,8 @@
 #     --output=logs/%x_%j.log slurm/vint_train.sbatch
 # Lane-centre labels: DATA_TAR=$HOME/carla-rl/checkpoints/vint_data/carla_expert_lc.tar
 #   CONFIG=$HOME/carla-rl-vint/scripts/vint/vint_carla_lanecentre.yaml VINT_START_PAD=1
+# DAgger round 1: the same plus DATA_TAR2=.../vint_data/carla_dagger1.tar
+#   CONFIG=$HOME/carla-rl-vint/scripts/vint/vint_carla_dagger1.yaml
 #
 # MODE=probe runs scripts/vint/probe_vint_setup.py (PROBE_TRAJ trajectories) instead
 # of training. The data comes as ONE tar (checkpoints/vint_data/carla_expert.tar) and
@@ -30,6 +32,10 @@ mkdir -p "$LOCAL"
 trap 'rm -rf "$LOCAL"' EXIT
 t0=$(date +%s)
 tar -xf "$DATA_TAR" -C "$LOCAL" || { echo "=== tar failed"; exit 1; }
+# DATA_TAR2: a second dataset next to the first (a DAgger round, carla_dagger<N>.tar).
+if [ -n "${DATA_TAR2:-}" ]; then
+  tar -xf "$DATA_TAR2" -C "$LOCAL" || { echo "=== tar2 failed"; exit 1; }
+fi
 echo "=== data unpacked in $(( $(date +%s) - t0 )) s: $(du -sh "$LOCAL" | cut -f1) | $(df -h "$LOCAL" | tail -1)"
 
 # ViNT's goal bound is wrong for waypoint_spacing > 1 (scripts/vint/patch_vint_dataset.py).
@@ -42,11 +48,15 @@ $PY "$REPO/scripts/vint/patch_vint_cf_labels.py" "$TRAIN/vint_train/data/vint_da
 $PY "$REPO/scripts/vint/patch_vint_start_pad.py" "$TRAIN/vint_train/data/vint_dataset.py" || exit 1
 echo "=== VINT_START_PAD=${VINT_START_PAD:-0}"
 
-# ViNT reads metric_waypoint_spacing for the dataset from data_config.yaml.
-SPACING=$($PY -c "import json; print(json.load(open('$LOCAL/carla_expert/summary.json'))['metric_waypoint_spacing_m'])")
+# ViNT reads metric_waypoint_spacing for each dataset from data_config.yaml (each
+# dataset's summary.json; a DAgger round's is fixed to the expert's by the converter).
 DC=$TRAIN/vint_train/data/data_config.yaml
-grep -q '^carla_expert:' "$DC" || printf '\ncarla_expert:\n  metric_waypoint_spacing: %s\n' "$SPACING" >> "$DC"
-echo "=== data_config: $(grep -A1 '^carla_expert:' "$DC" | tr '\n' ' ') (measured $SPACING)"
+for S in "$LOCAL"/*/summary.json; do
+  NAME=$(basename "$(dirname "$S")")
+  SPACING=$($PY -c "import json; print(json.load(open('$S'))['metric_waypoint_spacing_m'])")
+  grep -q "^$NAME:" "$DC" || printf '\n%s:\n  metric_waypoint_spacing: %s\n' "$NAME" "$SPACING" >> "$DC"
+  echo "=== data_config: $(grep -A1 "^$NAME:" "$DC" | tr '\n' ' ') (summary $SPACING)"
+done
 
 sed -e "s#__DATA__#$LOCAL#g" -e "s#__WEIGHTS__#$WEIGHTS#g" "$CONFIG" > "$LOCAL/config.yaml"
 cd "$TRAIN" || exit 1

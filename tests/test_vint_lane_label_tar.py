@@ -101,7 +101,30 @@ def _compute_actions(self, traj_data, curr_time, goal_time):
         yaw = traj_data["yaw"][start_index:end_index:self.waypoint_spacing]
         positions = traj_data["position"][start_index:end_index:self.waypoint_spacing]
         return positions, yaw
+
+
+def _index(traj_data, begin_time, end_time):
+        out = []
+        if True:
+            for curr_time in range(begin_time, end_time):
+                out.append(curr_time)
+        return out
 '''
+
+
+def test_unlabelled_dagger_frames_are_left_out_of_the_samples():
+    """A DAgger frame without a label (cf_ok False: no expert plan there) is no
+    training sample; every other trajectory is indexed exactly as before."""
+    ns = {}
+    exec(patch.apply(SRC), ns)
+    assert ns["_index"]({"position": np.zeros(5)}, 0, 5) == [0, 1, 2, 3, 4]
+    ok = np.array([True, False, True, False, True])
+    assert ns["_index"]({"position": np.zeros(5), "cf_ok": ok}, 0, 5) == [0, 2, 4]
+
+
+def test_the_patch_upgrades_a_loader_patched_before_the_dagger_edit():
+    once = SRC.replace(patch.EDITS[0][0], patch.EDITS[0][1])      # the first edit only
+    assert patch.apply(once) == patch.apply(SRC)
 
 
 def test_the_loader_reads_lane_labels_when_present_and_is_unchanged_otherwise():

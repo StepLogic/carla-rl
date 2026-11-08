@@ -170,3 +170,54 @@ def test_frames_and_positions_must_agree():
     frames, pos, end = _shard(5, "reached")
     with pytest.raises(ValueError):
         episode_to_traj(frames[:-2], pos, end)
+
+
+def test_aim_labels_become_vints_label_arrays():
+    """DAgger frames (EXPERT_RECORD_AIM): the recorder's CARLA aim points and yaws
+    -> cf_position / cf_yaw in the right-handed frame the trajectory uses, entry 0
+    the car itself; frames without a label keep cf_ok False."""
+    from vae_nav.vint_data import aim_cf_labels
+    xy = np.array([[0.0, 0.0], [1.0, 0.0]])                  # right-handed, heading +x
+    yaw = np.zeros(2)
+    aim = np.zeros((2, 5, 2), np.float32)
+    aim[0, :, 0] = np.arange(1, 6)
+    aim[0, :, 1] = -1.0                                       # CARLA y -1 = north = LEFT
+    aim_yaw = np.full((2, 5), -np.pi / 2, np.float32)         # CARLA -90 deg = facing north
+    pos, yw, ok = aim_cf_labels(xy, yaw, aim, aim_yaw, np.array([True, False]))
+    assert pos.shape == (2, 6, 2) and yw.shape == (2, 6)
+    assert pos[0, 0] == pytest.approx([0.0, 0.0])
+    assert pos[0, 1:, 1] == pytest.approx(np.ones(5))        # +y = left
+    assert yw[0, 1:] == pytest.approx(np.full(5, np.pi / 2))  # turned left
+    assert ok.tolist() == [True, False]
+
+
+def test_the_converter_keeps_dagger_aim_labels_and_a_fixed_spacing(tmp_path):
+    """--dataset names the tar's dataset; an episode with aim fields gains
+    cf_position/cf_yaw/cf_ok; --metric-spacing fixes ViNT's normaliser (the aim
+    labels are defined at 3 x 0.3782 m, whatever speed the policy drove)."""
+    import json
+    import pickle as pk
+    import subprocess
+    import tarfile
+    frames, pos, _ = _shard(30, "crossing")
+    p = tmp_path / "ep_600000.npz"
+    np.savez(p, frames=frames, pos=pos, end=np.array("crossing"), town=np.array("Town01"),
+             seed=np.array(600000), mode=np.array(1, np.int8),
+             aim=np.zeros((31, 5, 2), np.float32), aim_yaw=np.zeros((31, 5), np.float32),
+             aim_ok=np.ones(31, bool))
+    split = tmp_path / "split.json"
+    split.write_text(json.dumps({"train": [str(p)], "val": [str(p)]}))
+    tar = tmp_path / "d.tar"
+    r = subprocess.run([sys.executable, os.path.join(ROOT, "scripts", "convert_il_to_vint.py"),
+                        "--split", str(split), "--tar", str(tar), "--workers", "1",
+                        "--dataset", "carla_dagger1", "--trim", "0", "--min-frames", "16",
+                        "--metric-spacing", "0.3782"],
+                       capture_output=True, text=True,
+                       env={**os.environ, "CUDA_VISIBLE_DEVICES": ""})
+    assert r.returncode == 0, r.stderr
+    with tarfile.open(tar) as tf:
+        d = pk.loads(tf.extractfile("carla_dagger1/Town01_600000/traj_data.pkl").read())
+        s = json.loads(tf.extractfile("carla_dagger1/summary.json").read())
+        assert "splits/carla_dagger1/train/traj_names.txt" in tf.getnames()
+    assert d["cf_position"].shape == (31, 6, 2) and d["cf_ok"].all()   # no fault trim
+    assert s["metric_waypoint_spacing_m"] == pytest.approx(0.3782)

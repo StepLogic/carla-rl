@@ -78,11 +78,10 @@ def main():
                     help="uniform / random key counts chosen so their key + image-gap TOTAL "
                          "equals entropy's. Off by default (user 2026-11-07 stopped it: key-count "
                          "matching, Habitat's rule, as the frozen run used)")
-    ap.add_argument("--uniform-spacing", type=float, default=8.0,
-                    help="FIXED uniform key-node spacing in metres, the same in every CARLA "
-                         "experiment (user 2026-11-07: 'use a fixed number for all CARLA "
-                         "experiments ... for uniform'); 0 = match entropy's key count instead "
-                         "(the frozen run's maps)")
+    ap.add_argument("--uniform-spacing", type=float, default=0.0,
+                    help="0 (default, ALWAYS used -- user 2026-11-08: 'keep uniform map as is "
+                         "... always used count matched'): uniform spacing searched so its key "
+                         "count equals entropy's. > 0 = a fixed spacing in metres (not used)")
     ap.add_argument("--image-gaps", action=argparse.BooleanOptionalAction, default=True,
                     help="add image-coverage gap nodes (default); --no-image-gaps builds KEY-ONLY "
                          "maps (user 2026-11-08: oracle localisation without gap nodes)")

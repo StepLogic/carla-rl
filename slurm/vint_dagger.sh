@@ -29,8 +29,12 @@ case $TOWN in
   Town01) i=0;; Town04) i=1;; Town05) i=2;; Town10HD) i=3;;
   *) echo "=== vint_dagger: $TOWN is not a training town"; exit 1;;
 esac
-seed0=$((600000 + 10000 * i + 100000 * (DAGGER_ROUND - 1)))
+# SEED_OFFSET (even, default 0) splits one town over several jobs (user 2026-11-07,
+# "can you make it fast"): e.g. two jobs of 150 episodes with offsets 0 and 300.
+SEED_OFFSET=${SEED_OFFSET:-0}
+if [ $((SEED_OFFSET % 2)) -ne 0 ]; then echo "=== SEED_OFFSET must be even"; exit 1; fi
+seed0=$((600000 + 10000 * i + 100000 * (DAGGER_ROUND - 1) + SEED_OFFSET))
 echo "=== VINT_DAGGER round $DAGGER_ROUND $TOWN seeds from $seed0 (even: goal episodes) port $PORT policy=$EVAL_FROM -> $EXPERT_RECORD_ROOT n=$EXPERT_RECORD_EPISODES ==="
 REWARD_OVERLAY=slurm/il_record.env ENV_TOWNS=$TOWN EXPERT_SEED0=$seed0 \
-  RUN_NAME=vint_dagger_r${DAGGER_ROUND}_$TOWN CARLA_PORT=$PORT bash slurm/train_sac.sbatch
+  RUN_NAME=vint_dagger_r${DAGGER_ROUND}_${TOWN}_s$SEED_OFFSET CARLA_PORT=$PORT bash slurm/train_sac.sbatch
 echo "=== VINT_DAGGER round $DAGGER_ROUND $TOWN rc=$? ==="

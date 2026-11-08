@@ -32,10 +32,12 @@ mkdir -p "$LOCAL"
 trap 'rm -rf "$LOCAL"' EXIT
 t0=$(date +%s)
 tar -xf "$DATA_TAR" -C "$LOCAL" || { echo "=== tar failed"; exit 1; }
-# DATA_TAR2: a second dataset next to the first (a DAgger round, carla_dagger<N>.tar).
-if [ -n "${DATA_TAR2:-}" ]; then
-  tar -xf "$DATA_TAR2" -C "$LOCAL" || { echo "=== tar2 failed"; exit 1; }
-fi
+# DATA_TAR2, DATA_TAR3: more datasets next to the first (DAgger rounds, carla_dagger<N>.tar).
+for extra in "${DATA_TAR2:-}" "${DATA_TAR3:-}"; do
+  if [ -n "$extra" ]; then
+    tar -xf "$extra" -C "$LOCAL" || { echo "=== tar $extra failed"; exit 1; }
+  fi
+done
 echo "=== data unpacked in $(( $(date +%s) - t0 )) s: $(du -sh "$LOCAL" | cut -f1) | $(df -h "$LOCAL" | tail -1)"
 
 # ViNT's goal bound is wrong for waypoint_spacing > 1 (scripts/vint/patch_vint_dataset.py).

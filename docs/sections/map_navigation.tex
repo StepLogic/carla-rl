@@ -84,32 +84,3 @@ ViNT topological map & -- & -- & -- & -- & -- & -- \\
 \bottomrule
 \end{tabular}
 \end{table}
-
-\begin{table}[t]
-\centering
-\caption{ViNT on the development episodes (not the held-out set of
-Table~\ref{tab:map_navigation}): success rate, 100 episodes per cell. Val.: true
-goals reached out of 80 on training-town validation (Town05 and Town01), the only
-number used to choose a checkpoint; the imitation policy scores 63/80. ViNT keeps
-its frame context across subgoals and approaches only the final goal; the ViNT
-topological map uses ViNT's own map, localiser and navigator.}
-\label{tab:vint_dev}
-\begin{tabular}{llccccccc}
-\toprule
- & & & \multicolumn{3}{c}{Town02} & \multicolumn{3}{c}{Town03} \\
-\cmidrule(lr){4-6}\cmidrule(lr){7-9}
-Checkpoint & Map & Val. & Easy & Medium & Hard & Easy & Medium & Hard \\
-\midrule
-First fine-tune & None & 37 & 0.21 & 0.09 & 0.00 & 0.30 & 0.06 & 0.02 \\
-\midrule
-DAgger round 1 & None & 47 & 0.65 & 0.50 & 0.19 & 0.23 & 0.08 & 0.02 \\
- & ViNT map & & 0.68 & 0.59 & 0.49 & 0.33 & 0.11 & 0.00 \\
-\midrule
-DAgger round 2 & None & 49 & 0.73 & 0.43 & 0.10 & 0.32 & 0.16 & 0.04 \\
- & ViNT map & & 0.71 & 0.66 & 0.49 & 0.25 & 0.12 & 0.03 \\
-\midrule
-DAgger round 3 (final) & None & 55.5 & 0.82 & 0.60 & 0.23 & -- & -- & -- \\
- & ViNT map & & 0.76 & 0.63 & 0.50 & -- & -- & -- \\
-\bottomrule
-\end{tabular}
-\end{table}

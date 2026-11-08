@@ -39,45 +39,49 @@ not consistently significant, because the policy already reaches nearby goals
 on its own. The choice of nodes makes no measurable difference: entropy and SGM
 placement do not beat uniform spacing in any band. Localising by the true pose instead of by image, under the same
 navigation rules, changes success by at most 0.06 and is not significantly
-better, so image localisation is not what limits the system.
+better, so image localisation is not what limits the system. SPL is within
+0.01 of SR everywhere: successful episodes drive at most 1.1 times the shortest
+route, because a wrong turn almost always ends the episode by leaving the lane.
 
 \begin{table}[t]
 \centering
-\caption{Success rate on 200 held-out episodes per band (Town02 and Town03,
-100 each). Both localisation modes use the same maps and the same navigation
-rules. $^{*}$: $p<0.01$ against the same policy without a map (paired exact
-McNemar).}
+\caption{Success rate (SR) and success weighted by path length (SPL) on 200
+held-out episodes per band (Town02 and Town03, 100 each). Both localisation
+modes use the same maps and the same navigation rules. $^{*}$: SR $p<0.01$
+against the same policy without a map (paired exact McNemar).}
 \label{tab:map_navigation}
-\begin{tabular}{lccc}
+\begin{tabular}{lcccccc}
 \toprule
-Method & Easy & Medium & Hard \\
+ & \multicolumn{2}{c}{Easy} & \multicolumn{2}{c}{Medium} & \multicolumn{2}{c}{Hard} \\
+\cmidrule(lr){2-3}\cmidrule(lr){4-5}\cmidrule(lr){6-7}
+Method & SR & SPL & SR & SPL & SR & SPL \\
 \midrule
-\multicolumn{4}{l}{\textbf{Imitation policy}} \\
-No map & 0.70 & 0.63 & 0.42 \\
-\multicolumn{4}{l}{\textit{Image localisation}} \\
-\quad Uniform map & 0.74 & 0.67 & 0.53$^{*}$ \\
-\quad Entropy map & 0.72 & 0.68 & 0.54$^{*}$ \\
-\quad SGM map & 0.69 & 0.72$^{*}$ & 0.54$^{*}$ \\
-\multicolumn{4}{l}{\textit{True-pose localisation (upper bound)}} \\
-\quad Uniform map & 0.74 & 0.73 & 0.54 \\
-\quad Entropy map & 0.72 & 0.72 & 0.48 \\
-\quad SGM map & 0.70 & 0.73 & 0.56 \\
+\multicolumn{7}{l}{\textbf{Imitation policy}} \\
+No map & 0.70 & 0.70 & 0.62 & 0.62 & 0.42 & 0.42 \\
+\multicolumn{7}{l}{\textit{Image localisation}} \\
+\quad Uniform map & 0.73 & 0.73 & 0.67 & 0.66 & 0.53$^{*}$ & 0.53 \\
+\quad Entropy map & 0.72 & 0.72 & 0.68 & 0.68 & 0.54$^{*}$ & 0.54 \\
+\quad SGM map & 0.69 & 0.68 & 0.72$^{*}$ & 0.72 & 0.54$^{*}$ & 0.53 \\
+\multicolumn{7}{l}{\textit{True-pose localisation (upper bound)}} \\
+\quad Uniform map & 0.73 & 0.73 & 0.72 & 0.72 & 0.54 & 0.53 \\
+\quad Entropy map & 0.71 & 0.71 & 0.72 & 0.72 & 0.48 & 0.48 \\
+\quad SGM map & 0.69 & 0.69 & 0.73 & 0.73 & 0.56 & 0.56 \\
 \midrule
-\multicolumn{4}{l}{\textbf{RL policy}} \\
-No map & -- & -- & -- \\
-\multicolumn{4}{l}{\textit{Image localisation}} \\
-\quad Uniform map & -- & -- & -- \\
-\quad Entropy map & -- & -- & -- \\
-\quad SGM map & -- & -- & -- \\
-\multicolumn{4}{l}{\textit{True-pose localisation (upper bound)}} \\
-\quad Uniform map & -- & -- & -- \\
-\quad Entropy map & -- & -- & -- \\
-\quad SGM map & -- & -- & -- \\
+\multicolumn{7}{l}{\textbf{RL policy}} \\
+No map & -- & -- & -- & -- & -- & -- \\
+\multicolumn{7}{l}{\textit{Image localisation}} \\
+\quad Uniform map & -- & -- & -- & -- & -- & -- \\
+\quad Entropy map & -- & -- & -- & -- & -- & -- \\
+\quad SGM map & -- & -- & -- & -- & -- & -- \\
+\multicolumn{7}{l}{\textit{True-pose localisation (upper bound)}} \\
+\quad Uniform map & -- & -- & -- & -- & -- & -- \\
+\quad Entropy map & -- & -- & -- & -- & -- & -- \\
+\quad SGM map & -- & -- & -- & -- & -- & -- \\
 \midrule
-\multicolumn{4}{l}{\textbf{ViNT}~\cite{shah2023vint}} \\
-No map & -- & -- & -- \\
-Uniform map, image localisation & -- & -- & -- \\
-ViNT topological map & -- & -- & -- \\
+\multicolumn{7}{l}{\textbf{ViNT}~\cite{shah2023vint}} \\
+No map & -- & -- & -- & -- & -- & -- \\
+Uniform map, image localisation & -- & -- & -- & -- & -- & -- \\
+ViNT topological map & -- & -- & -- & -- & -- & -- \\
 \bottomrule
 \end{tabular}
 \end{table}

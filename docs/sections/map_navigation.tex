@@ -1,0 +1,61 @@
+% Topological-map navigation in CARLA. Numbers: docs/map_benchmark_fresh_2026-11-07.md,
+% raw results: results/map_fresh_2026-11-07/. Requires \usepackage{booktabs}.
+\subsection{Navigating with a Topological Map}
+\label{sec:map_navigation}
+
+\paragraph{Setup.}
+We test whether a topological map of a town helps the image-goal policy reach
+goals it cannot see from the start. The map is built once per town from a single
+drive by a scripted explorer that covers every lane and every junction turn
+(5.0\,km in Town02, 31.4\,km in Town03). Nodes are frames from this drive. We
+compare three ways of choosing them: \emph{uniform} spacing along the drive,
+\emph{entropy}, which keeps frames where the policy's action entropy peaks, and
+\emph{SGM}~\cite{emmons2020sgm}, which merges frames that a learnt temporal
+distance treats as interchangeable. The distance function follows
+ViNT~\cite{shah2023vint} and is trained on the policy's demonstration data from
+the training towns only. All three maps have the same number of key nodes
+(255 in Town02, 1104 in Town03) and are completed with the same image-coverage
+gap nodes and edge rules. Navigation is
+image-only: the start and goal nodes are the best image matches of the current
+view and the goal image, the agent is shown each subgoal's image along the
+planned path, and a subgoal counts as reached when its image matches the current
+view better than its neighbours. Episodes with no route are driven without the
+map. We also report an upper bound that localises with the true pose.
+
+\paragraph{Protocol.}
+Episodes come from the two held-out towns (Town02, Town03), with 100 per town in
+each of three bands of road-route distance: easy (10--25\,m), medium
+(25--50\,m) and hard (50--100\,m). These 600 episodes were drawn after the
+method was fixed and were not used during development. Success requires
+stopping within 1\,m of the goal, and leaving the road, crossing a solid line or
+colliding ends the episode. All arms use the same policy and the same episodes,
+so differences are tested with paired exact McNemar tests.
+
+\paragraph{Results.}
+Table~\ref{tab:map_navigation} gives the success rates. The map helps on long
+routes: on the hard band all three maps raise success from 0.42 to 0.53--0.54
+($p \le 0.002$ against no map). On easy and medium routes the gain is small and
+not consistently significant, because the policy already reaches nearby goals
+on its own. The choice of nodes makes no measurable difference: entropy and SGM
+placement do not beat uniform spacing in any band. Localising by image costs
+about 0.06 compared with the true-pose upper bound.
+
+\begin{table}[t]
+\centering
+\caption{Success rate on 200 held-out episodes per band (Town02 and Town03,
+100 each). Maps use image localisation unless stated. $^{*}$: $p<0.01$ against
+no map (paired exact McNemar).}
+\label{tab:map_navigation}
+\begin{tabular}{lccc}
+\toprule
+Method & Easy & Medium & Hard \\
+\midrule
+No map & 0.70 & 0.63 & 0.42 \\
+Uniform map & 0.74 & 0.67 & 0.53$^{*}$ \\
+Entropy map & 0.72 & 0.68 & 0.54$^{*}$ \\
+SGM map & 0.69 & 0.72$^{*}$ & 0.54$^{*}$ \\
+\midrule
+Uniform map, true-pose localisation & 0.77 & 0.74 & 0.60 \\
+\bottomrule
+\end{tabular}
+\end{table}

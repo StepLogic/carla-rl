@@ -148,4 +148,25 @@ Settings:
 - Training: warm-started from round-2 epoch 2, stopped after epoch 2. This time the stop waits for the next epoch to start in the log, so the checkpoint is complete.
 - Decision (pre-declared): only Town05/Town01 validation. The development map set runs only if the best epoch reaches >= 54/80.
 
-_Pending._
+**Validation** (true goal, n = 40 per town):
+
+| Round 3 | Run A | Run B | Mean |
+|---|---|---|---|
+| epoch 0 | 47 (T05 .500, T01 .675) | 46 (.500, .650) | 46.5 |
+| **epoch 1** | **54** (.575, .775) | **57** (.650, .775) | **55.5** |
+| epoch 2 | 47 (.500, .675) | | 47 |
+
+Epochs 0 and 1 were each evaluated twice on the same seeds (an early job and the follow-up overlapped). Run to run, the same checkpoint differs by up to 0.075 per town, which is the noise of one 40-episode validation.
+
+**Decision:** round-3 epoch 1 clears the bar in both runs, so it is the final ViNT. It gets the development map set: topomap tag `dagger3_e1`, label `vint_dev_dg3e1`.
+
+**Final candidates on training-town validation** (true / 80):
+
+| Candidate | Score |
+|---|---|
+| ViNT v1 | 37 |
+| lane-centre e1 | 42 |
+| DAgger r1 e1 | 47 |
+| DAgger r2 e2 | 49 |
+| **DAgger r3 e1** | **55.5** |
+| c0 | 63 |

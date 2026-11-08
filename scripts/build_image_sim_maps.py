@@ -83,6 +83,10 @@ def main():
                          "experiment (user 2026-11-07: 'use a fixed number for all CARLA "
                          "experiments ... for uniform'); 0 = match entropy's key count instead "
                          "(the frozen run's maps)")
+    ap.add_argument("--placements", nargs="+", default=["entropy", "uniform", "random"],
+                    choices=["entropy", "uniform", "random", "sgm_matched"],
+                    help="which maps to WRITE (others are computed but not saved); "
+                         "sgm_matched needs <out>/sgm_pairs_<Town>.npz")
     ap.add_argument("--drive-visit-m", type=float, default=8.0,
                     help="a candidate visits a node this close (aligned) for the drive edges")
     ap.add_argument("--max-edge-m", type=float, default=25.0)
@@ -194,8 +198,27 @@ def main():
     print(f"[ImgMap] key nodes: entropy MAD {len(mad)} -> {n} image-distinct; uniform {len(uni)} "
           f"(spacing {_sp:.2f} m); random {len(rnd)}", flush=True)
 
+    arms = [("entropy", keys), ("uniform", list(map(int, uni))), ("random", list(map(int, rnd)))]
+    if "sgm_matched" in a.placements:
+        # SGM (user 2026-11-07, "add sgm map"): v30's goal-critic read between the
+        # trace's frames (slurm/sgm_pairs_single.sh -> <out>/sgm_pairs_<Town>.npz),
+        # sgm_match with no spatial gate, key count matched to entropy's. Its members
+        # are TRACE indices (candidates thinned at 0.8 m); each is mapped to the
+        # nearest 0.5 m candidate frame here, so every rule after this is shared.
+        z = np.load(os.path.join(a.out, f"sgm_pairs_{a.town}.npz"))
+        _cut, keep, _sst = im.sgm_match(z["cand"], z["pairs"], z["q"], z["xy"], z["yaw"],
+                                        count=n, gate_m=None, iters=30)
+        Sa = np.asarray(S)
+        j = np.clip(np.searchsorted(Sa, np.asarray(keep)), 1, len(Sa) - 1)
+        lo_, hi_ = j - 1, j
+        dlo = np.hypot(*(tr["pos"][Sa[lo_]] - tr["pos"][keep]).T)
+        dhi = np.hypot(*(tr["pos"][Sa[hi_]] - tr["pos"][keep]).T)
+        sgm_keys = list(dict.fromkeys(np.where(dlo <= dhi, lo_, hi_).tolist()))
+        print(f"[ImgMap] SGM: cutoff {_cut:.3f}, {len(keep)} members -> {len(sgm_keys)} key nodes "
+              f"(target {n})", flush=True)
+        arms.append(("sgm_matched", sgm_keys))
     rows = []
-    for name, key in (("entropy", keys), ("uniform", list(map(int, uni))), ("random", list(map(int, rnd)))):
+    for name, key in [x for x in arms if x[0] in a.placements]:
         nodes, img_gap = with_image_gaps(key)
         # 2b. METRIC GAP (aligned, gap_m)
         before = len(nodes)
@@ -274,7 +297,8 @@ def main():
                "scc_frac": round(scc / max(len(gnodes), 1), 3), **meta}
         print(json.dumps(row), flush=True)
         rows.append(row)
-    with open(os.path.join(a.out, f"summary_{a.town}.json"), "w") as fh:
+    _sfx = "" if set(a.placements) == {"entropy", "uniform", "random"} else "_" + "_".join(a.placements)
+    with open(os.path.join(a.out, f"summary_{a.town}{_sfx}.json"), "w") as fh:
         json.dump(rows, fh, indent=1)
 
 

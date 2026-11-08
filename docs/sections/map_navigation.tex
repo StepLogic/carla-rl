@@ -38,24 +38,31 @@ routes: on the hard band all three maps raise success from 0.42 to 0.53--0.54
 not consistently significant, because the policy already reaches nearby goals
 on its own. The choice of nodes makes no measurable difference: entropy and SGM
 placement do not beat uniform spacing in any band. Localising by image costs
-about 0.06 compared with the true-pose upper bound.
+about 0.06 compared with the true-pose upper bound. With true-pose
+localisation entropy and SGM fall below uniform on hard routes; their nodes are
+sparser on straight roads, so more episodes find no node within the 8\,m
+localisation radius and are driven without the map.
 
 \begin{table}[t]
 \centering
 \caption{Success rate on 200 held-out episodes per band (Town02 and Town03,
-100 each). Maps use image localisation unless stated. $^{*}$: $p<0.01$ against
-no map (paired exact McNemar).}
+100 each). $^{*}$: $p<0.01$ against no map (paired exact McNemar).}
 \label{tab:map_navigation}
 \begin{tabular}{lccc}
 \toprule
 Method & Easy & Medium & Hard \\
 \midrule
 No map & 0.70 & 0.63 & 0.42 \\
+\midrule
+\multicolumn{4}{l}{\textit{Image localisation}} \\
 Uniform map & 0.74 & 0.67 & 0.53$^{*}$ \\
 Entropy map & 0.72 & 0.68 & 0.54$^{*}$ \\
 SGM map & 0.69 & 0.72$^{*}$ & 0.54$^{*}$ \\
 \midrule
-Uniform map, true-pose localisation & 0.77 & 0.74 & 0.60 \\
+\multicolumn{4}{l}{\textit{True-pose localisation (upper bound)}} \\
+Uniform map & 0.77 & 0.74$^{*}$ & 0.60$^{*}$ \\
+Entropy map & 0.74 & 0.75$^{*}$ & 0.51$^{*}$ \\
+SGM map & 0.76 & 0.76$^{*}$ & 0.50$^{*}$ \\
 \bottomrule
 \end{tabular}
 \end{table}

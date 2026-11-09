@@ -120,7 +120,8 @@ class QuantileCritics(nn.Module):
 
     def __init__(self, state_dim: int, action_dim: int, n_critics: int = 5,
                  n_quantiles: int = 25, hidden: Sequence[int] = (256, 256),
-                 dropout: float = 0.0, layer_norm: bool = False) -> None:
+                 dropout: float = 0.0, layer_norm: bool = False,
+                 proj_dim: int = 0) -> None:
         """DroQ-style regularisation (dropout, layer_norm) is off by default.
 
         Linear -> Dropout -> LayerNorm -> ReLU on every HIDDEN layer, the
@@ -129,11 +130,28 @@ class QuantileCritics(nn.Module):
         Both are PER CRITIC: the ensemble is stacked parameters, so the norm's
         affine terms carry a critic axis as well, or all heads would share one
         normalisation and stop being independent estimators.
+
+        `proj_dim` > 0 (user 2026-11-09): DrQ's / SAC-AE's input head, per
+        critic -- the state goes through Linear(state_dim -> proj_dim) ->
+        LayerNorm -> tanh and the ACTION is concatenated to that feature, so
+        the action is 2 of proj_dim + 2 first-layer inputs instead of 2 of
+        state_dim + 2 (3652 here, where it drove < 0.4% of the layer's input).
+        0 = every earlier critic, parameter for parameter.
         """
         super().__init__()
         self.n_critics, self.n_quantiles = int(n_critics), int(n_quantiles)
         self.dropout, self.layer_norm = float(dropout), bool(layer_norm)
-        dims = [int(state_dim) + int(action_dim)] + list(hidden) + [self.n_quantiles]
+        self.proj_dim = int(proj_dim)
+        if self.proj_dim > 0:
+            pw = torch.empty(self.n_critics, int(state_dim), self.proj_dim)
+            for i in range(self.n_critics):           # per critic, read as (d_in, d_out)
+                nn.init.kaiming_uniform_(pw[i].T, a=math.sqrt(5))
+            self.proj_w = nn.Parameter(pw)
+            self.proj_b = nn.Parameter(torch.zeros(self.n_critics, self.proj_dim))
+            self.proj_ln_w = nn.Parameter(torch.ones(self.n_critics, self.proj_dim))
+            self.proj_ln_b = nn.Parameter(torch.zeros(self.n_critics, self.proj_dim))
+        in_state = self.proj_dim if self.proj_dim > 0 else int(state_dim)
+        dims = [in_state + int(action_dim)] + list(hidden) + [self.n_quantiles]
         self.weights = nn.ParameterList()
         self.biases = nn.ParameterList()
         for d_in, d_out in zip(dims[:-1], dims[1:]):
@@ -167,8 +185,23 @@ class QuantileCritics(nn.Module):
                 + (b[idx] if idx is not None else b[:, None, :])
         return x
 
+    def project(self, s: torch.Tensor, idx: Optional[int] = None) -> torch.Tensor:
+        """DrQ's head: tanh(LayerNorm(s W + b)) per critic -> (n_critics, B, proj_dim),
+        or (B, proj_dim) for critic `idx`."""
+        if idx is None:
+            z = torch.einsum("bi,nio->nbo", s, self.proj_w) + self.proj_b[:, None, :]
+            w, b = self.proj_ln_w[:, None, :], self.proj_ln_b[:, None, :]
+        else:
+            z = s @ self.proj_w[idx] + self.proj_b[idx]
+            w, b = self.proj_ln_w[idx], self.proj_ln_b[idx]
+        z = nn.functional.layer_norm(z, (z.shape[-1],)) * w + b
+        return torch.tanh(z)
+
     def forward(self, s: torch.Tensor, a: torch.Tensor) -> torch.Tensor:
-        x = torch.cat([s, a], dim=-1)[None].expand(self.n_critics, -1, -1)
+        if self.proj_dim > 0:
+            x = torch.cat([self.project(s), a[None].expand(self.n_critics, -1, -1)], dim=-1)
+        else:
+            x = torch.cat([s, a], dim=-1)[None].expand(self.n_critics, -1, -1)
         for k, (w, b) in enumerate(zip(self.weights, self.biases)):
             x = torch.einsum("nbi,nio->nbo", x, w) + b[:, None, :]
             if k < len(self.weights) - 1:
@@ -176,7 +209,7 @@ class QuantileCritics(nn.Module):
         return x
 
     def single_forward(self, i: int, s: torch.Tensor, a: torch.Tensor) -> torch.Tensor:
-        x = torch.cat([s, a], dim=-1)
+        x = torch.cat([self.project(s, idx=i) if self.proj_dim > 0 else s, a], dim=-1)
         for k, (w, b) in enumerate(zip(self.weights, self.biases)):
             x = x @ w[i] + b[i]
             if k < len(self.weights) - 1:

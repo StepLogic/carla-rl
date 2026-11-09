@@ -2026,6 +2026,14 @@ def coverage_perturbation(dry):
                            throttle=_pair("EXPERT_BURST_THROTTLE", "0.0,0.5")))
 
 
+def checkpoint_critic_proj_dim(ckpt_dir) -> int:
+    """The size of a checkpoint's critic input head (DrQ's projection), from its
+    config.json; 0 (no head) for one written before the field existed."""
+    import json
+    with open(os.path.join(ckpt_dir, "config.json")) as fh:
+        return int(json.load(fh).get("critic_proj_dim", 0) or 0)
+
+
 def checkpoint_critic_layer_norm(ckpt_dir) -> bool:
     """Whether a checkpoint's critics have LayerNorm, from its config.json;
     False for one written before the field (or the rule) existed."""
@@ -2109,7 +2117,7 @@ def require_plain_sac(training, algo, env=None) -> None:
             + "\nSource slurm/plain_sac.env LAST in the run's overlay.")
 
 
-def build_agent(binoc_dim, act_dim, critic_layer_norm=None):
+def build_agent(binoc_dim, act_dim, critic_layer_norm=None, critic_proj_dim=None):
     """The learner exactly as main() configures it, with DEBiT's pretrained
     monocular trunk loaded into both the online and the target encoder.
     Factored out of main() (2026-11-04, imitation-first plan) so behaviour
@@ -2177,6 +2185,12 @@ def build_agent(binoc_dim, act_dim, critic_layer_norm=None):
         # USER RULE 2026-11-06: LayerNorm in the critic, on by default.
         critic_layer_norm=(os.environ.get("CRITIC_LAYERNORM", "1") == "1"
                            if critic_layer_norm is None else bool(critic_layer_norm)),
+        # CRITIC_PROJ_DIM (user 2026-11-09): DrQ's critic input head, per critic,
+        # Linear([h | state] -> N) -> LayerNorm -> tanh with the action after it; the
+        # raw 3650-d input left the 2 actions < 0.4% of the first layer. 0 = off.
+        # An eval passes its checkpoint's own size (checkpoint_critic_proj_dim).
+        critic_proj_dim=(env_int("CRITIC_PROJ_DIM", 0) if critic_proj_dim is None
+                         else int(critic_proj_dim)),
         subset_size=env_int("SUBSET_SIZE", 2),
         discount=env_float("DISCOUNT", 0.99),
         discount_e=env_float("EXPLORE_DISCOUNT", 0.99),
@@ -2349,7 +2363,8 @@ def main():
     # first ("shapes (2,) (3,)") and the smoke run the second ("the expanded
     # size of the tensor (2) must match the existing size (3)").
     ACT_DIM = int(env.action_space.shape[0])
-    agent = build_agent(binoc_dim, ACT_DIM, critic_layer_norm=checkpoint_critic_layer_norm(EVAL_FROM) if EVAL_FROM else None)
+    agent = build_agent(binoc_dim, ACT_DIM, critic_layer_norm=checkpoint_critic_layer_norm(EVAL_FROM) if EVAL_FROM else None,
+                        critic_proj_dim=checkpoint_critic_proj_dim(EVAL_FROM) if EVAL_FROM else None)
     require_critic_layernorm(agent.cfg.critic_layer_norm,
                              training=not (EVAL_FROM or EXPERT_RECORD))
     mono_report = agent.mono_report
@@ -2428,6 +2443,11 @@ def main():
     if os.environ.get("ALGO", "sac") == "sac":
         print("  PLAIN SAC (user rule 2026-11-08): all learner settings checked "
               "(slurm/plain_sac.env)", flush=True)
+    if agent.cfg.critic_proj_dim:
+        print(f"  CRITIC INPUT HEAD (DrQ, CRITIC_PROJ_DIM={agent.cfg.critic_proj_dim}): each "
+              f"critic maps [h | state] ({agent.cfg.hidden + len(agent.cfg.goal_cols)}-d) "
+              f"through Linear -> {agent.cfg.critic_proj_dim} -> LayerNorm -> tanh, then "
+              f"takes the action", flush=True)
     print(f"  towns={','.join(TOWNS)} (rotating every {TOWN_EVERY} episodes; "
           f"Town02/Town03 HELD OUT) port={PORT} seed={SEED} device={DEVICE}",
           flush=True)

@@ -124,6 +124,18 @@ def test_the_random_warmup_runs_are_plain_and_mirror_each_other():
         assert loc.get(k) == clu.get(k), k
 
 
+def test_the_projection_runs_are_plain_and_mirror_each_other():
+    loc = _resolved("slurm/local_c0ft_t05_sac_plain_rw_proj.env")
+    clu = _resolved("slurm/sac_c0_plain_rs10_rw_proj.env")
+    for env in (loc, clu):
+        assert plain_sac_violations(env) == []
+        assert env["CRITIC_PROJ_DIM"] == "50" and env["RANDOM_WARMUP"] == "1"
+    for k in ("IL_PRELOAD_TRANSFORM", "IL_CRITIC_WARMUP_UPDATES", "IL_ONLINE_FREEZE_UPDATES",
+              "IL_FREEZE_TRUNK", "HER", "DET_EPISODE_FRAC", "UPDATE_EVERY", "LEARNING_STARTS",
+              "REWARD_SCALE", "TARGET_ENTROPY", "RANDOM_WARMUP", "CRITIC_PROJ_DIM"):
+        assert loc.get(k) == clu.get(k), k
+
+
 def test_a_sac_training_run_refuses_to_start_and_names_every_violation():
     with pytest.raises(SystemExit) as e:
         require_plain_sac(training=True, algo="sac",

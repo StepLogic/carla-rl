@@ -236,6 +236,10 @@ class GatedRecurrentTQCConfig:
     # a high replay ratio stable. 0 / False = every earlier run.
     critic_dropout: float = 0.0
     critic_layer_norm: bool = False
+    # DrQ's critic input head (user 2026-11-09): > 0 gives every critic its own
+    # Linear([h | state] -> critic_proj_dim) -> LayerNorm -> tanh, and the action
+    # joins after it (nets.QuantileCritics proj_dim). 0 = every earlier critic.
+    critic_proj_dim: int = 0
     # ACTOR_LOG_STD (2026-11-06): pin the actor's log-std at this value (its
     # clamp becomes (v, v)), so a fine-tune trains only the mean action: every
     # clone fine-tune collapsed with its action noise growing. One float for
@@ -584,11 +588,13 @@ class GatedRecurrentTQC:
         self.critics_g = QuantileCritics(cfg.hidden + len(cfg.goal_cols), cfg.action_dim,
                                          cfg.n_critics, cfg.n_quantiles, cfg.mlp,
                                          dropout=cfg.critic_dropout,
-                                         layer_norm=cfg.critic_layer_norm).to(dev)
+                                         layer_norm=cfg.critic_layer_norm,
+                                         proj_dim=cfg.critic_proj_dim).to(dev)
         self.critics_e = QuantileCritics(cfg.hidden + len(cfg.explore_cols), cfg.action_dim,
                                          cfg.n_critics, cfg.n_quantiles, cfg.mlp,
                                          dropout=cfg.critic_dropout,
-                                         layer_norm=cfg.critic_layer_norm).to(dev)
+                                         layer_norm=cfg.critic_layer_norm,
+                                         proj_dim=cfg.critic_proj_dim).to(dev)
         self.compress_targ = _frozen_copy(self.compress)
         self.act_embed_targ = _frozen_copy(self.act_embed) if cfg.prev_action else None
         self.core_targ = _frozen_copy(self.core)
@@ -1402,7 +1408,8 @@ class GatedRecurrentTQC:
         if fresh_critics_on_mismatch and set(blob["critics_g"]) != set(self.critics_g.state_dict()):
             skip = self._CRITIC_PARTS
             print(f"  load {in_dir}: the checkpoint's critics differ in architecture "
-                  f"(critic LayerNorm now {'ON' if self.cfg.critic_layer_norm else 'OFF'}) -- "
+                  f"(critic LayerNorm now {'ON' if self.cfg.critic_layer_norm else 'OFF'}, "
+                  f"input head {self.cfg.critic_proj_dim or 'none'}) -- "
                   f"critics, critic targets and the critic optimiser start FRESH; every other "
                   f"module loads strictly", flush=True)
         # Strict on names and shapes: a pose snapshot (D-channel compression,

@@ -54,7 +54,9 @@ def test_the_checkpoints_own_critic_setting_is_read(tmp_path):
 def test_evals_build_the_critic_the_checkpoint_has():
     main_src = SRC[SRC.index("\ndef main():"):]
     assert ("build_agent(binoc_dim, ACT_DIM, critic_layer_norm="
-            "checkpoint_critic_layer_norm(EVAL_FROM) if EVAL_FROM else None)") in main_src
+            "checkpoint_critic_layer_norm(EVAL_FROM) if EVAL_FROM else None") in main_src
+    # and its critic input head (tests/test_critic_projection.py)
+    assert "critic_proj_dim=checkpoint_critic_proj_dim(EVAL_FROM) if EVAL_FROM else None" in main_src
 
 
 def test_a_warm_start_from_a_no_layernorm_checkpoint_gets_fresh_layernorm_critics(tmp_path):

@@ -147,6 +147,15 @@ def test_the_pretrained_frozen_head_run_is_plain_and_two_town():
                                            "eval_every": 500, "freeze": True}
 
 
+def test_the_twin_critic_run_is_plain_two_town_and_standard_sac():
+    from train_carla_sac import proj_pretrain_settings
+    env = _resolved("slurm/sac_c0_sac2_projbc.env")
+    assert plain_sac_violations(env) == []
+    assert (env["N_CRITICS"], env["SUBSET_SIZE"], env["ACTOR_Q_REDUCE"]) == ("2", "2", "min")
+    assert env["ENV_TOWNS"] == "Town05,Town01" and env["CRITIC_PROJ_DIM"] == "50"
+    assert proj_pretrain_settings(env)["freeze"] is True
+
+
 def test_a_sac_training_run_refuses_to_start_and_names_every_violation():
     with pytest.raises(SystemExit) as e:
         require_plain_sac(training=True, algo="sac",

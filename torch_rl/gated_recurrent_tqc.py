@@ -240,6 +240,10 @@ class GatedRecurrentTQCConfig:
     # Linear([h | state] -> critic_proj_dim) -> LayerNorm -> tanh, and the action
     # joins after it (nets.QuantileCritics proj_dim). 0 = every earlier critic.
     critic_proj_dim: int = 0
+    # The actor's Q over the ensemble (user 2026-11-09, "use same number standard
+    # critics use"): "mean" = REDQ (every earlier run), "min" = SAC's min(Q1, Q2) of
+    # its twin critics (Haarnoja et al. 2018 use the minimum in the policy loss).
+    actor_q_reduce: str = "mean"
     # ACTOR_LOG_STD (2026-11-06): pin the actor's log-std at this value (its
     # clamp becomes (v, v)), so a fine-tune trains only the mean action: every
     # clone fine-tune collapsed with its action noise growing. One float for
@@ -482,6 +486,17 @@ def _bound_frac(target: torch.Tensor, bound: float, upper: bool) -> torch.Tensor
     """
     hit = ((target >= bound) if upper else (target <= bound)).float()
     return hit.mean(dim=1) if hit.dim() > 1 else hit
+
+
+def reduce_critics(q: torch.Tensor, how: str) -> torch.Tensor:
+    """The ensemble's (n_critics, batch, n_quantiles) output -> one value per row for
+    the actor: "mean" over critics and quantiles (REDQ), or "min" over critics of each
+    critic's quantile mean (SAC's twin-critic minimum)."""
+    if how == "mean":
+        return q.mean(dim=(0, 2))
+    if how == "min":
+        return q.mean(dim=2).amin(dim=0)
+    raise ValueError(f"ACTOR_Q_REDUCE={how!r}: expected mean (REDQ) or min (SAC)")
 
 
 def _masked_mean(x: torch.Tensor, m: torch.Tensor) -> torch.Tensor:
@@ -1273,7 +1288,8 @@ class GatedRecurrentTQC:
             per_row = zero
             bc_on = self._bc_x is not None
             if has_g:
-                q_g = self._q(self.critics_g, s_d, st, self.goal_cols, new_a).mean(dim=(0, 2))
+                q_g = reduce_critics(self._q(self.critics_g, s_d, st, self.goal_cols, new_a),
+                                     cfg.actor_q_reduce)
                 if bc_on:
                     # TD3+BC: the critic term scaled by alpha / mean|Q| so the
                     # cloning term below keeps a fixed share of the one actor step.
@@ -1284,7 +1300,8 @@ class GatedRecurrentTQC:
                     scale_g = self._actor_q_scale(q_g, m_g, self.q_scale_g, self.q_scale_init_g)
                     per_row = per_row + (alpha_g * logp - q_g / scale_g) * m_g
             if has_e:
-                q_e = self._q(self.critics_e, s_d, st, self.explore_cols, new_a).mean(dim=(0, 2))
+                q_e = reduce_critics(self._q(self.critics_e, s_d, st, self.explore_cols, new_a),
+                                     cfg.actor_q_reduce)
                 scale_e = self._actor_q_scale(q_e, m_e, self.q_scale_e, self.q_scale_init_e)
                 # v13 warm-up: the exploration critic trains alone for the first
                 # explore_actor_warmup updates. A tensor, so no per-update guard.

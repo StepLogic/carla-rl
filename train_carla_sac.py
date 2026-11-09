@@ -2215,6 +2215,9 @@ def build_agent(binoc_dim, act_dim, critic_layer_norm=None, critic_proj_dim=None
         critic_proj_dim=(env_int("CRITIC_PROJ_DIM", 0) if critic_proj_dim is None
                          else int(critic_proj_dim)),
         subset_size=env_int("SUBSET_SIZE", 2),
+        # ACTOR_Q_REDUCE (user 2026-11-09, standard SAC's twin critics): "mean" (REDQ,
+        # the default) or "min" (SAC: min(Q1, Q2) in the policy loss as in the target).
+        actor_q_reduce=os.environ.get("ACTOR_Q_REDUCE", "mean"),
         discount=env_float("DISCOUNT", 0.99),
         discount_e=env_float("EXPLORE_DISCOUNT", 0.99),
         explore_actor_warmup=env_int("EXPLORE_ACTOR_WARMUP", 5000),

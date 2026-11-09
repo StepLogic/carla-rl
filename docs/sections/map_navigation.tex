@@ -112,7 +112,7 @@ SGM & -- & -- & -- & -- & -- & -- \\
 \setlength{\tabcolsep}{3.5pt}
 \caption{How the 200 held-out episodes per band end, imitation policy with
 ground-truth pose localisation on maps of key nodes only
-(Table~\ref{tab:map_navigation_pose}); None: no map. Reached, lane fault
+(Table~\ref{tab:map_navigation_pose}). Reached, lane fault
 (crossing or leaving the road), collision and time-out sum to 200. Too fast:
 passed within 1\,m of the goal above 10\,km/h and was not counted.}
 \label{tab:map_failures_pose}
@@ -121,19 +121,16 @@ passed within 1\,m of the goal above 10\,km/h and was not counted.}
 Map & Reached & Lane fault & Collision & Time-out & Too fast \\
 \midrule
 \multicolumn{6}{l}{\textit{Easy}} \\
-None & 140 & 45 & 5 & 10 & 19 \\
 \rowcolor{gray!15}Uniform & 138 & 32 & 1 & 29 & 10 \\
 \rowcolor{blue!12}Entropy & 118 & 52 & 4 & 26 & 33 \\
 SGM & 135 & 34 & 1 & 30 & 22 \\
 \midrule
 \multicolumn{6}{l}{\textit{Medium}} \\
-None & 125 & 63 & 2 & 10 & 18 \\
 \rowcolor{gray!15}Uniform & 137 & 38 & 1 & 24 & 9 \\
 \rowcolor{blue!12}Entropy & 112 & 57 & 0 & 31 & 30 \\
 SGM & 113 & 47 & 0 & 40 & 33 \\
 \midrule
 \multicolumn{6}{l}{\textit{Hard}} \\
-None & 84 & 92 & 4 & 20 & 18 \\
 \rowcolor{gray!15}Uniform & 106 & 38 & 2 & 54 & 4 \\
 \rowcolor{blue!12}Entropy & 82 & 69 & 8 & 41 & 18 \\
 SGM & 82 & 55 & 1 & 62 & 13 \\

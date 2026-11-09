@@ -60,6 +60,6 @@ elif [ "$ARM" = vinttopo ]; then
 else out=$HOME/carla-rl/checkpoints/$RUN/eval_${TAG}_map-${ARM}; MAPDIR=$MAPROOT/$ARM; fi
 if [ -f "$out/eval.json" ]; then echo "=== have $RUN"; exit 0; fi
 echo "=== VINT_BENCH $RUN ckpt=$CKPT port $PORT topomap=${EVAL_VINT_TOPOMAP:-none} localise=${EVAL_MAP_LOCALISE:-pose} joint=${EVAL_MAP_JOINT_LOCALISE:-0} reset_hidden=$EVAL_MAP_RESET_HIDDEN replan=$EVAL_MAP_REPLAN fallback=$EVAL_MAP_FALLBACK off_road_junction_m=$OFF_ROAD_JUNCTION_M maps=${MAPDIR:-none} episodes=$EVAL_EPISODES_FILE ==="
-EVAL_VIDEO_EVERY=10 REWARD_OVERLAY=slurm/bench_$BAND.env ENV_TOWNS=$TOWN WRONG_GOAL_MODE=0 \
+EVAL_VIDEO_EVERY=10 REWARD_OVERLAY=${BAND_OVERLAY:-slurm/bench_$BAND.env} ENV_TOWNS=$TOWN WRONG_GOAL_MODE=0 \
   EVAL_MAP_DIR=$MAPDIR RUN_NAME=$RUN CARLA_PORT=$PORT EVAL_FROM=$CKPT bash slurm/train_sac.sbatch
 echo "=== VINT_BENCH $RUN rc=$? ==="

@@ -218,6 +218,12 @@ EVAL_WRONG_GOAL = os.environ.get("WRONG_GOAL_MODE", "0") == "1"
 # EVAL_VIDEO_EVERY: keep a video of every Nth episode (1 = all, as before);
 #   1,800 episodes per arm of videos would be several GB.
 EVAL_PROBE = os.environ.get("EVAL_PROBE", "0") == "1"
+# EVAL_PROBE_TURNS=1 (user 2026-11-09, "we need hard goals to show map works"):
+# each probe also traces the GlobalRoutePlanner route start -> goal and counts the
+# JUNCTION TURNS on it (runs of RoadOption LEFT / RIGHT, i.e. the route leaves a
+# junction other than straight on) and the junctions it crosses, so a set can be
+# selected whose goals lane-following alone cannot reach. Off = probe.json as before.
+EVAL_PROBE_TURNS = os.environ.get("EVAL_PROBE_TURNS", "0") == "1"
 EVAL_EPISODES_FILE = os.environ.get("EVAL_EPISODES_FILE", "")
 EVAL_VIDEO_EVERY = env_int("EVAL_VIDEO_EVERY", 1)
 # BENCH_BAND (easy|medium|hard): which generator band this process runs
@@ -1617,6 +1623,41 @@ def _poses(info):
             "goal_xy": None if gp is None else [round(float(v), 3) for v in np.asarray(gp)[:2]]}
 
 
+_GRP_CACHE = {}
+
+
+def _route_turns(core, start_xy, goal_xy):
+    """Junction turns on the planner's route start -> goal (EVAL_PROBE_TURNS):
+    {"turns": runs of RoadOption LEFT/RIGHT, "junctions": runs of junction
+    waypoints, "plan_m": planned metres}. Uses rlib's GlobalRoutePlanner at 2 m."""
+    import carla
+    from src.global_route_planner import GlobalRoutePlanner, RoadOption
+    wmap = core.map
+    key = id(wmap)
+    if key not in _GRP_CACHE:
+        _GRP_CACHE.clear()
+        _GRP_CACHE[key] = GlobalRoutePlanner(wmap, 2.0)
+    grp = _GRP_CACHE[key]
+    hero = core.hero.get_transform().location
+    gl = carla.Location(float(goal_xy[0]), float(goal_xy[1]), float(hero.z))
+    route = grp.trace_route(hero, gl)
+    turns = junctions = 0
+    prev_turn = prev_j = False
+    plan_m = 0.0
+    for i, (wp, opt) in enumerate(route):
+        is_turn = opt in (RoadOption.LEFT, RoadOption.RIGHT)
+        if is_turn and not prev_turn:
+            turns += 1
+        prev_turn = is_turn
+        j = bool(wp.is_junction)
+        if j and not prev_j:
+            junctions += 1
+        prev_j = j
+        if i:
+            plan_m += route[i - 1][0].transform.location.distance(wp.transform.location)
+    return {"turns": turns, "junctions": junctions, "plan_m": round(plan_m, 2)}
+
+
 def run_eval(env, agent, pxr, server, out_root):
     """EVAL_EPISODES goal episodes, deterministic actions, faults terminal,
     every episode recorded. Writes eval.json next to the videos."""
@@ -1716,9 +1757,12 @@ def run_eval(env, agent, pxr, server, out_root):
             _o, _r, _te, _tr, inf1 = env.step(zero)
             p1 = np.asarray(inf1.get("hero_pos", p0), np.float64)
             rem = inf1.get("route_remaining_m")
+            turns = {}
+            if EVAL_PROBE_TURNS and g0 is not None:
+                turns = _route_turns(getattr(env, "unwrapped", env).core, p0, g0)
             probes.append({
                 "town": TOWNS[0], "seed": seed, "band": BENCH_BAND,
-                **_poses(info),
+                **_poses(info), **turns,
                 "route_m": (None if rem is None
                             else round(float(rem) + float(np.linalg.norm(p1 - p0)), 3)),
                 "euclid_m": (None if g0 is None else round(float(np.linalg.norm(

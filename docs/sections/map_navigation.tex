@@ -44,13 +44,15 @@ nodes leave long stretches of road uncovered. SPL is within
 0.01 of SR everywhere: successful episodes drive at most 1.1 times the shortest
 route, because a wrong turn almost always ends the episode by leaving the lane.
 
-\begin{table}[t]
+\begin{table}[H]
 \centering
 \footnotesize
 \setlength{\tabcolsep}{3.5pt}
 \caption{SR and SPL on 200 held-out episodes per band (Town02 and Town03),
-localising by image. Node budget per map: 255 key nodes in Town02 and 1104 in
-Town03 (SGM: 254 and 1090), plus 156--476 image-coverage gap nodes.}
+localizing by image. Success: reaching within 1\,m of the goal at any speed. Hard:
+50--150\,m routes with at least two junction turns. Node budget per map: 255 key
+nodes in Town02 and 1104 in Town03 (SGM: 254 and 1090), plus 156--476
+image-coverage gap nodes.}
 \label{tab:map_navigation}
 \begin{tabular}{lcccccc}
 \toprule
@@ -59,10 +61,10 @@ Town03 (SGM: 254 and 1090), plus 156--476 image-coverage gap nodes.}
 Map & SR & SPL & SR & SPL & SR & SPL \\
 \midrule
 \multicolumn{7}{l}{\textit{Imitation policy}} \\
-None & 0.70 & 0.70 & 0.63 & 0.62 & 0.42 & 0.42 \\
-\rowcolor{gray!15}Uniform & 0.74 & 0.73 & 0.67 & 0.66 & 0.53 & 0.53 \\
-\rowcolor{blue!12}Entropy & 0.72 & 0.72 & 0.68 & 0.68 & 0.54 & 0.54 \\
-SGM & 0.69 & 0.68 & 0.72 & 0.72 & 0.54 & 0.53 \\
+None & 0.77 & 0.77 & 0.71 & 0.71 & 0.06 & 0.05 \\
+\rowcolor{gray!15}Uniform & 0.76 & 0.76 & 0.73 & 0.72 & 0.11 & 0.11 \\
+\rowcolor{blue!12}Entropy & 0.75 & 0.74 & 0.71 & 0.71 & 0.06 & 0.06 \\
+SGM & 0.79 & 0.78 & 0.75 & 0.75 & 0.13 & 0.12 \\
 \midrule
 \multicolumn{7}{l}{\textit{RL policy}} \\
 None & -- & -- & -- & -- & -- & -- \\
@@ -71,9 +73,9 @@ None & -- & -- & -- & -- & -- & -- \\
 SGM & -- & -- & -- & -- & -- & -- \\
 \midrule
 \multicolumn{7}{l}{\textit{ViNT}~\cite{shah2023vint}} \\
-None & 0.51 & 0.49 & 0.40 & 0.38 & 0.14 & 0.13 \\
-\rowcolor{gray!15}Uniform & 0.33 & 0.31 & 0.25 & 0.24 & 0.14 & 0.14 \\
-ViNT map & 0.46 & 0.44 & 0.35 & 0.35 & 0.26 & 0.26 \\
+None & 0.51 & 0.48 & 0.38 & 0.37 & 0.02 & 0.02 \\
+\rowcolor{gray!15}Uniform & 0.58 & 0.55 & 0.44 & 0.43 & 0.09 & 0.08 \\
+ViNT map & 0.49 & 0.48 & 0.38 & 0.37 & 0.06 & 0.06 \\
 \bottomrule
 \end{tabular}
 \end{table}

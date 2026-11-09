@@ -164,7 +164,11 @@ class GatedRecurrentSAC(GatedRecurrentTQC):
         st = self._state(obs[:, K:-1]).reshape(N, cfg.state_dim)
         st_next = self._state(obs[:, K + 1:]).reshape(N, cfg.state_dim)
         a = actions.reshape(N, cfg.action_dim)
-        r, msk = rewards.reshape(N), masks.reshape(N)
+        # REWARD_SCALE: as in the SAC update -- rewards and value clips together.
+        k = float(cfg.reward_scale)
+        r, msk = rewards.reshape(N) * k, masks.reshape(N)
+        v_floor = None if cfg.value_floor is None else float(cfg.value_floor) * k
+        v_ceil = None if cfg.value_ceiling is None else float(cfg.value_ceiling) * k
         no_a = a.new_zeros((N, 0))
 
         # Q_targ at the replay action: min over a random REDQ subset, as SAC's target.
@@ -184,14 +188,14 @@ class GatedRecurrentSAC(GatedRecurrentTQC):
         with torch.no_grad():
             v_next = self._q(self.value_g, s_next_t, st_next, self.goal_cols, no_a)[0, :, 0]
             target = r + float(cfg.discount) * msk * v_next
-            if cfg.value_floor is not None:
-                target = target.clamp(min=float(cfg.value_floor))
-            if cfg.value_ceiling is not None:
-                target = target.clamp(max=float(cfg.value_ceiling))
-            at_floor = (_masked_mean(_bound_frac(target, cfg.value_floor, upper=False), m)
-                        if cfg.value_floor is not None else zero)
-            at_ceiling = (_masked_mean(_bound_frac(target, cfg.value_ceiling, upper=True), m)
-                          if cfg.value_ceiling is not None else zero)
+            if v_floor is not None:
+                target = target.clamp(min=v_floor)
+            if v_ceil is not None:
+                target = target.clamp(max=v_ceil)
+            at_floor = (_masked_mean(_bound_frac(target, v_floor, upper=False), m)
+                        if v_floor is not None else zero)
+            at_ceiling = (_masked_mean(_bound_frac(target, v_ceil, upper=True), m)
+                          if v_ceil is not None else zero)
         qs = self._q(self.critics_g, s, st, self.goal_cols, a)
         q_loss = _masked_mean(self._critic_loss_per_sample(qs, target, head="goal"), m)
         self.opt_critic.zero_grad(set_to_none=True)
@@ -290,7 +294,11 @@ class GatedRecurrentSAC(GatedRecurrentTQC):
         fixed = float(self.cfg.fixed_alpha)
         temp = ("" if fixed <= 0.0 else
                 f" | temperature FIXED at {fixed:g} (never updated, re-applied on load)")
-        return self._describe_learner() + pin + delay + td3bc + temp
+        k = float(self.cfg.reward_scale)
+        scale = ("" if k == 1.0 else
+                 f" | reward x{k:g} in the update (value clips x{k:g} too)")
+        qn = "" if self.cfg.actor_q_norm else " | actor loss alpha*logpi - Q (no Q/std(Q) norm)"
+        return self._describe_learner() + pin + delay + td3bc + temp + scale + qn
 
     def _describe_learner(self) -> str:
         cfg = self.cfg

@@ -267,6 +267,11 @@ class GatedRecurrentTQCConfig:
     # entropy term, worth about +-alpha*|log pi|/(1 - gamma) ~ 20 at alpha 0.1.
     value_floor: Optional[float] = -100.0
     value_ceiling: Optional[float] = 100.0
+    # REWARD_SCALE (user 2026-11-08, "lets fix this with reward scale"): every reward
+    # the update sees -- live, HER, preloaded -- times this, and the value clips above
+    # (both heads) with it; a scaled run is the unscaled one fed k*r and k*bounds.
+    # Needs actor_q_norm off to reach the actor: Q / std(Q) cancels any scale.
+    reward_scale: float = 1.0
     init_temperature: float = 0.1
     init_temperature_e: float = 0.1
     # Unit ([-1, 1]^2) space: the torch Actor's log_prob carries no box
@@ -1163,7 +1168,14 @@ class GatedRecurrentTQC:
         st = self._state(obs[:, K:-1]).reshape(N, cfg.state_dim)
         st_next = self._state(obs[:, K + 1:]).reshape(N, cfg.state_dim)
         a = actions.reshape(N, cfg.action_dim)
-        r, m = rewards.reshape(N), masks.reshape(N)
+        # REWARD_SCALE: rewards and the value clips scale together (plain floats,
+        # so a compiled update treats them as constants).
+        k = float(cfg.reward_scale)
+        r, m = rewards.reshape(N) * k, masks.reshape(N)
+        v_floor = None if cfg.value_floor is None else cfg.value_floor * k
+        v_ceil = None if cfg.value_ceiling is None else cfg.value_ceiling * k
+        v_floor_e = None if cfg.value_floor_e is None else cfg.value_floor_e * k
+        v_ceil_e = None if cfg.value_ceiling_e is None else cfg.value_ceiling_e * k
 
         with torch.no_grad():
             next_a, next_logp = self._actor_sample(torch.cat([s_next_t, st_next], dim=-1))
@@ -1182,16 +1194,16 @@ class GatedRecurrentTQC:
                 next_q = self._q(self.critics_g_targ, s_next_t, st_next, self.goal_cols, next_a)
                 target_g = self._critic_target(
                     next_q, r, m, discount=cfg.discount, alpha=alpha_g,
-                    next_log_probs=next_logp, value_floor=cfg.value_floor,
-                    value_ceiling=cfg.value_ceiling, head="goal")
+                    next_log_probs=next_logp, value_floor=v_floor,
+                    value_ceiling=v_ceil, head="goal")
                 # A target pinned at a bound gives the actor no value gradient;
                 # without these a saturated critic and a flat loss look alike.
-                if cfg.value_floor is not None:
+                if v_floor is not None:
                     at_floor = _masked_mean(
-                        _bound_frac(target_g, cfg.value_floor, upper=False), m_g)
-                if cfg.value_ceiling is not None:
+                        _bound_frac(target_g, v_floor, upper=False), m_g)
+                if v_ceil is not None:
                     at_ceiling = _masked_mean(
-                        _bound_frac(target_g, cfg.value_ceiling, upper=True), m_g)
+                        _bound_frac(target_g, v_ceil, upper=True), m_g)
             qs_g = self._q(self.critics_g, s, st, self.goal_cols, a)
             per_g = self._critic_loss_per_sample(qs_g, target_g, head="goal")
             if is_w_rows is not None:
@@ -1205,8 +1217,8 @@ class GatedRecurrentTQC:
                 next_q = self._q(self.critics_e_targ, s_next_t, st_next, self.explore_cols, next_a)
                 target_e = self._critic_target(
                     next_q, r, m, discount=cfg.discount_e, alpha=alpha_e,
-                    next_log_probs=next_logp, value_floor=cfg.value_floor_e,
-                    value_ceiling=cfg.value_ceiling_e, head="explore")
+                    next_log_probs=next_logp, value_floor=v_floor_e,
+                    value_ceiling=v_ceil_e, head="explore")
             qs_e = self._q(self.critics_e, s, st, self.explore_cols, a)
             per_e = self._critic_loss_per_sample(qs_e, target_e, head="explore")
             if is_w_rows is not None:

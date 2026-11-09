@@ -2092,6 +2092,12 @@ def build_agent(binoc_dim, act_dim, critic_layer_norm=None):
         # FIXED_ALPHA > 0 (user 2026-11-08): the temperature is held at this value
         # and never updated (TARGET_ENTROPY and ALPHA_LR then do nothing).
         fixed_alpha=env_float("FIXED_ALPHA", 0.0),
+        # REWARD_SCALE (user 2026-11-08, "lets fix this with reward scale"): every
+        # reward the update sees, and the value clips, times this. ACTOR_Q_NORM=0
+        # drops the actor's Q / std(Q), which would cancel the scale: the actor loss
+        # becomes plain SAC's alpha * log pi - Q.
+        reward_scale=env_float("REWARD_SCALE", 1.0),
+        actor_q_norm=os.environ.get("ACTOR_Q_NORM", "1") == "1",
         actor_pretanh_l2=env_float("ACTOR_PRETANH_L2", 0.0),
         actor_pretanh_free=env_float("ACTOR_PRETANH_FREE", 1.5),
         # ALGO=iql (user 2026-11-06, torch_rl/iql.py): critic and actor queried

@@ -85,6 +85,10 @@ def main():
     ap.add_argument("--image-gaps", action=argparse.BooleanOptionalAction, default=True,
                     help="add image-coverage gap nodes (default); --no-image-gaps builds KEY-ONLY "
                          "maps (user 2026-11-08: oracle localisation without gap nodes)")
+    ap.add_argument("--mad-z", type=float, default=1.0,
+                    help="online-MAD admission z (robust z-score, sigma = MAD/0.6745). 1.0 = the "
+                         "Habitat peer's value used so far; 2.5 = Leys et al. 2013's default")
+    ap.add_argument("--mad-window-m", type=float, default=15.0, help="online-MAD trailing window, metres")
     ap.add_argument("--key-count", type=int, default=None,
                     help="force the matched baselines' key count to this number (default: the "
                          "entropy key count found in this build). User 2026-11-09: entropy is the "
@@ -153,7 +157,7 @@ def main():
         return torch.cat([D[s:s + 4096].float() @ Dn.T for s in range(0, len(D), 4096)])
 
     # 1. KEY NODES
-    mad, _st = online_maps.online_mad(ent, pos, drv, window_m=15.0, z=1.0)
+    mad, _st = online_maps.online_mad(ent, pos, drv, window_m=a.mad_window_m, z=a.mad_z)
     keys = []
     if len(mad):
         Dm = D[np.asarray(mad)].float()

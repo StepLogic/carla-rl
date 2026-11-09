@@ -230,6 +230,12 @@ EVAL_PROBE = os.environ.get("EVAL_PROBE", "0") == "1"
 # junction other than straight on) and the junctions it crosses, so a set can be
 # selected whose goals lane-following alone cannot reach. Off = probe.json as before.
 EVAL_PROBE_TURNS = os.environ.get("EVAL_PROBE_TURNS", "0") == "1"
+# EVAL_TRAJ=1 (user 2026-11-09: "videos of an agent navigating using the entropy
+# map - add overhead view and show waypoints and shortest path"): each episode also
+# writes <eval>/traj/ep<k>.json -- per step the car's x, y, yaw, speed and the
+# subgoal node it is chasing; every planned / replanned node path; and the
+# planner's shortest road route. Off = eval unchanged.
+EVAL_TRAJ = os.environ.get("EVAL_TRAJ", "0") == "1"
 EVAL_EPISODES_FILE = os.environ.get("EVAL_EPISODES_FILE", "")
 EVAL_VIDEO_EVERY = env_int("EVAL_VIDEO_EVERY", 1)
 # BENCH_BAND (easy|medium|hard): which generator band this process runs
@@ -1664,6 +1670,20 @@ def _route_turns(core, start_xy, goal_xy):
     return {"turns": turns, "junctions": junctions, "plan_m": round(plan_m, 2)}
 
 
+def _route_xy(core, goal_xy):
+    """The planner's shortest road route hero -> goal as [[x, y], ...] (EVAL_TRAJ)."""
+    import carla
+    from src.global_route_planner import GlobalRoutePlanner
+    wmap = core.map
+    if id(wmap) not in _GRP_CACHE:
+        _GRP_CACHE.clear()
+        _GRP_CACHE[id(wmap)] = GlobalRoutePlanner(wmap, 2.0)
+    hero = core.hero.get_transform().location
+    route = _GRP_CACHE[id(wmap)].trace_route(
+        hero, carla.Location(float(goal_xy[0]), float(goal_xy[1]), float(hero.z)))
+    return [[round(wp.transform.location.x, 2), round(wp.transform.location.y, 2)] for wp, _o in route]
+
+
 def run_eval(env, agent, pxr, server, out_root):
     """EVAL_EPISODES goal episodes, deterministic actions, faults terminal,
     every episode recorded. Writes eval.json next to the videos."""
@@ -1876,6 +1896,15 @@ def run_eval(env, agent, pxr, server, out_root):
                     return pxr.goal_block(info["debit_goal"])
                 goal_blk = _aim()
         vid.start(k)
+        traj = None
+        if EVAL_TRAJ:
+            _g0 = info.get("goal_pos")
+            traj = {"seed": seed, "town": TOWNS[0],
+                    "start": [float(v) for v in np.asarray(info.get("hero_pos", (0, 0)))[:2]],
+                    "goal": None if _g0 is None else [float(v) for v in np.asarray(_g0)[:2]],
+                    "road_route": (None if _g0 is None
+                                   else _route_xy(getattr(env, "unwrapped", env).core, _g0)),
+                    "paths": [], "steps": []}
         ret, t, end = 0.0, 0, None
         # SPL bookkeeping. p = metres actually driven; l = the shortest ROUTE
         # to the goal, from the planner the reward's potential term uses. The
@@ -1961,6 +1990,13 @@ def run_eval(env, agent, pxr, server, out_root):
                         leg_steps = 0
                         if EVAL_MAP_RESET_HIDDEN:
                             hidden = agent.reset_hidden(1)
+                if traj is not None:
+                    _cur = (-1 if nav is None or nav.final else int(nav.current()))
+                    if nav is not None and (not traj["paths"] or traj["paths"][-1]["path"] != [int(v) for v in nav.path]):
+                        traj["paths"].append({"t": t, "path": [int(v) for v in nav.path]})
+                    traj["steps"].append([t, round(float(pos[0]), 2), round(float(pos[1]), 2),
+                                          round(float(info.get("hero_yaw", 0.0) or 0.0), 3),
+                                          round(float(info.get("speed_kmh", 0.0) or 0.0), 1), _cur])
                 moved = float(np.linalg.norm(pos - prev_pos))
                 path_m += moved
                 prev_pos = pos
@@ -2028,6 +2064,13 @@ def run_eval(env, agent, pxr, server, out_root):
                      **(chain_summary(chain_goals, info, end,
                                       float(os.environ.get("GOAL_CHAIN_M", 200.0) or 200.0))
                         if EVAL_CHAIN else {})})
+        if traj is not None:
+            traj.update({k_: rows[-1].get(k_) for k_ in ("end", "reached", "steps", "path_m", "shortest_m",
+                                                          "map_start_node", "map_goal_node", "video")})
+            traj["map_dir"] = EVAL_MAP_DIR or None
+            os.makedirs(os.path.join(out, "traj"), exist_ok=True)
+            with open(os.path.join(out, "traj", f"ep{k:06d}.json"), "w") as fh:
+                json.dump(traj, fh)
         sr = np.mean([x["reached"] for x in rows])
         spl = np.nanmean([x["spl"] for x in rows])
         print(f"[Eval {k + 1:3d}/{n_eps}] seed={seed} end={end} "

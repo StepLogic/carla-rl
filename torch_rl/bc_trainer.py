@@ -291,8 +291,8 @@ def il_finetune_prepare(agent, buf, root, towns, *, warmup_updates, chunk_b, chu
             updates=int(proj_pretrain["updates"]), eval_every=int(proj_pretrain["eval_every"]),
             freeze=bool(proj_pretrain["freeze"]), log=log)
         del tr_buf, va_buf
-        log(f"[IL] critic projection: best val NLL {ps['best_val_nll']:.4f} / MAE "
-            f"{ps['best_val_mae']:.4f} at update {ps['best_step']} (untrained "
+        log(f"[IL] critic projection: best val MAE {ps['best_val_mae']:.4f} (NLL "
+            f"{ps['best_val_nll']:.4f}) at update {ps['best_step']} (untrained "
             f"{ps['init_val_nll']:.4f} / {ps['init_val_mae']:.4f}; c0's actor on the same rows "
             f"{ps['actor_val_nll']:.4f} / {ps['actor_val_mae']:.4f}); copied into all "
             f"{agent.critics_g.proj_w.shape[0]} critics and their targets, "

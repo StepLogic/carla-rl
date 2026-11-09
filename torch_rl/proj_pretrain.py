@@ -9,7 +9,9 @@ decoder (the actor's MLP, mean and log-std) reads the head's output and the loss
 bc_trainer.bc_loss's -- the pre-tanh Gaussian NLL of the expert's label action, label
 clipped to +-0.995 -- over the valid rows of each chunk. The trunk (encoder + GRU)
 only provides h, without gradient. As c0's checkpoint was chosen on held-out
-episodes, the head with the lowest validation NLL is kept. It is then copied into
+episodes, the head with the lowest validation ACTION ERROR (mean |tanh(mean) - label|)
+is kept -- not the lowest NLL, which also scores the decoder's spread (overconfident on
+training rows, and discarded with the decoder). It is then copied into
 every critic of the goal ensemble and its target, and frozen there: as in DrQ, where
 all critics share the encoder's output, the critics differ only in the MLPs SAC trains
 on top of it.
@@ -126,12 +128,16 @@ def pretrain_critic_projection(agent, sample_train, val_chunk, *, updates, lr=3e
             tm = sum(w[1] for w in window) / len(window)
             history.append({"step": step, "train_nll": tn, "train_mae": tm,
                             "val_nll": vn, "val_mae": vm})
-            if vn < best["val_nll"]:
+            # Chosen on the validation ACTION ERROR: how well the head's features
+            # predict the expert's action. The NLL also scores the decoder's spread,
+            # which turns overconfident on training rows and is thrown away anyway
+            # (cluster job 465230: val NLL -1.32 -> -0.83 while val MAE 0.353 -> 0.318).
+            if vm < best["val_mae"]:
                 best = {"val_nll": vn, "val_mae": vm, "step": step,
                         "head": copy.deepcopy(head.state_dict()),
                         "decoder": copy.deepcopy(decoder.state_dict())}
             log(f"[PROJ] step={step} train_nll={tn:.4f} val_nll={vn:.4f} val_mae={vm:.4f} "
-                f"train_mae={tm:.4f} (best {best['val_nll']:.4f} at {best['step']}; "
+                f"train_mae={tm:.4f} (best val_mae {best['val_mae']:.4f} at {best['step']}; "
                 f"{len(window) / (time.time() - t0):.2f} upd/s)")
             window, t0 = [], time.time()
     head.load_state_dict(best["head"])

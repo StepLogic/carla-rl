@@ -63,8 +63,10 @@ def test_pretraining_learns_the_labels_and_keeps_the_best_head():
         a, lambda: _labelled(a.cfg, 8, seed=next(g)), _labelled(a.cfg, 16, seed=99_999),
         updates=400, eval_every=50, log=lambda m: None)
     assert stats["best_val_mae"] < 0.5 * stats["init_val_mae"]
-    assert stats["best_val_nll"] == min(h["val_nll"] for h in stats["history"])
-    assert stats["final_val_nll"] == pytest.approx(stats["best_val_nll"], abs=1e-4)
+    # the head is chosen on validation ACTION ERROR (its features predicting the
+    # expert's action); the NLL also scores the decoder's spread, which is discarded
+    assert stats["best_val_mae"] == min(h["val_mae"] for h in stats["history"])
+    assert stats["final_val_mae"] == pytest.approx(stats["best_val_mae"], abs=1e-5)
     assert {"actor_val_nll", "actor_val_mae", "best_step"} <= set(stats)
 
 
@@ -79,7 +81,38 @@ def test_the_best_head_and_decoder_are_restored_together():
     stats = pretrain_critic_projection(a, lambda: _labelled(a.cfg, 8, seed=next(g)), val,
                                        updates=200, eval_every=50, log=lambda m: None)
     assert stats["best_step"] == 0
+    assert stats["final_val_mae"] == pytest.approx(stats["init_val_mae"], abs=1e-5)
     assert stats["final_val_nll"] == pytest.approx(stats["init_val_nll"], abs=1e-5)
+
+
+def test_selection_is_on_action_error_not_nll():
+    # an overconfident decoder makes the validation NLL worse while the action error
+    # still improves: the head must follow the action error
+    import torch_rl.proj_pretrain as pp
+    # (nll, mae) of the validation calls in order: c0's actor (reference), the
+    # untrained head, then the evals at updates 10, 20, 30
+    calls = iter([(9.0, 0.90), (1.0, 0.50), (0.5, 0.40), (2.0, 0.30), (3.0, 0.35)])
+    a = _agent()
+    real_val_errors = pp._nll_mae
+
+    def fake_nll_mae(mean, log_std, act, v, clip=0.995):
+        nll, mae = real_val_errors(mean, log_std, act, v, clip)
+        if mean.shape[0] == 16 * 6:              # the validation chunk's rows
+            try:
+                n, m = next(calls)
+                return torch.tensor(n), torch.tensor(m)
+            except StopIteration:
+                pass
+        return nll, mae
+    pp._nll_mae = fake_nll_mae
+    try:
+        g = iter(range(10_000))
+        stats = pretrain_critic_projection(a, lambda: _labelled(a.cfg, 8, seed=next(g)),
+                                           _labelled(a.cfg, 16, seed=99_999),
+                                           updates=30, eval_every=10, log=lambda m: None)
+    finally:
+        pp._nll_mae = real_val_errors
+    assert stats["best_step"] == 20 and stats["best_val_mae"] == pytest.approx(0.30)
 
 
 def test_every_critic_and_its_target_get_the_head_frozen():

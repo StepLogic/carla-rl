@@ -15,10 +15,13 @@ ViNT without a map, on the same episodes.
   Development used only the development set (`logs/bench_long_episodes.json`, seeds
   21000–23110).
 - **Success and faults:** identical to the c0 rows.
-  - Arrival: within 1 m of the goal, with no speed condition.
+  - Arrival: within 1 m of the goal **at ≤ 10 km/h**. `slurm/train_sac.sbatch` sources `slurm/v52_reward.env`, which sets `GOAL_ARRIVAL_MAX_SPEED=10`, for c0 and ViNT alike.
+    - CORRECTION 2026-11-09: this line first said "no speed condition". That checked only the env's default (0) and missed `v52_reward.env`.
+    - A pass within 1 m above 10 km/h was not an arrival. The "near misses" below include such fast passes; the 0.84 m pass at 14 km/h noted in the development section is one.
+    - On 2026-11-09 the user redefined success as reaching the goal at any speed (`GOAL_ARRIVAL_MAX_SPEED=0`). The mapping session reran the final ViNT that way.
   - A crossing, off-road or collision ends the episode. A fault on the arrival step is a failure.
   - Off-road junction rule: `OFF_ROAD_JUNCTION_M=3.5`.
-  - SR@2m counts a pass within 2 m only at ≤ 10 km/h (the tracker's default).
+  - SR@2m counts a pass within 2 m only at ≤ 10 km/h, the same `GOAL_ARRIVAL_MAX_SPEED`.
   - These settings are frozen in `slurm/vint_bench_map.sh`.
 - **Arms (same seeds):**
   - **ViNT mapless:** the real goal image from the start (`ARM=mapless`).
@@ -62,7 +65,7 @@ ViNT's predicted distance to the next node has a median of 3.59 (Town02) and 3.7
   - Outcomes:
     - 1 reached at 1 m and 4 at 2 m.
     - 15 crossings and 2 off-road.
-    - 6 failures passed 0.8–1.8 m from the goal. The 0.84 m pass came at 14 km/h on the step of a line crossing.
+    - 6 failures passed 0.8–1.8 m from the goal. The 0.84 m pass came at 14 km/h, so the ≤ 10 km/h rule did not count it (corrected 2026-11-09; first written as "on the step of a line crossing").
   - Localisation:
     - Start node within 8 m in 16 of 18 episodes (median error 1.6 m).
     - Goal node within 8 m in 14 of 18 (median 1.5 m); the misses were 15–175 m.

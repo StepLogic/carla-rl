@@ -157,6 +157,15 @@ def test_the_twin_critic_run_is_plain_two_town_and_standard_sac():
     assert proj_pretrain_settings(env)["freeze"] is True
 
 
+def test_the_no_freeze_run_trains_the_actor_from_the_first_update():
+    env = _resolved("slurm/sac_c0_sac2_projbc_nofreeze.env")
+    assert plain_sac_violations(env) == []
+    assert env["IL_ONLINE_FREEZE_UPDATES"] == "0"
+    assert env["IL_CRITIC_WARMUP_UPDATES"] == "5000" and env["RANDOM_WARMUP"] == "1"
+    assert (env["N_CRITICS"], env["ACTOR_Q_REDUCE"], env["CRITIC_PROJ_PRETRAIN_SELECT"]) == (
+        "2", "min", "final")
+
+
 def test_a_sac_training_run_refuses_to_start_and_names_every_violation():
     with pytest.raises(SystemExit) as e:
         require_plain_sac(training=True, algo="sac",

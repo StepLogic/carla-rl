@@ -256,7 +256,10 @@ def il_finetune_prepare(agent, buf, root, towns, *, warmup_updates, chunk_b, chu
         if tname not in VARIANTS:
             raise SystemExit(f"IL_PRELOAD_TRANSFORM={tname!r}: not one of {sorted(VARIANTS)}")
         transform = VARIANTS[tname]
-    n_exec = fill_buffer(replay, paths, which="exec", transform=transform)
+    # REWARD_SCALE (torch_rl.reward_scale): the demos on the env's reward scale.
+    from torch_rl.reward_scale import reward_scale
+    n_exec = fill_buffer(replay, paths, which="exec", transform=transform,
+                         reward_scale=reward_scale())
     # USER RULE 2026-11-07: "WHEN USING PRERECORDED DATA WITH SAC ENSURE PRERECORDED
     # DATA DOES NOT UPDATE TEMPERATURE AND IS NOT OVERWRITTEN". Pinned, the recorded
     # rows stay in the replay for good (online data rings after them) and their

@@ -155,7 +155,8 @@ def frame_goal_distances(ep):
     return np.concatenate([[to_end[0]], to_end])
 
 
-def fill_buffer(buf, paths, which="label", env_id=0, transform=None):
+def fill_buffer(buf, paths, which="label", env_id=0, transform=None,
+                reward_scale=1.0):
     """Load episodes into a DeviceEpisodeBuffer exactly as the trainer would
     have added them. `which`: "label" (cloning) or "exec" (replay). Returns the
     number of transitions added; empty episodes are skipped. For cloning, an
@@ -198,7 +199,10 @@ def fill_buffer(buf, paths, which="label", env_id=0, transform=None):
         term, trunc = (False, True) if cut else (bool(ep["terminal"]), bool(ep["truncated"]))
         for t in range(T):
             last = t == T - 1
-            buf.add(rows[t], ep[key][t], float(ep["reward"][t]), term and last,
+            # REWARD_SCALE (torch_rl.reward_scale): the recorded reward times the
+            # run's scale, as the env scales the live rows.
+            buf.add(rows[t], ep[key][t], float(ep["reward"][t]) * float(reward_scale),
+                    term and last,
                     trunc and last, rows[t + 1], mode, env_id=env_id,
                     goal=ep["goal"])
         buf.end_episode(env_id)

@@ -164,11 +164,9 @@ class GatedRecurrentSAC(GatedRecurrentTQC):
         st = self._state(obs[:, K:-1]).reshape(N, cfg.state_dim)
         st_next = self._state(obs[:, K + 1:]).reshape(N, cfg.state_dim)
         a = actions.reshape(N, cfg.action_dim)
-        # REWARD_SCALE: as in the SAC update -- rewards and value clips together.
-        k = float(cfg.reward_scale)
-        r, msk = rewards.reshape(N) * k, masks.reshape(N)
-        v_floor = None if cfg.value_floor is None else float(cfg.value_floor) * k
-        v_ceil = None if cfg.value_ceiling is None else float(cfg.value_ceiling) * k
+        r, msk = rewards.reshape(N), masks.reshape(N)
+        v_floor = None if cfg.value_floor is None else float(cfg.value_floor)
+        v_ceil = None if cfg.value_ceiling is None else float(cfg.value_ceiling)
         no_a = a.new_zeros((N, 0))
 
         # Q_targ at the replay action: min over a random REDQ subset, as SAC's target.
@@ -294,11 +292,10 @@ class GatedRecurrentSAC(GatedRecurrentTQC):
         fixed = float(self.cfg.fixed_alpha)
         temp = ("" if fixed <= 0.0 else
                 f" | temperature FIXED at {fixed:g} (never updated, re-applied on load)")
-        k = float(self.cfg.reward_scale)
-        scale = ("" if k == 1.0 else
-                 f" | reward x{k:g} in the update (value clips x{k:g} too)")
         qn = "" if self.cfg.actor_q_norm else " | actor loss alpha*logpi - Q (no Q/std(Q) norm)"
-        return self._describe_learner() + pin + delay + td3bc + temp + scale + qn
+        clips = (" | NO value clips" if (self.cfg.value_floor is None
+                                         and self.cfg.value_ceiling is None) else "")
+        return self._describe_learner() + pin + delay + td3bc + temp + qn + clips
 
     def _describe_learner(self) -> str:
         cfg = self.cfg

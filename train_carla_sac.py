@@ -55,6 +55,15 @@ def env_float(name, default):
     return float(os.environ.get(name, default))
 
 
+def env_opt_float(name, default):
+    """env_float, except "none" / "off" (any case) gives None: the setting is
+    switched off (user 2026-11-08, "remove value clips" -- plain SAC has none)."""
+    v = os.environ.get(name)
+    if v is not None and v.strip().lower() in ("none", "off"):
+        return None
+    return env_float(name, default)
+
+
 RUN_NAME = os.environ.get("RUN_NAME", "carla_sac_debit_v1")
 MAX_STEPS = env_int("MAX_STEPS", 1_000_000)
 UPDATE_EVERY = env_int("UPDATE_EVERY", 20)
@@ -2077,10 +2086,10 @@ def build_agent(binoc_dim, act_dim, critic_layer_norm=None):
         discount=env_float("DISCOUNT", 0.99),
         discount_e=env_float("EXPLORE_DISCOUNT", 0.99),
         explore_actor_warmup=env_int("EXPLORE_ACTOR_WARMUP", 5000),
-        value_floor=env_float("TQC_VALUE_FLOOR", -200.0),
-        value_ceiling=env_float("TQC_VALUE_CEILING", 150.0),
-        value_floor_e=env_float("EXPLORE_VALUE_FLOOR", -200.0),
-        value_ceiling_e=env_float("EXPLORE_VALUE_CEILING", 150.0),
+        value_floor=env_opt_float("TQC_VALUE_FLOOR", -200.0),
+        value_ceiling=env_opt_float("TQC_VALUE_CEILING", 150.0),
+        value_floor_e=env_opt_float("EXPLORE_VALUE_FLOOR", -200.0),
+        value_ceiling_e=env_opt_float("EXPLORE_VALUE_CEILING", 150.0),
         # THE ENTROPY TARGET the temperature tunes -log pi (sampled, AFTER the
         # tanh squash) towards. -2 (the default, -action_dim) let alpha_g fall
         # to ~5e-4 in v10/v11 while the actor's raw outputs drifted past +-1:
@@ -2092,11 +2101,10 @@ def build_agent(binoc_dim, act_dim, critic_layer_norm=None):
         # FIXED_ALPHA > 0 (user 2026-11-08): the temperature is held at this value
         # and never updated (TARGET_ENTROPY and ALPHA_LR then do nothing).
         fixed_alpha=env_float("FIXED_ALPHA", 0.0),
-        # REWARD_SCALE (user 2026-11-08, "lets fix this with reward scale"): every
-        # reward the update sees, and the value clips, times this. ACTOR_Q_NORM=0
-        # drops the actor's Q / std(Q), which would cancel the scale: the actor loss
-        # becomes plain SAC's alpha * log pi - Q.
-        reward_scale=env_float("REWARD_SCALE", 1.0),
+        # ACTOR_Q_NORM=0 (user 2026-11-08, "i want implementation to plain SAC"):
+        # drops the actor's Q / std(Q) normalisation (v13), which also cancels any
+        # reward scale; the actor loss is plain SAC's alpha * log pi - Q.
+        # REWARD_SCALE lives in the ENVIRONMENT (torch_rl.reward_scale), not here.
         actor_q_norm=os.environ.get("ACTOR_Q_NORM", "1") == "1",
         actor_pretanh_l2=env_float("ACTOR_PRETANH_L2", 0.0),
         actor_pretanh_free=env_float("ACTOR_PRETANH_FREE", 1.5),
@@ -2132,6 +2140,7 @@ def main():
 
     from torch_rl import pixel_rows as pxr
     from torch_rl.carla_env_build import build_env
+    from torch_rl.reward_scale import reward_scale
     from torch_rl.carla_server import CarlaServer, connect_with_restarts
     from torch_rl.debit_encoder import DebitTinyEncoder
     from torch_rl.debit_mono import describe_load, load_debit_mono
@@ -2472,7 +2481,9 @@ def main():
                 # path the car drove, distance to a hindsight goal only falls,
                 # so new-ground pay equals plain progress there.
                 retreat_scale=float(0.0 if _G.ROUTE_PROGRESS_RATCHET else _G.ROUTE_RETREAT_SCALE),
-                zone_only=_G.GOAL_ZONE_M > 0)
+                zone_only=_G.GOAL_ZONE_M > 0,
+                # REWARD_SCALE (torch_rl.reward_scale): relabelled rows on the env's scale.
+                reward_scale=reward_scale())
             print(f"  HER: {HER_RELABEL} hindsight legs per episode, "
                   f"{env_float('GOAL_DIST_MIN', 5.0):g}-{env_float('GOAL_DIST_MAX', 25.0):g} m, "
                   f"arrival {GOAL_RADIUS_M:g} m at <= {_G.GOAL_ARRIVAL_MAX_SPEED:g} km/h, "

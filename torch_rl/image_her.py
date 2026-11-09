@@ -41,8 +41,12 @@ class ImageGoalHER:
                  explore_bonus=10.0, potential_k=1.0, lane_fault=None,
                  env_id_offset=1000, relabel_explore=True, seed=0,
                  speed_gate_kmh=None, positive=False, retreat_scale=None,
-                 zone_only=False):
+                 zone_only=False, reward_scale=1.0):
         self.buf, self.enc, self.pxr = buf, encoder, pxr
+        # REWARD_SCALE (torch_rl.reward_scale): relabelled rewards are computed
+        # from the env's RAW reward and scaled here, on their way into the replay,
+        # exactly as the env scales the live rows.
+        self.reward_scale = float(reward_scale)
         self.n_relabel, self.min_m, self.max_m = int(n_relabel), float(min_m), float(max_m)
         self.radius, self.max_speed = float(radius), float(max_speed)
         self.goal_bonus, self.explore_bonus = float(goal_bonus), float(explore_bonus)
@@ -215,7 +219,8 @@ class ImageGoalHER:
                         and e["speed"][t] >= self.speed_gate):
                     prog = 0.0
                 r = e["base"][t] + prog
-            self.buf.add(row, e["actions"][t], float(r), last, False, nrow, 1,
+            self.buf.add(row, e["actions"][t], float(r) * self.reward_scale, last,
+                         False, nrow, 1,
                          env_id=eid, goal=goal_blk)
         self.counts["legs"] += 1
         self.counts["rows"] += j - s + 1

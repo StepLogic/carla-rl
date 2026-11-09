@@ -165,4 +165,9 @@ def build_env(town: str, seed: int, encoder=None, port: int = 2000,
         seed=seed, town=town)
     cap = int(max_episode_steps if max_episode_steps is not None
               else os.environ.get("MAX_EPISODE_STEPS", 2000))
-    return TimeLimit(env, max_episode_steps=cap)
+    env = TimeLimit(env, max_episode_steps=cap)
+    # REWARD_SCALE (user 2026-11-08, "multiply reward in environment"): the env's
+    # reward times k, raw value in info["raw_reward"]; k = 1 leaves the stack as it was.
+    from torch_rl.reward_scale import ScaledReward, reward_scale
+    k = reward_scale()
+    return ScaledReward(env, k) if k != 1.0 else env

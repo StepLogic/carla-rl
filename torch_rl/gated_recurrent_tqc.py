@@ -267,11 +267,6 @@ class GatedRecurrentTQCConfig:
     # entropy term, worth about +-alpha*|log pi|/(1 - gamma) ~ 20 at alpha 0.1.
     value_floor: Optional[float] = -100.0
     value_ceiling: Optional[float] = 100.0
-    # REWARD_SCALE (user 2026-11-08, "lets fix this with reward scale"): every reward
-    # the update sees -- live, HER, preloaded -- times this, and the value clips above
-    # (both heads) with it; a scaled run is the unscaled one fed k*r and k*bounds.
-    # Needs actor_q_norm off to reach the actor: Q / std(Q) cancels any scale.
-    reward_scale: float = 1.0
     init_temperature: float = 0.1
     init_temperature_e: float = 0.1
     # Unit ([-1, 1]^2) space: the torch Actor's log_prob carries no box
@@ -1168,14 +1163,10 @@ class GatedRecurrentTQC:
         st = self._state(obs[:, K:-1]).reshape(N, cfg.state_dim)
         st_next = self._state(obs[:, K + 1:]).reshape(N, cfg.state_dim)
         a = actions.reshape(N, cfg.action_dim)
-        # REWARD_SCALE: rewards and the value clips scale together (plain floats,
-        # so a compiled update treats them as constants).
-        k = float(cfg.reward_scale)
-        r, m = rewards.reshape(N) * k, masks.reshape(N)
-        v_floor = None if cfg.value_floor is None else cfg.value_floor * k
-        v_ceil = None if cfg.value_ceiling is None else cfg.value_ceiling * k
-        v_floor_e = None if cfg.value_floor_e is None else cfg.value_floor_e * k
-        v_ceil_e = None if cfg.value_ceiling_e is None else cfg.value_ceiling_e * k
+        r, m = rewards.reshape(N), masks.reshape(N)
+        # The value clips: None (VALUE_* = none) means none, as in plain SAC.
+        v_floor, v_ceil = cfg.value_floor, cfg.value_ceiling
+        v_floor_e, v_ceil_e = cfg.value_floor_e, cfg.value_ceiling_e
 
         with torch.no_grad():
             next_a, next_logp = self._actor_sample(torch.cat([s_next_t, st_next], dim=-1))

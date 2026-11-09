@@ -115,7 +115,10 @@ def run_parallel(venv, agent, buf, row_of, box, *, to_env, to_actor, goal_block,
             buf.add(rows[i], actions[i], float(rewards[i]), term, trunc, nrow,
                     modes[i], env_id=i, goal=goals[i])
             if her is not None:
-                her.record(i, rows[i], actions[i], float(rewards[i]), term,
+                # HER recomputes its rewards from the env's RAW reward (its shaping
+                # and bonus terms are raw too) and applies REWARD_SCALE itself.
+                her.record(i, rows[i], actions[i],
+                           float(inf.get("raw_reward", rewards[i])), term,
                            trunc, nrow, infos[i], inf)
             ep_ret[i] += float(rewards[i])
             ep_len[i] += 1

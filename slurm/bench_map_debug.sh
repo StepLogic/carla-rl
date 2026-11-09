@@ -14,7 +14,9 @@ cd ~/carla-rl
 C=${CKPT:-$HOME/carla-rl/checkpoints/il_bc_c0/step_15000}
 TAG=$(basename "$C")
 MAPROOT=${MAPROOT:-$HOME/carla-rl/checkpoints/maps_expert}
-export BENCH_BASE_OVERLAY=slurm/il_eval_chw.env GOAL_CAM_MATCH=1
+# BENCH_BASE_OVERLAY: default il_eval_chw.env (10 km/h arrival, from v52_reward.env);
+# slurm/il_eval_chw_anyspeed.env = arrival at any speed (user 2026-11-09).
+export BENCH_BASE_OVERLAY=${BENCH_BASE_OVERLAY:-slurm/il_eval_chw.env} GOAL_CAM_MATCH=1
 # EPISODES: the fixed episode file (default: the development set). The frozen
 # evaluation uses the fresh, never-seen set (slurm/bench_probe_fresh.sh).
 export EVAL_EPISODES_FILE=${EPISODES:-$HOME/carla-rl/logs/bench_long_episodes.json}

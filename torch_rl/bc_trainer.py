@@ -290,9 +290,11 @@ def il_finetune_prepare(agent, buf, root, towns, *, warmup_updates, chunk_b, chu
         ps = pretrain_critic_projection(
             agent, lambda: tr_buf.sample_chunks(n_ch, bc_len + K, K), val_chunk,
             updates=int(proj_pretrain["updates"]), eval_every=int(proj_pretrain["eval_every"]),
-            freeze=bool(proj_pretrain["freeze"]), log=log)
+            freeze=bool(proj_pretrain["freeze"]), log=log,
+            select=proj_pretrain.get("select", "final"))
         del tr_buf, va_buf
-        log(f"[IL] critic projection: early-stopped at update {ps['best_step']}: val NLL "
+        log(f"[IL] critic projection: kept the head of update {ps['best_step']} "
+            f"({'final' if ps['select'] == 'final' else 'NLL early stop'}): val NLL "
             f"{ps['best_val_nll']:.4f} / MAE {ps['best_val_mae']:.4f} on {ps['val_rows']} "
             f"held-out steps (untrained "
             f"{ps['init_val_nll']:.4f} / {ps['init_val_mae']:.4f}; c0's actor on the same rows "

@@ -97,10 +97,16 @@ def proj_pretrain_settings(env=None):
                          "(CRITIC_PROJ_DIM > 0)")
     if not env.get("IL_PRELOAD_ROOT", ""):
         raise SystemExit("CRITIC_PROJ_PRETRAIN_UPDATES > 0 needs the demos (IL_PRELOAD_ROOT)")
+    # CRITIC_PROJ_PRETRAIN_SELECT: "final" (default; user 2026-11-09, "Restart with the
+    # 10k head") keeps the head after all updates, "nll" early-stops on held-out NLL.
+    select = env.get("CRITIC_PROJ_PRETRAIN_SELECT", "final") or "final"
+    if select not in ("final", "nll"):
+        raise SystemExit(f"CRITIC_PROJ_PRETRAIN_SELECT={select!r}: expected final or nll")
     return {"updates": updates,
             "chunks": int(env.get("CRITIC_PROJ_PRETRAIN_CHUNKS", "32") or 32),
             "eval_every": int(env.get("CRITIC_PROJ_PRETRAIN_EVAL_EVERY", "500") or 500),
-            "freeze": env.get("CRITIC_PROJ_FREEZE", "1") == "1"}
+            "freeze": env.get("CRITIC_PROJ_FREEZE", "1") == "1",
+            "select": select}
 
 
 def replay_sampling():

@@ -144,7 +144,8 @@ def test_the_pretrained_frozen_head_run_is_plain_and_two_town():
     assert env["IL_PRELOAD_TOWNS"].split() == ["Town05", "Town01"]
     assert env["CRITIC_PROJ_DIM"] == "50" and env["RANDOM_WARMUP"] == "1"
     assert proj_pretrain_settings(env) == {"updates": 10000, "chunks": 32,
-                                           "eval_every": 250, "freeze": True}
+                                           "eval_every": 250, "freeze": True,
+                                           "select": "final"}
 
 
 def test_the_twin_critic_run_is_plain_two_town_and_standard_sac():

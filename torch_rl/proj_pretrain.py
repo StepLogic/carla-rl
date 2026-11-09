@@ -8,11 +8,13 @@ c0's cloning objective, to carry what the expert does in the state: an actor-siz
 decoder (the actor's MLP, mean and log-std) reads the head's output and the loss is
 bc_trainer.bc_loss's -- the pre-tanh Gaussian NLL of the expert's label action, label
 clipped to +-0.995 -- over the valid rows of each chunk. The trunk (encoder + GRU)
-only provides h, without gradient. As c0's checkpoint was chosen on held-out
-episodes, the head is EARLY-STOPPED on the validation NLL (the cloning objective,
-measured on held-out episodes): the TRAINED head -- never the untrained one, which can
-score well on action error because a decoder predicting ~0 is near most labels --
-with the lowest validation NLL is kept, its decoder with it. It is then copied into
+only provides h, without gradient. Which head is kept is `select`: "final" (the
+default; user 2026-11-09, "Restart with the 10k head") is the head after all updates,
+a fixed schedule as c0's training was; "nll" early-stops on the held-out NLL among
+trained heads. Held-out NLL and action error are logged either way (on the cluster
+demos the NLL mostly scored confidence -- c0's own actor 56.8 -- and the head it
+early-stopped had the worst action error, 0.357, against the 10k head's 0.286 and
+c0's 0.304; the untrained head's ~0 predictions scored 0.319). It is then copied into
 every critic of the goal ensemble and its target, and frozen there: as in DrQ, where
 all critics share the encoder's output, the critics differ only in the MLPs SAC trains
 on top of it.
@@ -82,13 +84,21 @@ def _decode(decoder, z):
 
 
 def pretrain_critic_projection(agent, sample_train, val_chunk, *, updates, lr=3e-4,
-                               eval_every=500, freeze=True, log=print, seed=0):
-    """Train one projection head by c0's cloning loss, early-stop it on the held-out
-    `val_chunk` (one chunk or a list of them) by NLL among trained heads, copy it into
-    every goal critic and its target, freeze it there (`freeze`). `sample_train()`
-    returns a labelled chunk (the bc_trainer buffers' format). Returns stats: init /
-    best / final validation NLL and MAE, c0's own actor on the same validation rows,
-    the number of rows, the best update and the history."""
+                               eval_every=500, freeze=True, log=print, seed=0,
+                               select="final"):
+    """Train one projection head by c0's cloning loss and keep one (`select`):
+    "final" = the head after all `updates` (user 2026-11-09, "Restart with the 10k
+    head": on held-out data the NLL mostly scores confidence -- c0's own actor gets
+    56.8 -- and the early-stopped head had the worst action error, 0.357, against the
+    10k head's 0.286 and c0's 0.304), or "nll" = early stopping on the held-out NLL
+    among trained heads. The held-out `val_chunk` (one chunk or a list) is measured
+    either way. The kept head is copied into every goal critic and its target and
+    frozen there (`freeze`). `sample_train()` returns a labelled chunk (the bc_trainer
+    buffers' format). Returns stats: init / kept ("best_*") / final validation NLL and
+    MAE, c0's own actor on the same rows, the number of rows, the kept update, the
+    rule and the history."""
+    if select not in ("final", "nll"):
+        raise ValueError(f"select={select!r}: expected 'final' or 'nll'")
     C = agent.critics_g
     P = int(getattr(C, "proj_dim", 0) or 0)
     if P <= 0:
@@ -139,12 +149,15 @@ def pretrain_critic_projection(agent, sample_train, val_chunk, *, updates, lr=3e
             # cannot choose: on the cluster data the untrained head's ~0 predictions
             # scored 0.310, better than every trained head up to 2500 updates, while
             # the NLL fell 0.75 -> -1.32 at 1000 updates and rose after: overfitting.)
-            if best is None or vn < best["val_nll"]:
+            if (select == "final" and step == int(updates)) or (
+                    select == "nll" and (best is None or vn < best["val_nll"])):
                 best = {"val_nll": vn, "val_mae": vm, "step": step,
                         "head": copy.deepcopy(head.state_dict()),
                         "decoder": copy.deepcopy(decoder.state_dict())}
+            kept = ("keeping the final head" if select == "final" else
+                    f"best val_nll {best['val_nll']:.4f} at {best['step']}")
             log(f"[PROJ] step={step} train_nll={tn:.4f} val_nll={vn:.4f} val_mae={vm:.4f} "
-                f"train_mae={tm:.4f} (best val_nll {best['val_nll']:.4f} at {best['step']}; "
+                f"train_mae={tm:.4f} ({kept}; "
                 f"{len(window) / (time.time() - t0):.2f} upd/s)")
             window, t0 = [], time.time()
     head.load_state_dict(best["head"])
@@ -162,7 +175,7 @@ def pretrain_critic_projection(agent, sample_train, val_chunk, *, updates, lr=3e
             "best_step": best["step"], "final_val_nll": final_nll, "final_val_mae": final_mae,
             "actor_val_nll": float(anll), "actor_val_mae": float(amae),
             "val_rows": int(vv.sum()), "frozen": bool(freeze), "proj_dim": P,
-            "history": history}
+            "select": select, "history": history}
 
 
 def _state_cols(agent, chunk):

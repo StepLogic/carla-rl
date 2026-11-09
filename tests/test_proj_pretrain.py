@@ -61,7 +61,7 @@ def test_pretraining_learns_the_labels_and_keeps_the_best_head():
     g = iter(range(10_000))
     stats = pretrain_critic_projection(
         a, lambda: _labelled(a.cfg, 8, seed=next(g)), _labelled(a.cfg, 16, seed=99_999),
-        updates=400, eval_every=50, log=lambda m: None)
+        updates=400, eval_every=50, select="nll", log=lambda m: None)
     assert stats["best_val_mae"] < 0.5 * stats["init_val_mae"]
     # early stopping on the validation NLL (the cloning objective), trained heads only
     assert stats["best_val_nll"] == min(h["val_nll"] for h in stats["history"])
@@ -79,11 +79,31 @@ def test_the_best_head_and_decoder_are_restored_together():
     val["actions"] = -val["actions"]
     g = iter(range(10_000))
     stats = pretrain_critic_projection(a, lambda: _labelled(a.cfg, 8, seed=next(g)), val,
-                                       updates=200, eval_every=50, log=lambda m: None)
+                                       updates=200, eval_every=50, select="nll",
+                                       log=lambda m: None)
     at_best = next(h for h in stats["history"] if h["step"] == stats["best_step"])
     assert stats["best_step"] > 0
     assert stats["final_val_nll"] == pytest.approx(at_best["val_nll"], abs=1e-5)
     assert stats["final_val_mae"] == pytest.approx(at_best["val_mae"], abs=1e-5)
+
+
+def test_select_final_keeps_the_head_after_all_updates():
+    # user 2026-11-09: "Restart with the 10k head" -- a fixed schedule, like c0's
+    # training; held-out numbers still logged, but they choose nothing.
+    a = _agent()
+    val = _labelled(a.cfg, 16, seed=99_999)
+    val["actions"] = -val["actions"]                   # validation worsens with training
+    g = iter(range(10_000))
+    stats = pretrain_critic_projection(a, lambda: _labelled(a.cfg, 8, seed=next(g)), val,
+                                       updates=120, eval_every=40, select="final",
+                                       log=lambda m: None)
+    last = stats["history"][-1]
+    assert stats["best_step"] == 120 == last["step"]
+    assert stats["final_val_nll"] == pytest.approx(last["val_nll"], abs=1e-5)
+    assert stats["select"] == "final"
+    with pytest.raises(ValueError, match="select"):
+        pretrain_critic_projection(a, lambda: _labelled(a.cfg, 8, seed=1), val, updates=1,
+                                   select="mae", log=lambda m: None)
 
 
 def test_validation_takes_several_chunks():
@@ -121,7 +141,8 @@ def test_selection_is_on_validation_nll_and_never_the_untrained_head():
         g = iter(range(10_000))
         stats = pretrain_critic_projection(a, lambda: _labelled(a.cfg, 8, seed=next(g)),
                                            _labelled(a.cfg, 16, seed=99_999),
-                                           updates=30, eval_every=10, log=lambda m: None)
+                                           updates=30, eval_every=10, select="nll",
+                                           log=lambda m: None)
     finally:
         pp._nll_mae = real_val_errors
     assert stats["best_step"] == 20 and stats["best_val_nll"] == pytest.approx(0.5)
@@ -173,7 +194,8 @@ def test_the_trainer_reads_the_settings_and_fails_fast():
     assert proj_pretrain_settings({}) is None
     s = proj_pretrain_settings({"CRITIC_PROJ_PRETRAIN_UPDATES": "10000",
                                 "CRITIC_PROJ_DIM": "50", "IL_PRELOAD_ROOT": "/d"})
-    assert s == {"updates": 10000, "chunks": 32, "eval_every": 500, "freeze": True}
+    assert s == {"updates": 10000, "chunks": 32, "eval_every": 500, "freeze": True,
+                 "select": "final"}
     with pytest.raises(SystemExit, match="CRITIC_PROJ_DIM"):
         proj_pretrain_settings({"CRITIC_PROJ_PRETRAIN_UPDATES": "10", "IL_PRELOAD_ROOT": "/d"})
     with pytest.raises(SystemExit, match="IL_PRELOAD_ROOT"):

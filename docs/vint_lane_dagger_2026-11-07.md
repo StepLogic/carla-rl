@@ -5,7 +5,7 @@ The final ViNT (DAgger round-3 epoch 1, chosen on Town05/Town01 validation) was 
 - Run by the mapping session: its commit 104062e, raw files in `results/map_fresh_2026-11-07/vint_final` (its commit adc9a33).
 - The user asked for this checkpoint only, with no per-round or development-set rows in the paper.
 
-Pooled over Town02 + Town03, SR / SPL at 1 m:
+Pooled over Town02 + Town03, SR / SPL at 1 m. These were scored with arrival at ≤ 10 km/h, the rule in force then (`slurm/v52_reward.env`). On 2026-11-09 the user dropped the speed condition, and the mapping session runs the any-speed evaluations. The checkpoint choice was re-confirmed under the new rule (last section).
 
 | Fresh set | easy | medium | hard |
 |---|---|---|---|
@@ -38,7 +38,7 @@ Nothing here touches the fresh benchmark set. Development and validation sets on
 
 The recorder refuses the evaluation towns in code (`torch_rl/expert_record.HELD_OUT_TOWNS = ("Town02", "Town03")`).
 
-**Selection uses training-town validation only.** Every epoch choice uses c0's validation: Town05 + Town01, seeds 50000+.
+**Selection uses training-town validation only.** Every epoch choice uses c0's validation: Town05 + Town01, seeds 50000+. The final pick was re-confirmed under the evaluation's success rule (1 m, any speed) on 2026-11-09; see the last section.
 
 **Where the evaluation towns are used.** Town02/Town03 serve only to evaluate:
 - The development split (`bench_long_episodes.json`), used for lane checks and the development map set.
@@ -204,3 +204,33 @@ Epochs 0 and 1 were each evaluated twice on the same seeds (an early job and the
 | DAgger r2 e2 | 49 |
 | **DAgger r3 e1** | **55.5** |
 | c0 | 63 |
+
+## Re-validation under the evaluation's success rule (2026-11-09)
+
+The user changed the benchmark's success rule to "within 1 m of the goal, at any speed". They also asked that ViNT's training and evaluation be kept at parity.
+
+Every validation number above was scored at 2 m and ≤ 10 km/h: the trainer default plus `slurm/v52_reward.env`. So the five finalists were validated again under the new rule.
+
+- **Overlay** `slurm/il_eval_val_chw_any1m.env`: c0's validation (Town05 + Town01, seeds 50000+, n = 40 per town, true goal) with `GOAL_RADIUS_M=1.0` and `GOAL_ARRIVAL_MAX_SPEED=0`.
+  - `GOAL_RADIUS_M` sets the env's arrival, SPL and the benchmark scorer together.
+  - The benchmark's `bench_*.env` files set the same value.
+- **Jobs:** one validation job, 465283 (`slurm/vint_val_any1m.sh`, 400 episodes), then one tie-break job, 465313.
+  - Every `eval.json` records arrival radius 1.0 m, seed0 50000, deterministic actions, and faults that end the episode.
+- **Decision rule, declared before any result:**
+  - The most arrivals out of 80 wins.
+  - If the top two are within 3 arrivals, both are rerun once and the two-run totals decide. 3 is the spread of r3 e1's two runs under the old rule.
+  - A remaining tie goes to the old-rule validation.
+
+| Candidate | Run 1 (T05 + T01) | Run 2 | Total |
+|---|---|---|---|
+| **DAgger r3 e1** | **53** (23 + 30) | **53** (24 + 29) | **106 / 160** |
+| DAgger r3 e2 | 51 (22 + 29) | 45 (18 + 27) | 96 / 160 |
+| DAgger r2 e2 | 45 (14 + 31) | | |
+| DAgger r1 e1 | 41 (16 + 25) | | |
+| DAgger r3 e0 | 39 (14 + 25) | | |
+
+**Decision:** round-3 epoch 1 stays the final ViNT under the new rule. The mapping session's any-speed evaluations (the hard-turns set, and easy/medium) use it unchanged.
+
+- r3 e2's two runs differ by 6 arrivals. That is why the near-tie was rerun rather than decided on one run.
+- For ViNT the speed condition hardly mattered. r3 e1 scores 55 and 57 at 2 m and any speed (the scorer's 2 m rate), against 54 and 57 under the old rule.
+- The 1 m radius costs r3 e1 2-4 arrivals per run (53 vs 55-57 at 2 m).

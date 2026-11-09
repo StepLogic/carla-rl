@@ -2065,8 +2065,9 @@ def run_eval(env, agent, pxr, server, out_root):
                                       float(os.environ.get("GOAL_CHAIN_M", 200.0) or 200.0))
                         if EVAL_CHAIN else {})})
         if traj is not None:
-            traj.update({k_: rows[-1].get(k_) for k_ in ("end", "reached", "steps", "path_m", "shortest_m",
+            traj.update({k_: rows[-1].get(k_) for k_ in ("end", "reached", "path_m", "shortest_m",
                                                           "map_start_node", "map_goal_node", "video")})
+            traj["n_steps"] = rows[-1].get("steps")       # "steps" holds the per-step records
             traj["map_dir"] = EVAL_MAP_DIR or None
             os.makedirs(os.path.join(out, "traj"), exist_ok=True)
             with open(os.path.join(out, "traj", f"ep{k:06d}.json"), "w") as fh:

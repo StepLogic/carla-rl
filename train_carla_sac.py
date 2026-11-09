@@ -2027,6 +2027,72 @@ def require_critic_layernorm(layer_norm, training) -> None:
                          "LayerNorm in the critic for every RL run")
 
 
+def _plain_off(v):
+    return v.strip().lower() in ("none", "off")
+
+
+def _plain_zero(v):
+    return v.strip() == "" or float(v) == 0.0
+
+
+# PLAIN SAC, USER RULE 2026-11-08 ("record these plain SAC RULES SO THAT NO NEW RUN
+# IS WRONG"; see slurm/plain_sac.env for the user's words). One row per learner
+# setting: its name, the trainer's default when unset, the test its value must
+# pass, and what plain SAC / REDQ has.
+PLAIN_SAC_RULES = (
+    ("TQC_VALUE_FLOOR", "-200", _plain_off, "no value clips (none)"),
+    ("TQC_VALUE_CEILING", "150", _plain_off, "no value clips (none)"),
+    ("EXPLORE_VALUE_FLOOR", "-200", _plain_off, "no value clips (none)"),
+    ("EXPLORE_VALUE_CEILING", "150", _plain_off, "no value clips (none)"),
+    ("ACTOR_Q_NORM", "1", lambda v: v.strip() == "0",
+     "actor loss alpha*logpi - Q, no Q/std(Q) normalisation (0)"),
+    ("ACTOR_PRETANH_L2", "0", _plain_zero, "no penalty on the actor's pre-tanh mean (0)"),
+    ("ACTOR_BC_ALPHA", "0", _plain_zero, "no cloning term in the actor loss (0)"),
+    ("IL_BC_WEIGHT0", "1.0", _plain_zero, "no cloning step in a fine-tune (0)"),
+    ("FIXED_ALPHA", "0", _plain_zero, "an auto-tuned temperature, not a fixed one (unset)"),
+    ("ACTOR_LOG_STD", "", lambda v: v.strip() == "", "a learned log-std, not a pinned one (unset)"),
+    ("PER_ALPHA", "0", _plain_zero, "uniform replay, no PER (0)"),
+    ("UNIFORM_TRANSITIONS", "0", lambda v: v.strip() == "1",
+     "every stored transition equally likely (1)"),
+    ("GOAL_BATCH_FRAC", "0.5", _plain_off, "no forced goal/explore batch split (none)"),
+    ("IL_EXPERT_FRAC", "0", _plain_zero, "no forced expert share of each batch (0)"),
+    ("ONE_CRITIC", "1", lambda v: v.strip() == "1",
+     "one critic ensemble, not two gated by mode (1)"),
+    ("CRITIC_DROPOUT", "0", _plain_zero, "no critic dropout (0)"),
+)
+
+
+def plain_sac_violations(env=None):
+    """The settings in `env` (default os.environ) that break the plain-SAC rule, one
+    line each ("NAME=value: plain SAC needs ..."); [] = plain SAC."""
+    env = os.environ if env is None else env
+    out = []
+    for name, default, ok, need in PLAIN_SAC_RULES:
+        raw = env.get(name)
+        try:
+            good = ok(default if raw is None else raw)
+        except ValueError:                 # not a number where one is needed
+            good = False
+        if not good:
+            shown = raw if raw is not None else f"<unset, default {default or 'none'}>"
+            out.append(f"{name}={shown}: plain SAC needs {need}")
+    return out
+
+
+def require_plain_sac(training, algo, env=None) -> None:
+    """USER RULE 2026-11-08: no SAC training run starts unless every PLAIN_SAC_RULES
+    setting holds. Evals, traces, recordings, cloning and ALGO=iql are not SAC
+    training runs and are exempt."""
+    if not training or algo != "sac":
+        return
+    bad = plain_sac_violations(env)
+    if bad:
+        raise SystemExit(
+            "PLAIN SAC RULE (user 2026-11-08: \"record these plain SAC RULES SO THAT NO NEW "
+            "RUN IS WRONG\"): this SAC training run breaks it --\n  " + "\n  ".join(bad)
+            + "\nSource slurm/plain_sac.env LAST in the run's overlay.")
+
+
 def build_agent(binoc_dim, act_dim, critic_layer_norm=None):
     """The learner exactly as main() configures it, with DEBiT's pretrained
     monocular trunk loaded into both the online and the target encoder.
@@ -2173,6 +2239,12 @@ def main():
     if os.environ.get("BC_TRAIN", "0") == "1":
         from torch_rl.bc_trainer import run_bc_train
         return run_bc_train(OUT, make_agent=build_agent)
+
+    # PLAIN SAC (user rule 2026-11-08): a SAC training run with any non-plain
+    # learner setting stops HERE, before the encoder and CARLA start. Evals,
+    # traces, recordings and IQL are exempt.
+    require_plain_sac(training=not (EVAL_FROM or EXPERT_RECORD),
+                      algo=os.environ.get("ALGO", "sac"))
 
     # DEBiT IS FROZEN (user 2026-10-14), so no adapters are added and its 3136-d
     # binocular output is a fixed function of (view, goal). That lets the ENV
@@ -2336,6 +2408,9 @@ def main():
     # the label, the checkpoint directory, the town, the seeds and the action
     # mode, so a run's identity is in its own log rather than inferred later.
     print(f"=== [{RUN_NAME}] preflight ===", flush=True)
+    if os.environ.get("ALGO", "sac") == "sac":
+        print("  PLAIN SAC (user rule 2026-11-08): all learner settings checked "
+              "(slurm/plain_sac.env)", flush=True)
     print(f"  towns={','.join(TOWNS)} (rotating every {TOWN_EVERY} episodes; "
           f"Town02/Town03 HELD OUT) port={PORT} seed={SEED} device={DEVICE}",
           flush=True)

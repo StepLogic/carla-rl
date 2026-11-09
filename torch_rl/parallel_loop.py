@@ -147,8 +147,11 @@ def run_parallel(venv, agent, buf, row_of, box, *, to_env, to_actor, goal_block,
             if det[i] and modes[i] == 1:
                 recent["det_goal"].append(float(arrived))
             # JUNCTION RAMP (torch_rl.junction_ramp): every finished goal
-            # episode moves the goal sampler's junction fraction, or not.
-            if junction_ramp is not None and modes[i] == 1:
+            # episode moves the goal sampler's junction fraction, or not --
+            # except one that RANDOM actions drove (the random warm-up): the
+            # curriculum tracks the policy's success, not random driving's.
+            if (junction_ramp is not None and modes[i] == 1
+                    and not (random_warmup and step < learning_starts)):
                 _msg = junction_ramp.record(arrived)
                 if _msg:
                     log(_msg)

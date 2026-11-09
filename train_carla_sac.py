@@ -64,6 +64,22 @@ def env_opt_float(name, default):
     return env_float(name, default)
 
 
+def random_warmup_on(init_from, env=None):
+    """Whether the first LEARNING_STARTS transitions use uniform-random actions,
+    plain SAC's start steps. RANDOM_WARMUP: auto (the default, every earlier run)
+    = only without INIT_FROM, a warm start's loaded policy refilling the replay
+    itself; 1 = on a warm start too (user 2026-11-08, "Random warm-up": the c0
+    fine-tune's critic saw only c0's narrow actions and came out flat in the
+    action); 0 = never."""
+    env = os.environ if env is None else env
+    v = env.get("RANDOM_WARMUP", "auto").strip().lower()
+    if v == "auto":
+        return not init_from
+    if v in ("0", "1"):
+        return v == "1"
+    raise ValueError(f"RANDOM_WARMUP={v!r}: expected auto, 1 or 0")
+
+
 def replay_sampling():
     """How the replay draws training windows (user 2026-11-08: "Fix the
     window-sampler bias so every transition is equally likely (plain SAC), and
@@ -2373,8 +2389,9 @@ def main():
         agent.load(INIT_FROM, fresh_critics_on_mismatch=True)
         print(f"  WARM START from {INIT_FROM}: modules, targets, temperatures, "
               f"optimisers and update counter restored; replay buffer EMPTY, so no "
-              f"update until {LEARNING_STARTS} transitions from the loaded policy",
-              flush=True)
+              f"update until {LEARNING_STARTS} transitions from "
+              + ("UNIFORM-RANDOM actions (RANDOM_WARMUP=1)" if random_warmup_on(INIT_FROM)
+                 else "the loaded policy"), flush=True)
     # PER (user 2026-11-06, "use PER"): prioritized replay; PER_ALPHA 0 = uniform,
     # every earlier run. The SAC update weights its critic loss by the chunks'
     # importance weights and returns their TD priorities; IQL's does not.
@@ -2599,6 +2616,10 @@ def main():
                 down=env_float("JUNCTION_RAMP_DOWN", 0.1),
                 window=int(env_float("JUNCTION_RAMP_WINDOW", 100)))
             print(f"  {ramp.describe()}", flush=True)
+        if random_warmup_on(INIT_FROM):
+            print(f"  RANDOM WARM-UP: the first {LEARNING_STARTS} transitions use "
+                  f"uniform-random actions (plain SAC's start steps); the junction "
+                  f"curriculum ignores the episodes they drive", flush=True)
         t_start = time.time()
         steps, episodes = run_parallel(
             venv, agent, buf, row_of, _box, to_env=to_env, to_actor=to_actor,
@@ -2609,8 +2630,9 @@ def main():
             log_every=LOG_EVERY, vids=vids, her=her,
             log=lambda m: print(m, flush=True),
             det_frac=DET_EPISODE_FRAC, det_seed=SEED, junction_ramp=ramp,
-            # A warm start refills the empty buffer with its OWN policy.
-            random_warmup=not INIT_FROM, after_update=il_hook)
+            # A warm start refills the empty buffer with its OWN policy, unless
+            # RANDOM_WARMUP=1 (plain SAC's uniform-random start steps).
+            random_warmup=random_warmup_on(INIT_FROM), after_update=il_hook)
         venv.close()
         for srv in servers:
             srv.stop()
@@ -2618,6 +2640,9 @@ def main():
               f"{(time.time() - t_start) / 3600:.2f} h -> {OUT}", flush=True)
         return
 
+    if os.environ.get("RANDOM_WARMUP", "auto").strip().lower() == "1":
+        # The serial loop never acts randomly, so the setting would do nothing.
+        raise ValueError("RANDOM_WARMUP=1 needs the parallel loop (PARALLEL_TOWNS=1)")
     hidden = agent.reset_hidden(1)
     goal_blk = pxr.goal_block(info["debit_goal"])   # the buffer's episode goal
     row = row_of(obs, info)

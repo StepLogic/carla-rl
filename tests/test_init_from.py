@@ -72,4 +72,8 @@ def test_the_loop_can_act_with_the_policy_before_learning_starts(tmp_path):
 
 
 def test_the_trainer_turns_random_warmup_off_for_a_warm_start():
-    assert "random_warmup=not INIT_FROM" in _src()
+    # By default (RANDOM_WARMUP=auto); RANDOM_WARMUP=1 turns it on (test_random_warmup.py).
+    from train_carla_sac import random_warmup_on
+    assert "random_warmup=random_warmup_on(INIT_FROM)" in _src()
+    assert random_warmup_on("/ckpt/step_1", {}) is False
+    assert random_warmup_on("", {}) is True

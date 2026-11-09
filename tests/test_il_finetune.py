@@ -185,7 +185,7 @@ def test_trainer_wires_the_preload_warmup_and_hook():
     """main(): prepare before either loop, hook after every update in both."""
     s = open(os.path.join(ROOT, "train_carla_sac.py")).read()
     assert "il_hook = il_finetune_prepare(" in s
-    assert "random_warmup=not INIT_FROM, after_update=il_hook)" in s
+    assert "random_warmup=random_warmup_on(INIT_FROM), after_update=il_hook)" in s
     assert "metrics = agent.update(chunk)\n                if il_hook is not None:\n                    il_hook()" in s
     # a preloaded replay is not empty, so the warm start's refill guard stands down
     assert "if LEARNING_STARTS < INIT_MIN_LEARNING_STARTS and not IL_PRELOAD_ROOT:" in s

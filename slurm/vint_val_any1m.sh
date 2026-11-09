@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# PREPARED, NOT RUN (2026-11-09): the user asked for all ViNT jobs to be cancelled
-# before this was submitted. Submit only on the user's request.
+# 2026-11-09: held after the user cancelled all ViNT jobs, then submitted the same
+# day on the user's go-ahead (relayed by the mapping session).
 #
 # ONE job re-validates every ViNT finalist at evaluation parity (user 2026-11-09:
 # success = within 1 m of the goal at ANY speed). Town05 + Town01, EVAL_SEED 50000+,
@@ -10,9 +10,10 @@
 #
 # First sync slurm/il_eval_val_chw_any1m.env, slurm/vint_val_epochs.sh and this
 # file to ~/carla-rl-vint (tmp + mv), then:
-#   sbatch -p gpu --gres=gpu:rtx2080:1 -c 4 --mem=48G -t 12:00:00 --exclude=node-g106 \
-#     -J vint_val_any1m -o ~/carla-rl/logs/vint_val_any1m_%j.out --export=ALL \
+#   sbatch -p gpu --gres=gpu:rtx2080:1 -c 4 --mem=48G -t 4:00:00 --exclude=node-g106 \
+#     -J vint_val_any1m -o ~/carla-rl-vint/logs/vint_val_any1m_%j.log --export=ALL \
 #     ~/carla-rl-vint/slurm/vint_val_any1m.sh
+# (~7 min per checkpoint per town in job 464932, so ~70 min for all ten evals.)
 # vint_val_epochs.sh re-exports checkpoints/<TAG>/epoch_<E> (same .pth symlink, same
 # vint.json) before each eval; the standalone copies in checkpoints/vint_final/ are
 # not touched.

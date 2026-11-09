@@ -1,0 +1,3 @@
+GPU NVIDIA L40 | per frame: trace call 3.22 ms, entropy only 2.67 ms
+  12332 drive steps -> trace call 39.7 s (0.66 min), entropy only 32.9 s
+  77887 drive steps -> trace call 250.6 s (4.18 min), entropy only 208.0 s

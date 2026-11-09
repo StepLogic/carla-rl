@@ -50,9 +50,8 @@ route, because a wrong turn almost always ends the episode by leaving the lane.
 \setlength{\tabcolsep}{3.5pt}
 \caption{SR and SPL on 200 held-out episodes per band (Town02 and Town03),
 localizing by image. Success: reaching within 1\,m of the goal at any speed. Hard:
-50--150\,m routes with at least two junction turns. Node budget per map: 255 key
-nodes in Town02 and 1104 in Town03 (SGM: 254 and 1090), plus 156--476
-image-coverage gap nodes.}
+50--150\,m routes with at least two junction turns. Node budget per map: 96 key
+nodes in Town02 and 323 in Town03, plus 300--875 image-coverage gap nodes.}
 \label{tab:map_navigation}
 \begin{tabular}{lcccccc}
 \toprule
@@ -62,9 +61,9 @@ Map & SR & SPL & SR & SPL & SR & SPL \\
 \midrule
 \multicolumn{7}{l}{\textit{Imitation policy}} \\
 None & 0.77 & 0.77 & 0.71 & 0.71 & 0.06 & 0.05 \\
-\rowcolor{gray!15}Uniform & 0.76 & 0.76 & 0.73 & 0.72 & 0.11 & 0.11 \\
-\rowcolor{blue!12}Entropy & 0.75 & 0.74 & 0.71 & 0.71 & 0.06 & 0.06 \\
-SGM & 0.79 & 0.78 & 0.75 & 0.75 & 0.13 & 0.12 \\
+\rowcolor{gray!15}Uniform & 0.77 & 0.76 & 0.73 & 0.72 & 0.11 & 0.11 \\
+\rowcolor{blue!12}Entropy & 0.76 & 0.76 & 0.73 & 0.73 & 0.13 & 0.12 \\
+SGM & 0.73 & 0.73 & 0.74 & 0.73 & 0.15 & 0.14 \\
 \midrule
 \multicolumn{7}{l}{\textit{RL policy}} \\
 None & -- & -- & -- & -- & -- & -- \\
@@ -74,7 +73,7 @@ SGM & -- & -- & -- & -- & -- & -- \\
 \midrule
 \multicolumn{7}{l}{\textit{ViNT}~\cite{shah2023vint}} \\
 None & 0.51 & 0.48 & 0.38 & 0.37 & 0.02 & 0.02 \\
-\rowcolor{gray!15}Uniform & 0.58 & 0.55 & 0.44 & 0.43 & 0.09 & 0.08 \\
+\rowcolor{gray!15}Uniform & 0.55 & 0.54 & 0.45 & 0.44 & 0.11 & 0.10 \\
 ViNT map & 0.49 & 0.48 & 0.38 & 0.37 & 0.06 & 0.06 \\
 \bottomrule
 \end{tabular}
@@ -85,9 +84,10 @@ ViNT map & 0.49 & 0.48 & 0.38 & 0.37 & 0.06 & 0.06 \\
 \footnotesize
 \setlength{\tabcolsep}{3.5pt}
 \caption{Comparison of node placers with key nodes only in Town02 and Town03 in
-CARLA~\cite{dosovitskiy2017carla}, localising by the ground-truth pose. SR and SPL
-on the same 200 held-out episodes per band. Hard: 50--150\,m routes with at least
-two junction turns.}
+CARLA~\cite{dosovitskiy2017carla}, localising by the ground-truth pose. Node budget
+per map: 97 key nodes in Town02 and 319 in Town03. SR and SPL on the same 200
+held-out episodes per band. Hard: 50--150\,m routes with at least two junction
+turns.}
 \label{tab:map_navigation_pose}
 \begin{tabular}{lcccccc}
 \toprule
@@ -96,9 +96,9 @@ two junction turns.}
 Map & SR & SPL & SR & SPL & SR & SPL \\
 \midrule
 \multicolumn{7}{l}{\textit{Imitation policy}} \\
-\rowcolor{gray!15}Uniform & 0.74 & 0.73 & 0.73 & 0.73 & 0.08 & 0.08 \\
-\rowcolor{blue!12}Entropy & 0.76 & 0.76 & 0.72 & 0.71 & 0.08 & 0.07 \\
-SGM & 0.78 & 0.77 & 0.72 & 0.71 & 0.12 & 0.12 \\
+\rowcolor{gray!15}Uniform & 0.75 & 0.74 & 0.71 & 0.70 & 0.10 & 0.09 \\
+\rowcolor{blue!12}Entropy & 0.74 & 0.74 & 0.62 & 0.62 & 0.08 & 0.06 \\
+SGM & 0.74 & 0.73 & 0.70 & 0.69 & 0.05 & 0.04 \\
 \midrule
 \multicolumn{7}{l}{\textit{RL policy}} \\
 \rowcolor{gray!15}Uniform & -- & -- & -- & -- & -- & -- \\

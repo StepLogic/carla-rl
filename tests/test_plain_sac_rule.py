@@ -99,6 +99,19 @@ def test_the_local_plain_run_is_plain():
     assert plain_sac_violations(_resolved("slurm/local_c0ft_t05_sac_plain.env")) == []
 
 
+def test_the_cluster_plain_run_is_plain_and_mirrors_the_local_one():
+    env = _resolved("slurm/sac_c0_plain_rs10.env")
+    assert plain_sac_violations(env) == []
+    assert env["REWARD_SCALE"] == "10"
+    assert env["ENV_TOWNS"] == "Town05,Town01"
+    assert env["IL_PRELOAD_TOWNS"].split() == ["Town05", "Town01"]   # training towns only
+    local = _resolved("slurm/local_c0ft_t05_sac_plain.env")
+    for k in ("IL_PRELOAD_TRANSFORM", "IL_CRITIC_WARMUP_UPDATES", "IL_ONLINE_FREEZE_UPDATES",
+              "IL_FREEZE_TRUNK", "HER", "DET_EPISODE_FRAC", "UPDATE_EVERY", "LEARNING_STARTS",
+              "REWARD_SCALE", "TARGET_ENTROPY"):
+        assert env.get(k) == local.get(k), k
+
+
 def test_a_sac_training_run_refuses_to_start_and_names_every_violation():
     with pytest.raises(SystemExit) as e:
         require_plain_sac(training=True, algo="sac",

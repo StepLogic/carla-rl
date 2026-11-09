@@ -281,7 +281,8 @@ def il_finetune_prepare(agent, buf, root, towns, *, warmup_updates, chunk_b, chu
         tr_buf, n_tr = _buffer(tr_p, act_dim, agent.device, seed=2)
         va_buf, n_va = _buffer(va_p, act_dim, agent.device, seed=3)
         n_ch = int(proj_pretrain["chunks"])
-        val_chunk = va_buf.sample_chunks(VAL_CHUNKS * 4, bc_len + K, K)
+        # ~5k held-out steps (128 chunks), so the early-stopping point is not noise.
+        val_chunk = [va_buf.sample_chunks(VAL_CHUNKS * 4, bc_len + K, K) for _ in range(4)]
         log(f"[IL] critic projection: cloning pretraining on {len(tr_p)} episodes / {n_tr} "
             f"labelled steps, validation {len(va_p)} / {n_va}; "
             f"{int(proj_pretrain['updates'])} updates x {n_ch} chunks x {bc_len}")
@@ -291,8 +292,9 @@ def il_finetune_prepare(agent, buf, root, towns, *, warmup_updates, chunk_b, chu
             updates=int(proj_pretrain["updates"]), eval_every=int(proj_pretrain["eval_every"]),
             freeze=bool(proj_pretrain["freeze"]), log=log)
         del tr_buf, va_buf
-        log(f"[IL] critic projection: best val MAE {ps['best_val_mae']:.4f} (NLL "
-            f"{ps['best_val_nll']:.4f}) at update {ps['best_step']} (untrained "
+        log(f"[IL] critic projection: early-stopped at update {ps['best_step']}: val NLL "
+            f"{ps['best_val_nll']:.4f} / MAE {ps['best_val_mae']:.4f} on {ps['val_rows']} "
+            f"held-out steps (untrained "
             f"{ps['init_val_nll']:.4f} / {ps['init_val_mae']:.4f}; c0's actor on the same rows "
             f"{ps['actor_val_nll']:.4f} / {ps['actor_val_mae']:.4f}); copied into all "
             f"{agent.critics_g.proj_w.shape[0]} critics and their targets, "

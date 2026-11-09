@@ -9,9 +9,10 @@ decoder (the actor's MLP, mean and log-std) reads the head's output and the loss
 bc_trainer.bc_loss's -- the pre-tanh Gaussian NLL of the expert's label action, label
 clipped to +-0.995 -- over the valid rows of each chunk. The trunk (encoder + GRU)
 only provides h, without gradient. As c0's checkpoint was chosen on held-out
-episodes, the head with the lowest validation ACTION ERROR (mean |tanh(mean) - label|)
-is kept -- not the lowest NLL, which also scores the decoder's spread (overconfident on
-training rows, and discarded with the decoder). It is then copied into
+episodes, the head is EARLY-STOPPED on the validation NLL (the cloning objective,
+measured on held-out episodes): the TRAINED head -- never the untrained one, which can
+score well on action error because a decoder predicting ~0 is near most labels --
+with the lowest validation NLL is kept, its decoder with it. It is then copied into
 every critic of the goal ensemble and its target, and frozen there: as in DrQ, where
 all critics share the encoder's output, the critics differ only in the MLPs SAC trains
 on top of it.
@@ -82,11 +83,12 @@ def _decode(decoder, z):
 
 def pretrain_critic_projection(agent, sample_train, val_chunk, *, updates, lr=3e-4,
                                eval_every=500, freeze=True, log=print, seed=0):
-    """Train one projection head by c0's cloning loss, keep the best on `val_chunk`,
-    copy it into every goal critic and its target, freeze it there (`freeze`).
-    `sample_train()` returns a labelled chunk (the bc_trainer buffers' format).
-    Returns stats: init / best / final validation NLL and MAE, c0's own actor on the
-    same validation chunk, the best update and the history."""
+    """Train one projection head by c0's cloning loss, early-stop it on the held-out
+    `val_chunk` (one chunk or a list of them) by NLL among trained heads, copy it into
+    every goal critic and its target, freeze it there (`freeze`). `sample_train()`
+    returns a labelled chunk (the bc_trainer buffers' format). Returns stats: init /
+    best / final validation NLL and MAE, c0's own actor on the same validation rows,
+    the number of rows, the best update and the history."""
     C = agent.critics_g
     P = int(getattr(C, "proj_dim", 0) or 0)
     if P <= 0:
@@ -98,7 +100,14 @@ def pretrain_critic_projection(agent, sample_train, val_chunk, *, updates, lr=3e
     decoder = _mlp(P, tuple(agent.cfg.mlp), 2 * A).to(dev)
     opt = torch.optim.Adam(list(head.parameters()) + list(decoder.parameters()), lr=float(lr))
 
-    xv, av, vv = _critic_inputs(agent, val_chunk)
+    chunks = val_chunk if isinstance(val_chunk, (list, tuple)) else [val_chunk]
+    parts = [_critic_inputs(agent, ch) for ch in chunks]
+    xv = torch.cat([p[0] for p in parts])
+    av = torch.cat([p[1] for p in parts])
+    vv = torch.cat([p[2] for p in parts])
+    actor_in = torch.cat([torch.cat([p[0][:, :agent.cfg.hidden], _state_cols(agent, ch)], -1)
+                          for p, ch in zip(parts, chunks)])
+    del parts
 
     def val():
         with torch.no_grad():
@@ -107,13 +116,11 @@ def pretrain_critic_projection(agent, sample_train, val_chunk, *, updates, lr=3e
 
     with torch.no_grad():
         # c0's own actor on the same rows: what the full input gives (reference).
-        am, als = agent._actor_forward(torch.cat([xv[:, :agent.cfg.hidden],
-                                                  _state_cols(agent, val_chunk)], -1))
+        am, als = agent._actor_forward(actor_in)
         anll, amae = _nll_mae(am, als, av, vv)
+    del actor_in
     init_nll, init_mae = val()
-    best = {"val_nll": init_nll, "val_mae": init_mae, "step": 0,
-            "head": copy.deepcopy(head.state_dict()),
-            "decoder": copy.deepcopy(decoder.state_dict())}
+    best = None              # trained heads only: the untrained one is never kept
     history, t0, window = [], time.time(), []
     for step in range(1, int(updates) + 1):
         x, a, v = _critic_inputs(agent, sample_train())
@@ -128,16 +135,16 @@ def pretrain_critic_projection(agent, sample_train, val_chunk, *, updates, lr=3e
             tm = sum(w[1] for w in window) / len(window)
             history.append({"step": step, "train_nll": tn, "train_mae": tm,
                             "val_nll": vn, "val_mae": vm})
-            # Chosen on the validation ACTION ERROR: how well the head's features
-            # predict the expert's action. The NLL also scores the decoder's spread,
-            # which turns overconfident on training rows and is thrown away anyway
-            # (cluster job 465230: val NLL -1.32 -> -0.83 while val MAE 0.353 -> 0.318).
-            if vm < best["val_mae"]:
+            # EARLY STOPPING on the validation NLL, trained heads only. (Action error
+            # cannot choose: on the cluster data the untrained head's ~0 predictions
+            # scored 0.310, better than every trained head up to 2500 updates, while
+            # the NLL fell 0.75 -> -1.32 at 1000 updates and rose after: overfitting.)
+            if best is None or vn < best["val_nll"]:
                 best = {"val_nll": vn, "val_mae": vm, "step": step,
                         "head": copy.deepcopy(head.state_dict()),
                         "decoder": copy.deepcopy(decoder.state_dict())}
             log(f"[PROJ] step={step} train_nll={tn:.4f} val_nll={vn:.4f} val_mae={vm:.4f} "
-                f"train_mae={tm:.4f} (best val_mae {best['val_mae']:.4f} at {best['step']}; "
+                f"train_mae={tm:.4f} (best val_nll {best['val_nll']:.4f} at {best['step']}; "
                 f"{len(window) / (time.time() - t0):.2f} upd/s)")
             window, t0 = [], time.time()
     head.load_state_dict(best["head"])
@@ -154,7 +161,8 @@ def pretrain_critic_projection(agent, sample_train, val_chunk, *, updates, lr=3e
             "best_val_nll": best["val_nll"], "best_val_mae": best["val_mae"],
             "best_step": best["step"], "final_val_nll": final_nll, "final_val_mae": final_mae,
             "actor_val_nll": float(anll), "actor_val_mae": float(amae),
-            "frozen": bool(freeze), "proj_dim": P, "history": history}
+            "val_rows": int(vv.sum()), "frozen": bool(freeze), "proj_dim": P,
+            "history": history}
 
 
 def _state_cols(agent, chunk):

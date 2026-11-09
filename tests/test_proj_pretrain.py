@@ -63,35 +63,47 @@ def test_pretraining_learns_the_labels_and_keeps_the_best_head():
         a, lambda: _labelled(a.cfg, 8, seed=next(g)), _labelled(a.cfg, 16, seed=99_999),
         updates=400, eval_every=50, log=lambda m: None)
     assert stats["best_val_mae"] < 0.5 * stats["init_val_mae"]
-    # the head is chosen on validation ACTION ERROR (its features predicting the
-    # expert's action); the NLL also scores the decoder's spread, which is discarded
-    assert stats["best_val_mae"] == min(h["val_mae"] for h in stats["history"])
-    assert stats["final_val_mae"] == pytest.approx(stats["best_val_mae"], abs=1e-5)
+    # early stopping on the validation NLL (the cloning objective), trained heads only
+    assert stats["best_val_nll"] == min(h["val_nll"] for h in stats["history"])
+    assert stats["final_val_nll"] == pytest.approx(stats["best_val_nll"], abs=1e-5)
+    assert stats["best_step"] > 0
     assert {"actor_val_nll", "actor_val_mae", "best_step"} <= set(stats)
 
 
 def test_the_best_head_and_decoder_are_restored_together():
     # Validation labels are the training labels reversed: validation gets worse as
-    # training improves, so the best is the untrained start and the final numbers
-    # must be exactly those (head AND decoder restored, not only the head).
+    # training goes on, so the best trained head is an early one, and the final
+    # numbers must be exactly its eval's (head AND decoder restored, not only the head).
     a = _agent()
     val = _labelled(a.cfg, 16, seed=99_999)
     val["actions"] = -val["actions"]
     g = iter(range(10_000))
     stats = pretrain_critic_projection(a, lambda: _labelled(a.cfg, 8, seed=next(g)), val,
                                        updates=200, eval_every=50, log=lambda m: None)
-    assert stats["best_step"] == 0
-    assert stats["final_val_mae"] == pytest.approx(stats["init_val_mae"], abs=1e-5)
-    assert stats["final_val_nll"] == pytest.approx(stats["init_val_nll"], abs=1e-5)
+    at_best = next(h for h in stats["history"] if h["step"] == stats["best_step"])
+    assert stats["best_step"] > 0
+    assert stats["final_val_nll"] == pytest.approx(at_best["val_nll"], abs=1e-5)
+    assert stats["final_val_mae"] == pytest.approx(at_best["val_mae"], abs=1e-5)
 
 
-def test_selection_is_on_action_error_not_nll():
-    # an overconfident decoder makes the validation NLL worse while the action error
-    # still improves: the head must follow the action error
+def test_validation_takes_several_chunks():
+    a = _agent()
+    g = iter(range(10_000))
+    stats = pretrain_critic_projection(
+        a, lambda: _labelled(a.cfg, 8, seed=next(g)),
+        [_labelled(a.cfg, 8, seed=70_000), _labelled(a.cfg, 8, seed=70_001)],
+        updates=20, eval_every=10, log=lambda m: None)
+    assert stats["val_rows"] == 2 * 8 * 6
+
+
+def test_selection_is_on_validation_nll_and_never_the_untrained_head():
+    # The untrained head can score well on action error (a decoder predicting ~0
+    # is close to most labels) -- it must never be the one kept; among trained heads
+    # the lowest validation NLL wins (early stopping on the cloning objective).
     import torch_rl.proj_pretrain as pp
     # (nll, mae) of the validation calls in order: c0's actor (reference), the
-    # untrained head, then the evals at updates 10, 20, 30
-    calls = iter([(9.0, 0.90), (1.0, 0.50), (0.5, 0.40), (2.0, 0.30), (3.0, 0.35)])
+    # untrained head (best on both), then the evals at updates 10, 20, 30
+    calls = iter([(9.0, 0.90), (0.1, 0.10), (1.0, 0.50), (0.5, 0.60), (0.8, 0.30)])
     a = _agent()
     real_val_errors = pp._nll_mae
 
@@ -112,7 +124,7 @@ def test_selection_is_on_action_error_not_nll():
                                            updates=30, eval_every=10, log=lambda m: None)
     finally:
         pp._nll_mae = real_val_errors
-    assert stats["best_step"] == 20 and stats["best_val_mae"] == pytest.approx(0.30)
+    assert stats["best_step"] == 20 and stats["best_val_nll"] == pytest.approx(0.5)
 
 
 def test_every_critic_and_its_target_get_the_head_frozen():

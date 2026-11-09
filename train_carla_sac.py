@@ -2099,6 +2099,17 @@ def coverage_perturbation(dry):
                            throttle=_pair("EXPERT_BURST_THROTTLE", "0.0,0.5")))
 
 
+def checkpoint_critic_ensemble(ckpt_dir) -> dict:
+    """The critic ensemble a checkpoint was trained with (n_critics, subset_size), from
+    its config.json, so an eval builds the shapes it loads (job 465314: twin critics,
+    while N_CRITICS is the training overlay's, not the eval's). None for a field the
+    config lacks: build_agent then falls back to the environment, as before."""
+    import json
+    with open(os.path.join(ckpt_dir, "config.json")) as fh:
+        d = json.load(fh)
+    return {"n_critics": d.get("n_critics"), "subset_size": d.get("subset_size")}
+
+
 def checkpoint_critic_proj_dim(ckpt_dir) -> int:
     """The size of a checkpoint's critic input head (DrQ's projection), from its
     config.json; 0 (no head) for one written before the field existed."""
@@ -2190,7 +2201,8 @@ def require_plain_sac(training, algo, env=None) -> None:
             + "\nSource slurm/plain_sac.env LAST in the run's overlay.")
 
 
-def build_agent(binoc_dim, act_dim, critic_layer_norm=None, critic_proj_dim=None):
+def build_agent(binoc_dim, act_dim, critic_layer_norm=None, critic_proj_dim=None,
+                n_critics=None, subset_size=None):
     """The learner exactly as main() configures it, with DEBiT's pretrained
     monocular trunk loaded into both the online and the target encoder.
     Factored out of main() (2026-11-04, imitation-first plan) so behaviour
@@ -2246,7 +2258,9 @@ def build_agent(binoc_dim, act_dim, critic_layer_norm=None, critic_proj_dim=None
         hidden=env_int("HIDDEN", 512),
         visual_dim=env_int("VISUAL_DIM", 512), mlp=(256, 256), burn_in=BURN_IN,
         device=DEVICE, compile=os.environ.get("TORCH_COMPILE", "0") == "1",
-        seed=SEED, n_critics=env_int("N_CRITICS", 10),
+        seed=SEED,
+        # An eval passes its checkpoint's ensemble (checkpoint_critic_ensemble).
+        n_critics=env_int("N_CRITICS", 10) if n_critics is None else int(n_critics),
         # LR drives the critic and the actor; ALPHA_LR the temperatures
         # (0 = follow LR). Under a high replay ratio both have to come
         # down: see GatedRecurrentSACConfig.alpha_lr.
@@ -2264,7 +2278,7 @@ def build_agent(binoc_dim, act_dim, critic_layer_norm=None, critic_proj_dim=None
         # An eval passes its checkpoint's own size (checkpoint_critic_proj_dim).
         critic_proj_dim=(env_int("CRITIC_PROJ_DIM", 0) if critic_proj_dim is None
                          else int(critic_proj_dim)),
-        subset_size=env_int("SUBSET_SIZE", 2),
+        subset_size=env_int("SUBSET_SIZE", 2) if subset_size is None else int(subset_size),
         # ACTOR_Q_REDUCE (user 2026-11-09, standard SAC's twin critics): "mean" (REDQ,
         # the default) or "min" (SAC: min(Q1, Q2) in the policy loss as in the target).
         actor_q_reduce=os.environ.get("ACTOR_Q_REDUCE", "mean"),
@@ -2443,7 +2457,8 @@ def main():
     # size of the tensor (2) must match the existing size (3)").
     ACT_DIM = int(env.action_space.shape[0])
     agent = build_agent(binoc_dim, ACT_DIM, critic_layer_norm=checkpoint_critic_layer_norm(EVAL_FROM) if EVAL_FROM else None,
-                        critic_proj_dim=checkpoint_critic_proj_dim(EVAL_FROM) if EVAL_FROM else None)
+                        critic_proj_dim=checkpoint_critic_proj_dim(EVAL_FROM) if EVAL_FROM else None,
+                        **(checkpoint_critic_ensemble(EVAL_FROM) if EVAL_FROM else {}))
     require_critic_layernorm(agent.cfg.critic_layer_norm,
                              training=not (EVAL_FROM or EXPERT_RECORD))
     mono_report = agent.mono_report

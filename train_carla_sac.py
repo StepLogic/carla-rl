@@ -80,6 +80,29 @@ def random_warmup_on(init_from, env=None):
     raise ValueError(f"RANDOM_WARMUP={v!r}: expected auto, 1 or 0")
 
 
+def proj_pretrain_settings(env=None):
+    """The critic projection head's imitation pretraining (user 2026-11-09: "pretrain
+    projection layer with imitation learning using demo data like c0 before - freeze
+    and start town05_town01 SAC train"; torch_rl.proj_pretrain), or None when off.
+    CRITIC_PROJ_PRETRAIN_UPDATES (0 = off), CRITIC_PROJ_PRETRAIN_CHUNKS (32, c0's
+    BC_CHUNKS), CRITIC_PROJ_PRETRAIN_EVAL_EVERY (500), CRITIC_PROJ_FREEZE (1). Needs
+    a head (CRITIC_PROJ_DIM > 0) and the demos (IL_PRELOAD_ROOT): refused otherwise,
+    before anything starts."""
+    env = os.environ if env is None else env
+    updates = int(env.get("CRITIC_PROJ_PRETRAIN_UPDATES", "0") or 0)
+    if updates <= 0:
+        return None
+    if int(env.get("CRITIC_PROJ_DIM", "0") or 0) <= 0:
+        raise SystemExit("CRITIC_PROJ_PRETRAIN_UPDATES > 0 needs a critic projection head "
+                         "(CRITIC_PROJ_DIM > 0)")
+    if not env.get("IL_PRELOAD_ROOT", ""):
+        raise SystemExit("CRITIC_PROJ_PRETRAIN_UPDATES > 0 needs the demos (IL_PRELOAD_ROOT)")
+    return {"updates": updates,
+            "chunks": int(env.get("CRITIC_PROJ_PRETRAIN_CHUNKS", "32") or 32),
+            "eval_every": int(env.get("CRITIC_PROJ_PRETRAIN_EVAL_EVERY", "500") or 500),
+            "freeze": env.get("CRITIC_PROJ_FREEZE", "1") == "1"}
+
+
 def replay_sampling():
     """How the replay draws training windows (user 2026-11-08: "Fix the
     window-sampler bias so every transition is equally likely (plain SAC), and
@@ -2275,6 +2298,9 @@ def main():
     # traces, recordings and IQL are exempt.
     require_plain_sac(training=not (EVAL_FROM or EXPERT_RECORD),
                       algo=os.environ.get("ALGO", "sac"))
+    # The projection pretraining's settings, refused here when they cannot work
+    # (no head, no demos) rather than after CARLA has started.
+    _proj_pretrain = None if (EVAL_FROM or EXPERT_RECORD) else proj_pretrain_settings()
 
     # DEBiT IS FROZEN (user 2026-10-14), so no adapters are added and its 3136-d
     # binocular output is a fixed function of (view, goal). That lets the ENV
@@ -2573,7 +2599,8 @@ def main():
             warmup_updates=IL_CRITIC_WARMUP_UPDATES, chunk_b=CHUNK_B, chunk_t=CHUNK_T,
             w0=IL_BC_WEIGHT0, decay_updates=IL_BC_DECAY_UPDATES, bc_chunks=IL_BC_CHUNKS,
             bc_len=IL_BC_LEN, aug=il_aug, log=lambda m: print(m, flush=True),
-            online_freeze_updates=IL_ONLINE_FREEZE_UPDATES, expert_replay=xbuf)
+            online_freeze_updates=IL_ONLINE_FREEZE_UPDATES, expert_replay=xbuf,
+            proj_pretrain=_proj_pretrain)
         if xbuf is not None:
             from torch_rl.mixed_replay import MixedReplay
             buf = MixedReplay(buf, xbuf, IL_EXPERT_FRAC)

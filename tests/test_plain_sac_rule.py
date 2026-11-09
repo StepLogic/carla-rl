@@ -136,6 +136,17 @@ def test_the_projection_runs_are_plain_and_mirror_each_other():
         assert loc.get(k) == clu.get(k), k
 
 
+def test_the_pretrained_frozen_head_run_is_plain_and_two_town():
+    from train_carla_sac import proj_pretrain_settings
+    env = _resolved("slurm/sac_c0_plain_rs10_rw_projbc.env")
+    assert plain_sac_violations(env) == []
+    assert env["ENV_TOWNS"] == "Town05,Town01"
+    assert env["IL_PRELOAD_TOWNS"].split() == ["Town05", "Town01"]
+    assert env["CRITIC_PROJ_DIM"] == "50" and env["RANDOM_WARMUP"] == "1"
+    assert proj_pretrain_settings(env) == {"updates": 10000, "chunks": 32,
+                                           "eval_every": 500, "freeze": True}
+
+
 def test_a_sac_training_run_refuses_to_start_and_names_every_violation():
     with pytest.raises(SystemExit) as e:
         require_plain_sac(training=True, algo="sac",

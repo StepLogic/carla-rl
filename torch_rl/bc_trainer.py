@@ -227,7 +227,7 @@ def actor_freeze_hook(agent, updates, log=None):
 
 def il_finetune_prepare(agent, buf, root, towns, *, warmup_updates, chunk_b, chunk_t,
                         w0, decay_updates, bc_chunks, bc_len, aug=None, log=print,
-                        online_freeze_updates=0, expert_replay=None):
+                        online_freeze_updates=0, expert_replay=None, proj_pretrain=None):
     """Ready a clone for the RL fine-tune (imitation-first plan, Task 10), before
     the first env step:
       1. the recorded episodes fill the replay `buf` with their EXECUTED actions
@@ -273,6 +273,30 @@ def il_finetune_prepare(agent, buf, root, towns, *, warmup_updates, chunk_b, chu
     log(f"[IL] the {pinned} recorded rows are PINNED (never overwritten; online data rings "
         f"through the other {replay.capacity - pinned}) and never update the temperature")
     K = int(agent.cfg.burn_in)
+    if proj_pretrain:
+        # The critic's projection head, pretrained by imitation on these demos and
+        # frozen (user 2026-11-09), before the critic warm-up trains the MLPs on it.
+        from torch_rl.proj_pretrain import pretrain_critic_projection
+        tr_p, va_p = split_by_episode(paths)
+        tr_buf, n_tr = _buffer(tr_p, act_dim, agent.device, seed=2)
+        va_buf, n_va = _buffer(va_p, act_dim, agent.device, seed=3)
+        n_ch = int(proj_pretrain["chunks"])
+        val_chunk = va_buf.sample_chunks(VAL_CHUNKS * 4, bc_len + K, K)
+        log(f"[IL] critic projection: cloning pretraining on {len(tr_p)} episodes / {n_tr} "
+            f"labelled steps, validation {len(va_p)} / {n_va}; "
+            f"{int(proj_pretrain['updates'])} updates x {n_ch} chunks x {bc_len}")
+        t0 = time.time()
+        ps = pretrain_critic_projection(
+            agent, lambda: tr_buf.sample_chunks(n_ch, bc_len + K, K), val_chunk,
+            updates=int(proj_pretrain["updates"]), eval_every=int(proj_pretrain["eval_every"]),
+            freeze=bool(proj_pretrain["freeze"]), log=log)
+        del tr_buf, va_buf
+        log(f"[IL] critic projection: best val NLL {ps['best_val_nll']:.4f} / MAE "
+            f"{ps['best_val_mae']:.4f} at update {ps['best_step']} (untrained "
+            f"{ps['init_val_nll']:.4f} / {ps['init_val_mae']:.4f}; c0's actor on the same rows "
+            f"{ps['actor_val_nll']:.4f} / {ps['actor_val_mae']:.4f}); copied into all "
+            f"{agent.critics_g.proj_w.shape[0]} critics and their targets, "
+            + ("FROZEN" if ps["frozen"] else "trainable") + f" ({time.time() - t0:.0f} s)")
     t0 = time.time()
     agent.set_warmup(True)
     m = {}

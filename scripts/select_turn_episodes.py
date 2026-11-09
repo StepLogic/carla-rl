@@ -16,11 +16,14 @@ ap.add_argument("--min-m", type=float, default=50.0); ap.add_argument("--max-m",
 ap.add_argument("--min-turns", type=int, default=2)
 a = ap.parse_args()
 out = []
-for f in a.probes:
-    ps = sorted(json.load(open(f)), key=lambda p: p["seed"])
+by_town = {}
+for f in a.probes:                       # several probe files of one town are merged
+    for p in json.load(open(f)):
+        by_town.setdefault(p["town"], {})[p["seed"]] = p
+for town in sorted(by_town):
+    ps = [by_town[town][s] for s in sorted(by_town[town])]
     keep = [p for p in ps if p.get("route_m") is not None and p.get("turns") is not None
             and a.min_m <= p["route_m"] < a.max_m and p["turns"] >= a.min_turns]
-    town = ps[0]["town"]
     print(f"{town}: {len(ps)} probed, {sum(1 for p in ps if p.get('route_m') is not None)} routed, "
           f"{len(keep)} qualify -> keep {min(len(keep), a.per_town)}")
     if len(keep) < a.per_town:

@@ -9,7 +9,10 @@
 set -u
 cd ~/carla-rl
 : "${TOWN:?}" "${BAND:?}" "${ARM:?}" "${LABEL:?}" "${PORT:?}"
-C=$HOME/carla-rl/checkpoints/il_bc_c0/step_15000
+# CKPT: the policy (default c0 step 15000). Run Q (user 2026-11-08) passes its own
+# step dir; its config.json carries critic LayerNorm, read at load.
+C=${CKPT:-$HOME/carla-rl/checkpoints/il_bc_c0/step_15000}
+TAG=$(basename "$C")
 MAPROOT=${MAPROOT:-$HOME/carla-rl/checkpoints/maps_expert}
 export BENCH_BASE_OVERLAY=slurm/il_eval_chw.env GOAL_CAM_MATCH=1
 # EPISODES: the fixed episode file (default: the development set). The frozen
@@ -18,8 +21,8 @@ export EVAL_EPISODES_FILE=${EPISODES:-$HOME/carla-rl/logs/bench_long_episodes.js
 export EVAL_MAP_FALLBACK=${EVAL_MAP_FALLBACK:-mapless}
 RUN=bench_${LABEL}_${ARM}_${TOWN}_${BAND}
 # ARM=mapless: no map, the true goal image (bench_c0.sh's mapless arm).
-if [ "$ARM" = mapless ]; then out=checkpoints/$RUN/eval_step_15000; MAPDIR=""
-else out=checkpoints/$RUN/eval_step_15000_map-${ARM}; MAPDIR=$MAPROOT/$ARM; fi
+if [ "$ARM" = mapless ]; then out=checkpoints/$RUN/eval_$TAG; MAPDIR=""
+else out=checkpoints/$RUN/eval_${TAG}_map-${ARM}; MAPDIR=$MAPROOT/$ARM; fi
 if [ -f "$out/eval.json" ]; then echo "=== have $RUN"; exit 0; fi
 echo "=== MAPDEBUG $RUN port $PORT lookahead=${EVAL_MAP_LOOKAHEAD_M:-0} reset_hidden=${EVAL_MAP_RESET_HIDDEN:-0} fallback=$EVAL_MAP_FALLBACK off_road_junction_m=${OFF_ROAD_JUNCTION_M:-0} maps=${MAPDIR:-none} ==="
 EVAL_VIDEO_EVERY=10 REWARD_OVERLAY=slurm/bench_$BAND.env ENV_TOWNS=$TOWN WRONG_GOAL_MODE=0 \

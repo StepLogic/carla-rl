@@ -85,6 +85,11 @@ def main():
     ap.add_argument("--image-gaps", action=argparse.BooleanOptionalAction, default=True,
                     help="add image-coverage gap nodes (default); --no-image-gaps builds KEY-ONLY "
                          "maps (user 2026-11-08: oracle localisation without gap nodes)")
+    ap.add_argument("--key-count", type=int, default=None,
+                    help="force the matched baselines' key count to this number (default: the "
+                         "entropy key count found in this build). User 2026-11-09: entropy is the "
+                         "focal map; baselines are forced to ITS key count, read from the frozen "
+                         "entropy map so a rebuild cannot drift")
     ap.add_argument("--sgm-iters", type=int, default=30,
                     help="bisection steps for the SGM cutoff that matches entropy's key count")
     ap.add_argument("--placements", nargs="+", default=["entropy", "uniform", "random"],
@@ -197,7 +202,7 @@ def main():
         print(f"[ImgMap] TOTAL matched to entropy's {ent_total}: uniform {len(uni)} keys -> {uni_total} "
               f"(spacing {_sp:.2f} m); random {len(rnd)} keys -> {rnd_total}", flush=True)
     else:
-        _sp, uni = im.match_uniform(view, n)
+        _sp, uni = im.match_uniform(view, a.key_count or n)
         rnd = im.place_random(view, n, seed=a.seed)
     if a.uniform_spacing > 0:
         _sp, uni = a.uniform_spacing, im.place_uniform(view, a.uniform_spacing)
@@ -214,16 +219,40 @@ def main():
         # are TRACE indices (candidates thinned at 0.8 m); each is mapped to the
         # nearest 0.5 m candidate frame here, so every rule after this is shared.
         z = np.load(os.path.join(a.out, f"sgm_pairs_{a.town}.npz"))
-        _cut, keep, _sst = im.sgm_match(z["cand"], z["pairs"], z["q"], z["xy"], z["yaw"],
-                                        count=n, gate_m=None, iters=a.sgm_iters)
         Sa = np.asarray(S)
-        j = np.clip(np.searchsorted(Sa, np.asarray(keep)), 1, len(Sa) - 1)
-        lo_, hi_ = j - 1, j
-        dlo = np.hypot(*(tr["pos"][Sa[lo_]] - tr["pos"][keep]).T)
-        dhi = np.hypot(*(tr["pos"][Sa[hi_]] - tr["pos"][keep]).T)
-        sgm_keys = list(dict.fromkeys(np.where(dlo <= dhi, lo_, hi_).tolist()))
-        print(f"[ImgMap] SGM: cutoff {_cut:.3f}, {len(keep)} members -> {len(sgm_keys)} key nodes "
-              f"(target {n})", flush=True)
+        n_sgm = a.key_count if a.key_count else n
+
+        def sgm_keys_for(target):
+            cut, keep, _st = im.sgm_match(z["cand"], z["pairs"], z["q"], z["xy"], z["yaw"],
+                                          count=target, gate_m=None, iters=a.sgm_iters)
+            jj = np.clip(np.searchsorted(Sa, np.asarray(keep)), 1, len(Sa) - 1)
+            lo_, hi_ = jj - 1, jj
+            dlo = np.hypot(*(tr["pos"][Sa[lo_]] - tr["pos"][keep]).T)
+            dhi = np.hypot(*(tr["pos"][Sa[hi_]] - tr["pos"][keep]).T)
+            return cut, list(dict.fromkeys(np.where(dlo <= dhi, lo_, hi_).tolist()))
+
+        # FORCED TO ENTROPY'S KEY COUNT (user 2026-11-09). The cutoff moves the count
+        # in steps and mapping members onto the 0.5 m candidates merges a few, so the
+        # bisection target is corrected until the mapped count reaches n_sgm; if a
+        # step jumps over it, the closest count ABOVE is taken and the surplus keys
+        # dropped, most-redundant first (the key nearest another key).
+        target, best = n_sgm, None
+        for _ in range(12):
+            _cut, ks = sgm_keys_for(target)
+            if best is None or (len(ks) >= n_sgm and (len(best[1]) < n_sgm or len(ks) < len(best[1]))):
+                best = (_cut, ks)
+            if len(ks) == n_sgm:
+                break
+            target += n_sgm - len(ks)
+        _cut, sgm_keys = best
+        dropped = 0
+        while len(sgm_keys) > n_sgm:
+            P = pos[np.asarray(sgm_keys)]
+            dd = np.hypot(P[:, None, 0] - P[None, :, 0], P[:, None, 1] - P[None, :, 1])
+            np.fill_diagonal(dd, np.inf)
+            sgm_keys.pop(int(np.argmin(dd.min(1)))); dropped += 1
+        print(f"[ImgMap] SGM: cutoff {_cut:.3f} -> {len(sgm_keys)} key nodes (forced to {n_sgm}; "
+              f"{dropped} surplus dropped)", flush=True)
         arms.append(("sgm_matched", sgm_keys))
     rows = []
     for name, key in [x for x in arms if x[0] in a.placements]:

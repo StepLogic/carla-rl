@@ -6,7 +6,7 @@ cuDNN GRU over the whole chunk: there is no mid-chunk hidden reset to model.
 Latents are 3136 floats per step, so they are stored fp16: 1M steps is 6.3 GB
 instead of 12.5 GB.
 """
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 import numpy as np
 import torch
@@ -128,15 +128,26 @@ class _OpenEpisode:
 
 
 class DeviceEpisodeBuffer:
-    """Episode replay staged on host, stored on `device`, sampled with uniform row coverage.
+    """Episode replay staged on host, stored on `device`, sampled in windows of T trained rows.
 
     `EpisodeBuffer` draws a chunk's START uniformly in [0, n - L]. That trains
     a middle row ~(L - K)x more often than the episode's LAST transition (the
     one carrying the arrival bonus), and never trains using the first K rows
-    as burn-in context. Here the TRAINED WINDOW start t0 is drawn uniformly in
-    [0, n - 1] instead of the chunk start, so every transition -- including
-    the terminal one -- is the trained target of the same number of draws
-    (T = length - burn_in of them; see the coverage test).
+    as burn-in context. Here, by default, the TRAINED WINDOW start t0 is drawn
+    uniformly in [0, n - 1] of an episode picked with probability proportional
+    to n: every row STARTS a window equally often, and the terminal transition
+    is trained as often as a middle one -- but a window trains T = length -
+    burn_in rows, so row r is trained by the min(r + 1, T) starts at or before
+    it: an episode's first T - 1 rows, and all of a short episode, are trained
+    less (tests/test_uniform_transitions.py measures it).
+
+    `uniform_transitions=True` (user 2026-11-08: "every transition is equally
+    likely (plain SAC)") draws a VIRTUAL start v uniformly over the n + T - 1
+    values [-(T - 1), n - 1] (episode probability proportional to n + T - 1)
+    and trains the rows [v, v + T - 1] that exist. Each row lies in exactly T
+    of those windows, so every stored transition is trained equally often. A
+    window with v < 0 is fetched from row 0 (the hidden state is reset there,
+    as at an env reset) and trains its first v + T rows only.
 
     Storage lives on `device` as one flat array of rows -- `capacity` counts
     ROWS, not transitions. An episode of n transitions occupies rows
@@ -149,8 +160,10 @@ class DeviceEpisodeBuffer:
 
     Episodes are tagged goal (mode=1) or explore (mode=0) at add() time, and
     `sample_chunks` stratifies a batch by mode (`goal_batch_frac`) before
-    picking an episode (probability proportional to its length) and a window
-    start within it.
+    picking an episode and a window start within it. `goal_batch_frac=None`
+    (user 2026-11-08: "drop the forced 50/50 goal/explore batch split") draws
+    every chunk from all episodes together: each mode's share of a batch is
+    then its share of the data.
 
     `add`/`end_episode` take an `env_id` (default 0), one open (host-staged)
     episode per env_id, so N parallel envs can interleave `add()` calls in any
@@ -175,10 +188,10 @@ class DeviceEpisodeBuffer:
     obs_dtype = np.float16
 
     def __init__(self, obs_dim: int, action_dim: int, capacity: int, device,
-                 seed: int = 0, goal_batch_frac: float = 0.5, goal_dim: int = 0,
+                 seed: int = 0, goal_batch_frac: Optional[float] = 0.5, goal_dim: int = 0,
                  store_device=None, u8_cols: int = 0, per_alpha: float = 0.0,
                  per_beta0: float = 0.4, per_beta_updates: int = 100000,
-                 per_eps: float = 1e-3) -> None:
+                 per_eps: float = 1e-3, uniform_transitions: bool = False) -> None:
         """`device` is where SAMPLED batches are delivered (the learner's).
         `store_device` is where the ring lives; default `device`. Set it to
         "cpu" to hold the replay in host RAM -- user 2026-10-19, "move to main
@@ -196,7 +209,12 @@ class DeviceEpisodeBuffer:
         self.u8_cols = int(u8_cols)
         if not 0 <= self.u8_cols <= self.obs_dim:
             raise ValueError(f"u8_cols={u8_cols} outside [0, obs_dim={self.obs_dim}]")
-        self.goal_batch_frac = float(goal_batch_frac)
+        self.goal_batch_frac = None if goal_batch_frac is None else float(goal_batch_frac)
+        self.uniform_transitions = bool(uniform_transitions)
+        if float(per_alpha) > 0.0 and (self.uniform_transitions or self.goal_batch_frac is None):
+            raise ValueError(
+                f"PER (per_alpha={per_alpha}) draws window starts per mode stratum; it is "
+                "not combined with uniform_transitions or goal_batch_frac=None")
         self.rng = np.random.default_rng(seed)
 
         sd, U = self.store_device, self.u8_cols
@@ -467,18 +485,26 @@ class DeviceEpisodeBuffer:
 
         by_mode = {0: [], 1: []}
         for start, n, mode in self._episodes:
-            by_mode[mode].append((start, n))
+            by_mode[mode].append((start, n, mode))
 
-        n_goal = min(B, max(0, round(B * self.goal_batch_frac)))
-        n_explore = B - n_goal
-        if not by_mode[1]:
-            n_goal, n_explore = 0, B
-        if not by_mode[0]:
-            n_goal, n_explore = B, 0
+        if self.goal_batch_frac is None:
+            # NO MODE SPLIT: one stratum holding every episode (mode None).
+            strata = ((B, None),)
+        else:
+            n_goal = min(B, max(0, round(B * self.goal_batch_frac)))
+            n_explore = B - n_goal
+            if not by_mode[1]:
+                n_goal, n_explore = 0, B
+            if not by_mode[0]:
+                n_goal, n_explore = B, 0
+            strata = ((n_goal, 1), (n_explore, 0))
 
         starts = np.empty(B, dtype=np.int64)
         ns = np.empty(B, dtype=np.int64)
         t0 = np.empty(B, dtype=np.int64)
+        # The last episode row each chunk trains: n - 1, or earlier for a
+        # uniform_transitions window cut at v + T - 1.
+        t_last = np.empty(B, dtype=np.int64)
         mode_out = np.empty(B, dtype=np.float32)
         per = self.per_alpha > 0.0
         if per:
@@ -490,10 +516,10 @@ class DeviceEpisodeBuffer:
             is_w = np.empty(B, dtype=np.float64)
 
         pos = 0
-        for count, mode_value in ((n_goal, 1), (n_explore, 0)):
+        for count, mode_value in strata:
             if count == 0:
                 continue
-            if per:
+            if per:                    # (never with mode_value None: __init__ refuses it)
                 # Window starts drawn with probability p^alpha within the stratum.
                 cand = np.flatnonzero(self._row_mode == mode_value)
                 p = self._prio[cand] ** self.per_alpha
@@ -504,25 +530,36 @@ class DeviceEpisodeBuffer:
                 starts[sl] = self._row_start[rows]
                 ns[sl] = self._row_n[rows]
                 t0[sl] = rows - self._row_start[rows]
+                t_last[sl] = ns[sl] - 1
                 mode_out[sl] = mode_value
                 per_rows[sl] = rows
                 is_w[sl] = (len(cand) * prob[pick]) ** (-beta)
                 pos += count
                 continue
-            eps = by_mode[mode_value]
-            ep_starts = np.array([s for s, _ in eps], dtype=np.int64)
-            ep_ns = np.array([e_n for _, e_n in eps], dtype=np.int64)
-            weights = ep_ns.astype(np.float64)
+            eps = (by_mode[1] + by_mode[0]) if mode_value is None else by_mode[mode_value]
+            ep_starts = np.array([s for s, _, _ in eps], dtype=np.int64)
+            ep_ns = np.array([e_n for _, e_n, _ in eps], dtype=np.int64)
+            ep_modes = np.array([e_m for _, _, e_m in eps], dtype=np.float32)
+            # An episode offers n window starts, or n + T - 1 virtual ones.
+            weights = (ep_ns + (T - 1 if self.uniform_transitions else 0)).astype(np.float64)
             weights /= weights.sum()
             chosen = self.rng.choice(len(eps), size=count, p=weights)
             chosen_ns = ep_ns[chosen]
-            # Every row is a window start equally often: t0 ~ Uniform[0, n - 1].
-            chosen_t0 = self.rng.integers(0, chosen_ns)
             sl = slice(pos, pos + count)
+            if self.uniform_transitions:
+                # Every TRANSITION trained equally often: virtual start v ~
+                # Uniform[-(T-1), n-1]; the window is fetched from max(v, 0) and
+                # trains rows v .. v+T-1 that exist (each row is in T windows).
+                v = self.rng.integers(-(T - 1), chosen_ns)
+                t0[sl] = np.maximum(v, 0)
+                t_last[sl] = np.minimum(v + T - 1, chosen_ns - 1)
+            else:
+                # Every row is a window START equally often: t0 ~ Uniform[0, n - 1].
+                t0[sl] = self.rng.integers(0, chosen_ns)
+                t_last[sl] = chosen_ns - 1
             starts[sl] = ep_starts[chosen]
             ns[sl] = chosen_ns
-            t0[sl] = chosen_t0
-            mode_out[sl] = mode_value
+            mode_out[sl] = ep_modes[chosen]
             pos += count
 
         # obs rows fetched: [t0 - K, t0 + T] (length K + T + 1); outside [0, n] -> zero.
@@ -531,10 +568,11 @@ class DeviceEpisodeBuffer:
         obs_valid = (r_obs >= 0) & (r_obs <= ns[:, None])
         obs_idx = starts[:, None] + np.clip(r_obs, 0, ns[:, None])
 
-        # transitions t0 .. t0+T-1; valid = 0 past n - 1 (the last row has no transition).
+        # transitions t0 .. t0+T-1; valid = 0 past t_last (n - 1 at most: the last row
+        # has no transition).
         i_t = np.arange(T)
         r_t = t0[:, None] + i_t[None, :]                                 # (B, T)
-        t_valid = r_t <= (ns[:, None] - 1)
+        t_valid = r_t <= t_last[:, None]
         t_idx = starts[:, None] + np.clip(r_t, 0, ns[:, None] - 1)
 
         # keep[:, j] for j = 0..K: column j refers to episode row r = t0 - K + j; 0 iff

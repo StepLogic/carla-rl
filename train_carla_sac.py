@@ -64,6 +64,19 @@ def env_opt_float(name, default):
     return env_float(name, default)
 
 
+def replay_sampling():
+    """How the replay draws training windows (user 2026-11-08: "Fix the
+    window-sampler bias so every transition is equally likely (plain SAC), and
+    drop the forced 50/50 goal/explore batch split").
+    UNIFORM_TRANSITIONS=1: every stored transition is trained equally often.
+    Default 0, the sampler of every earlier run, which trains an episode's
+    first CHUNK_T - 1 rows (and all of a short episode) less than its later ones.
+    GOAL_BATCH_FRAC: the goal share of every batch (default 0.5); none / off =
+    no split, so each mode's share of a batch is its share of the data."""
+    return {"uniform_transitions": os.environ.get("UNIFORM_TRANSITIONS", "0") == "1",
+            "goal_batch_frac": env_opt_float("GOAL_BATCH_FRAC", 0.5)}
+
+
 RUN_NAME = os.environ.get("RUN_NAME", "carla_sac_debit_v1")
 MAX_STEPS = env_int("MAX_STEPS", 1_000_000)
 UPDATE_EVERY = env_int("UPDATE_EVERY", 20)
@@ -2299,7 +2312,7 @@ def main():
                          "(not ALGO=iql, not IL_EXPERT_FRAC's mixed replay)")
     buf = DeviceEpisodeBuffer(row_dim, ACT_DIM, 1000 if EVAL_FROM else CAPACITY, DEVICE, seed=SEED,
                               goal_dim=pxr.PIX,
-                              goal_batch_frac=env_float("GOAL_BATCH_FRAC", 0.5),
+                              **replay_sampling(),
                               store_device=REPLAY_DEVICE,
                               u8_cols=pxr.MONO_PIX if REPLAY_U8 else 0,
                               per_alpha=env_float("PER_ALPHA", 0.0),
@@ -2310,6 +2323,14 @@ def main():
         print(f"  PER: priority alpha {buf.per_alpha:g}, importance beta {buf.per_beta0:g} -> 1 "
               f"over {buf.per_beta_updates} updates, chunk priority 0.9 max + 0.1 mean "
               f"|TD error|; new rows enter at the max priority", flush=True)
+    print("  REPLAY SAMPLING: "
+          + ("every stored transition trained equally often (UNIFORM_TRANSITIONS=1)"
+             if buf.uniform_transitions else
+             f"window starts uniform per row (an episode's first {CHUNK_T - 1} rows "
+             f"trained less)")
+          + ("; NO goal/explore split (each mode's share = its share of the data)"
+             if buf.goal_batch_frac is None else
+             f"; goal share {buf.goal_batch_frac:g} of every batch"), flush=True)
 
     # PREFLIGHT, printed before a single step (user rule, after four restarts):
     # the label, the checkpoint directory, the town, the seeds and the action
@@ -2433,7 +2454,7 @@ def main():
             xbuf = DeviceEpisodeBuffer(
                 row_dim, ACT_DIM, expert_rows(IL_PRELOAD_ROOT, IL_PRELOAD_TOWNS), DEVICE,
                 seed=SEED + 1, goal_dim=pxr.PIX,
-                goal_batch_frac=env_float("GOAL_BATCH_FRAC", 0.5),
+                **replay_sampling(),
                 store_device=REPLAY_DEVICE, u8_cols=pxr.MONO_PIX if REPLAY_U8 else 0)
         il_hook = il_finetune_prepare(
             agent, buf, IL_PRELOAD_ROOT, IL_PRELOAD_TOWNS,

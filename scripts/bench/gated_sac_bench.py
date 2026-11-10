@@ -47,6 +47,19 @@ _CHANGED = ("action_dim", "state_dim", "goal_cols", "core_state_cols", "device",
             "target_entropy")
 
 
+def loop_settings(learning_starts=None, update_every=None) -> dict:
+    """C1's loop, optionally with another start and update rate -- the budget-matched control
+    (learner C trains from step 1000 with updates every step): everything else stays C1's."""
+    out = dict(C1_LOOP)
+    if learning_starts is not None:
+        out["learning_starts"] = int(learning_starts)
+    if update_every is not None:
+        if int(update_every) < 1:
+            raise ValueError(f"update_every must be >= 1, got {update_every}")
+        out["update_every"] = int(update_every)
+    return out
+
+
 def bench_config(c1: dict, obs_dim: int, act_dim: int, seed: int, device: str = "cpu") -> dict:
     """C1's learner config with only the input sizes, device, seed and the -action_dim entropy
     target changed. State block = [mode | speed | task state]; the critic reads all of it, the
@@ -117,6 +130,8 @@ def main():
     p.add_argument("--device", default="cpu",
                    help="cuda: the learner on the GPU, replay frames stored on cpu (as C1)")
     p.add_argument("--capacity", type=int, default=100000)
+    p.add_argument("--learning-starts", type=int, default=None, help="default: C1's 5000")
+    p.add_argument("--update-every", type=int, default=None, help="default: C1's 5")
     p.add_argument("--eval-every", type=int, default=0, help="agent steps; 0 = only at the end")
     p.add_argument("--eval-episodes", type=int, default=10)
     p.add_argument("--eval-seed", type=int, default=1000)
@@ -142,7 +157,7 @@ def main():
     report = load_debit_mono(agent.compress, args.debit_weights)
     agent.compress_targ.load_state_dict(agent.compress.state_dict())
     row_dim = pxr.MONO_PIX + cfg["state_dim"]
-    L = C1_LOOP
+    L = loop_settings(args.learning_starts, args.update_every)
     buf = DeviceEpisodeBuffer(row_dim, act_dim, args.capacity, args.device, seed=args.seed,
                               goal_dim=pxr.PIX, uniform_transitions=True, goal_batch_frac=None,
                               store_device="cpu", u8_cols=pxr.MONO_PIX)

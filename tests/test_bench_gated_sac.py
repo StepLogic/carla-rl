@@ -16,7 +16,7 @@ sys.path.insert(0, os.path.join(ROOT, "scripts", "bench"))
 os.environ.setdefault("MONO_CHW", "1")
 os.environ.setdefault("SPEED_OBS", "1")
 
-from gated_sac_bench import C1_LOOP, bench_config, bench_row  # noqa: E402
+from gated_sac_bench import C1_LOOP, bench_config, bench_row, loop_settings  # noqa: E402
 from torch_rl import pixel_rows as pxr  # noqa: E402
 
 C1 = {"action_dim": 2, "state_dim": 3138, "goal_cols": list(range(3138)),
@@ -63,6 +63,18 @@ def test_rows_use_the_c1_layout_and_the_same_frame_encoding_as_carla_rows():
 def test_the_loop_cadence_is_c1s():
     assert C1_LOOP == {"learning_starts": 5000, "update_every": 5, "updates_per": 1,
                        "chunk_b": 8, "chunk_t": 40, "burn_in": 8}
+
+
+def test_the_budget_matched_cadence_changes_only_the_start_and_the_update_rate():
+    """T2-B failed under C1's cadence (2026-11-10). The planned control: B with the update
+    budget of learner C -- learning from step 1000, an update every step -- everything else C1."""
+    assert loop_settings() == C1_LOOP
+    m = loop_settings(learning_starts=1000, update_every=1)
+    assert (m["learning_starts"], m["update_every"]) == (1000, 1)
+    assert {k: v for k, v in m.items() if k not in ("learning_starts", "update_every")} == \
+           {k: v for k, v in C1_LOOP.items() if k not in ("learning_starts", "update_every")}
+    with pytest.raises(ValueError):
+        loop_settings(update_every=0)
 
 
 def test_rows_refuse_a_wrong_frame_size():

@@ -1,13 +1,15 @@
 \begin{algorithm}[t]
 \caption{Causal entropy-based key-node selection. The selection loop is
-causal: it reads only earlier candidates. The descriptor vocabulary behind $s$ and
+causal: it reads only earlier candidates. The goal image is fixed for a drive,
+so $\mathcal{H}_t$ varies with the observation and with the car's pose relative to
+that one goal. The descriptor vocabulary behind $s$ and
 the threshold $\tau$ are fitted on the completed drive, so the pipeline as a whole
 is not online; a deployable version needs a vocabulary and a threshold fixed in
 advance. $\max$ and $\min$ over an empty set are $-\infty$ and $+\infty$.}
 \label{alg:node-selection}
 \begin{algorithmic}[1]
 \Require exploration drive $o_1,\dots,o_T$ with poses $p_t$, headings $\psi_t$ and
-  drive ids $m_t$; low-level policy $\pi$ driven with per-step goal $g_t$;
+  drive ids $m_t$; low-level policy $\pi$ in explore mode, conditioned on a single goal image $g_m$ latched at the start of drive $m$;
   image similarity $s$; candidate spacing $\delta$; window length $L$;
   warm-up $W$; MAD threshold $n$; spatial radius $\rho$; image threshold $\tau$
 \State $C \gets \textsc{Thin}(o_{1:T}, \delta)$
@@ -19,8 +21,8 @@ advance. $\max$ and $\min$ over an empty set are $-\infty$ and $+\infty$.}
   \State $\mathcal{B} \gets \emptyset$, \; $a \gets \textsc{false}$
     \Comment{the buffer restarts at a drive boundary}
   \For{$t \in C_m$} \Comment{online: one pass, no look-ahead}
-    \State $\mathcal{H}_t \gets \mathcal{H}\big(\pi(\cdot \mid o_t,\, g_t)\big)$
-      \Comment{entropy at the goal the explorer is driving to}
+    \State $\mathcal{H}_t \gets \mathcal{H}\big(\pi(\cdot \mid o_t,\, g_m)\big)$
+      \Comment{one policy pass per frame; recurrent state carried from the start of the drive}
     \If{$|\mathcal{B}| \ge W$}
       \State $\mu \gets \operatorname{median}(\mathcal{B})$,\;
              $\sigma \gets 1.4826\,\operatorname{MAD}(\mathcal{B})$

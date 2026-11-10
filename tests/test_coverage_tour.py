@@ -172,3 +172,47 @@ def test_the_drive_plan_closes_the_loop_past_its_own_start():
     xs = [w.transform.location.x for w in drive]
     assert k0 == 2 and xs[:k0 + 1] == [0.0, 1.0, 2.0]
     assert xs[len(plan):] == [1.0, 2.0, 3.0, 4.0, 5.0]  # past the spawn (2) by `overlap`
+
+
+# ---- towns whose lanes are not one strongly connected component (2026-11-09) --
+# Town05's lane-following graph (no lane changes) is not strongly connected: its
+# training-town tour (job 465543) failed "the tour cannot reach and return from
+# [108, 109, ...]". EXPERT_TOUR_LARGEST_SCC=1 keeps the required lanes inside the
+# strongly connected component holding the most required metres.
+from vae_nav.coverage_tour import restrict_to_largest_scc  # noqa: E402
+
+
+def _two_loops():
+    # loop A: 0->1->2->0 (lanes 10 m each); loop B: 5->6->5 (lanes 50 m each);
+    # a one-way link 2->5 joins them, so neither reaches the other both ways
+    edges = {(0, 1): 10.0, (1, 2): 10.0, (2, 0): 10.0, (5, 6): 50.0, (6, 5): 50.0,
+             (2, 5): 3.0}
+    required = [(0, 1), (1, 2), (2, 0), (5, 6), (6, 5)]
+    return edges, required
+
+
+def test_the_component_with_the_most_required_metres_is_kept():
+    edges, required = _two_loops()
+    keep, start, dropped = restrict_to_largest_scc(edges, required)
+    assert sorted(keep) == [(5, 6), (6, 5)]                 # 100 m beats 30 m
+    assert sorted(dropped) == [(0, 1), (1, 2), (2, 0)]
+    assert start in (5, 6)
+    walk = coverage_tour(edges, keep, start)                 # and it now plans
+    _assert_closed_walk(walk, edges, start)
+    assert set(keep) <= set(walk)
+
+
+def test_a_strongly_connected_town_loses_nothing():
+    edges = {(0, 1): 1.0, (1, 2): 1.0, (2, 0): 1.0}
+    keep, start, dropped = restrict_to_largest_scc(edges, list(edges))
+    assert sorted(keep) == sorted(edges) and dropped == []
+    assert start == sorted(keep)[0][0]                       # the old rule's start
+
+
+def test_the_trace_runner_uses_it_only_when_asked():
+    src = open(os.path.join(ROOT, "train_carla_sac.py")).read()
+    assert 'EXPERT_TOUR_LARGEST_SCC = os.environ.get("EXPERT_TOUR_LARGEST_SCC", "0") == "1"' in src
+    body = src[src.index("def run_expert_trace"):]
+    body = body[:body.index("walk = coverage_tour(")]
+    assert "if EXPERT_TOUR_LARGEST_SCC:" in body and "restrict_to_largest_scc(edges, req)" in body
+    assert "start = sorted(req)[0][0]" in body               # the default path, unchanged

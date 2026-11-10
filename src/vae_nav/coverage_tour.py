@@ -27,6 +27,29 @@ import networkx as nx
 import numpy as np
 
 
+def restrict_to_largest_scc(edges, required):
+    """For a town whose lane-following graph is NOT one strongly connected component
+    (Town05, 2026-11-09: some lanes are reachable only by a lane change, which the
+    tour never makes). Returns (required edges inside the component holding the most
+    required metres, a start node there -- the same rule as the default start,
+    `sorted(req)[0][0]` -- and the required edges left out). A strongly connected
+    town loses nothing."""
+    edges = {tuple(e): float(w) for e, w in dict(edges).items()}
+    req = list(dict.fromkeys(tuple(e) for e in required))
+    G = nx.DiGraph()
+    G.add_edges_from(edges)
+    best, best_m = None, -1.0
+    for comp in nx.strongly_connected_components(G):
+        m = sum(edges[e] for e in req if e[0] in comp and e[1] in comp)
+        if m > best_m:
+            best, best_m = comp, m
+    keep = [e for e in req if e[0] in best and e[1] in best]
+    dropped = [e for e in req if not (e[0] in best and e[1] in best)]
+    if not keep:
+        raise ValueError("no required lane lies inside any strongly connected component")
+    return keep, sorted(keep)[0][0], dropped
+
+
 def coverage_tour(edges, required, start):
     """Closed walk from `start` back to `start` traversing every `required`
     edge at least once. `edges` = {(u, v): metres} (directed). Returns the

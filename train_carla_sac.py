@@ -361,6 +361,11 @@ EXPERT_TRACE_CHUNK = env_int("EXPERT_TRACE_CHUNK", 2000)
 # junction turn, not only every lane, so a map built from it has an edge for every
 # legal turn (coverage_tour.lane_graph junctions=True). 0 = lanes only (earlier).
 EXPERT_TOUR_JUNCTIONS = os.environ.get("EXPERT_TOUR_JUNCTIONS", "0") == "1"
+# EXPERT_TOUR_LARGEST_SCC=1 (2026-11-09, training-town tours): a town whose lane-
+# following graph is not one strongly connected component (Town05) tours the
+# component with the most required metres (coverage_tour.restrict_to_largest_scc)
+# and records the lanes left out. 0 = every earlier trace (all lanes required).
+EXPERT_TOUR_LARGEST_SCC = os.environ.get("EXPERT_TOUR_LARGEST_SCC", "0") == "1"
 EXPERT_TRACE_MAX_STEPS = env_int("EXPERT_TRACE_MAX_STEPS", 200000)
 EXPERT_TRACE_MAX_DRIVES = env_int("EXPERT_TRACE_MAX_DRIVES", 20)
 EXPERT_TRACE_STUCK_STEPS = env_int("EXPERT_TRACE_STUCK_STEPS", 300)
@@ -1300,7 +1305,7 @@ def run_expert_trace(env, agent, pxr, server, out_root):
     from torch_rl.expert_record import assert_recordable_town
     from torch_rl.expert_trace import ChunkWriter, trace_dir
     from vae_nav.coverage_tour import (closed_drive_plan, coverage_tour, lane_graph,
-                                       tour_waypoints, walk_length)
+                                       restrict_to_largest_scc, tour_waypoints, walk_length)
     from vae_nav.expert_oracle import (SAMPLING_RESOLUTION_M, BasicAgentExpert,
                                        _ensure_agents_on_path)
     from vae_nav.gated_reward import GatedReward
@@ -1319,7 +1324,14 @@ def run_expert_trace(env, agent, pxr, server, out_root):
     from agents.navigation.global_route_planner import GlobalRoutePlanner
     grp = GlobalRoutePlanner(core.map, SAMPLING_RESOLUTION_M)
     edges, req, wps = lane_graph(grp, junctions=EXPERT_TOUR_JUNCTIONS)
-    start = sorted(req)[0][0]
+    dropped = []
+    if EXPERT_TOUR_LARGEST_SCC:
+        req, start, dropped = restrict_to_largest_scc(edges, req)
+        print(f"  EXPERT_TOUR_LARGEST_SCC: {len(req)} lanes kept, {len(dropped)} left out "
+              f"({sum(edges[e] for e in dropped):.0f} m) -- not reachable both ways without "
+              f"a lane change", flush=True)
+    else:
+        start = sorted(req)[0][0]
     walk = coverage_tour(edges, req, start)
     tour = tour_waypoints(walk, wps)
     plan, k_start = closed_drive_plan(tour, start_k=2, overlap=10)
@@ -1330,6 +1342,8 @@ def run_expert_trace(env, agent, pxr, server, out_root):
         "target_kmh": EXPERT_TARGET_KMH, "tour_edges": len(walk), "tour_m": round(tour_m, 1),
         "lanes": len(req), "lanes_m": round(lanes_m, 1), "tour_waypoints": len(tour),
         "junction_turns_required": bool(EXPERT_TOUR_JUNCTIONS),
+        "lanes_left_out": len(dropped),
+        "lanes_left_out_m": round(sum(edges[e] for e in dropped), 1),
         "plan_waypoints": len(plan), "closing_waypoints": len(plan) - len(tour),
         "trace_only": True})
     print(f"=== EXPERT TRACE {town} | tour {len(walk)} edges, {tour_m:.0f} m over "

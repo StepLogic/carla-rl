@@ -356,13 +356,44 @@ def _buffer(paths, act_dim, device, seed):
     return buf, added
 
 
+def bc_episode_paths(root, towns, max_seed="", shard_list=""):
+    """The episode shards a clone trains on.
+
+    Without `shard_list`: every shard under root/<town>/ (root may join several
+    with os.pathsep), keeping ids <= `max_seed` when given (BC_MAX_SEED: the DAgger
+    rounds wrote into the same root from seed 300000, so a round-0 clone sets
+    199999 to train on the expert's own episodes only).
+    With `shard_list` (BC_SHARD_LIST, plan 2026-11-09 B3): exactly the files it
+    lists, one per line -- M1's expert shards plus the DAgger-in-chains shards,
+    whose ids (seed * 100 + segment) no single seed cap can select. Every file
+    must exist and sit in a <town>/ directory of `towns`; held-out towns are
+    refused. The seed cap does not apply to a list."""
+    if not shard_list:
+        paths = episode_paths(root, towns)
+        if max_seed:
+            paths = [p for p in paths if int(os.path.basename(p)[3:-4]) <= int(max_seed)]
+        return paths
+    with open(shard_list) as fh:
+        paths = [ln.strip() for ln in fh if ln.strip()]
+    for p in paths:
+        if not os.path.isfile(p):
+            raise SystemExit(f"BC_SHARD_LIST {shard_list}: no such shard {p}")
+        town = os.path.basename(os.path.dirname(p))
+        assert_recordable_town(town)
+        if town not in towns:
+            raise SystemExit(f"BC_SHARD_LIST {shard_list}: {p} is in {town}, not in "
+                             f"BC_TOWNS {towns}")
+    return sorted(paths)
+
+
 def run_bc_train(out_root, make_agent=None):
     """The BC_TRAIN=1 mode: clone the recorded expert, checkpointing to
     <out_root>/step_<n>/. `make_agent(binoc_dim, act_dim)` builds the learner;
     the trainer passes its build_agent (default: imported from train_carla_sac)."""
     root = os.environ.get("BC_DATA_ROOT", "")
-    if not root:
-        raise SystemExit("BC_TRAIN=1 needs BC_DATA_ROOT (the expert recording root)")
+    if not root and not os.environ.get("BC_SHARD_LIST", ""):
+        raise SystemExit("BC_TRAIN=1 needs BC_DATA_ROOT (the expert recording root) "
+                         "or BC_SHARD_LIST (a file of shard paths)")
     towns = os.environ.get("BC_TOWNS", " ".join(TRAINING_TOWNS)).split()
     for t in towns:
         assert_recordable_town(t)                 # never clone a held-out town
@@ -372,21 +403,17 @@ def run_bc_train(out_root, make_agent=None):
     save_every = _env_int("BC_SAVE_EVERY", 2500)
     init_from = os.environ.get("BC_INIT_FROM", "")
 
-    paths = episode_paths(root, towns)
-    # BC_MAX_SEED: keep episodes whose seed (ep_<seed>.npz) is at most this --
-    # the DAgger rounds write into the same root from seed 300000, so a round-0
-    # clone sets 199999 to train on the expert's own episodes only.
-    max_seed = os.environ.get("BC_MAX_SEED", "")
-    if max_seed:
-        paths = [p for p in paths
-                 if int(os.path.basename(p)[3:-4]) <= int(max_seed)]
+    shard_list = os.environ.get("BC_SHARD_LIST", "")
+    paths = bc_episode_paths(root, towns, max_seed=os.environ.get("BC_MAX_SEED", ""),
+                             shard_list=shard_list)
     train, val = split_by_episode(paths)
     if not train or not val:
         raise SystemExit(f"BC needs >= 2 episodes under {root} for {towns}: "
                          f"{len(train)} train, {len(val)} val")
     os.makedirs(out_root, exist_ok=True)
     with open(os.path.join(out_root, "bc_split.json"), "w") as fh:
-        json.dump({"data_root": root, "towns": towns, "train": train, "val": val}, fh, indent=1)
+        json.dump({"data_root": root, "shard_list": shard_list or None, "towns": towns,
+                   "train": train, "val": val}, fh, indent=1)
 
     if make_agent is None:
         from train_carla_sac import build_agent as make_agent

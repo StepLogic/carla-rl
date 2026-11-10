@@ -1,0 +1,46 @@
+\begin{algorithm}[t]
+\caption{Causal entropy-based key-node selection. $\max$ and $\min$ over an
+empty set are $-\infty$ and $+\infty$.}
+\label{alg:node-selection}
+\begin{algorithmic}[1]
+\Require exploration drive $o_1,\dots,o_T$ with poses $p_t$, headings $\psi_t$ and
+  drive ids $m_t$; low-level policy $\pi$ driven with per-step goal $g_t$;
+  image similarity $s$; candidate spacing $\delta$; window length $L$;
+  warm-up $W$; MAD threshold $n$; spatial radius $\rho$; image threshold $\tau$
+\State $C \gets \textsc{Thin}(o_{1:T}, \delta)$
+  \Comment{keep $o_t$ unless an earlier kept frame lies within $\delta$ at a similar heading}
+\State $B \gets \max\big(W,\ \mathrm{round}(L / \delta)\big)$
+  \Comment{window length in candidates}
+\State $A \gets \emptyset$, \; $K \gets \emptyset$ \Comment{admitted, key nodes}
+\For{each drive $m$, its candidates $C_m$ in temporal order}
+  \State $\mathcal{B} \gets \emptyset$, \; $a \gets \textsc{false}$
+    \Comment{the buffer restarts at a drive boundary}
+  \For{$t \in C_m$} \Comment{online: one pass, no look-ahead}
+    \State $\mathcal{H}_t \gets \mathcal{H}\big(\pi(\cdot \mid o_t,\, g_t)\big)$
+      \Comment{entropy at the goal the explorer is driving to}
+    \If{$|\mathcal{B}| \ge W$}
+      \State $\mu \gets \operatorname{median}(\mathcal{B})$,\;
+             $\sigma \gets 1.4826\,\operatorname{MAD}(\mathcal{B})$
+      \If{$\sigma > 0$ \textbf{and} $\mathcal{H}_t \ge \mu + n\,\sigma$
+          \textbf{and} $\min_{j \in A}\lVert p_t - p_j\rVert \ge \rho$}
+        \State $A \gets A \cup \{t\}$,\; $a \gets \textsc{true}$
+          \Comment{entropy outlier w.r.t.\ the preceding $L$ metres}
+      \EndIf
+    \EndIf
+    \State append $\mathcal{H}_t$ to $\mathcal{B}$; keep the last $B$ values
+      \Comment{after the test, so $\mathcal{B}$ holds only earlier candidates}
+  \EndFor
+  \If{$\neg a$ \textbf{and} $C_m \neq \emptyset$}
+    \State $t^\star \gets \arg\max_{t \in C_m} \mathcal{H}_t$
+    \If{$\min_{j \in A}\lVert p_{t^\star} - p_j\rVert \ge \rho$}
+      \State $A \gets A \cup \{t^\star\}$
+        \Comment{a drive shorter than the warm-up is never left unrepresented}
+    \EndIf
+  \EndIf
+\EndFor
+\For{$t \in A$ in temporal order} \Comment{image-based non-maximum suppression}
+  \If{$\max_{k \in K} s(o_t, o_k) < \tau$} \State $K \gets K \cup \{t\}$ \EndIf
+\EndFor
+\State \Return key nodes $K$
+\end{algorithmic}
+\end{algorithm}

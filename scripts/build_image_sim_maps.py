@@ -85,6 +85,18 @@ def main():
     ap.add_argument("--image-gaps", action=argparse.BooleanOptionalAction, default=True,
                     help="add image-coverage gap nodes (default); --no-image-gaps builds KEY-ONLY "
                          "maps (user 2026-11-08: oracle localisation without gap nodes)")
+    ap.add_argument("--cand-mode", choices=("metric", "image"), default="metric",
+                    help="metric: candidates every --cand-m along the drive (uses odometry). "
+                         "image: keep a frame when its similarity to every earlier candidate is "
+                         "below --cand-sim, the Habitat rule, with no odometry (user 2026-11-10)")
+    ap.add_argument("--cand-sim", type=float, default=None,
+                    help="--cand-mode image threshold (default: Habitat's 0.60, scaled like the others)")
+    ap.add_argument("--mad-window-n", type=int, default=0,
+                    help="MAD window as a COUNT of candidates (time-based). 0 = derive it from "
+                         "--mad-window-m and the candidate spacing (uses odometry)")
+    ap.add_argument("--spatial-dedupe-m", type=float, default=0.8,
+                    help="reject an admitted node within this of any already placed (uses odometry); "
+                         "0 disables it")
     ap.add_argument("--mad-z", type=float, default=1.0,
                     help="online-MAD admission z (robust z-score, sigma = MAD/0.6745). 1.0 = the "
                          "Habitat peer's value used so far; 2.5 = Leys et al. 2013's default")
@@ -118,11 +130,15 @@ def main():
         index = json.load(fh)
     from torch_rl.expert_trace import drive_ids
     drive = drive_ids(tr, index)
-    S = im.place_uniform(tr, a.cand_m)                       # candidate trace indices
-    pos, yaw, ent, drv = tr["pos"][S], tr["yaw"][S], tr["entropy"][S], drive[S]
-    frames = im.node_frames(tr, S)
-    print(f"[ImgMap] {a.town}: {len(tr['pos'])} frames -> {len(S)} candidates at {a.cand_m:g} m", flush=True)
+    if a.cand_mode == "metric":
+        S = im.place_uniform(tr, a.cand_m)                   # candidate trace indices
+        print(f"[ImgMap] {a.town}: {len(tr['pos'])} frames -> {len(S)} candidates at {a.cand_m:g} m", flush=True)
+    else:
+        S = None                                             # chosen below, once descriptors exist
+        print(f"[ImgMap] {a.town}: {len(tr['pos'])} frames, IMAGE candidates (no odometry)", flush=True)
 
+    frames_all = im.node_frames(tr, np.arange(len(tr["pos"]))) if S is None else None
+    frames = im.node_frames(tr, S) if S is not None else frames_all
     enc = anyloc.ValueFacet(dev)
     vf = rng.choice(len(frames), size=min(2000, len(frames)), replace=False)
     pool = torch.cat([enc.patches(frames[vf[i:i + a.batch]]).reshape(-1, 768)
@@ -133,6 +149,13 @@ def main():
     D = torch.cat([anyloc.vlad(enc.patches(frames[i:i + a.batch]), C).half()
                    for i in range(0, len(frames), a.batch)])
     print(f"[ImgMap] descriptors {tuple(D.shape)}", flush=True)
+    if S is None:
+        # IMAGE CANDIDATES (Habitat's rule): stream the drive, keep a frame when it is
+        # below --cand-sim to EVERY earlier candidate. Sequential by construction.
+        thr_c = a.cand_sim                                   # may be None; set after scaling below
+        _pending_image_candidates = True
+    else:
+        _pending_image_candidates = False
 
     # THRESHOLD: this town's 2% far-false point (pairs > 10 m apart)
     i = rng.integers(0, len(pos), 400000); j = rng.integers(0, len(pos), 400000)
@@ -151,13 +174,32 @@ def main():
     print(f"[ImgMap] 2% far-false {thr_far:.3f}; same-place median {same_med:.3f} (Habitat {a.habitat_same_median}) "
           f"-> scale {scale:.3f}: coverage {thr}, dedupe {a.dedupe}, label floor {a.label_floor}", flush=True)
 
+    if _pending_image_candidates:
+        thr_c = a.cand_sim if a.cand_sim is not None else round(0.60 * scale, 3)
+        keep, acc = [], None
+        for i in range(len(D)):
+            v = D[i:i + 1].float()
+            if acc is None or float((v @ acc.T).max()) < thr_c:
+                keep.append(i)
+                acc = v if acc is None else torch.cat([acc, v])
+        S = np.asarray(keep, int)
+        D = D[torch.as_tensor(S, device=D.device)]
+        frames = frames_all[S]
+        del frames_all, acc
+        print(f"[ImgMap] IMAGE candidates at {thr_c}: {len(S)} of {len(tr['pos'])} frames "
+              f"({len(S) / len(tr['pos']):.1%})", flush=True)
+    pos, yaw, ent, drv = tr["pos"][S], tr["yaw"][S], tr["entropy"][S], drive[S]
+    view = {"pos": pos, "yaw": yaw}
+
     def sims_to(nodes):
         """(len(S), len(nodes)) cosine, chunked, on the GPU."""
         Dn = D[np.asarray(nodes)].float()
         return torch.cat([D[s:s + 4096].float() @ Dn.T for s in range(0, len(D), 4096)])
 
     # 1. KEY NODES
-    mad, _st = online_maps.online_mad(ent, pos, drv, window_m=a.mad_window_m, z=a.mad_z)
+    mad, _st = online_maps.online_mad(ent, pos, drv, window_m=a.mad_window_m, z=a.mad_z,
+                                      dedupe_m=a.spatial_dedupe_m,
+                                      window=(a.mad_window_n or None))
     keys = []
     if len(mad):
         Dm = D[np.asarray(mad)].float()
@@ -165,7 +207,6 @@ def main():
             if not keys or float((Dm[r:r + 1] @ D[np.asarray(keys)].float().T).max()) < a.dedupe:
                 keys.append(int(k))
     n = len(keys)
-    view = {"pos": pos, "yaw": yaw}
 
     def with_image_gaps(key):
         """2a. IMAGE-COVERAGE GAP NODES: greedily add the worst-covered candidate

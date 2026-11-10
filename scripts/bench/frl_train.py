@@ -40,6 +40,18 @@ CONFIGS = {
 }
 
 
+def make_env(env_id: str):
+    """The env with its action space rescaled to [-1, 1] when it is not already, so the tanh
+    actor reaches the whole range (Pendulum's torque is [-2, 2]). The reference loop only clips,
+    which is right for its own [-1, 1] envs and would halve Pendulum's torque."""
+    import gymnasium as gym
+    env = gym.make(env_id)
+    lo, hi = env.action_space.low, env.action_space.high
+    if not (np.allclose(lo, -1.0) and np.allclose(hi, 1.0)):
+        env = gym.wrappers.RescaleAction(env, -1.0, 1.0)
+    return env
+
+
 def mask_for(terminated: bool, truncated: bool) -> float:
     """0 only on a true termination; a time-limit truncation keeps bootstrapping."""
     return 0.0 if terminated else 1.0
@@ -81,8 +93,7 @@ def _wrap(obs, pixels: bool):
 
 
 def evaluate(agent, env_id: str, pixels: bool, episodes: int, seed0: int) -> list:
-    import gymnasium as gym
-    env = gym.make(env_id)
+    env = make_env(env_id)
     returns = []
     for k in range(episodes):
         o, _ = env.reset(seed=seed0 + k)
@@ -114,14 +125,13 @@ def main():
     p.add_argument("--out-json", default="")
     args = p.parse_args()
 
-    import gymnasium as gym
     import torch
     torch.set_num_threads(int(os.environ.get("OMP_NUM_THREADS", "4")))
     from torch_rl.frl.learner import DrQLearner, SACLearner
 
     cfg = dict(CONFIGS[args.config])
     kind = cfg.pop("learner")
-    env = gym.make(args.env)
+    env = make_env(args.env)
     repeat = int(getattr(env.unwrapped, "action_repeat", 1))
     agent_steps = args.env_steps // repeat
     pixels = env.observation_space.dtype == np.uint8 and len(env.observation_space.shape) == 3

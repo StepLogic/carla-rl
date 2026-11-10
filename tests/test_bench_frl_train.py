@@ -10,7 +10,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 sys.path.insert(0, os.path.join(ROOT, "scripts", "bench"))
 
-from frl_train import CONFIGS, ReplayBuffer, mask_for  # noqa: E402
+from frl_train import CONFIGS, ReplayBuffer, make_env, mask_for  # noqa: E402
 
 
 def test_configs_carry_the_reference_values():
@@ -26,6 +26,25 @@ def test_configs_carry_the_reference_values():
     # target entropy left to the learner's default (-action_dim / 2): the configs' -3.0 / -2.0
     # are tuned for FastRLAP's 2-D car (ruling in the plan)
     assert "target_entropy" not in r and "target_entropy" not in d
+
+
+def test_the_learner_acts_in_unit_box_and_the_env_gets_its_own_range():
+    """The tanh actor outputs [-1, 1]; Pendulum's torque is [-2, 2]. Clipping alone (the
+    reference loop, whose envs are already [-1, 1]) would halve the usable torque."""
+    pytest = __import__("pytest")
+    gym = pytest.importorskip("gymnasium")
+    env = make_env("Pendulum-v1")
+    assert env.action_space.low.tolist() == [-1.0] and env.action_space.high.tolist() == [1.0]
+    inner = env
+    while not hasattr(inner, "max_torque"):
+        inner = inner.env
+    seen = []
+    orig = inner.step
+    inner.step = lambda u: (seen.append(float(np.asarray(u).reshape(-1)[0])), orig(u))[1]
+    env.reset(seed=0)
+    env.step(np.array([1.0], np.float32))
+    assert abs(seen[-1] - 2.0) < 1e-6                          # full torque reachable
+    assert gym is not None
 
 
 def test_mask_is_zero_only_on_a_true_termination():

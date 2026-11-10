@@ -16,14 +16,25 @@ sys.path.insert(0, os.path.join(ROOT, "scripts", "bench"))
 os.environ.setdefault("MONO_CHW", "1")
 os.environ.setdefault("SPEED_OBS", "1")
 
-from gated_sac_bench import C1_LOOP, bench_config, bench_row, loop_settings  # noqa: E402
+from gated_sac_bench import (C1_LOOP, apply_overrides, augment_chunk,  # noqa: E402
+                             bench_config, bench_row, loop_settings)
+
+
+def test_overrides_set_existing_keys_with_json_values_and_refuse_unknown_ones():
+    cfg = bench_config(C1, obs_dim=3, act_dim=1, seed=1)
+    out = apply_overrides(cfg, ["critic_proj_dim=50", "critic_layer_norm=false", "lr=0.001"])
+    assert (out["critic_proj_dim"], out["critic_layer_norm"], out["lr"]) == (50, False, 0.001)
+    assert cfg["critic_proj_dim"] == 0                          # the input config is not mutated
+    with pytest.raises(KeyError):
+        apply_overrides(cfg, ["no_such_key=1"])
 from torch_rl import pixel_rows as pxr  # noqa: E402
 
 C1 = {"action_dim": 2, "state_dim": 3138, "goal_cols": list(range(3138)),
       "core_state_cols": list(range(1, 3138)), "explore_cols": [], "actor_state_cols": None,
       "device": "cuda", "seed": 0, "target_entropy": -2.0, "init_temperature": 0.1,
       "n_critics": 10, "subset_size": 2, "critic_layer_norm": True, "one_critic": True,
-      "mode_index": 0, "hidden": 512, "lr": 0.0003, "value_ceiling": None, "burn_in": 8}
+      "mode_index": 0, "hidden": 512, "lr": 0.0003, "value_ceiling": None, "burn_in": 8,
+      "critic_proj_dim": 0}
 
 
 def test_config_keeps_every_c1_setting_but_the_input_sizes():
@@ -75,6 +86,25 @@ def test_the_budget_matched_cadence_changes_only_the_start_and_the_update_rate()
            {k: v for k, v in C1_LOOP.items() if k not in ("learning_starts", "update_every")}
     with pytest.raises(ValueError):
         loop_settings(update_every=0)
+
+
+def test_augment_chunk_shifts_every_frame_of_a_chunk_alike_and_leaves_the_state_alone():
+    """Bisection of T2-B (2026-11-10): DrQ's random crop for the recurrent learner, ONE shift per
+    chunk (per-frame shifts would scramble the motion the GRU reads across frames)."""
+    torch = pytest.importorskip("torch")
+    n, L, P = 3, 4, pxr.MONO_PIX
+    obs = torch.zeros(n, L, P + 5)
+    img = torch.rand(n, 1, 3, pxr.MONO_IMG, pxr.MONO_IMG).expand(n, L, 3, pxr.MONO_IMG, pxr.MONO_IMG)
+    obs[..., :P] = img.reshape(n, L, P)
+    obs[..., P:] = torch.arange(5, dtype=torch.float32)
+    same = augment_chunk(obs, pad=6, offsets=torch.tensor([[6, 6]] * n))
+    assert torch.equal(same, obs)                              # offset = pad is the identity
+    out = augment_chunk(obs, pad=6, generator=torch.Generator().manual_seed(0))
+    assert out.shape == obs.shape
+    assert torch.equal(out[..., P:], obs[..., P:])            # the state block is untouched
+    for i in range(n):                                        # one shift for the whole chunk
+        assert all(torch.equal(out[i, 0, :P], out[i, t, :P]) for t in range(L))
+    assert augment_chunk(obs, pad=0) is obs                   # off
 
 
 def test_rows_refuse_a_wrong_frame_size():

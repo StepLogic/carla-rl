@@ -47,6 +47,22 @@ _CHANGED = ("action_dim", "state_dim", "goal_cols", "core_state_cols", "device",
             "target_entropy")
 
 
+def apply_overrides(cfg: dict, items) -> dict:
+    """KEY=VALUE overrides of the learner config for the bisection; VALUE is JSON (50, false,
+    0.001, "x"), else a plain string. Only keys the config already has: a typo must not
+    silently add a field the learner ignores."""
+    out = dict(cfg)
+    for item in items or ():
+        key, _, raw = str(item).partition("=")
+        if key not in out:
+            raise KeyError(f"{key!r} is not a learner config field")
+        try:
+            out[key] = json.loads(raw)
+        except json.JSONDecodeError:
+            out[key] = raw
+    return out
+
+
 def loop_settings(learning_starts=None, update_every=None) -> dict:
     """C1's loop, optionally with another start and update rate -- the budget-matched control
     (learner C trains from step 1000 with updates every step): everything else stays C1's."""
@@ -70,6 +86,28 @@ def bench_config(c1: dict, obs_dim: int, act_dim: int, seed: int, device: str = 
                core_state_cols=list(range(1, state_dim)), device=str(device), seed=int(seed),
                target_entropy=-float(act_dim))
     return cfg
+
+
+def augment_chunk(obs, pad: int, offsets=None, generator=None):
+    """DrQ's random crop for the recurrent learner (bisection of T2-B, 2026-11-10): ONE
+    edge-padded integer shift per chunk, applied to every frame of it (per-frame shifts would
+    scramble the motion the GRU reads); the state block is untouched. obs (n, L, D) with the
+    frame first in the C1 layout (channels first). pad 0 = off (returns obs itself)."""
+    if not pad:
+        return obs
+    import torch
+    from torch_rl.frl.learner import random_crop
+    if not pxr.MONO_CHW:
+        raise ValueError("augment_chunk needs the channels-first layout (MONO_CHW=1, as C1)")
+    n, L, _ = obs.shape
+    P, s = pxr.MONO_PIX, pxr.MONO_IMG
+    if offsets is None:
+        offsets = torch.randint(0, 2 * int(pad) + 1, (n, 2), generator=generator)
+    pix = obs[..., :P].reshape(n * L, 3, s, s)
+    shifted = random_crop(pix, int(pad), offsets=offsets.repeat_interleave(L, dim=0))
+    out = obs.clone()
+    out[..., :P] = shifted.reshape(n, L, P)
+    return out
 
 
 def bench_row(frame, state, strict: bool = False) -> np.ndarray:
@@ -132,6 +170,10 @@ def main():
     p.add_argument("--capacity", type=int, default=100000)
     p.add_argument("--learning-starts", type=int, default=None, help="default: C1's 5000")
     p.add_argument("--update-every", type=int, default=None, help="default: C1's 5")
+    p.add_argument("--set", action="append", default=[], metavar="KEY=VALUE",
+                   help="override a learner config field (JSON value), e.g. critic_proj_dim=50")
+    p.add_argument("--augment-pad", type=int, default=0,
+                   help="DrQ random crop, one shift per chunk; 0 = off (C1). 6 at 128 px = DrQ's 4 at 84")
     p.add_argument("--eval-every", type=int, default=0, help="agent steps; 0 = only at the end")
     p.add_argument("--eval-episodes", type=int, default=10)
     p.add_argument("--eval-seed", type=int, default=1000)
@@ -152,7 +194,8 @@ def main():
     obs_dim = 1 if args.pixels else int(np.prod(env.observation_space.shape))
     with open(args.c1_config) as fh:
         c1 = json.load(fh)
-    cfg = bench_config(c1, obs_dim, act_dim, args.seed, device=args.device)
+    cfg = apply_overrides(bench_config(c1, obs_dim, act_dim, args.seed, device=args.device),
+                          args.set)
     agent = GatedRecurrentSAC(GatedRecurrentSACConfig(**cfg))
     report = load_debit_mono(agent.compress, args.debit_weights)
     agent.compress_targ.load_state_dict(agent.compress.state_dict())
@@ -162,9 +205,12 @@ def main():
                               goal_dim=pxr.PIX, uniform_transitions=True, goal_batch_frac=None,
                               store_device="cpu", u8_cols=pxr.MONO_PIX)
     goal_blk = pxr.goal_block(np.zeros((pxr.IMG, pxr.IMG, 3), np.uint8))
+    aug_gen = torch.Generator().manual_seed(args.seed)
     print(f"=== GATED-SAC (learner B, C1 config {args.c1_config}) device {args.device} | env {args.env} | action repeat "
           f"{repeat} | {args.env_steps} env steps = {agent_steps} agent steps | {L} | "
-          f"target entropy {cfg['target_entropy']} | DEBiT trunk {report.get('loaded', report)} "
+          f"target entropy {cfg['target_entropy']} | augment pad {args.augment_pad} | "
+          f"overrides {args.set or 'none'} | "
+          f"DEBiT trunk {report.get('loaded', report)} "
           f"| {{n_critics {cfg.get('n_critics')}, subset {cfg.get('subset_size')}, LN "
           f"{cfg.get('critic_layer_norm')}, clip [{cfg.get('value_floor')}, "
           f"{cfg.get('value_ceiling')}], init alpha {cfg.get('init_temperature')}}}", flush=True)
@@ -193,8 +239,10 @@ def main():
         if (step > L["learning_starts"] and step % L["update_every"] == 0
                 and buf.sampleable >= L["chunk_t"] + L["burn_in"] + 1):
             for _ in range(L["updates_per"]):
-                metrics = agent.update(buf.sample_chunks(L["chunk_b"], L["chunk_t"] + L["burn_in"],
-                                                         L["burn_in"]))
+                chunk = buf.sample_chunks(L["chunk_b"], L["chunk_t"] + L["burn_in"], L["burn_in"])
+                if args.augment_pad:
+                    chunk["obs"] = augment_chunk(chunk["obs"], args.augment_pad, generator=aug_gen)
+                metrics = agent.update(chunk)
         if step % 1000 == 0:
             m = {k: v for k, v in (metrics or {}).items() if isinstance(v, (int, float))}
             print(f"[GSAC] step {step}/{agent_steps} env_step {step * repeat} | train last10 "

@@ -216,9 +216,12 @@ class GatedRecurrentSAC(GatedRecurrentTQC):
                 # in for SAC's sampled -log pi in the [Diag] line.
                 "neg_logp_g": _masked_mean(entropy, m),
                 "sat_steer": _masked_mean((det_a[..., 0].abs() > 0.99).float(), m),
-                "sat_throttle": _masked_mean((det_a[..., 1].abs() > 0.99).float(), m),
                 "mean_abs_u_steer": _masked_mean(mean_u[..., 0].abs(), m),
-                "mean_abs_u_throttle": _masked_mean(mean_u[..., 1].abs(), m),
+                # the throttle entries only with a second action (one-action benchmark
+                # tasks, 2026-11-10); logging only
+                **({"sat_throttle": _masked_mean((det_a[..., 1].abs() > 0.99).float(), m),
+                    "mean_abs_u_throttle": _masked_mean(mean_u[..., 1].abs(), m)}
+                   if det_a.shape[-1] > 1 else {}),
                 "log_std_g": _masked_mean(log_std.mean(dim=-1), m),
                 "enc_alive": self._enc_alive(obs),
                 "pretanh_pen": zero,

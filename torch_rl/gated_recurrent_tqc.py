@@ -1277,9 +1277,12 @@ class GatedRecurrentTQC:
                 diag = {
                     "neg_logp_g": _masked_mean(-logp.detach(), m_g),
                     "sat_steer": _masked_mean((_a[..., 0].abs() > 0.99).float(), m_g),
-                    "sat_throttle": _masked_mean((_a[..., 1].abs() > 0.99).float(), m_g),
                     "mean_abs_u_steer": _masked_mean(mean_u[..., 0].abs(), m_g),
-                    "mean_abs_u_throttle": _masked_mean(mean_u[..., 1].abs(), m_g),
+                    # the throttle entries only with a second action (2026-11-10: the
+                    # one-action benchmark tasks died on _a[..., 1]); logging only
+                    **({"sat_throttle": _masked_mean((_a[..., 1].abs() > 0.99).float(), m_g),
+                        "mean_abs_u_throttle": _masked_mean(mean_u[..., 1].abs(), m_g)}
+                       if _a.shape[-1] > 1 else {}),
                     "log_std_g": _masked_mean(log_std.mean(dim=-1), m_g),
                     # ENCODER HEALTH (2026-10-26): share of visual output units that
                     # vary across this batch's last frames. 0 = the camera is dead.

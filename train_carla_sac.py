@@ -335,6 +335,18 @@ if EVAL_MAP_FALLBACK not in ("", "mapless"):
 # reports the M0 gate (arrivals, metres between failures).
 EXPERT_RECORD = os.environ.get("EXPERT_RECORD", "0") == "1"
 EXPERT_DRIVER = os.environ.get("EXPERT_DRIVER", "expert")
+# EXPERT_RECORD_CHAIN=1 (plan 2026-11-09, B1, DAgger in chains): a goal episode's car
+# drives on after each arrival to the next chained goal (the env's soft reset, as in
+# the chain eval: needs EVAL_CHAIN=1 and the GOAL_CHAIN_* settings), and every goal
+# segment is saved as its own shard, id seed * 100 + segment
+# (torch_rl.expert_record.chain_segment_id). 0 = one goal per episode, as before.
+EXPERT_RECORD_CHAIN = os.environ.get("EXPERT_RECORD_CHAIN", "0") == "1"
+# EXPERT_GOAL_ONLY=1 (ported from vint-carla 598a593, same name and meaning): goal
+# episodes only -- seeds EXPERT_SEED0 + 2k, since episode_plan makes even seeds goal
+# episodes (the noise level still cycles through every sigma).
+EXPERT_GOAL_ONLY = os.environ.get("EXPERT_GOAL_ONLY", "0") == "1"
+if EXPERT_RECORD_CHAIN and not EVAL_CHAIN:
+    raise ValueError("EXPERT_RECORD_CHAIN=1 needs EVAL_CHAIN=1 (the env's chained goals)")
 EXPERT_RECORD_DRY = os.environ.get("EXPERT_RECORD_DRY", "0") == "1"
 EXPERT_RECORD_EPISODES = env_int("EXPERT_RECORD_EPISODES", 200)
 EXPERT_SEED0 = env_int("EXPERT_SEED0", 100000)
@@ -1470,7 +1482,8 @@ def run_record(env, agent, pxr, server, out_root):
     import random as _random
     import torch
     from torch_rl.expert_data import save_episode
-    from torch_rl.expert_record import (assert_recordable_town, effective_sigma,
+    from torch_rl.expert_record import (assert_recordable_town, chain_continues,
+                                        chain_segment_id, effective_sigma,
                                         episode_plan, episode_returns, expert_bias,
                                         gate_report, keep_episode, record_step)
     from vae_nav.expert_oracle import BasicAgentExpert
@@ -1481,6 +1494,9 @@ def run_record(env, agent, pxr, server, out_root):
     assert_recordable_town(town)
     if EXPERT_DRIVER not in ("expert", "policy"):
         raise ValueError(f"EXPERT_DRIVER must be expert|policy, got {EXPERT_DRIVER!r}")
+    if EXPERT_GOAL_ONLY and EXPERT_SEED0 % 2:
+        raise ValueError("EXPERT_GOAL_ONLY=1 needs an even EXPERT_SEED0 (even seeds are "
+                         "the goal episodes of episode_plan)")
     gated = env
     while not isinstance(gated, GatedReward):
         gated = gated.env
@@ -1514,7 +1530,7 @@ def run_record(env, agent, pxr, server, out_root):
     expert, hero_id = None, None
     episodes, total, kept = [], 0, 0
     for k in range(EXPERT_RECORD_EPISODES):
-        seed = EXPERT_SEED0 + k
+        seed = EXPERT_SEED0 + (2 * k if EXPERT_GOAL_ONLY else k)
         plan = episode_plan(seed)
         sigma = effective_sigma(plan["sigma"], EXPERT_RECORD_DRY)
         burst.reset()                     # a coverage burst never spans two episodes
@@ -1538,89 +1554,104 @@ def run_record(env, agent, pxr, server, out_root):
         if EXPERT_DRIVER == "policy":
             hidden = agent.reset_hidden(1)
             goal_blk = pxr.goal_block(info["debit_goal"])
-        rec = {"frames": [pxr.to_frame(info["debit_cur"], pxr.MONO_IMG).astype(np.uint8)],
-               "binoc": [np.asarray(obs["binoc"], np.float16)],
-               "act_exec": [], "act_label": [], "reward": [], "speed": [], "pos": []}
-        goal_frame = info["debit_goal"]
-        prev = np.asarray(info.get("hero_pos", (0.0, 0.0)), np.float64)[:2]
-        path_m, end, terminal, truncated = 0.0, None, False, False
-        # Goal episodes: how close the expert got and how fast it was going there
-        # (the same EpisodeTracker the eval uses) -- the M0 gate's diagnosis.
-        tracker = None
-        if mode == 1 and info.get("goal_pos") is not None:
-            from vae_nav.carla_benchmark import EpisodeTracker
-            tracker = EpisodeTracker(info["goal_pos"], prev, max_speed=float(
-                os.environ.get("GOAL_ARRIVAL_MAX_SPEED", 10.0)),
-                radius=GOAL_RADIUS_M, radius_2m=2.0)
-        while end is None:
-            if EXPERT_DRIVER == "policy":
-                expert.replan_if_off_route(EXPERT_REPLAN_M)
-            a_exp = expert.act()
-            if a_exp is None:
-                end = no_label_end(mode, len(rec["act_exec"]))
-                truncated = True
-                break
-            a_pol = None
-            if EXPERT_DRIVER == "policy":
-                row = pxr.mono_row(info["debit_cur"], _net_mode(obs["mode"]), obs["binoc"],
-                               speed_kmh=_speed_kmh(info))
-                a_act, hidden = agent.act(row, hidden, goal=goal_blk, deterministic=True)
-                a_pol = to_env(np.asarray(a_act, np.float32), box)
-            a_exec, a_label = record_step(EXPERT_DRIVER, a_pol, a_exp, sigma,
-                                          rng, low, high,
-                                          throttle_sigma=throttle_sigma, burst=burst, bias=bias)
-            obs, r, term, trunc, info = env.step(a_exec)
-            pos = np.asarray(info.get("hero_pos", prev), np.float64)[:2]
-            path_m += float(np.linalg.norm(pos - prev))
-            prev = pos
+        # ONE SEGMENT PER GOAL. Without EXPERT_RECORD_CHAIN there is exactly one; with
+        # it, a goal arrival continues the same car to the next chained goal.
+        seg = 0
+        while True:
+            sid = chain_segment_id(seed, seg) if EXPERT_RECORD_CHAIN else seed
+            rec = {"frames": [pxr.to_frame(info["debit_cur"], pxr.MONO_IMG).astype(np.uint8)],
+                   "binoc": [np.asarray(obs["binoc"], np.float16)],
+                   "act_exec": [], "act_label": [], "reward": [], "speed": [], "pos": []}
+            goal_frame = info["debit_goal"]
+            prev = np.asarray(info.get("hero_pos", (0.0, 0.0)), np.float64)[:2]
+            path_m, end, terminal, truncated = 0.0, None, False, False
+            # Goal episodes: how close the expert got and how fast it was going there
+            # (the same EpisodeTracker the eval uses) -- the M0 gate's diagnosis.
+            tracker = None
+            if mode == 1 and info.get("goal_pos") is not None:
+                from vae_nav.carla_benchmark import EpisodeTracker
+                tracker = EpisodeTracker(info["goal_pos"], prev, max_speed=float(
+                    os.environ.get("GOAL_ARRIVAL_MAX_SPEED", 10.0)),
+                    radius=GOAL_RADIUS_M, radius_2m=2.0)
+            while end is None:
+                if EXPERT_DRIVER == "policy":
+                    expert.replan_if_off_route(EXPERT_REPLAN_M)
+                a_exp = expert.act()
+                if a_exp is None:
+                    end = no_label_end(mode, len(rec["act_exec"]))
+                    truncated = True
+                    break
+                a_pol = None
+                if EXPERT_DRIVER == "policy":
+                    row = pxr.mono_row(info["debit_cur"], _net_mode(obs["mode"]), obs["binoc"],
+                                       speed_kmh=_speed_kmh(info))
+                    a_act, hidden = agent.act(row, hidden, goal=goal_blk, deterministic=True)
+                    a_pol = to_env(np.asarray(a_act, np.float32), box)
+                a_exec, a_label = record_step(EXPERT_DRIVER, a_pol, a_exp, sigma,
+                                              rng, low, high,
+                                              throttle_sigma=throttle_sigma, burst=burst, bias=bias)
+                obs, r, term, trunc, info = env.step(a_exec)
+                pos = np.asarray(info.get("hero_pos", prev), np.float64)[:2]
+                path_m += float(np.linalg.norm(pos - prev))
+                prev = pos
+                if tracker is not None:
+                    tracker.step(pos, float(info.get("speed_kmh", 0.0) or 0.0))
+                rec["act_exec"].append(to_actor(a_exec, box))
+                rec["act_label"].append(to_actor(a_label, box))
+                rec["reward"].append(float(r))
+                rec["speed"].append(float(info.get("speed_kmh", 0.0) or 0.0))
+                rec["pos"].append(pos.astype(np.float32))
+                rec["frames"].append(pxr.to_frame(info["debit_cur"], pxr.MONO_IMG).astype(np.uint8))
+                rec["binoc"].append(np.asarray(obs["binoc"], np.float16))
+                fault = _fault(info)
+                if fault:
+                    end, terminal = fault, True
+                elif info.get("is_success") or info.get("goal_end") == "reached":
+                    end, terminal = "reached", True
+                elif term:
+                    end = str(info.get("goal_end") or info.get("explore_end") or "term")
+                    terminal = True
+                elif trunc:
+                    end, truncated = "clock", True
+            n = len(rec["act_exec"])
+            total += n
+            approach = {}
             if tracker is not None:
-                tracker.step(pos, float(info.get("speed_kmh", 0.0) or 0.0))
-            rec["act_exec"].append(to_actor(a_exec, box))
-            rec["act_label"].append(to_actor(a_label, box))
-            rec["reward"].append(float(r))
-            rec["speed"].append(float(info.get("speed_kmh", 0.0) or 0.0))
-            rec["pos"].append(pos.astype(np.float32))
-            rec["frames"].append(pxr.to_frame(info["debit_cur"], pxr.MONO_IMG).astype(np.uint8))
-            rec["binoc"].append(np.asarray(obs["binoc"], np.float16))
-            fault = _fault(info)
-            if fault:
-                end, terminal = fault, True
-            elif info.get("is_success") or info.get("goal_end") == "reached":
-                end, terminal = "reached", True
-            elif term:
-                end = str(info.get("goal_end") or info.get("explore_end") or "term")
-                terminal = True
-            elif trunc:
-                end, truncated = "clock", True
-        n = len(rec["act_exec"])
-        total += n
-        approach = {}
-        if tracker is not None:
-            fin = tracker.finish(reached=end == "reached", t_end=n, route_m=None)
-            approach = {k: fin[k] for k in ("closest_m", "speed_at_closest_kmh",
-                                            "entry_speed_kmh", "min_speed_inside_kmh")}
-        ret, ret_d = episode_returns(rec["reward"], RECORD_GAMMA)
-        episodes.append({"seed": seed, "mode": mode, "sigma": sigma, "end": end,
-                         "path_m": round(path_m, 2), "steps": n,
-                         "return": round(ret, 3), "return_disc": round(ret_d, 3), **approach})
-        if keep_episode(n) and not EXPERT_RECORD_DRY:
-            save_episode(os.path.join(root, f"ep_{seed}.npz"), {
-                "frames": np.stack(rec["frames"]), "binoc": np.stack(rec["binoc"]),
-                "act_exec": np.asarray(rec["act_exec"], np.float32),
-                "act_label": np.asarray(rec["act_label"], np.float32),
-                "reward": np.asarray(rec["reward"], np.float32),
-                "speed": np.asarray(rec["speed"], np.float32),
-                "pos": np.asarray(rec["pos"], np.float32).reshape(-1, 2),
-                "mode": np.int8(mode), "terminal": terminal, "truncated": truncated,
-                "goal": pxr.goal_block(goal_frame), "sigma": np.float32(sigma),
-                "driver": EXPERT_DRIVER, "end": end, "town": town, "seed": np.int64(seed)})
-            kept += n
-        print(f"[Record {k + 1}/{EXPERT_RECORD_EPISODES}] seed={seed} "
-              f"{'goal' if mode == 1 else 'explore'} sigma={sigma:g} end={end} "
-              f"steps={n} driven={path_m:.1f} m return={ret:.2f} disc={ret_d:.2f}"
-              + (f" closest={approach['closest_m']} m at {approach['speed_at_closest_kmh']} km/h"
-                 f" entry={approach['entry_speed_kmh']}" if approach else "")
-              + f" | total {total} steps", flush=True)
+                fin = tracker.finish(reached=end == "reached", t_end=n, route_m=None)
+                approach = {k: fin[k] for k in ("closest_m", "speed_at_closest_kmh",
+                                                "entry_speed_kmh", "min_speed_inside_kmh")}
+            ret, ret_d = episode_returns(rec["reward"], RECORD_GAMMA)
+            episodes.append({"seed": sid, "mode": mode, "sigma": sigma, "end": end,
+                             "path_m": round(path_m, 2), "steps": n,
+                             "return": round(ret, 3), "return_disc": round(ret_d, 3), **approach})
+            if keep_episode(n) and not EXPERT_RECORD_DRY:
+                save_episode(os.path.join(root, f"ep_{sid}.npz"), {
+                    "frames": np.stack(rec["frames"]), "binoc": np.stack(rec["binoc"]),
+                    "act_exec": np.asarray(rec["act_exec"], np.float32),
+                    "act_label": np.asarray(rec["act_label"], np.float32),
+                    "reward": np.asarray(rec["reward"], np.float32),
+                    "speed": np.asarray(rec["speed"], np.float32),
+                    "pos": np.asarray(rec["pos"], np.float32).reshape(-1, 2),
+                    "mode": np.int8(mode), "terminal": terminal, "truncated": truncated,
+                    "goal": pxr.goal_block(goal_frame), "sigma": np.float32(sigma),
+                    "driver": EXPERT_DRIVER, "end": end, "town": town, "seed": np.int64(sid)})
+                kept += n
+            print(f"[Record {k + 1}/{EXPERT_RECORD_EPISODES}] seed={sid} "
+                  f"{'goal' if mode == 1 else 'explore'} sigma={sigma:g} end={end} "
+                  f"steps={n} driven={path_m:.1f} m return={ret:.2f} disc={ret_d:.2f}"
+                  + (f" closest={approach['closest_m']} m at {approach['speed_at_closest_kmh']} km/h"
+                     f" entry={approach['entry_speed_kmh']}" if approach else "")
+                  + f" | total {total} steps", flush=True)
+            if not chain_continues(EXPERT_RECORD_CHAIN, mode, end, info):
+                break
+            obs, info = env.reset()       # soft reset: the same car, the next goal
+            if not info.get("chain_soft_reset"):
+                break                     # no next goal could be placed: the chain ends
+            seg += 1
+            expert.reset(info["goal_location"])
+            if EXPERT_DRIVER == "policy":
+                hidden = agent.reset_hidden(1)       # a chained goal is a new episode
+                goal_blk = pxr.goal_block(info["debit_goal"])
 
     gate = gate_report([e for e in episodes if e["mode"] == 1],
                        [e for e in episodes if e["mode"] == 0])

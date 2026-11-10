@@ -134,6 +134,27 @@ def record_step(driver, a_policy, a_expert, sigma, rng, low, high, throttle_sigm
     raise ValueError(f"driver must be 'expert' or 'policy', got {driver!r}")
 
 
+CHAIN_SEGMENTS_MAX = 100
+
+
+def chain_segment_id(seed, seg):
+    """Shard id of goal segment `seg` of the chained recording started at `seed`
+    (EXPERT_RECORD_CHAIN, plan 2026-11-09 B1): seed * 100 + seg. Every segment is
+    its own episode shard with one goal image."""
+    seg = int(seg)
+    if not 0 <= seg < CHAIN_SEGMENTS_MAX:
+        raise ValueError(f"segment {seg} outside 0..{CHAIN_SEGMENTS_MAX - 1}")
+    return int(seed) * CHAIN_SEGMENTS_MAX + seg
+
+
+def chain_continues(chain_on, mode, end, info):
+    """After a goal arrival in a chained recording, the same car drives on to the
+    next goal (the env's soft reset). Never for explore episodes, faults, or once
+    the env stops offering a next goal (the chain's 200 m are done)."""
+    return (bool(chain_on) and int(mode) == 1 and end == "reached"
+            and bool(info.get("chain_continue")))
+
+
 def keep_episode(n_steps):
     """An episode with no recorded step (no plan at step 0) is discarded."""
     return int(n_steps) > 0

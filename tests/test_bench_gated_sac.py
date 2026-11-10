@@ -40,6 +40,15 @@ def test_config_keeps_every_c1_setting_but_the_input_sizes():
            {k: v for k, v in C1.items() if k not in changed}
 
 
+def test_the_device_is_a_parameter_defaulting_to_cpu():
+    """User 2026-11-10 "run any NN on gpu - onlocal": the same config on the local GPU."""
+    assert bench_config(C1, obs_dim=3, act_dim=1, seed=1)["device"] == "cpu"
+    cuda = bench_config(C1, obs_dim=3, act_dim=1, seed=1, device="cuda")
+    assert cuda["device"] == "cuda"
+    assert {k: v for k, v in cuda.items() if k != "device"} == \
+           {k: v for k, v in bench_config(C1, 3, 1, 1).items() if k != "device"}
+
+
 def test_rows_use_the_c1_layout_and_the_same_frame_encoding_as_carla_rows():
     frame = np.random.default_rng(0).integers(0, 256, (128, 128, 3), dtype=np.uint8)
     state = np.array([0.5, -1.0, 2.0], np.float32)

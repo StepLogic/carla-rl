@@ -10,7 +10,14 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 sys.path.insert(0, os.path.join(ROOT, "scripts", "bench"))
 
-from frl_train import CONFIGS, ReplayBuffer, make_env, mask_for  # noqa: E402
+from frl_train import CONFIGS, ReplayBuffer, build_parser, make_env, mask_for  # noqa: E402
+
+
+def test_the_device_defaults_to_cpu_and_takes_cuda():
+    """User 2026-11-10 "run any NN on gpu - onlocal"."""
+    base = ["--env", "Pendulum-v1", "--config", "redq", "--env-steps", "10"]
+    assert build_parser().parse_args(base).device == "cpu"
+    assert build_parser().parse_args(base + ["--device", "cuda"]).device == "cuda"
 
 
 def test_configs_carry_the_reference_values():

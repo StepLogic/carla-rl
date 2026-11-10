@@ -108,9 +108,10 @@ def evaluate(agent, env_id: str, pixels: bool, episodes: int, seed0: int) -> lis
     return returns
 
 
-def main():
+def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser()
     p.add_argument("--env", required=True)
+    p.add_argument("--device", default="cpu", help="cuda: the learner on the GPU")
     p.add_argument("--config", required=True, choices=sorted(CONFIGS))
     p.add_argument("--env-steps", type=int, required=True, help="environment steps (x action repeat)")
     p.add_argument("--seed", type=int, default=1)
@@ -123,7 +124,11 @@ def main():
     p.add_argument("--eval-episodes", type=int, default=10)
     p.add_argument("--eval-seed", type=int, default=1000)
     p.add_argument("--out-json", default="")
-    args = p.parse_args()
+    return p
+
+
+def main():
+    args = build_parser().parse_args()
 
     import torch
     torch.set_num_threads(int(os.environ.get("OMP_NUM_THREADS", "4")))
@@ -140,17 +145,17 @@ def main():
         if not pixels:
             raise ValueError("the drq config needs a pixel env")
         agent = DrQLearner(pixel_shape=tuple(env.observation_space.shape), action_dim=act_dim,
-                           seed=args.seed, **cfg)
+                           seed=args.seed, device=args.device, **cfg)
     else:
         if pixels:
             raise ValueError("the redq (SAC) config takes a state env")
         agent = SACLearner(obs_dim=int(np.prod(env.observation_space.shape)), action_dim=act_dim,
-                           seed=args.seed, **cfg)
+                           seed=args.seed, device=args.device, **cfg)
     rb = ReplayBuffer(env.observation_space.shape, env.observation_space.dtype, act_dim,
                       args.replay_size, pixels)
     rng = np.random.default_rng(args.seed)
     env.action_space.seed(args.seed)
-    print(f"=== FRL {args.config} ({kind}) env {args.env} | action repeat {repeat} | "
+    print(f"=== FRL {args.config} ({kind}) device {args.device} | env {args.env} | action repeat {repeat} | "
           f"{args.env_steps} env steps = {agent_steps} agent steps | utd {args.utd_ratio} batch "
           f"{args.batch_size} | start {args.start_training} | target entropy {agent.target_entropy} "
           f"(anneal {'off' if args.no_entropy_anneal else '-25e-7/step'}) | {cfg}", flush=True)

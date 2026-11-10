@@ -47,14 +47,14 @@ _CHANGED = ("action_dim", "state_dim", "goal_cols", "core_state_cols", "device",
             "target_entropy")
 
 
-def bench_config(c1: dict, obs_dim: int, act_dim: int, seed: int) -> dict:
+def bench_config(c1: dict, obs_dim: int, act_dim: int, seed: int, device: str = "cpu") -> dict:
     """C1's learner config with only the input sizes, device, seed and the -action_dim entropy
     target changed. State block = [mode | speed | task state]; the critic reads all of it, the
     GRU everything after the mode bit (as C1: goal_cols = all, core_state_cols = 1..)."""
     cfg = dict(c1)
     state_dim = 2 + int(obs_dim)
     cfg.update(action_dim=int(act_dim), state_dim=state_dim, goal_cols=list(range(state_dim)),
-               core_state_cols=list(range(1, state_dim)), device="cpu", seed=int(seed),
+               core_state_cols=list(range(1, state_dim)), device=str(device), seed=int(seed),
                target_entropy=-float(act_dim))
     return cfg
 
@@ -114,6 +114,8 @@ def main():
     p.add_argument("--debit-weights",
                    default=os.path.join(ROOT, "dependencies", "debit_weights", "debit_tiny.pth"))
     p.add_argument("--seed", type=int, default=1)
+    p.add_argument("--device", default="cpu",
+                   help="cuda: the learner on the GPU, replay frames stored on cpu (as C1)")
     p.add_argument("--capacity", type=int, default=100000)
     p.add_argument("--eval-every", type=int, default=0, help="agent steps; 0 = only at the end")
     p.add_argument("--eval-episodes", type=int, default=10)
@@ -135,17 +137,17 @@ def main():
     obs_dim = 1 if args.pixels else int(np.prod(env.observation_space.shape))
     with open(args.c1_config) as fh:
         c1 = json.load(fh)
-    cfg = bench_config(c1, obs_dim, act_dim, args.seed)
+    cfg = bench_config(c1, obs_dim, act_dim, args.seed, device=args.device)
     agent = GatedRecurrentSAC(GatedRecurrentSACConfig(**cfg))
     report = load_debit_mono(agent.compress, args.debit_weights)
     agent.compress_targ.load_state_dict(agent.compress.state_dict())
     row_dim = pxr.MONO_PIX + cfg["state_dim"]
     L = C1_LOOP
-    buf = DeviceEpisodeBuffer(row_dim, act_dim, args.capacity, "cpu", seed=args.seed,
+    buf = DeviceEpisodeBuffer(row_dim, act_dim, args.capacity, args.device, seed=args.seed,
                               goal_dim=pxr.PIX, uniform_transitions=True, goal_batch_frac=None,
                               store_device="cpu", u8_cols=pxr.MONO_PIX)
     goal_blk = pxr.goal_block(np.zeros((pxr.IMG, pxr.IMG, 3), np.uint8))
-    print(f"=== GATED-SAC (learner B, C1 config {args.c1_config}) env {args.env} | action repeat "
+    print(f"=== GATED-SAC (learner B, C1 config {args.c1_config}) device {args.device} | env {args.env} | action repeat "
           f"{repeat} | {args.env_steps} env steps = {agent_steps} agent steps | {L} | "
           f"target entropy {cfg['target_entropy']} | DEBiT trunk {report.get('loaded', report)} "
           f"| {{n_critics {cfg.get('n_critics')}, subset {cfg.get('subset_size')}, LN "

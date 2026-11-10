@@ -14,14 +14,23 @@ Each video (2x real time):
                (orange), current waypoint (magenta ring), car track (red), start (green),
                goal (yellow star)
 
-ALL SIX EPISODES FAIL in these recordings. Four of them (41028, 41123, 41176, 41189)
-reached the goal in the original evaluation; none reproduced on this rerun. Town03 is
-where every method struggles: the entropy map's hard-set success there is 0.07
-(7 of 100 episodes), and at that level individual successes do not reproduce reliably,
-because CARLA runs are not exactly repeatable and a lane crossing on Town03's narrow
-lanes ends an episode early.
+THREE SUCCESSES, from a full rerun of all 100 Town03 hard episodes in which exactly
+3 reached the goal (0.03; the original evaluation gave 0.07, 7 of 100). All three are
+included, so these are every success in that rerun, not a selection:
+  entropy_nav_Town03_seed41028_reached.mp4    81 m route, reached in 63 s
+  entropy_nav_Town03_seed41267_reached.mp4   114 m route, reached in 52 s
+  entropy_nav_Town03_seed41915_reached.mp4    92 m route, reached in 48 s
+41028 and 41915 also reached the goal in the original evaluation; 41267 is new. 41028
+failed in the six-episode rerun below and succeeded here, which shows how much a
+single Town03 episode can vary between runs.
 
-Files (route length, how it ended, closest approach to the goal):
+SIX FAILURES, from a separate six-episode rerun. Four of them (41028, 41123, 41176,
+41189) reached the goal in the original evaluation; none reproduced in that rerun.
+Town03 is where every method struggles, and at a 3-7% success rate individual
+successes do not reproduce reliably: CARLA runs are not exactly repeatable and a lane
+crossing on Town03's narrow lanes ends an episode early.
+
+Failures (route length, how it ended, closest approach to the goal):
   entropy_nav_Town03_seed41189_clock.mp4      85 m  ran out of time   3.6 m  <- the instructive one
   entropy_nav_Town03_seed41176_crossing.mp4   90 m  crossed a line   52.7 m
   entropy_nav_Town03_seed41010_crossing.mp4  138 m  crossed a line   51.2 m
@@ -37,3 +46,6 @@ navigation-timing failure, not a planning one.
 
 The other five never come within 47 m of the goal: the policy crosses a lane line or
 leaves the road early, which is the driving skill failing, not the map.
+
+Note on 41028: it appears twice, as a failure (six-episode rerun) and a success
+(full rerun). Both recordings are genuine; the difference is run-to-run variation.

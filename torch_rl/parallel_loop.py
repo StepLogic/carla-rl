@@ -66,6 +66,24 @@ def run_parallel(venv, agent, buf, row_of, box, *, to_env, to_actor, goal_block,
         for i in range(n):
             her.begin(i, infos[i], modes[i])
 
+    def _next_episode(i, obs_s, hidden, episodes):
+        """Start env i's next episode from its auto-reset observation; returns
+        the hidden state with column i zeroed."""
+        o_new = venv.unstack(obs_s, i)
+        rinf = venv.reset_infos[i] if venv.reset_infos[i] is not None else {}
+        infos[i] = rinf
+        rows[i] = row_of(o_new, rinf)
+        goals[i] = goal_block(rinf["debit_goal"])
+        modes[i] = _mode_of(o_new)
+        hidden = agent.zero_hidden_columns(hidden, [i])
+        det[i] = bool(det_frac) and bool(det_rng.random() < det_frac)
+        ep_ret[i], ep_len[i], ep_cross[i], ep_decl[i] = 0.0, 0, 0, 0
+        if vids:
+            vids[i].start(episodes)
+        if her is not None:
+            her.begin(i, rinf, modes[i])
+        return hidden
+
     recent = {"goal": [], "explore": [], "policy": [], "ends": {}, "det_goal": [],
               "cross": [], "declare": [], "junc": []}
     roll = {"n": 0, "lock": 0, "idle_thr": 0}
@@ -101,6 +119,21 @@ def run_parallel(venv, agent, buf, row_of, box, *, to_env, to_actor, goal_block,
         for i in range(n):
             inf = step_infos[i]
             done = bool(dones[i])
+            if done and inf.get("env_error"):
+                # A FAILED SIMULATOR STEP (2026-11-09): vec_env reset the env and
+                # abandoned the episode. There is no real transition, so store
+                # none; close the replay episode at its last real step (a cut, so
+                # it bootstraps) and start the next one as after any end. Building
+                # a row from the synthetic info killed the local projection run.
+                buf.end_episode(env_id=i)
+                if her is not None:
+                    her.flush(i, terminated=False, truncated=True)
+                key = f"{names[i]}:env_error"
+                recent["ends"][key] = recent["ends"].get(key, 0) + 1
+                log(f"[Env] {names[i]}: simulator fault, episode abandoned after "
+                    f"{ep_len[i]} real steps (nothing stored for the failed step); env_error")
+                hidden = _next_episode(i, obs_s, hidden, episodes)
+                continue
             if done:
                 fin = final_infos[i]
                 nrow = row_of(fin["final_obs"], fin)
@@ -168,19 +201,7 @@ def run_parallel(venv, agent, buf, row_of, box, *, to_env, to_actor, goal_block,
             if on_episode is not None:
                 on_episode(i, end, ep_ret[i], ep_len[i])
 
-            o_new = venv.unstack(obs_s, i)
-            rinf = venv.reset_infos[i] if venv.reset_infos[i] is not None else {}
-            infos[i] = rinf
-            rows[i] = row_of(o_new, rinf)
-            goals[i] = goal_block(rinf["debit_goal"])
-            modes[i] = _mode_of(o_new)
-            hidden = agent.zero_hidden_columns(hidden, [i])
-            det[i] = bool(det_frac) and bool(det_rng.random() < det_frac)
-            ep_ret[i], ep_len[i], ep_cross[i], ep_decl[i] = 0.0, 0, 0, 0
-            if vids:
-                vids[i].start(episodes)
-            if her is not None:
-                her.begin(i, rinf, modes[i])
+            hidden = _next_episode(i, obs_s, hidden, episodes)
 
             if episodes % log_every == 0:
                 g, e = recent["goal"], recent["explore"]

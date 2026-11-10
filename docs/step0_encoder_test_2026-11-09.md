@@ -70,15 +70,20 @@ Setup:
 
 The probe compares the best steering on a 21-point grid with the expert's, on held-out episodes.
 
-| Probe | States | Corr. with expert | Best steer at full lock | Mean \|best\| (expert) |
+The image critic gets the same everything, with c0's features as its input instead. Results on every 10th episode (4,000 held-out states; the first-3 probe agrees):
+
+| Critic input | Corr. with expert (all / off-junction / clean) | Best steer at full lock | Mean \|best\| (expert 0.03–0.07) | Q span over the steering grid |
 |---|---|---|---|---|
-| First 3 Town05 episodes (the earlier probe) | 487 | 0.03 (off-junction 0.05) | 4% | 0.18 (0.03) |
-| Every 10th episode | 4,000 | 0.04 (off-junction 0.08, clean labels 0.12) | 9% | 0.47 (0.07) |
+| True lane state | 0.04 / 0.08 / 0.12 | 9% / 4% / 8% | 0.47 / 0.40 / 0.65 | 8.9 |
+| c0's features | −0.05 / −0.06 / 0.01 | 84% / 82% / 95% | 0.92 / 0.91 / 0.97 | 1.8 |
 
-- The earlier image critic on c0's features, same study: corr +0.04 with the DrQ head, +0.10 without.
-- The matched image-critic rerun inside this script is still running.
+The earlier image study (same data and probe, different script) gave +0.04 with the DrQ head and +0.10 without.
 
-Even with the true lane state, TD on these demonstrations does not identify how much to steer. The demonstrations rarely show what over-steering costs, and one step's consequence is small even in the true motion (ceiling R² about 0.3).
+**The inputs shape the failure, but neither critic learns the expert's steering.**
+- On c0's features, Q is almost flat and linear in steering, so its best steering sits at full lock. This is the collapse seen in every SAC run, and §2 explains it: one step's action does not show in the next features.
+- On the true lane state, Q varies with steering and has an interior optimum, but not at the expert's action.
+
+TD on these demonstrations does not identify how much to steer: they rarely show what over-steering costs, and one step's consequence is small even in the true motion (ceiling R² about 0.3).
 
 ## Gate 0 (declared before the results)
 

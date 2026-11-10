@@ -37,9 +37,11 @@ def test_the_state_block_is_the_MODE_BIT_AND_NOTHING_ELSE():
     # The mode goes through _net_mode (HIDE_MODE_BIT, v34): still the mode bit
     # and nothing else, now optionally held at 1 for the network. priv_m
     # (PRIV_OBS, 2026-11-07) fills CRITIC-ONLY columns the actor and the GRU never
-    # read (tests/test_priv_critic.py, tests/test_priv_obs.py).
+    # read (tests/test_priv_critic.py, tests/test_priv_obs.py). Since 2026-11-10 the row is
+    # built in the module-level obs_row, which main's row_of and learner C's loop both call.
     assert ('pxr.mono_row(i["debit_cur"], _net_mode(o["mode"]), o["binoc"],\n'
-            '                            speed_kmh=_speed_kmh(i), priv_m=_priv_m(o, i))') in s
+            '                        speed_kmh=_speed_kmh(i), priv_m=_priv_m(o, i))') in s
+    assert "return obs_row(o, i)" in s
     assert 'o["vector"]' not in s and 'o["state"]' not in s
     assert "mode_index=0" in s
 

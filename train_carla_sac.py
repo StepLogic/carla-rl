@@ -582,6 +582,12 @@ HER_EXPLORE = os.environ.get("HER_EXPLORE", "1") == "1"
 # Unset = off, every earlier run unchanged.
 JUNCTION_RAMP_START = (float(os.environ["JUNCTION_RAMP_START"])
                        if os.environ.get("JUNCTION_RAMP_START") else None)
+# LEARNER (user 2026-11-10, "move straight to learner C"): "gated" = GatedRecurrentSAC (every
+# earlier run); "frl" = learner C, FastRLAP's SACLearner on c0's frozen features, its own loop
+# (torch_rl/frl/carla.py) on one env.
+LEARNER = os.environ.get("LEARNER", "gated").strip().lower()
+if LEARNER not in ("gated", "frl"):
+    raise SystemExit(f"LEARNER={LEARNER}: 'gated' or 'frl'")
 PORT = env_int("CARLA_PORT", 2000)
 SEED = env_int("SEED", 0)
 DEVICE = os.environ.get("TORCH_DEVICE", "cuda")
@@ -634,6 +640,22 @@ def _priv_m(obs, info):
         return None
     r = info.get("route_remaining_m")
     return None if r is None else float(r)
+
+
+def obs_row(o, i):
+    """[mono frame | mode | speed/priv | binoc] for one step: main's row_of, shared with
+    learner C's loop."""
+    from torch_rl import pixel_rows as pxr
+    # THE ENCODER MUST HAVE RUN. With no encoder the wrapper serves a ZERO
+    # binoc and flags it; stored, that trains the policy goal-blind and
+    # nothing downstream looks wrong -- the run simply never learns to use
+    # the goal, which is the failure this whole arm exists to detect.
+    if not i.get("binoc_encoded", False):
+        raise RuntimeError(
+            "info['binoc_encoded'] is False: the env wrapper has no DEBiT "
+            "encoder, so the binoc column would be zeros.")
+    return pxr.mono_row(i["debit_cur"], _net_mode(o["mode"]), o["binoc"],
+                        speed_kmh=_speed_kmh(i), priv_m=_priv_m(o, i))
 
 
 def _fault(info):
@@ -2601,9 +2623,17 @@ def main():
     # session: no stream available"). A restart cannot inherit that state.
     town_i = 0
     parallel = use_parallel(PARALLEL_TOWNS, EVAL_FROM, len(TOWNS)) and not EXPERT_RECORD
+    if LEARNER == "frl" and not (EVAL_FROM or EXPERT_RECORD):
+        from torch_rl.frl.carla import frl_refusals
+        _bad = frl_refusals(TOWNS, parallel)
+        if _bad:
+            raise SystemExit("LEARNER=frl refuses these settings (they would be silently "
+                             "ignored or wrong) --\n  " + "\n  ".join(_bad))
     # JUNCTION RAMP (torch_rl.junction_ramp) lives in the parallel loop only,
     # and never in eval, whose goal set must stay at the overlay's fraction.
-    if ramp_needs_parallel(JUNCTION_RAMP_START, parallel, EVAL_FROM, EXPERT_RECORD):
+    # Learner C's own loop runs it too (torch_rl/frl/carla.py).
+    if (ramp_needs_parallel(JUNCTION_RAMP_START, parallel, EVAL_FROM, EXPERT_RECORD)
+            and not (LEARNER == "frl" and not EVAL_FROM)):
         raise ValueError("JUNCTION_RAMP_START needs PARALLEL_TOWNS=1: the "
                          "serial loop has no junction ramp")
     ports = [PORT + 50 * i for i in range(len(TOWNS))] if parallel else [PORT]
@@ -2673,6 +2703,30 @@ def main():
     # first ("shapes (2,) (3,)") and the smoke run the second ("the expanded
     # size of the tensor (2) must match the existing size (3)").
     ACT_DIM = int(env.action_space.shape[0])
+    # LEARNER C (user 2026-11-10): its checkpoints evaluate through run_eval with a policy that
+    # has GatedRecurrentSAC's acting API; LEARNER=frl trains with learner C's own loop. Both
+    # reuse the server and the env built above; every other path continues unchanged below.
+    if EVAL_FROM and not EXPERT_RECORD:
+        from torch_rl.frl.carla import is_frl_checkpoint, load_policy
+        if is_frl_checkpoint(EVAL_FROM):
+            if EXPERT_TRACE or EVAL_SGM_TRACE or EVAL_TRACE:
+                raise SystemExit("a learner-C checkpoint has the standard eval only")
+            return run_eval(env, load_policy(EVAL_FROM, DEVICE), pxr, server, OUT)
+    if LEARNER == "frl" and not (EVAL_FROM or EXPERT_RECORD):
+        import itertools
+
+        from torch_rl.frl.carla import run_carla
+        _rebuilds = itertools.count(1)
+
+        def _rebuild():
+            # a fresh env on the same server (restarted if it no longer answers); a new seed
+            # so the episode sequence does not repeat from the start
+            k = next(_rebuilds)
+            return connect_with_restarts(
+                lambda: build_env(TOWNS[0], seed=SEED + 100000 * k, encoder=enc, port=PORT,
+                                  state_keys=()), server)
+        return run_carla(env, obs, info, server, OUT, row_of=obs_row, to_env=to_env,
+                         rebuild_env=_rebuild)
     agent = build_agent(binoc_dim, ACT_DIM, critic_layer_norm=checkpoint_critic_layer_norm(EVAL_FROM) if EVAL_FROM else None,
                         critic_proj_dim=checkpoint_critic_proj_dim(EVAL_FROM) if EVAL_FROM else None,
                         **(checkpoint_critic_ensemble(EVAL_FROM) if EVAL_FROM else {}))
@@ -2830,16 +2884,7 @@ def main():
         The binoc comes from the observation, where the wrapper put it after
         encoding (view, goal) through the FROZEN DEBiT -- so it is a stored
         feature, not something the learner recomputes."""
-        # THE ENCODER MUST HAVE RUN. With no encoder the wrapper serves a ZERO
-        # binoc and flags it; stored, that trains the policy goal-blind and
-        # nothing downstream looks wrong -- the run simply never learns to use
-        # the goal, which is the failure this whole arm exists to detect.
-        if not i.get("binoc_encoded", False):
-            raise RuntimeError(
-                "info['binoc_encoded'] is False: the env wrapper has no DEBiT "
-                "encoder, so the binoc column would be zeros.")
-        return pxr.mono_row(i["debit_cur"], _net_mode(o["mode"]), o["binoc"],
-                            speed_kmh=_speed_kmh(i), priv_m=_priv_m(o, i))
+        return obs_row(o, i)
 
     if IL_ALPHA0 > 0:
         print(f"  TEMPERATURE (IL_ALPHA0): {agent.alpha_g:g} from the checkpoint -> "

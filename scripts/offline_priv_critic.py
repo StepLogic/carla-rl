@@ -117,6 +117,18 @@ def probe_rows(C, eps):
     return np.concatenate(fr), np.concatenate(st)
 
 
+def held_out_split(C):
+    """(training episodes, probes): the first 3 shards (sorted names) and every 10th are held
+    out; probes = their (frame, step) rows as probe_first3 and probe_every10."""
+    order = np.argsort(C["e_path"])                       # sorted shard names
+    first3 = set(order[:3].tolist())
+    every10 = set(order[::10].tolist())
+    held = first3 | every10
+    train_eps = [e for e in range(len(C["e_T"])) if e not in held]
+    return train_eps, {"probe_first3": probe_rows(C, sorted(first3)),
+                       "probe_every10": probe_rows(C, sorted(every10 - first3))}
+
+
 def sample_next_action(mean_u, log_std, gen):
     noise = torch.randn(mean_u.shape, generator=gen, device=mean_u.device)
     pre = mean_u + log_std.exp() * noise
@@ -295,14 +307,8 @@ def main():
     os.makedirs(args.out, exist_ok=True)
     C = dict(np.load(args.cache, allow_pickle=False))
     n_eps = len(C["e_T"])
-    order = np.argsort(C["e_path"])                       # sorted shard names
-    first3 = set(order[:3].tolist())
-    every10 = set(order[::10].tolist())
-    held = first3 | every10
-    train_eps = [e for e in range(n_eps) if e not in held]
+    train_eps, probes = held_out_split(C)
     train = transitions(C, train_eps)
-    probes = {"probe_first3": probe_rows(C, sorted(first3)),
-              "probe_every10": probe_rows(C, sorted(every10 - first3))}
     print(f"[offline_priv] {n_eps} episodes: train {len(train_eps)} ({len(train[0])} transitions), "
           f"probe first3 {len(probes['probe_first3'][0])} + every10 {len(probes['probe_every10'][0])} steps",
           flush=True)

@@ -90,6 +90,8 @@ def test_the_cache_is_removed_when_the_trainer_exits(monkeypatch, tmp_path):
                         lambda fn, *a, **k: registered.append((fn, a, k)))
     s, env = _start(monkeypatch, tmp_path)
     _start(monkeypatch, tmp_path, server=s)
+    # (the server's own stop-at-exit hook, test_carla_server_exit, registers too)
+    registered = [r for r in registered if r[0] is cs.shutil.rmtree]
     assert len(registered) == 1
     fn, a, k = registered[0]
     fn(*a, **k)

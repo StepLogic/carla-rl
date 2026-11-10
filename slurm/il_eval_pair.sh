@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # A paired goal-image eval (imitation-first plan, Tasks 7-9): the same EVAL_SEED
 # episodes with the TRUE goal image, then with a WRONG one (WRONG_GOAL_MODE=1),
-# then ~/paired_wrong.py on the pair. Each half is skipped if its eval.json
+# then scripts/paired_wrong.py on the pair. Each half is skipped if its eval.json
 # already exists, so a killed job resumes.
 #
 #   OVERLAY=slurm/il_eval.env CKPT=<.../step_N> TOWN=Town02 RUN=<run name> \
@@ -18,9 +18,14 @@ for wg in 0 1; do
   out=$D/eval_$TAG; [ "$wg" = 1 ] && out=${out}_wrong
   if [ -f "$out/eval.json" ]; then echo "=== have $out"; continue; fi
   echo "=== EVAL_PAIR $RUN $TOWN wrong=$wg n=$N ==="
-  REWARD_OVERLAY=$OVERLAY ENV_TOWNS=$TOWN RUN_NAME=$RUN CARLA_PORT=$((PORT + 50 * wg)) \
+  p=$((PORT + 50 * wg))
+  REWARD_OVERLAY=$OVERLAY ENV_TOWNS=$TOWN RUN_NAME=$RUN CARLA_PORT=$p \
     WRONG_GOAL_MODE=$wg EVAL_FROM=$CKPT EVAL_EPISODES=$N bash slurm/train_sac.sbatch
   echo "=== EVAL_PAIR $RUN $TOWN wrong=$wg rc=$? ==="
+  # A crashed or SIGKILLed eval must not leave its CARLA server behind (orphans on
+  # 4600/4650/4700 held 11.8 GB and caused an OOM, 2026-11-09): sweep this half's
+  # EXACT port. Bracketed so the pattern cannot match this shell; never fatal.
+  pkill -9 -f -- "-carla-rpc-por[t]=$p( |\$)" 2>/dev/null || true
 done
-python3 -I ~/paired_wrong.py "$D/eval_$TAG" "$D/eval_${TAG}_wrong" 2>&1 | sed "s/^/[Gap] /"
+python3 -I scripts/paired_wrong.py "$D/eval_$TAG" "$D/eval_${TAG}_wrong" 2>&1 | sed "s/^/[Gap] /"
 echo "=== EVAL_PAIR DONE ==="

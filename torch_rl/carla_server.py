@@ -97,6 +97,7 @@ class CarlaServer:
         self.proc: Optional[subprocess.Popen] = None
         self.n_starts = 0
         self._cache_dir: Optional[str] = None
+        self._exit_hook = False
         os.makedirs(log_dir, exist_ok=True)
 
     # ------------------------------------------------------------- lifecycle --
@@ -129,6 +130,22 @@ class CarlaServer:
             start_new_session=True,          # its own group, so it can be swept
             env=self._launch_env())
         self.n_starts += 1
+        # Its own session also means nothing stops it when THIS Python dies: an
+        # eval that crashed (strict load failure) left its servers on 4600/4650/
+        # 4700 holding 11.8 GB until the next process ran out of memory
+        # (2026-11-09). Stop it at interpreter exit -- registered once per server,
+        # after the shader-cache hook, so it runs first (atexit is LIFO).
+        if not self._exit_hook:
+            atexit.register(self._stop_at_exit)
+            self._exit_hook = True
+
+    def _stop_at_exit(self) -> None:
+        """atexit: stop this server as the Python that started it exits. Never
+        raises (interpreter shutdown)."""
+        try:
+            self.stop(grace=3.0)
+        except Exception:
+            pass
 
     def _launch_env(self) -> Optional[dict]:
         """The server's environment. A local CARLA inherits the trainer's as is

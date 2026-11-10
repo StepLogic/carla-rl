@@ -269,12 +269,31 @@ def feature_sets(C):
             "binoc": C["f_binoc"].astype(np.float32)}
 
 
+def clean_label_mask(C):
+    """Frames whose lane labels can be trusted: moving, heading defined, off-junction,
+    well inside the lane (|offset| <= 1 m), |heading error| <= 15 deg, and no lane
+    jump (|offset change| < 0.3 m to both neighbours in the same episode).
+
+    Why (checked on the Town05 cache before any probe was re-run): the first filter,
+    |offset| <= half the lane width, kept frames at lane boundaries -- where the
+    nearest lane centre flips to the neighbouring lane and the signed offset jumps by
+    a lane width -- and wrong-way / lane-snapping outliers (heading errors up to
+    180 deg, mostly in clone-driven episodes). 3% of frames took the heading error's
+    SD to 15.4 deg and its correlation with the next offset change to +0.10. Under
+    this filter: SD 3.5 deg, correlation +0.93, offset SD 0.21 m (53,237 frames)."""
+    off, he, ep = C["f_offset"], C["f_heading_err"], C["f_ep"]
+    d = np.diff(off)
+    same = ep[1:] == ep[:-1]
+    fwd_ok = np.r_[same & (np.abs(d) < 0.3), False]
+    bwd_ok = np.r_[False, same & (np.abs(d) < 0.3)]
+    with np.errstate(invalid="ignore"):
+        return (C["f_valid"] & ~C["f_junction"] & (C["f_kmh"] >= MIN_KMH)
+                & (np.abs(off) <= 1.0) & (np.abs(he) <= 15.0) & fwd_ok & bwd_ok)
+
+
 def state_rows(C):
-    """Frames for the state probes: moving, heading defined, off-junction, inside
-    their own lane."""
-    off = C["f_offset"]
-    return np.flatnonzero(C["f_valid"] & ~C["f_junction"] & (C["f_kmh"] >= MIN_KMH)
-                          & (np.abs(off) <= np.minimum(0.5 * C["f_width"], 1.75)))
+    """Frames for the state probes: the clean-label frames."""
+    return np.flatnonzero(clean_label_mask(C))
 
 
 def visibility_rows(C, k):
@@ -338,9 +357,9 @@ def run_probes(caches, threads):
                                 for s0, T in zip(main["e_s0"], main["e_T"])])
         y = noise[s_idx].astype(np.float64)
         gg = main["f_ep"][fa]
-        # labelled subset (off-junction both ends, headings defined): the ceiling's rows
-        lab_ok = (main["f_valid"][fa] & main["f_valid"][fb] & ~main["f_junction"][fa]
-                  & ~main["f_junction"][fb])
+        # labelled subset (clean lane labels at both ends): the ceiling's rows
+        clean = clean_label_mask(main)
+        lab_ok = clean[fa] & clean[fb]
         dpsi = ll.wrap_deg(main["f_heading"][fb] - main["f_heading"][fa])
         doff = main["f_offset"][fb] - main["f_offset"][fa]
         ceil_X = np.stack([dpsi, doff, main["f_kmh"][fa]], -1)[lab_ok]

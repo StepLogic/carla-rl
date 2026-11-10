@@ -37,7 +37,7 @@ import sys
 import time
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path[:0] = [REPO, os.path.join(REPO, "src")]
+sys.path[:0] = [REPO, os.path.join(REPO, "src"), os.path.join(REPO, "scripts")]
 
 import numpy as np  # noqa: E402
 import torch  # noqa: E402
@@ -51,15 +51,21 @@ N_CRITICS, SUBSET = 10, 2
 
 
 def priv_features(C):
-    """Per frame: the true lane state, clipped and scaled to ~unit range."""
+    """Per frame: the true lane state, clipped and scaled to ~unit range, with a
+    flag for frames whose labels are trustworthy (probe_c0_features.clean_label_mask:
+    off-junction, well inside the lane, no lane-boundary jump); elsewhere the offset
+    and heading error are kept but clipped, and the flag tells the critic so."""
+    from probe_c0_features import clean_label_mask
     known = np.isfinite(C["f_heading"]) & C["f_valid"]
-    herr = np.where(known, np.clip(C["f_heading_err"], -45.0, 45.0), 0.0) / 10.0
-    off = np.clip(np.nan_to_num(C["f_offset"]), -3.0, 3.0)
+    clean = clean_label_mask(C)
+    herr = np.where(known, np.clip(np.nan_to_num(C["f_heading_err"]), -15.0, 15.0), 0.0) / 5.0
+    off = np.clip(np.nan_to_num(C["f_offset"]), -1.75, 1.75)
     curv = np.clip(np.nan_to_num(C["f_curv"]), -90.0, 90.0) / 30.0
     kmh = C["f_kmh"] / 15.0
     mode = C["f_modespeed"][:, 0]
     return np.stack([off, herr, curv, kmh, C["f_junction"].astype(np.float32),
-                     known.astype(np.float32), mode], -1).astype(np.float32)
+                     known.astype(np.float32), clean.astype(np.float32), mode],
+                    -1).astype(np.float32)
 
 
 def image_features(C):
@@ -110,7 +116,7 @@ def sample_next_action(mean_u, log_std, gen):
 
 
 @torch.no_grad()
-def measure(critics, X, a0, junction, dev, max_states=4000, seed=0):
+def measure(critics, X, a0, junction, clean, dev, max_states=4000, seed=0):
     rng = np.random.default_rng(seed)
     idx = np.arange(len(a0)) if len(a0) <= max_states else np.sort(
         rng.choice(len(a0), max_states, replace=False))
@@ -126,6 +132,7 @@ def measure(critics, X, a0, junction, dev, max_states=4000, seed=0):
     best = grid[qs.argmax(0)].cpu().numpy()
     exp = a0[idx, 0]
     jn = junction[idx]
+    cl = clean[idx]
 
     def stats(m):
         b, e = best[m], exp[m]
@@ -136,7 +143,7 @@ def measure(critics, X, a0, junction, dev, max_states=4000, seed=0):
                 "mean_abs_expert": round(float(np.abs(e).mean()), 3)}
     span = (qs.max(0).values - qs.min(0).values).cpu().numpy()
     return {"all": stats(np.ones(len(idx), bool)), "off_junction": stats(~jn),
-            "q_span_over_grid": round(float(np.median(span)), 4)}
+            "clean_labels": stats(cl), "q_span_over_grid": round(float(np.median(span)), 4)}
 
 
 def run_arm(arm, C, X, train, probes, args, dev):
@@ -153,6 +160,8 @@ def run_arm(arm, C, X, train, probes, args, dev):
     log_std = torch.as_tensor(C["f_log_std"], device=dev)
     acts = torch.as_tensor(C["s_act_exec"], device=dev)
     rng = np.random.default_rng(args.seed)
+    from probe_c0_features import clean_label_mask
+    clean = clean_label_mask(C)
     trace, t0 = [], time.time()
     for u in range(1, args.updates + 1):
         b = rng.integers(0, len(fa), args.batch)
@@ -178,9 +187,11 @@ def run_arm(arm, C, X, train, probes, args, dev):
             row = {"arm": arm, "updates": u, "loss": round(float(loss), 4),
                    "q_mean": round(float(q.mean()), 3), "secs": round(time.time() - t0)}
             for name, (fr, sp) in probes.items():
-                row[name] = measure(critics, X[fr], C["s_act_label"][sp], C["f_junction"][fr], dev)
+                row[name] = measure(critics, X[fr], C["s_act_label"][sp], C["f_junction"][fr],
+                                    clean[fr], dev)
             trace.append(row)
             print("[offline_priv] " + json.dumps(row), flush=True)
+    torch.save(critics.state_dict(), os.path.join(args.out, f"critics_{arm}.pt"))
     return trace
 
 

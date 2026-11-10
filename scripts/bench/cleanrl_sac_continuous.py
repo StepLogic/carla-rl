@@ -1,4 +1,15 @@
 # docs and experiment results can be found at https://docs.cleanrl.dev/rl-algorithms/sac/#sac_continuous_actionpy
+#
+# BENCH CONTROL ARM (plan docs/superpowers/plans/2026-11-10-learner-validation.md, Task 1).
+# Vendored from vwxyzjn/cleanrl@fe8d8a03c41a7ef5b523e2e354bd01c363e786bb (MIT licence); the
+# previous commit holds it byte for byte. The ONLY additions, all marked "BENCH ADDITION":
+#   * Args eval_episodes / eval_seed / out_json;
+#   * the training episodic returns kept in a list;
+#   * after training, a deterministic evaluation (the actor's tanh-squashed mean action) on a fresh
+#     env, seeds eval_seed .. eval_seed + eval_episodes - 1, written to out_json.
+# Nothing in the training loop changed. Run it in ~/bench-venv (gymnasium 0.29.1 as upstream pins;
+# the loop uses the 0.29 vector API) with PYTHONNOUSERSITE=1.
+import json
 import os
 import random
 import time
@@ -64,6 +75,14 @@ class Args:
     """Entropy regularization coefficient."""
     autotune: bool = True
     """automatic tuning of the entropy coefficient"""
+
+    # BENCH ADDITION: the end-of-run evaluation and its result file
+    eval_episodes: int = 10
+    """deterministic evaluation episodes after training"""
+    eval_seed: int = 1000
+    """first evaluation seed (episodes use eval_seed .. eval_seed + eval_episodes - 1)"""
+    out_json: str = ""
+    """where to write the result JSON (empty = do not write)"""
 
 
 def make_env(env_id, seed, idx, capture_video, run_name):
@@ -218,6 +237,7 @@ if __name__ == "__main__":
         handle_timeout_termination=False,
     )
     start_time = time.time()
+    train_returns = []  # BENCH ADDITION
 
     # TRY NOT TO MODIFY: start the game
     obs, _ = envs.reset(seed=args.seed)
@@ -237,6 +257,7 @@ if __name__ == "__main__":
             for info in infos["final_info"]:
                 if info is not None:
                     print(f"global_step={global_step}, episodic_return={info['episode']['r']}")
+                    train_returns.append(float(np.asarray(info["episode"]["r"]).reshape(-1)[0]))  # BENCH ADDITION
                     writer.add_scalar("charts/episodic_return", info["episode"]["r"], global_step)
                     writer.add_scalar("charts/episodic_length", info["episode"]["l"], global_step)
                     break
@@ -319,6 +340,31 @@ if __name__ == "__main__":
                 )
                 if args.autotune:
                     writer.add_scalar("losses/alpha_loss", alpha_loss.item(), global_step)
+
+    # BENCH ADDITION: deterministic evaluation (the actor's squashed mean) on a fresh env.
+    eval_returns = []
+    eval_env = gym.make(args.env_id)
+    for k in range(args.eval_episodes):
+        o, _ = eval_env.reset(seed=args.eval_seed + k)
+        done, ret = False, 0.0
+        while not done:
+            with torch.no_grad():
+                _, _, mean_action = actor.get_action(torch.Tensor(np.asarray(o)).to(device).unsqueeze(0))
+            o, r, term, trunc, _ = eval_env.step(mean_action[0].cpu().numpy())
+            ret += float(r)
+            done = bool(term or trunc)
+        eval_returns.append(ret)
+    eval_env.close()
+    result = {"arm": "A_cleanrl", "env_id": args.env_id, "total_timesteps": args.total_timesteps,
+              "seed": args.seed, "eval_seeds": [args.eval_seed + k for k in range(args.eval_episodes)],
+              "eval_returns": eval_returns, "eval_mean": float(np.mean(eval_returns)),
+              "train_last10_mean": float(np.mean(train_returns[-10:])) if train_returns else None,
+              "train_episodes": len(train_returns), "seconds": round(time.time() - start_time, 1)}
+    print("[BenchResult] " + json.dumps(result), flush=True)
+    if args.out_json:
+        os.makedirs(os.path.dirname(os.path.abspath(args.out_json)), exist_ok=True)
+        with open(args.out_json, "w") as fh:
+            json.dump(result, fh, indent=1)
 
     envs.close()
     writer.close()

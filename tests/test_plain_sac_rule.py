@@ -187,3 +187,25 @@ def test_main_checks_the_rule_before_the_encoder_and_carla_start():
     assert main_src.index("run_bc_train(OUT") < i            # cloning is not SAC
     assert i < main_src.index("DebitTinyEncoder(") and i < main_src.index("CarlaServer(")
     assert "training=not (EVAL_FROM or EXPERT_RECORD)" in main_src[i:i + 200]
+
+
+def test_the_action_repeat_runs_are_plain_and_differ_only_in_k():
+    """C1 (plan 2026-11-09): P2's task under the plain-SAC rule, k = 1 / 2 / 4."""
+    runs = {k: _resolved(f"slurm/sac_scratch_ar{k}.env") for k in (1, 2, 4)}
+    for k, env in runs.items():
+        assert plain_sac_violations(env) == [], k
+        assert env["ACTION_REPEAT"] == str(k)
+        assert env["ENV_TOWNS"] == "Town05,Town01" and env["UPDATE_EVERY"] == "5"
+        assert env["GOAL_ARRIVAL_MAX_SPEED"] == "0" and env["OFF_ROAD_JUNCTION_M"] == "3.5"
+        assert "INIT_FROM" not in env                         # from scratch
+    keys = set().union(*runs.values()) - {"ACTION_REPEAT", "_", "SHLVL", "PWD", "OLDPWD"}
+    for key in keys:
+        assert runs[1].get(key) == runs[2].get(key) == runs[4].get(key), key
+
+
+def test_their_evals_act_at_the_training_rate_under_the_benchmark_rule():
+    for k in (1, 2, 4):
+        env = _resolved(f"slurm/il_eval_val_chw_jr_any1m_ar{k}.env")
+        assert env["ACTION_REPEAT"] == str(k)
+        assert env["GOAL_RADIUS_M"] == "1.0" and env["GOAL_ARRIVAL_MAX_SPEED"] == "0"
+        assert env["OFF_ROAD_JUNCTION_M"] == "3.5"

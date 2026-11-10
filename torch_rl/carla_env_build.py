@@ -104,6 +104,74 @@ def check_cluster_env() -> None:
         raise SystemExit("this arm is the gated two-mode policy: set GATED=1")
 
 
+try:                                   # the pure config functions need no gym
+    import gymnasium as _gym
+    _Wrapper = _gym.Wrapper
+except ImportError:                    # pragma: no cover
+    _Wrapper = object
+
+# ACTION_REPEAT=k (plan 2026-11-09, C1; DrQ / DrQ-v2's action repeat): each agent
+# action is applied for k simulator ticks. Every SAC critic on c0's features ranked
+# steering as if it barely mattered; at 10 Hz one action barely changes the next
+# frame, and Q(s, a) - V(s) shrinks with the control step (Tallec et al., ICML 2019).
+# Default 1 = no wrapper: every earlier run is unchanged.
+# A tick that changes the goal ends the repeat early, so the goal wrapper above sees
+# that tick's info; fault/crossing flags of earlier ticks are carried forward.
+REPEAT_STOP_KEYS = ("chain_soft_reset", "is_success", "declared", "false_stop")
+REPEAT_CARRY_KEYS = ("collision", "off_road", "off_road_raw", "lane_invasion",
+                     "lane_invasion_any", "lane_invasion_illegal", "lane_fined",
+                     "junction_cleared", "stalled")
+
+
+def action_repeat() -> int:
+    """ACTION_REPEAT (default 1). Refused with EXPERT_RECORD=1: the recorder labels
+    every tick with the expert's action, and held actions would not be its own."""
+    raw = (os.environ.get("ACTION_REPEAT", "1") or "1").strip()
+    try:
+        k = int(raw)
+    except ValueError:
+        raise ValueError(f"ACTION_REPEAT={raw!r}: an integer >= 1") from None
+    if k < 1:
+        raise ValueError(f"ACTION_REPEAT={k}: must be >= 1")
+    if k > 1 and os.environ.get("EXPERT_RECORD", "0") == "1":
+        raise ValueError("ACTION_REPEAT > 1 with EXPERT_RECORD=1: recordings label every "
+                         "tick with the expert's own action; do not repeat actions there")
+    return k
+
+
+def _set(v) -> bool:
+    """An info flag is set: True, a nonzero count, or a non-empty list of marks."""
+    if v is None:
+        return False
+    if hasattr(v, "__len__") and not isinstance(v, str):
+        return len(v) > 0
+    return bool(v)
+
+
+class ActionRepeat(_Wrapper):
+    """Hold each action for k ticks; sum the rewards; stop at a tick that ends the
+    episode or changes the goal; carry fault flags from earlier ticks."""
+
+    def __init__(self, env, k: int):
+        super().__init__(env)
+        self.k = int(k)
+
+    def step(self, action):
+        total, carried = 0.0, {}
+        for i in range(self.k):
+            obs, r, terminated, truncated, info = self.env.step(action)
+            total += float(r)
+            carried.update({key: info[key] for key in REPEAT_CARRY_KEYS if _set(info.get(key))})
+            if terminated or truncated or any(_set(info.get(key)) for key in REPEAT_STOP_KEYS):
+                break
+        info = dict(info)
+        for key, v in carried.items():
+            if not _set(info.get(key)):
+                info[key] = v
+        info["repeat_ticks"] = i + 1
+        return obs, total, terminated, truncated, info
+
+
 def chain_enabled(eval_mode) -> bool:
     """Whether GatedReward chains goals: always in training, in eval only with
     EVAL_CHAIN=1 (imitation-first plan, Task 11: one car driven goal after goal
@@ -159,6 +227,9 @@ def build_env(town: str, seed: int, encoder=None, port: int = 2000,
         # unless EVAL_CHAIN=1 (the imitation-first chain eval).
         chain=chain_enabled(eval_mode),
         seed=seed)
+    k_repeat = action_repeat()
+    if k_repeat > 1:
+        env = ActionRepeat(env, k_repeat)
     env = DebitGoalWrapper(
         env, encoder=encoder, state_keys=tuple(state_keys),
         wrong_goal=(os.environ.get("WRONG_GOAL_MODE", "0") == "1"),

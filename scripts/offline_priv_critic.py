@@ -25,6 +25,15 @@ Probe: the first 3 Town05 episodes (the earlier study's probe) plus every 10th
 episode, all held out of training; the expert's LABEL action with its steering
 replaced by each of 21 values in [-1, 1].
 
+Arm frl_embed50 (user 2026-11-10, "Compressed to 50-d, compression trained by the
+critic (FastRLAP)"): the same protocol, with learner C's own critic (torch_rl.frl,
+the FastRLAP port) in FastRLAP's embeddings mode instead of QuantileCritics: c0's
+frozen [GRU | binoc] -> Dense(50) -> LayerNorm -> tanh, trained by the critic loss;
+[mode, speed] -> its own Dense(50) -> LayerNorm -> tanh; 10 LayerNorm Q heads
+(256, 256); min over 2 target heads; no entropy term in the target (FastRLAP's
+backup_entropy=False, so the alpha 0.1 above does not enter). The next action is
+still c0's frozen actor's.
+
 usage: python scripts/offline_priv_critic.py CACHE OUT [--arms priv,image] [--updates 20000]
   CACHE = <probe out>/features_Town05.npz from scripts/probe_c0_features.py
 """
@@ -48,6 +57,8 @@ from torch_rl.slope_diag import ARRIVAL_CUT  # noqa: E402
 REWARD_SCALE = 10.0
 GAMMA, TAU, LR, ALPHA = 0.99, 0.005, 3e-4, 0.1
 N_CRITICS, SUBSET = 10, 2
+H_DIM, MS_DIM = 512, 2          # image_features rows: [GRU 512 | mode, speed | binoc 3136]
+FRL_LATENT = 50
 
 
 def priv_features(C):
@@ -195,6 +206,79 @@ def run_arm(arm, C, X, train, probes, args, dev):
     return trace
 
 
+def split_image_row(x):
+    """An image_features row -> learner C's multiplexer inputs: embeddings = [GRU | binoc]
+    (c0's frozen image features), states = [mode, speed]."""
+    return {"embeddings": torch.cat([x[:, :H_DIM], x[:, H_DIM + MS_DIM:]], 1),
+            "states": x[:, H_DIM:H_DIM + MS_DIM]}
+
+
+class C0NextActor:
+    """c0's frozen actor in place of learner C's: update_critic draws the target's next action
+    from actor.sample(next_observations), which here carries c0's cached mean and log-std."""
+
+    def __init__(self, gen):
+        self.gen = gen
+
+    def sample(self, obs):
+        a, logp = sample_next_action(obs["c0_mean_u"], obs["c0_log_std"], self.gen)
+        return a, logp, torch.tanh(obs["c0_mean_u"])
+
+
+class MeasureView:
+    """measure() reads critics(x, a) as (heads, batch, quantiles); learner C's is (heads, batch)."""
+
+    def __init__(self, critic):
+        self.critic = critic
+
+    def __call__(self, x, a):
+        return self.critic(split_image_row(x), a)[..., None]
+
+
+def frl_critic(emb_dim, state_dim, device, seed):
+    """Learner C (SACLearner, embeddings mode) with FastRLAP's critic settings and this study's
+    gamma / tau / learning rate. Only its critic is used; the caller replaces its actor."""
+    from torch_rl.frl.learner import SACLearner
+    return SACLearner(action_dim=2, embedding_dim=emb_dim, state_dim=state_dim,
+                      latent_dim=FRL_LATENT, critic_lr=LR, hidden_dims=(256, 256),
+                      discount=GAMMA, tau=TAU, num_qs=N_CRITICS, num_min_qs=SUBSET,
+                      critic_layer_norm=True, backup_entropy=False, seed=seed, device=device)
+
+
+def run_arm_frl(arm, C, X, train, probes, args, dev):
+    """The run_arm protocol with learner C's critic and its own update_critic."""
+    L = frl_critic(X.shape[1] - MS_DIM, MS_DIM, dev, args.seed)      # [GRU | binoc] = 3648
+    L.actor = C0NextActor(torch.Generator(device=dev).manual_seed(args.seed))
+    fa, fb, st, rw, mk = train
+    mean_u = torch.as_tensor(C["f_mean_u"], device=dev)
+    log_std = torch.as_tensor(C["f_log_std"], device=dev)
+    acts = torch.as_tensor(C["s_act_exec"], device=dev)
+    rng = np.random.default_rng(args.seed)
+    from probe_c0_features import clean_label_mask
+    clean = clean_label_mask(C)
+    view = MeasureView(L.critic)
+    trace, t0 = [], time.time()
+    for u in range(1, args.updates + 1):
+        b = rng.integers(0, len(fa), args.batch)
+        x = torch.as_tensor(np.asarray(X[fa[b]], np.float32), device=dev)
+        xn = torch.as_tensor(np.asarray(X[fb[b]], np.float32), device=dev)
+        nxt = split_image_row(xn)
+        nxt["c0_mean_u"], nxt["c0_log_std"] = mean_u[fb[b]], log_std[fb[b]]
+        info = L.update_critic({"observations": split_image_row(x), "next_observations": nxt,
+                                "actions": acts[st[b]], "rewards": torch.as_tensor(rw[b], device=dev),
+                                "masks": torch.as_tensor(mk[b], device=dev)})
+        if u % args.every == 0 or u == args.updates:
+            row = {"arm": arm, "updates": u, "loss": round(info["critic_loss"], 4),
+                   "q_mean": round(info["q"], 3), "secs": round(time.time() - t0)}
+            for name, (fr, sp) in probes.items():
+                row[name] = measure(view, X[fr], C["s_act_label"][sp], C["f_junction"][fr],
+                                    clean[fr], dev)
+            trace.append(row)
+            print("[offline_priv] " + json.dumps(row), flush=True)
+    torch.save(L.critic.state_dict(), os.path.join(args.out, f"critics_{arm}.pt"))
+    return trace
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("cache")
@@ -222,11 +306,13 @@ def main():
     print(f"[offline_priv] {n_eps} episodes: train {len(train_eps)} ({len(train[0])} transitions), "
           f"probe first3 {len(probes['probe_first3'][0])} + every10 {len(probes['probe_every10'][0])} steps",
           flush=True)
-    feats = {"priv": priv_features, "image": image_features, "image_proj50": image_features}
+    feats = {"priv": priv_features, "image": image_features, "image_proj50": image_features,
+             "frl_embed50": image_features}
     result = {"args": vars(args), "train_episodes": len(train_eps), "arms": {}}
     for arm in args.arms.split(","):
         X = feats[arm](C)
-        result["arms"][arm] = run_arm(arm, C, X, train, probes, args, args.device)
+        runner = run_arm_frl if arm.startswith("frl_") else run_arm
+        result["arms"][arm] = runner(arm, C, X, train, probes, args, args.device)
         with open(os.path.join(args.out, "offline_priv_critic.json"), "w") as fh:
             json.dump(result, fh, indent=1)
     print(f"[offline_priv] done -> {args.out}", flush=True)

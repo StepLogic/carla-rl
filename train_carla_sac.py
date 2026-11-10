@@ -347,6 +347,36 @@ EXPERT_RECORD_CHAIN = os.environ.get("EXPERT_RECORD_CHAIN", "0") == "1"
 EXPERT_GOAL_ONLY = os.environ.get("EXPERT_GOAL_ONLY", "0") == "1"
 if EXPERT_RECORD_CHAIN and not EVAL_CHAIN:
     raise ValueError("EXPERT_RECORD_CHAIN=1 needs EVAL_CHAIN=1 (the env's chained goals)")
+# EXPERT_RECORD_MAP=1 (plan 2026-11-09, B2, map-subgoal recording; Gate A: with map
+# subgoals c0 fails mostly by wrong branches at junctions). The expert drives a goal
+# episode while the goal input is the NEXT NODE IMAGE of the town's map in
+# EVAL_MAP_DIR -- the deployment interface. Start and goal nodes by true pose
+# (Graph.localise, EVAL_MAP_START_M / EVAL_MAP_GOAL_M), the subgoal switches when the
+# car reaches a route node (image_map.Navigator, EVAL_MAP_SWITCH_M, as the pose arm),
+# and every leg is its own shard with that node's image as its goal, id seed * 100 +
+# leg (the GRU starts each leg fresh, as EVAL_MAP_RESET_HIDDEN=1); the last leg's goal
+# is the real goal image. The expert drives the ROAD route while the images follow the
+# MAP route, so an episode is recorded only when they agree (expert_record.
+# map_route_skip): a map route, at least EXPERT_RECORD_MAP_MIN_TURNS junction turns on
+# the road route, and the map route at most EXPERT_RECORD_MAP_MAX_RATIO x its length.
+# A leg is dropped (end "map_lost", the episode ends) once the car is
+# EXPERT_RECORD_MAP_LOST_M further from its subgoal than its closest approach.
+# EXPERT_RECORD_EPISODES counts RECORDED routes here, out of at most
+# EXPERT_RECORD_MAP_TRIES x as many seeds. 0 = off.
+EXPERT_RECORD_MAP = os.environ.get("EXPERT_RECORD_MAP", "0") == "1"
+EXPERT_RECORD_MAP_MIN_TURNS = env_int("EXPERT_RECORD_MAP_MIN_TURNS", 1)
+EXPERT_RECORD_MAP_MAX_RATIO = env_float("EXPERT_RECORD_MAP_MAX_RATIO", 1.2)
+EXPERT_RECORD_MAP_LOST_M = env_float("EXPERT_RECORD_MAP_LOST_M", 10.0)
+EXPERT_RECORD_MAP_TRIES = env_int("EXPERT_RECORD_MAP_TRIES", 40)
+if EXPERT_RECORD_MAP and not EVAL_MAP_DIR:
+    raise ValueError("EXPERT_RECORD_MAP=1 needs EVAL_MAP_DIR (the town's image map)")
+if EXPERT_RECORD_MAP and not EXPERT_GOAL_ONLY:
+    raise ValueError("EXPERT_RECORD_MAP=1 needs EXPERT_GOAL_ONLY=1 (map routes are goal episodes)")
+if EXPERT_RECORD_MAP and EXPERT_RECORD_CHAIN:
+    raise ValueError("EXPERT_RECORD_MAP=1 and EXPERT_RECORD_CHAIN=1 are exclusive")
+if EXPERT_RECORD_MAP and EXPERT_DRIVER != "expert":
+    raise ValueError("EXPERT_RECORD_MAP=1 needs EXPERT_DRIVER=expert: a policy off the "
+                     "map route would be shown subgoals the expert's labels do not follow")
 EXPERT_RECORD_DRY = os.environ.get("EXPERT_RECORD_DRY", "0") == "1"
 EXPERT_RECORD_EPISODES = env_int("EXPERT_RECORD_EPISODES", 200)
 EXPERT_SEED0 = env_int("EXPERT_SEED0", 100000)
@@ -1477,7 +1507,8 @@ def run_record(env, agent, pxr, server, out_root):
     action and the expert's label (actor space), the reward, speed and pose.
     An episode ends on the first eval-rule fault, an arrival, the env's own
     end, or (explore) the expert's plan running out. Writes record_summary.json
-    (per-episode list + this town's M0 gate) and prints [RecordDone]."""
+    (per-episode list + this town's M0 gate) and prints [RecordDone].
+    EXPERT_RECORD_MAP=1: map-subgoal legs, one shard per leg (see the flag)."""
     import json
     import random as _random
     import torch
@@ -1485,7 +1516,8 @@ def run_record(env, agent, pxr, server, out_root):
     from torch_rl.expert_record import (assert_recordable_town, chain_continues,
                                         chain_segment_id, effective_sigma,
                                         episode_plan, episode_returns, expert_bias,
-                                        gate_report, keep_episode, record_step)
+                                        gate_report, keep_episode, map_route_metres,
+                                        map_route_skip, record_step)
     from vae_nav.expert_oracle import BasicAgentExpert
     from vae_nav.expert_route import explore_route
     from vae_nav.gated_reward import GatedReward
@@ -1526,10 +1558,40 @@ def run_record(env, agent, pxr, server, out_root):
           f"from seed {EXPERT_SEED0} | expert {EXPERT_TARGET_KMH:g} km/h, explore "
           f"{EXPERT_EXPLORE_MIN_M:g}-{EXPERT_EXPLORE_MAX_M:g} m | "
           + ("DRY (gate only)" if EXPERT_RECORD_DRY else f"-> {root}"), flush=True)
+    gmap = map_frames = goal_wrapper = None
+    map_skipped, routes = [], 0
+    if EXPERT_RECORD_MAP:
+        from vae_nav import image_map
+        from vae_nav.debit_goal_wrapper import DebitGoalWrapper
+        gmap = image_map.Graph.load(os.path.join(EVAL_MAP_DIR, f"{town}.json"))
+        map_frames = np.load(os.path.join(EVAL_MAP_DIR, f"{town}_frames.npy"))
+        if len(map_frames) != len(gmap.nodes):
+            raise RuntimeError(f"{EVAL_MAP_DIR}: {len(map_frames)} frames for "
+                               f"{len(gmap.nodes)} nodes")
+        goal_wrapper = env
+        while not isinstance(goal_wrapper, DebitGoalWrapper):
+            goal_wrapper = goal_wrapper.env
+        print(f"  MAP SUBGOALS: {EVAL_MAP_DIR} {town}: {len(gmap.nodes)} nodes | start<= "
+              f"{EVAL_MAP_START_M:g} m, goal<= {EVAL_MAP_GOAL_M:g} m, switch "
+              f"{EVAL_MAP_SWITCH_M:g} m, lookahead {EVAL_MAP_LOOKAHEAD_M:g} m | record a "
+              f"route if >= {EXPERT_RECORD_MAP_MIN_TURNS} turns and map <= "
+              f"{EXPERT_RECORD_MAP_MAX_RATIO:g} x road; leg lost at +"
+              f"{EXPERT_RECORD_MAP_LOST_M:g} m | {EXPERT_RECORD_EPISODES} routes from <= "
+              f"{EXPERT_RECORD_EPISODES * EXPERT_RECORD_MAP_TRIES} seeds", flush=True)
+
+    def _leg_goal(nav, final_frame, info):
+        """B2: aim the goal at the current leg -- the next map node's image, or the
+        real goal once the route's nodes are done -- -> the binoc against it."""
+        if nav.final:
+            return goal_wrapper.retarget(final_frame, info)
+        return goal_wrapper.retarget(map_frames[nav.current()], info)
 
     expert, hero_id = None, None
     episodes, total, kept = [], 0, 0
-    for k in range(EXPERT_RECORD_EPISODES):
+    n_tries = EXPERT_RECORD_EPISODES * (EXPERT_RECORD_MAP_TRIES if EXPERT_RECORD_MAP else 1)
+    for k in range(n_tries):
+        if EXPERT_RECORD_MAP and routes >= EXPERT_RECORD_EPISODES:
+            break
         seed = EXPERT_SEED0 + (2 * k if EXPERT_GOAL_ONLY else k)
         plan = episode_plan(seed)
         sigma = effective_sigma(plan["sigma"], EXPERT_RECORD_DRY)
@@ -1540,6 +1602,41 @@ def run_record(env, agent, pxr, server, out_root):
         torch.manual_seed(seed)
         obs, info = env.reset(seed=seed)
         mode = int(gated.mode)
+        nav = final_frame = map_row = None
+        if EXPERT_RECORD_MAP:
+            # B2: record this goal episode only if the map route and the road route
+            # the expert drives agree (expert_record.map_route_skip).
+            hp = np.asarray(info.get("hero_pos", (0.0, 0.0)), np.float64)[:2]
+            hy = float(info.get("hero_yaw", 0.0) or 0.0)
+            gp = info.get("goal_pos")
+            route = map_m = None
+            rt = {"turns": 0, "junctions": 0, "plan_m": None}
+            if mode == 1 and gp is not None:
+                gp = np.asarray(gp, np.float64)[:2]
+                _s, _g, route = gmap.localise(hp, hy, gp, start_radius=EVAL_MAP_START_M,
+                                              goal_radius=EVAL_MAP_GOAL_M)
+                if route is not None:
+                    map_m = map_route_metres(gmap._xy, route, hp, gp)
+                    rt = _route_turns(core, hp, gp)
+            why = map_route_skip(route, map_m, rt["plan_m"], rt["turns"],
+                                 min_turns=EXPERT_RECORD_MAP_MIN_TURNS,
+                                 max_ratio=EXPERT_RECORD_MAP_MAX_RATIO)
+            map_row = {"map_hops": None if route is None else len(route) - 1,
+                       "map_m": None if map_m is None else round(map_m, 2),
+                       "road_m": rt["plan_m"], "turns": rt["turns"],
+                       "junctions": rt["junctions"]}
+            if why is not None:
+                map_skipped.append({"seed": seed, "why": why, **map_row})
+                print(f"[RecordMap] seed={seed} skipped ({why}) {map_row}", flush=True)
+                continue
+            routes += 1
+            nav = image_map.Navigator(gmap, route, switch_m=EVAL_MAP_SWITCH_M,
+                                      lookahead_m=EVAL_MAP_LOOKAHEAD_M)
+            nav.look_ahead(hp)                     # the first leg (no-op when off)
+            final_frame = goal_wrapper.latched_goal()
+            obs["binoc"] = _leg_goal(nav, final_frame, info)
+            print(f"[RecordMap] seed={seed} route {routes}/{EXPERT_RECORD_EPISODES}: "
+                  f"{map_row}", flush=True)
         if expert is None or core.hero.id != hero_id:
             expert = BasicAgentExpert(core.hero, core.map, box,
                                       target_speed_kmh=EXPERT_TARGET_KMH)
@@ -1558,13 +1655,17 @@ def run_record(env, agent, pxr, server, out_root):
         # it, a goal arrival continues the same car to the next chained goal.
         seg = 0
         while True:
-            sid = chain_segment_id(seed, seg) if EXPERT_RECORD_CHAIN else seed
+            sid = chain_segment_id(seed, seg) if EXPERT_RECORD_CHAIN or EXPERT_RECORD_MAP else seed
             rec = {"frames": [pxr.to_frame(info["debit_cur"], pxr.MONO_IMG).astype(np.uint8)],
                    "binoc": [np.asarray(obs["binoc"], np.float16)],
                    "act_exec": [], "act_label": [], "reward": [], "speed": [], "pos": []}
             goal_frame = info["debit_goal"]
             prev = np.asarray(info.get("hero_pos", (0.0, 0.0)), np.float64)[:2]
             path_m, end, terminal, truncated = 0.0, None, False, False
+            # B2: this leg's subgoal node (None: the real goal) and the car's closest
+            # approach to it so far.
+            leg_node = None if nav is None or nav.final else int(nav.current())
+            leg_min = float("inf")
             # Goal episodes: how close the expert got and how fast it was going there
             # (the same EpisodeTracker the eval uses) -- the M0 gate's diagnosis.
             tracker = None
@@ -1613,6 +1714,13 @@ def run_record(env, agent, pxr, server, out_root):
                     terminal = True
                 elif trunc:
                     end, truncated = "clock", True
+                elif nav is not None and nav.update(pos, float(info.get("hero_yaw", 0.0) or 0.0)):
+                    end, truncated = "subgoal", True        # this leg ends; the car drives on
+                elif nav is not None and not nav.final:
+                    sg_m = nav.subgoal_m(pos)
+                    leg_min = min(leg_min, sg_m)
+                    if sg_m > leg_min + EXPERT_RECORD_MAP_LOST_M:
+                        end, truncated = "map_lost", True   # its subgoal fell behind
             n = len(rec["act_exec"])
             total += n
             approach = {}
@@ -1623,8 +1731,10 @@ def run_record(env, agent, pxr, server, out_root):
             ret, ret_d = episode_returns(rec["reward"], RECORD_GAMMA)
             episodes.append({"seed": sid, "mode": mode, "sigma": sigma, "end": end,
                              "path_m": round(path_m, 2), "steps": n,
-                             "return": round(ret, 3), "return_disc": round(ret_d, 3), **approach})
-            if keep_episode(n) and not EXPERT_RECORD_DRY:
+                             "return": round(ret, 3), "return_disc": round(ret_d, 3), **approach,
+                             **({} if nav is None else {"map_leg": seg, "map_node": leg_node,
+                                                        "route_seed": seed, **map_row})})
+            if keep_episode(n) and not EXPERT_RECORD_DRY and end != "map_lost":
                 save_episode(os.path.join(root, f"ep_{sid}.npz"), {
                     "frames": np.stack(rec["frames"]), "binoc": np.stack(rec["binoc"]),
                     "act_exec": np.asarray(rec["act_exec"], np.float32),
@@ -1641,7 +1751,12 @@ def run_record(env, agent, pxr, server, out_root):
                   f"steps={n} driven={path_m:.1f} m return={ret:.2f} disc={ret_d:.2f}"
                   + (f" closest={approach['closest_m']} m at {approach['speed_at_closest_kmh']} km/h"
                      f" entry={approach['entry_speed_kmh']}" if approach else "")
+                  + ("" if nav is None else f" | route {routes} leg {seg} node {leg_node}")
                   + f" | total {total} steps", flush=True)
+            if end == "subgoal":
+                seg += 1                  # the next leg: the same car drives on, no reset
+                obs["binoc"] = _leg_goal(nav, final_frame, info)
+                continue
             if not chain_continues(EXPERT_RECORD_CHAIN, mode, end, info):
                 break
             obs, info = env.reset()       # soft reset: the same car, the next goal
@@ -1658,6 +1773,19 @@ def run_record(env, agent, pxr, server, out_root):
     summary = {"town": town, "driver": EXPERT_DRIVER, "dry": EXPERT_RECORD_DRY,
                "seed0": EXPERT_SEED0, "target_kmh": EXPERT_TARGET_KMH,
                "steps": total, "kept_steps": kept, "gate": gate, "episodes": episodes}
+    if EXPERT_RECORD_MAP:
+        summary["map"] = {"map_dir": EVAL_MAP_DIR, "routes": routes,
+                          "seeds_tried": routes + len(map_skipped),
+                          "min_turns": EXPERT_RECORD_MAP_MIN_TURNS,
+                          "max_ratio": EXPERT_RECORD_MAP_MAX_RATIO,
+                          "lost_m": EXPERT_RECORD_MAP_LOST_M,
+                          "switch_m": EVAL_MAP_SWITCH_M, "start_m": EVAL_MAP_START_M,
+                          "goal_m": EVAL_MAP_GOAL_M, "lookahead_m": EVAL_MAP_LOOKAHEAD_M}
+        summary["map_skipped"] = map_skipped
+        print(f"[RecordMap] {routes} routes recorded from {routes + len(map_skipped)} seeds; "
+              f"skipped: " + json.dumps({w: sum(1 for s in map_skipped if s["why"] == w)
+                                         for w in sorted({s["why"] for s in map_skipped})}),
+              flush=True)
     os.makedirs(out_root, exist_ok=True)
     with open(os.path.join(out_root, "record_summary.json"), "w") as fh:
         json.dump(summary, fh, indent=1)

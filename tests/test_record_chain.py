@@ -45,7 +45,8 @@ def test_run_record_uses_them_only_when_asked():
     rec = SRC[SRC.index("def run_record("):]
     rec = rec[:rec.index("\ndef ", 10)]
     assert "chain_continues(EXPERT_RECORD_CHAIN, mode, end, info)" in rec
-    assert "chain_segment_id(seed, seg) if EXPERT_RECORD_CHAIN else seed" in rec
+    # segment ids for chained goals, or (B2) map-subgoal legs -- never otherwise
+    assert "chain_segment_id(seed, seg) if EXPERT_RECORD_CHAIN or EXPERT_RECORD_MAP else seed" in rec
     assert "env.reset()" in rec and 'info.get("chain_soft_reset")' in rec
     # a new goal: the expert re-plans to it and the policy's memory restarts
     i = rec.index('info.get("chain_soft_reset")')

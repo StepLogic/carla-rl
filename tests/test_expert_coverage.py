@@ -96,7 +96,8 @@ def test_the_label_stays_clean_under_every_perturbation():
 
 def test_the_recorder_wires_coverage_and_a_dry_run_never_perturbs():
     s = open(os.path.join(ROOT, "train_carla_sac.py")).read()
-    rec = s[s.index("def run_record("):s.index("def run_record(") + 9000]
+    rec = s[s.index("def run_record("):]
+    rec = rec[:rec.index("\ndef ", 10)]                      # the whole function
     assert "burst.reset()" in rec                            # per episode
     assert "throttle_sigma=throttle_sigma, burst=burst" in rec
     from train_carla_sac import coverage_perturbation

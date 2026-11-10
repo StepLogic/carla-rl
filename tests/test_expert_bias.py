@@ -70,7 +70,8 @@ def test_episode_returns_are_the_sum_and_the_discounted_sum():
 
 def test_the_recorder_wires_the_bias_and_logs_returns():
     s = open(os.path.join(ROOT, "train_carla_sac.py")).read()
-    rec = s[s.index("def run_record("):s.index("def run_record(") + 11000]
+    rec = s[s.index("def run_record("):]
+    rec = rec[:rec.index("\ndef ", 10)]                      # the whole function
     assert "bias = expert_bias()" in rec
     assert "burst=burst, bias=bias" in rec
     assert 'episode_returns(rec["reward"], RECORD_GAMMA)' in rec

@@ -155,6 +155,41 @@ def chain_continues(chain_on, mode, end, info):
             and bool(info.get("chain_continue")))
 
 
+def map_route_metres(node_xy, route, start_xy, goal_xy):
+    """Metres of a MAP route as the car would drive it (EXPERT_RECORD_MAP, plan
+    2026-11-09 B2): car -> first node -> ... along node positions -> last node ->
+    goal. The image maps' edge costs are unit hops, not metres, so they cannot
+    give this."""
+    xy = np.asarray(node_xy, np.float64)[list(route)]
+    s = np.asarray(start_xy, np.float64)[:2]
+    g = np.asarray(goal_xy, np.float64)[:2]
+    along = float(np.hypot(*np.diff(xy, axis=0).T).sum()) if len(xy) > 1 else 0.0
+    return float(np.hypot(*(xy[0] - s)) + along + np.hypot(*(xy[-1] - g)))
+
+
+def map_route_skip(route, map_m, road_m, turns, min_turns=1, max_ratio=1.2,
+                   max_legs=CHAIN_SEGMENTS_MAX):
+    """-> None to record a map-subgoal episode, else why it is skipped.
+
+    The expert drives the planner's ROAD route to the real goal while the goal
+    images follow the MAP route, so the two must agree: a map route with at least
+    one subgoal node ("no_route"), no more legs than shard ids ("legs": one leg per
+    node after the start plus the final one), a road route ("no_road"), at least
+    `min_turns` junction turns on it ("turns"), and a map route no longer than
+    `max_ratio` x the road route ("detour")."""
+    if route is None or len(route) < 2:
+        return "no_route"
+    if len(route) > int(max_legs):
+        return "legs"
+    if road_m is None or road_m <= 0:
+        return "no_road"
+    if int(turns) < int(min_turns):
+        return "turns"
+    if map_m is None or float(map_m) > float(max_ratio) * float(road_m):
+        return "detour"
+    return None
+
+
 def keep_episode(n_steps):
     """An episode with no recorded step (no plan at step 0) is discarded."""
     return int(n_steps) > 0

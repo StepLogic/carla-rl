@@ -1,21 +1,23 @@
 % Key nodes inside a junction (CARLA is_junction at each node position, projected to the
 % nearest driving lane). Maps: checkpoints/maps_expert_jx_img_z25 (MAD z=2.5), key nodes
-% only; uniform and SGM are count-matched to entropy. Trace = the same test over the
-% drive's candidate frames, 0.5 m apart (unchanged by z: 894/3664 and 6455/16242).
+% only; uniform, SGM and random are matched to entropy's key count.
 % Source: scripts/junction_count_offline.py, 2026-11-10. Requires \usepackage{booktabs}.
 \begin{table}[t]
 \centering
-\caption{Key nodes inside a junction. Trace: the drive's candidate frames, 0.5\,m apart.
-Uniform and SGM are matched to entropy's key count.}
+\caption{Key nodes inside a junction. Trace: the drive's candidate frames, 0.5\,m apart,
+which is the base rate. Uniform, SGM and random are matched to entropy's key count
+(96 in Town02, 323 in Town03); the matched uniform spacing is 26.8\,m and 21.6\,m.}
 \label{tab:junction_nodes}
 \begin{tabular}{lrr}
 \toprule
 Placement & Town02 & Town03 \\
 \midrule
-Trace   & 24.4\% & 39.7\% \\
+Trace   & 894/3664 (24.4\%) & 6454/16242 (39.7\%) \\
+\midrule
 Entropy & 45/96 (46.9\%) & 175/323 (54.2\%) \\
 Uniform & 27/96 (28.1\%) & 110/323 (34.1\%) \\
 SGM     & 21/96 (21.9\%) & 115/323 (35.6\%) \\
+Random  & 20/96 (20.8\%) & 133/323 (41.2\%) \\
 \bottomrule
 \end{tabular}
 \end{table}

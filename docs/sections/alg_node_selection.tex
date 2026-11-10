@@ -1,6 +1,9 @@
 \begin{algorithm}[t]
-\caption{Causal entropy-based key-node selection. $\max$ and $\min$ over an
-empty set are $-\infty$ and $+\infty$.}
+\caption{Causal entropy-based key-node selection. The selection loop is
+causal: it reads only earlier candidates. The descriptor vocabulary behind $s$ and
+the threshold $\tau$ are fitted on the completed drive, so the pipeline as a whole
+is not online; a deployable version needs a vocabulary and a threshold fixed in
+advance. $\max$ and $\min$ over an empty set are $-\infty$ and $+\infty$.}
 \label{alg:node-selection}
 \begin{algorithmic}[1]
 \Require exploration drive $o_1,\dots,o_T$ with poses $p_t$, headings $\psi_t$ and

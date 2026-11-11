@@ -57,6 +57,7 @@ class LoopSettings:
     replay_device: str = ""             # "" = device
     seed: int = 0
     entropy_anneal: float = 25e-7       # FastRLAP: target_entropy -= 25e-7 per step
+    expert: str = ""                    # FastRLAP's expert replay (torch_rl/frl/expert.py); "" = none
 
     @classmethod
     def from_env(cls, env=None) -> "LoopSettings":
@@ -331,7 +332,8 @@ def _mode(obs) -> int:
 
 def train(env, obs, info, out: str, *, trunk: C0Trunk, row_of: Callable, settings: LoopSettings,
           c0_dir: str, log: Callable = print, probe: Optional[SteerProbe] = None,
-          to_env: Callable = box_map, ramp=None, rebuild_env: Optional[Callable] = None):
+          to_env: Callable = box_map, ramp=None, rebuild_env: Optional[Callable] = None,
+          expert=None):
     """FastRLAP's online loop on the CARLA env; returns (learner, replay, the live env). `ramp`
     (a torch_rl.junction_ramp.JunctionRamp or None): the task's junction curriculum, fed every
     finished GOAL episode the actor drove, as the parallel loop feeds it. `rebuild_env` (None =
@@ -417,6 +419,12 @@ def train(env, obs, info, out: str, *, trunk: C0Trunk, row_of: Callable, setting
             o_t = o_n
         if step >= s.start_training:
             upd = learner.update(rb.sample(s.batch), utd_ratio=s.utd)
+            if expert is not None:
+                # FastRLAP: a second update on the fixed expert replay, temperature untouched
+                from torch_rl.frl import expert as _fx
+                xinfo = _fx.expert_update(learner, expert, s.batch, s.utd)
+                upd.update({f"x_{key}": xinfo[key] for key in ("critic_loss", "q", "actor_loss")
+                            if key in xinfo})
         if step % s.log_every == 0:
             g, e = recent["goal"], recent["explore"]
             mean = lambda xs, j: float(np.mean([x[j] for x in xs])) if xs else float("nan")
@@ -460,6 +468,17 @@ def run_carla(env, obs, info, server, out: str, *, row_of: Callable, to_env: Cal
     cache = os.environ.get("FRL_PROBE_CACHE", "")
     probe = SteerProbe(cache, s.device) if cache else None
     box = env.action_space
+    expert = None
+    if s.expert:
+        from torch_rl.carla_env_build import action_repeat
+        from torch_rl.frl.expert import ExpertReplay
+        expert = ExpertReplay.load(s.expert, seed=s.seed)
+        if expert.k != action_repeat():
+            raise SystemExit(f"FRL_EXPERT {s.expert} was built at action repeat {expert.k}; this run "
+                             f"acts at ACTION_REPEAT={action_repeat()}")
+        if expert.c0_md5 != params_md5(c0_dir):
+            raise SystemExit(f"FRL_EXPERT {s.expert} was built on c0 md5 {expert.c0_md5}; this run's "
+                             f"trunk is {params_md5(c0_dir)}")
     ramp = make_ramp()
     if ramp is not None:
         obs, info = env.reset()       # main drew the first goal at the target fraction
@@ -486,13 +505,16 @@ def run_carla(env, obs, info, server, out: str, *, row_of: Callable, to_env: Cal
         + " ".join(f"{k}={e(k)}" for k in ("MAX_STEPS", "CKPT_EVERY", "LEARNING_STARTS",
                                            "UPDATE_EVERY", "REPLAY_CAPACITY") if e(k)))
     log(f"  env rebuild on a failed reset: {'on' if rebuild_env else 'OFF'}")
+    log(f"  EXPERT REPLAY (FastRLAP's second update per step, temperature untouched): "
+        + (f"{s.expert}: {len(expert)} transitions at k={expert.k}, {expert.meta}" if expert
+           else "OFF"))
     log(f"  probe: {cache or 'OFF'} | checkpoints -> {out}")
     t0 = time.time()
     live = env
     try:
         _, _, live = train(env, obs, info, out, trunk=trunk, row_of=row_of, settings=s,
                            c0_dir=c0_dir, log=log, probe=probe, to_env=to_env, ramp=ramp,
-                           rebuild_env=rebuild_env)
+                           rebuild_env=rebuild_env, expert=expert)
     finally:
         try:
             live.close()

@@ -58,6 +58,9 @@ class LoopSettings:
     seed: int = 0
     entropy_anneal: float = 25e-7       # FastRLAP: target_entropy -= 25e-7 per step
     expert: str = ""                    # FastRLAP's expert replay (torch_rl/frl/expert.py); "" = none
+    actor: str = "frl"                  # "frl" = learner C's own actor; "c0" = c0's head (C0HeadActor)
+    actor_freeze: int = 0               # training steps after start_training with critic-only updates
+    random_start: int = 1               # 1 = uniform-random actions before start_training (FastRLAP)
 
     @classmethod
     def from_env(cls, env=None) -> "LoopSettings":
@@ -220,13 +223,59 @@ class FeatureReplay:
                 "actions": self.act[idx], "rewards": self.rew[idx], "masks": self.mask[idx]}
 
 
-def make_learner(emb_dim: int, state_dim: int, action_dim: int, device, seed: int = 0):
+class C0HeadActor(torch.nn.Module):
+    """c0's own actor head -- a TRAINABLE COPY -- as learner C's actor (user 2026-11-11: "but the actor
+    shares same frontend"). It reads c0's input, [GRU | mode, speed | binoc], uncompressed, in c0's order,
+    so at step 0 the RL policy is c0 exactly; the critic keeps learner C's own (compressed) view."""
+
+    def __init__(self, c0_actor: torch.nn.Module, hidden_dim: int):
+        super().__init__()
+        import copy
+        self.net = copy.deepcopy(c0_actor)
+        for p in self.net.parameters():
+            p.requires_grad_(True)
+        self.hidden_dim = int(hidden_dim)
+
+    def c0_input(self, obs) -> torch.Tensor:
+        e, st = obs["embeddings"].float(), obs["states"].float()
+        return torch.cat([e[:, :self.hidden_dim], st, e[:, self.hidden_dim:]], dim=-1)
+
+    def sample(self, obs):
+        """-> (action, log pi(action), deterministic action tanh(mean)), learner C's actor API."""
+        x = self.c0_input(obs)
+        a, logp = self.net.sample(x)
+        return a, logp, torch.tanh(self.net(x)[0])
+
+
+def make_learner(emb_dim: int, state_dim: int, action_dim: int, device, seed: int = 0,
+                 actor: str = "frl", trunk: Optional[C0Trunk] = None):
+    """Learner C. actor="c0": its actor is replaced by a trainable copy of c0's head (C0HeadActor)."""
     from torch_rl.frl.learner import SACLearner
     learner = SACLearner(action_dim=action_dim, embedding_dim=emb_dim, state_dim=state_dim,
                          latent_dim=LATENT_DIM, seed=seed, device=str(device), **REDQ)
+    if actor == "c0":
+        if trunk is None:
+            raise ValueError("actor='c0' needs the c0 trunk (its head is copied from it)")
+        learner.actor = C0HeadActor(trunk.agent.actor, trunk.hidden_dim).to(learner.device)
+        learner.actor_opt = torch.optim.Adam(learner.actor.parameters(), lr=REDQ["actor_lr"])
+    elif actor != "frl":
+        raise ValueError(f"actor={actor!r}: 'frl' or 'c0'")
     learner.dims = {"emb_dim": int(emb_dim), "state_dim": int(state_dim),
-                    "action_dim": int(action_dim)}
+                    "action_dim": int(action_dim), "actor": actor}
     return learner
+
+
+def critic_only_update(learner, batch: Dict, utd: int) -> Dict:
+    """The critic part of learner.update alone -- utd minibatches, Polyak after each -- with the actor and
+    the temperature untouched: the warm start's freeze, while a fresh critic learns c0's values."""
+    from torch_rl.frl.learner import _slice, _to
+    batch = _to(batch, learner.device)
+    n = int(batch["rewards"].shape[0])
+    bs = n // int(utd)
+    info = {}
+    for i in range(int(utd)):
+        info = learner.update_critic(_slice(batch, i * bs, (i + 1) * bs))
+    return info
 
 
 class FrlC0Policy:
@@ -292,7 +341,8 @@ def load_policy(d: str, device) -> FrlC0Policy:
     if (trunk.emb_dim, trunk.state_dim) != (meta["emb_dim"], meta["state_dim"]):
         raise ValueError(f"c0 trunk dims {(trunk.emb_dim, trunk.state_dim)} != the "
                          f"checkpoint's {(meta['emb_dim'], meta['state_dim'])}")
-    learner = make_learner(meta["emb_dim"], meta["state_dim"], meta["action_dim"], device)
+    learner = make_learner(meta["emb_dim"], meta["state_dim"], meta["action_dim"], device,
+                           actor=meta.get("actor", "frl"), trunk=trunk)
     state = torch.load(os.path.join(d, "params.pt"), map_location=str(device))
     learner.actor.load_state_dict(state["actor"])
     return FrlC0Policy(trunk, learner.actor)
@@ -333,7 +383,7 @@ def _mode(obs) -> int:
 def train(env, obs, info, out: str, *, trunk: C0Trunk, row_of: Callable, settings: LoopSettings,
           c0_dir: str, log: Callable = print, probe: Optional[SteerProbe] = None,
           to_env: Callable = box_map, ramp=None, rebuild_env: Optional[Callable] = None,
-          expert=None):
+          expert=None, learner=None):
     """FastRLAP's online loop on the CARLA env; returns (learner, replay, the live env). `ramp`
     (a torch_rl.junction_ramp.JunctionRamp or None): the task's junction curriculum, fed every
     finished GOAL episode the actor drove, as the parallel loop feeds it. `rebuild_env` (None =
@@ -360,7 +410,9 @@ def train(env, obs, info, out: str, *, trunk: C0Trunk, row_of: Callable, setting
     s = settings
     box = env.action_space
     act_dim = int(box.shape[0])
-    learner = make_learner(trunk.emb_dim, trunk.state_dim, act_dim, s.device, s.seed)
+    if learner is None:
+        learner = make_learner(trunk.emb_dim, trunk.state_dim, act_dim, s.device, s.seed,
+                               actor=s.actor, trunk=trunk)
     rb = FeatureReplay(s.replay, trunk.emb_dim, trunk.state_dim, act_dim,
                        s.replay_device or s.device, s.seed)
     rng = np.random.default_rng(s.seed)
@@ -374,7 +426,7 @@ def train(env, obs, info, out: str, *, trunk: C0Trunk, row_of: Callable, setting
     upd, t0 = {}, time.time()
     for step in range(1, s.max_steps + 1):
         learner.target_entropy -= s.entropy_anneal
-        if step < s.start_training:
+        if step < s.start_training and s.random_start:
             a = rng.uniform(-1.0, 1.0, act_dim).astype(np.float32)
         else:
             a = learner.sample_actions(o_t)[0].astype(np.float32)
@@ -418,11 +470,16 @@ def train(env, obs, info, out: str, *, trunk: C0Trunk, row_of: Callable, setting
                 mode, ep_ret, ep_len = _mode(obs), 0.0, 0
             o_t = o_n
         if step >= s.start_training:
-            upd = learner.update(rb.sample(s.batch), utd_ratio=s.utd)
+            frozen = step < s.start_training + s.actor_freeze
+            if frozen:                    # warm start: the critic learns alone first
+                upd = critic_only_update(learner, rb.sample(s.batch), s.utd)
+            else:
+                upd = learner.update(rb.sample(s.batch), utd_ratio=s.utd)
             if expert is not None:
                 # FastRLAP: a second update on the fixed expert replay, temperature untouched
                 from torch_rl.frl import expert as _fx
-                xinfo = _fx.expert_update(learner, expert, s.batch, s.utd)
+                xinfo = (critic_only_update(learner, expert.sample(s.batch), s.utd) if frozen
+                         else _fx.expert_update(learner, expert, s.batch, s.utd))
                 upd.update({f"x_{key}": xinfo[key] for key in ("critic_loss", "q", "actor_loss")
                             if key in xinfo})
         if step % s.log_every == 0:
@@ -505,6 +562,9 @@ def run_carla(env, obs, info, server, out: str, *, row_of: Callable, to_env: Cal
         + " ".join(f"{k}={e(k)}" for k in ("MAX_STEPS", "CKPT_EVERY", "LEARNING_STARTS",
                                            "UPDATE_EVERY", "REPLAY_CAPACITY") if e(k)))
     log(f"  env rebuild on a failed reset: {'on' if rebuild_env else 'OFF'}")
+    log(f"  ACTOR: {'c0 head (trainable copy; the RL policy starts as c0)' if s.actor == 'c0' else 'learner C (from scratch)'}"
+        f" | critic-only steps after start_training: {s.actor_freeze} | random start: "
+        f"{'on' if s.random_start else 'OFF (the actor drives from step 1)'}")
     log(f"  EXPERT REPLAY (FastRLAP's second update per step, temperature untouched): "
         + (f"{s.expert}: {len(expert)} transitions at k={expert.k}, {expert.meta}" if expert
            else "OFF"))

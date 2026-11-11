@@ -179,8 +179,10 @@ class SACLearner:
             mb = _slice(batch, i * bs, (i + 1) * bs)
             critic_info = self.update_critic(mb)
         actor_info = self.update_actor(mb)                 # the LAST minibatch, as the reference
+        # NaN entropy = the reference minibatch held no rows of the agent's own (all expert rows
+        # pinned in the replay): the temperature is left alone for this update.
         temp_info = (self.update_temperature(actor_info["entropy"])
-                     if update_temperature else {})
+                     if update_temperature and not np.isnan(actor_info["entropy"]) else {})
         return {**actor_info, **critic_info, **temp_info}
 
     def update_critic(self, mb: Dict) -> Dict:
@@ -212,7 +214,14 @@ class SACLearner:
         finally:
             for p in crit:
                 p.requires_grad_(True)
-        return {"actor_loss": float(loss), "entropy": float(-logp.detach().mean())}
+        # The entropy that tunes the temperature: over the minibatch, or -- when the batch marks
+        # which rows the agent collected itself ("online", expert rows pinned in the replay) --
+        # over its own rows only: recorded rows never move the temperature (user rule 2026-11-07).
+        lp = logp.detach()
+        if "online" in mb:
+            lp = lp[mb["online"].to(lp.device).bool()]
+        entropy = float(-lp.mean()) if lp.numel() else float("nan")
+        return {"actor_loss": float(loss), "entropy": entropy}
 
     def update_temperature(self, entropy: float) -> Dict:
         loss = temperature_loss(self.log_temp, entropy, self.target_entropy)

@@ -61,6 +61,14 @@ class LoopSettings:
     actor: str = "frl"                  # "frl" = learner C's own actor; "c0" = c0's head (C0HeadActor)
     actor_freeze: int = 0               # training steps after start_training with critic-only updates
     random_start: int = 1               # 1 = uniform-random actions before start_training (FastRLAP)
+    # How the expert replay is used: "update" = FastRLAP's second update per step on a separate expert
+    # batch; "pinned" = the expert rows sit in the main replay, never overwritten, sampled uniformly with
+    # the RL's own rows, the temperature tuned on the RL's own rows only (user 2026-11-11).
+    expert_mode: str = "update"
+
+    def __post_init__(self):
+        if self.expert_mode not in ("update", "pinned"):
+            raise ValueError(f"expert_mode={self.expert_mode!r}: 'update' or 'pinned'")
 
     @classmethod
     def from_env(cls, env=None) -> "LoopSettings":
@@ -99,6 +107,8 @@ def frl_refusals(towns, parallel: bool, env=None) -> list:
     for k in ("MONO_CHW", "SPEED_OBS"):
         if str(env.get(k, "")).strip() != "1":
             out.append(f"{k}={env.get(k)}: c0's trunk reads {k}=1 rows")
+    if str(env.get("FRL_EXPERT_MODE", "")).strip() == "pinned" and not env.get("FRL_EXPERT"):
+        out.append("FRL_EXPERT_MODE=pinned with no FRL_EXPERT: there are no expert rows to pin")
     return out
 
 
@@ -183,28 +193,44 @@ class C0Trunk:
 
 class FeatureReplay:
     """Uniform transition replay of learner C's inputs (FastRLAP's ReplayBuffer: sampled
-    uniformly with replacement); embeddings stored float16, like the offline cache."""
+    uniformly with replacement); embeddings stored float16, like the offline cache.
+
+    pinned: expert transitions (torch_rl/frl/expert.ExpertReplay's arrays) held in the first rows,
+    NEVER overwritten (the prerecorded-data rule); the RL's own transitions fill a ring of
+    `capacity` rows after them. Sampling is uniform over all rows held; each batch marks the
+    RL's own rows in "online" (bool), which is what the temperature is tuned on."""
 
     def __init__(self, capacity: int, emb_dim: int, state_dim: int, action_dim: int, device,
-                 seed: int = 0):
+                 seed: int = 0, pinned: Optional[Dict] = None):
         dev = torch.device(device)
         c = int(capacity)
-        self.capacity = c
-        self.emb = torch.zeros(c, emb_dim, dtype=torch.float16, device=dev)
-        self.next_emb = torch.zeros(c, emb_dim, dtype=torch.float16, device=dev)
-        self.st = torch.zeros(c, state_dim, device=dev)
-        self.next_st = torch.zeros(c, state_dim, device=dev)
-        self.act = torch.zeros(c, action_dim, device=dev)
-        self.rew = torch.zeros(c, device=dev)
-        self.mask = torch.zeros(c, device=dev)
-        self.n = self.i = 0
+        p = 0 if pinned is None else int(pinned["rewards"].shape[0])
+        self.capacity, self.n_pinned = c, p
+        rows = p + c
+        self.emb = torch.zeros(rows, emb_dim, dtype=torch.float16, device=dev)
+        self.next_emb = torch.zeros(rows, emb_dim, dtype=torch.float16, device=dev)
+        self.st = torch.zeros(rows, state_dim, device=dev)
+        self.next_st = torch.zeros(rows, state_dim, device=dev)
+        self.act = torch.zeros(rows, action_dim, device=dev)
+        self.rew = torch.zeros(rows, device=dev)
+        self.mask = torch.zeros(rows, device=dev)
+        if p:
+            for dst, key in ((self.emb, "emb"), (self.next_emb, "next_emb"), (self.st, "states"),
+                             (self.next_st, "next_states"), (self.act, "actions"),
+                             (self.rew, "rewards"), (self.mask, "masks")):
+                src = torch.as_tensor(pinned[key])
+                if tuple(src.shape[1:]) != tuple(dst.shape[1:]):
+                    raise ValueError(f"pinned {key} rows {tuple(src.shape[1:])} != the replay's "
+                                     f"{tuple(dst.shape[1:])}")
+                dst[:p] = src.to(dev, dst.dtype)
+        self.n = self.i = 0                          # the RL's own rows held / next ring slot
         self.rng = np.random.default_rng(seed)
 
     def __len__(self) -> int:
-        return self.n
+        return self.n_pinned + self.n
 
     def add(self, obs, action, reward: float, mask: float, next_obs) -> None:
-        i = self.i
+        i = self.n_pinned + self.i
         self.emb[i] = obs["embeddings"][0]
         self.st[i] = obs["states"][0]
         self.next_emb[i] = next_obs["embeddings"][0]
@@ -212,15 +238,17 @@ class FeatureReplay:
         self.act[i] = torch.as_tensor(np.asarray(action, np.float32))
         self.rew[i] = float(reward)
         self.mask[i] = float(mask)
-        self.i = (i + 1) % self.capacity
+        self.i = (self.i + 1) % self.capacity
         self.n = min(self.n + 1, self.capacity)
 
     def sample(self, batch: int) -> Dict:
-        idx = torch.as_tensor(self.rng.integers(0, self.n, size=int(batch)), device=self.emb.device)
+        idx = torch.as_tensor(self.rng.integers(0, len(self), size=int(batch)),
+                              device=self.emb.device)
         return {"observations": {"embeddings": self.emb[idx].float(), "states": self.st[idx]},
                 "next_observations": {"embeddings": self.next_emb[idx].float(),
                                       "states": self.next_st[idx]},
-                "actions": self.act[idx], "rewards": self.rew[idx], "masks": self.mask[idx]}
+                "actions": self.act[idx], "rewards": self.rew[idx], "masks": self.mask[idx],
+                "online": idx >= self.n_pinned}
 
 
 class C0HeadActor(torch.nn.Module):
@@ -413,8 +441,10 @@ def train(env, obs, info, out: str, *, trunk: C0Trunk, row_of: Callable, setting
     if learner is None:
         learner = make_learner(trunk.emb_dim, trunk.state_dim, act_dim, s.device, s.seed,
                                actor=s.actor, trunk=trunk)
+    pinned = expert is not None and s.expert_mode == "pinned"
+    # pinned: the expert rows sit in THIS replay (never overwritten) and there is no second update
     rb = FeatureReplay(s.replay, trunk.emb_dim, trunk.state_dim, act_dim,
-                       s.replay_device or s.device, s.seed)
+                       s.replay_device or s.device, s.seed, pinned=expert.t if pinned else None)
     rng = np.random.default_rng(s.seed)
     torch.manual_seed(s.seed)
     hidden = trunk.zero_hidden()
@@ -475,7 +505,7 @@ def train(env, obs, info, out: str, *, trunk: C0Trunk, row_of: Callable, setting
                 upd = critic_only_update(learner, rb.sample(s.batch), s.utd)
             else:
                 upd = learner.update(rb.sample(s.batch), utd_ratio=s.utd)
-            if expert is not None:
+            if expert is not None and not pinned:
                 # FastRLAP: a second update on the fixed expert replay, temperature untouched
                 from torch_rl.frl import expert as _fx
                 xinfo = (critic_only_update(learner, expert.sample(s.batch), s.utd) if frozen
@@ -565,7 +595,11 @@ def run_carla(env, obs, info, server, out: str, *, row_of: Callable, to_env: Cal
     log(f"  ACTOR: {'c0 head (trainable copy; the RL policy starts as c0)' if s.actor == 'c0' else 'learner C (from scratch)'}"
         f" | critic-only steps after start_training: {s.actor_freeze} | random start: "
         f"{'on' if s.random_start else 'OFF (the actor drives from step 1)'}")
-    log(f"  EXPERT REPLAY (FastRLAP's second update per step, temperature untouched): "
+    how = ({"update": "FastRLAP's second update per step on an expert batch, temperature untouched",
+            "pinned": "PINNED in the main replay: never overwritten, sampled uniformly with the RL's own "
+                      "rows, no second update, temperature tuned on the RL's own rows only"}
+           [s.expert_mode])
+    log(f"  EXPERT REPLAY ({how}): "
         + (f"{s.expert}: {len(expert)} transitions at k={expert.k}, {expert.meta}" if expert
            else "OFF"))
     log(f"  probe: {cache or 'OFF'} | checkpoints -> {out}")

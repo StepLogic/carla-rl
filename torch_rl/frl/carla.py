@@ -71,6 +71,9 @@ class LoopSettings:
     # A checkpoint dir to resume from (train_parallel; user 2026-11-12 "resume current run with new code"):
     # the whole learner and the step count are restored; the replay is not in a checkpoint and starts fresh.
     resume: str = ""
+    # 1 = the critic's heads computed in one batched pass (networks.EnsembleQ.batched): the same weights
+    # and numbers, faster; a compute layout, so a resumed run may change it.
+    batched_heads: int = 0
 
     def __post_init__(self):
         if self.expert_mode not in ("update", "pinned"):
@@ -281,11 +284,13 @@ class C0HeadActor(torch.nn.Module):
 
 
 def make_learner(emb_dim: int, state_dim: int, action_dim: int, device, seed: int = 0,
-                 actor: str = "frl", trunk: Optional[C0Trunk] = None):
-    """Learner C. actor="c0": its actor is replaced by a trainable copy of c0's head (C0HeadActor)."""
+                 actor: str = "frl", trunk: Optional[C0Trunk] = None, batched_heads: bool = False):
+    """Learner C. actor="c0": its actor is replaced by a trainable copy of c0's head (C0HeadActor).
+    batched_heads: the critic's heads in one batched pass (the same weights and numbers, faster)."""
     from torch_rl.frl.learner import SACLearner
     learner = SACLearner(action_dim=action_dim, embedding_dim=emb_dim, state_dim=state_dim,
-                         latent_dim=LATENT_DIM, seed=seed, device=str(device), **REDQ)
+                         latent_dim=LATENT_DIM, seed=seed, device=str(device),
+                         batched_heads=bool(batched_heads), **REDQ)
     if actor == "c0":
         if trunk is None:
             raise ValueError("actor='c0' needs the c0 trunk (its head is copied from it)")
@@ -459,7 +464,7 @@ def train(env, obs, info, out: str, *, trunk: C0Trunk, row_of: Callable, setting
     act_dim = int(box.shape[0])
     if learner is None:
         learner = make_learner(trunk.emb_dim, trunk.state_dim, act_dim, s.device, s.seed,
-                               actor=s.actor, trunk=trunk)
+                               actor=s.actor, trunk=trunk, batched_heads=bool(s.batched_heads))
     pinned = expert is not None and s.expert_mode == "pinned"
     # pinned: the expert rows sit in THIS replay (never overwritten) and there is no second update
     rb = FeatureReplay(s.replay, trunk.emb_dim, trunk.state_dim, act_dim,
@@ -597,7 +602,7 @@ def _learn_step(learner, rb, expert, pinned: bool, s: LoopSettings, step: int) -
 # Settings a resumed run may change: run length and cadence, devices, the loop, the resume itself (and
 # the seed, whose streams cannot be continued anyway). Every other LoopSettings field must match.
 RESUME_MAY_DIFFER = ("max_steps", "ckpt_every", "log_every", "device", "replay_device", "parallel",
-                     "resume", "seed", "expert")
+                     "resume", "seed", "expert", "batched_heads")
 
 
 def restore_learner(learner, ckpt_dir: str, s: LoopSettings, c0_dir: str) -> int:
@@ -677,7 +682,7 @@ def train_parallel(env, obs, info, out: str, *, trunk: C0Trunk, row_of: Callable
     act_dim = int(box.shape[0])
     if learner is None:
         learner = make_learner(trunk.emb_dim, trunk.state_dim, act_dim, s.device, s.seed,
-                               actor=s.actor, trunk=trunk)
+                               actor=s.actor, trunk=trunk, batched_heads=bool(s.batched_heads))
     pinned = expert is not None and s.expert_mode == "pinned"
     # RESUME: the whole learner and the step count from a checkpoint; the replay is not in it, so it starts
     # fresh, and the random streams are reseeded past the resumed step (they cannot be continued).

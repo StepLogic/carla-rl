@@ -64,9 +64,14 @@ class EnsembleQ(nn.Module):
 
     def __init__(self, obs_dim: int, action_dim: int, num_qs: int = 10,
                  hidden_dims: Sequence[int] = (256, 256), use_layer_norm: bool = False,
-                 dropout_rate: Optional[float] = None):
+                 dropout_rate: Optional[float] = None, batched: bool = False):
         super().__init__()
         self.num_qs = int(num_qs)
+        # batched (2026-11-12, speed): all heads in one pass over STACKED per-head weights -- the same
+        # parameters, state dict and optimizer state as the loop; dropout is not supported there.
+        if batched and dropout_rate:
+            raise ValueError("batched heads do not support dropout")
+        self.batched = bool(batched)
         self.heads = nn.ModuleList()
         for _ in range(self.num_qs):
             base = MLP(obs_dim + action_dim, hidden_dims, activate_final=True,
@@ -77,7 +82,32 @@ class EnsembleQ(nn.Module):
                 heads: Optional[torch.Tensor] = None) -> torch.Tensor:
         x = torch.cat([obs, action], dim=-1)
         idx = range(self.num_qs) if heads is None else [int(i) for i in heads]
+        if self.batched:
+            return self._forward_batched(x, list(idx))
         return torch.stack([self.heads[i](x).squeeze(-1) for i in idx], dim=0)
+
+    def _forward_batched(self, x: torch.Tensor, idx) -> torch.Tensor:
+        """Every head's MLP at once: each Linear as one matmul over the heads' stacked weights
+        (x @ W^T + b, as nn.Linear), each LayerNorm normalised once and given each head's own affine."""
+        hs = [self.heads[i] for i in idx]
+        h = x.unsqueeze(0)                                            # (1, B, in) -> (H, B, d)
+        for j, layer in enumerate(hs[0][0].net):
+            if isinstance(layer, nn.Linear):
+                w = torch.stack([hd[0].net[j].weight for hd in hs])       # (H, out, in)
+                b = torch.stack([hd[0].net[j].bias for hd in hs])         # (H, out)
+                h = torch.matmul(h, w.transpose(1, 2)) + b.unsqueeze(1)
+            elif isinstance(layer, nn.LayerNorm):
+                w = torch.stack([hd[0].net[j].weight for hd in hs])
+                b = torch.stack([hd[0].net[j].bias for hd in hs])
+                h = F.layer_norm(h, layer.normalized_shape, eps=layer.eps) * w.unsqueeze(1) \
+                    + b.unsqueeze(1)
+            elif isinstance(layer, nn.ReLU):
+                h = F.relu(h)
+            else:
+                raise TypeError(f"batched heads: unsupported layer {type(layer).__name__}")
+        w = torch.stack([hd[1].weight for hd in hs])                      # (H, 1, d)
+        b = torch.stack([hd[1].bias for hd in hs])                        # (H, 1)
+        return (torch.matmul(h, w.transpose(1, 2)) + b.unsqueeze(1)).squeeze(-1)
 
 
 def _log1m_tanh_sq(u: torch.Tensor) -> torch.Tensor:

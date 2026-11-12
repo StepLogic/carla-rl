@@ -95,10 +95,12 @@ def _to(obj, device):
 
 class _Critic(nn.Module):
     def __init__(self, trunk: nn.Module, in_dim: int, action_dim: int, num_qs: int,
-                 hidden_dims: Sequence[int], use_layer_norm: bool, dropout_rate):
+                 hidden_dims: Sequence[int], use_layer_norm: bool, dropout_rate,
+                 batched: bool = False):
         super().__init__()
         self.trunk = trunk
-        self.q = EnsembleQ(in_dim, action_dim, num_qs, hidden_dims, use_layer_norm, dropout_rate)
+        self.q = EnsembleQ(in_dim, action_dim, num_qs, hidden_dims, use_layer_norm, dropout_rate,
+                           batched=batched)
 
     def forward(self, obs: Obs, action: torch.Tensor, heads=None) -> torch.Tensor:
         return self.q(self.trunk(obs), action, heads=heads)
@@ -127,7 +129,7 @@ class SACLearner:
                  critic_dropout_rate: Optional[float] = None, critic_layer_norm: bool = False,
                  target_entropy: Optional[float] = None, init_temperature: float = 1.0,
                  backup_entropy: bool = True, seed: int = 0, device: str = "cpu",
-                 **trunk_kwargs):
+                 batched_heads: bool = False, **trunk_kwargs):
         self.device = torch.device(device)
         torch.manual_seed(int(seed))                  # reproducible initialisation
         self.gen = torch.Generator().manual_seed(int(seed))
@@ -143,7 +145,8 @@ class SACLearner:
             latent_dim=latent_dim, **trunk_kwargs)
         self.actor = _Actor(actor_trunk, in_dim, self.action_dim, hidden_dims).to(self.device)
         self.critic = _Critic(critic_trunk, in_dim, self.action_dim, self.num_qs, hidden_dims,
-                              critic_layer_norm, critic_dropout_rate).to(self.device)
+                              critic_layer_norm, critic_dropout_rate,
+                              batched=batched_heads).to(self.device)
         self.target_critic = copy.deepcopy(self.critic)
         for p in self.target_critic.parameters():
             p.requires_grad_(False)
@@ -232,8 +235,12 @@ class SACLearner:
 
     @torch.no_grad()
     def _polyak(self) -> None:
-        for p, pt in zip(self.critic.parameters(), self.target_critic.parameters()):
-            pt.mul_(1.0 - self.tau).add_(self.tau * p)
+        # target <- target * (1 - tau) + (tau * critic), as grouped (foreach) ops: the same float
+        # operations in the same order as one parameter at a time, so bit-identical, ~100 launches fewer.
+        src = list(self.critic.parameters())
+        dst = list(self.target_critic.parameters())
+        torch._foreach_mul_(dst, 1.0 - self.tau)
+        torch._foreach_add_(dst, torch._foreach_mul(src, self.tau))
 
     # -- acting
     @torch.no_grad()

@@ -15,12 +15,14 @@ class MockTownEnv(Env):
     def __init__(s, town, goal_x):
         s.town, s.goal_x, s.x, s.t = town, goal_x, 0.0, 0
         s.observation_space = spaces.Dict({
-            'goal': spaces.Box(-np.inf,np.inf,(12,),np.float32),
+            # 4-d since the wrapper's goal_block dropped the action history
+            # (it moved to the mode-independent state block, OBS_WITH_STATE=1).
+            'goal': spaces.Box(-np.inf,np.inf,(4,),np.float32),
             'latent': spaces.Box(-np.inf,np.inf,(128,),np.float32)})
         s.action_space = spaces.Box(np.array([-1.,0.],np.float32), np.array([1.,1.],np.float32))
         s.goal_block = lambda f: VAEGoalWrapper.goal_block(s, f)
     def _obs(s):
-        return {'goal': np.array([s.goal_x-s.x,0,0,1,0,0,0,0,0,0,0,0], np.float32),
+        return {'goal': np.array([s.goal_x-s.x,0,0,1], np.float32),
                 'latent': np.zeros(128, np.float32)}
     def _info(s):
         return {'hero_pos': np.array([s.x,0.0]), 'hero_yaw': 0.0,

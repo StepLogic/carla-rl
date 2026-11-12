@@ -1,0 +1,68 @@
+# CARLA 0.9.16 on an NVIDIA GLVND base, so it renders on the GPU under apptainer.
+#
+# User 2026-10-13: use the 0.9.16 container. The official carlasim/carla:0.9.16
+# image cannot: it is built on plain ubuntu:20.04 and ships Mesa's three Vulkan
+# drivers with NO NVIDIA ICD, so Vulkan picks lavapipe and renders on the CPU --
+# zero GPU memory at Low, and at Epic the render thread times out after 60 s and
+# the engine segfaults.
+#
+# WHY A REBUILD RATHER THAN BINDS. Measured on node-g102 over a dozen jobs, the
+# driver itself refuses inside that image: asked directly,
+# vk_icdGetInstanceProcAddr("vkCreateInstance") returns NULL, while the SAME
+# byte-identical driver file in the carlasim/carla:0.9.15 image returns a valid
+# pointer. Supplying the manifest (four variants, including 0.9.15's byte for
+# byte), swapping the Vulkan loader in both directions, masking the Mesa ICDs,
+# shadowing Mesa's GLVND with the host's, and restoring the system library
+# search path all failed identically. The one thing not reproducible with a bind
+# is the base image, and that is exactly what differs:
+#
+#   carlasim/carla:0.9.15  nvidia/cudagl base -- CUDA_VERSION=10.1.243,
+#       NVIDIA_DRIVER_CAPABILITIES=compute,graphics,utility, /usr/local/nvidia
+#       on LD_LIBRARY_PATH, ships /etc/vulkan/icd.d/nvidia_icd.json, no Mesa ICDs
+#   carlasim/carla:0.9.16  ubuntu:20.04 + libsdl2 + xserver-xorg + libvulkan1 +
+#       libomp5 -- Mesa ICDs, no NVIDIA ICD
+#
+# So this takes 0.9.16's simulator and puts it on the base 0.9.15 proves works,
+# keeping 0.9.16's cp310 client wheel -- the only reason 0.9.16 was chosen, since
+# 0.9.15 ships cp27/cp37 only and cannot share an interpreter with torch.
+#
+# The apt list is 0.9.16's own, read out of its build history, minus libvulkan1:
+# the NVIDIA base supplies the loader and its ICD, and installing Ubuntu's would
+# put Mesa's drivers back.
+#
+# build:  docker build -f slurm/Dockerfile.carla0916nv -t carla0916nv:latest .
+# to sif: singularity build carla0916nv.sif docker-daemon://carla0916nv:latest
+FROM nvidia/opengl:1.2-glvnd-runtime-ubuntu20.04
+
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+      libsdl2-2.0-0 xserver-xorg libomp5 xdg-user-dirs ca-certificates \
+ && rm -rf /var/lib/apt/lists/*
+
+# THE NVIDIA ICD MANIFEST. The base does not ship one -- nvidia-docker injects it
+# at run time and apptainer does not -- so it is baked in here, with the content
+# and api_version from the 0.9.15 image that works. VERIFIED (job 453243) on this
+# base at Ubuntu 20.04: vk_icdGetInstanceProcAddr("vkCreateInstance") returns a
+# valid pointer, where on plain ubuntu:20.04 it returns NULL.
+RUN mkdir -p /etc/vulkan/icd.d && printf '%s\n' \
+  '{' \
+  '    "file_format_version" : "1.0.0",' \
+  '    "ICD": {' \
+  '        "library_path": "libGLX_nvidia.so.0",' \
+  '        "api_version" : "1.1.99"' \
+  '    }' \
+  '}' > /etc/vulkan/icd.d/nvidia_icd.json
+
+# 0.9.16's own simulator tree and its python client wheels.
+COPY --from=carlasim/carla:0.9.16 /workspace /workspace
+
+# The official image runs as a non-root user and CarlaUE4.sh chmods its binary;
+# apptainer runs as the invoking user anyway, so ownership is made permissive
+# rather than tied to a uid that will not exist on the cluster.
+RUN chmod -R a+rX /workspace \
+ && chmod a+x /workspace/CarlaUE4.sh \
+ && find /workspace -name 'CarlaUE4-Linux-Shipping' -exec chmod a+x {} +
+
+WORKDIR /workspace
+ENV NVIDIA_DRIVER_CAPABILITIES=all NVIDIA_VISIBLE_DEVICES=all
+CMD ["/bin/bash", "CarlaUE4.sh"]

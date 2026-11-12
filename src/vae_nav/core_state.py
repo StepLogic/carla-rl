@@ -20,6 +20,16 @@ reward that is wrong everywhere and looks merely difficult.
 """
 import math
 
+OBS_PRIV = os.environ.get("OBS_PRIV", "0") == "1"
+# The same block feeds the LANE-CENTRE SHAPING in gated_reward (user 2026-10-25).
+# Published in info only -- the DEBiT observation never reads it -- whenever
+# either cost is on, so turning the cost on cannot leave it reading nothing.
+LANE_GEOM = (OBS_PRIV
+             or float(os.environ.get("LANE_CENTRE_K", 0.0) or 0.0) > 0.0
+             or float(os.environ.get("LANE_HEADING_K", 0.0) or 0.0) > 0.0)
+
+GOAL_ZONE_M = float(os.environ.get("GOAL_ZONE_M", 0.0) or 0.0)
+
 import numpy as np
 
 try:
@@ -70,9 +80,39 @@ class CoreStateWrapper(Wrapper):
 
         info = dict(info or {})
         info["hero_pos"] = np.array([tf.location.x, tf.location.y], np.float64)
+        # HEIGHT, for the hindsight relabeller's route planner (2026-09-26):
+        # planning from a 2-D pose at z=0 snapped onto the wrong road for 17% of
+        # Town05 plans (detours >3x, up to 111x), against 1% from the true 3-D
+        # location. Additive: nothing else reads it.
+        info["hero_z"] = float(tf.location.z)
         # Radians. CARLA reports yaw in DEGREES; feeding those to sin/cos in the
         # goal block would silently scramble every bearing.
         info["hero_yaw"] = math.radians(float(tf.rotation.yaw))
+        # PRIVILEGED LANE FEATURES (OBS_PRIV=1, asymmetric goal critic, user
+        # 2026-09-27). One map query per step; only the privileged critic ever
+        # reads the result -- see vae_nav.lane_priv. Off by default, so every
+        # other run's info is unchanged.
+        if LANE_GEOM:
+            from vae_nav.lane_priv import lane_priv_from_map
+            world_map = getattr(core, "map", None)
+            if world_map is None:
+                raise SystemExit("OBS_PRIV=1 or the lane-centre shaping is on but "
+                                 "core.map is None: the lane block needs the "
+                                 "CARLA map.")
+            info["lane_priv"] = lane_priv_from_map(world_map, tf.location,
+                                                   info["hero_yaw"])
+            # Half the hero's width, for the potential's "room before the body
+            # touches the line". From the bounding box, not a constant: the
+            # blueprint is a config choice.
+            bb = getattr(hero, "bounding_box", None)
+            info["hero_half_width"] = (float(bb.extent.y) if bb is not None
+                                       else None)
+        # JUNCTION ZONE (GOAL_ZONE_M > 0, vae_nav.goal_chain): metres along the
+        # lane to the next junction, None beyond the zone. Off by default.
+        if GOAL_ZONE_M > 0.0:
+            from vae_nav.goal_chain import junction_ahead_m
+            info["junction_ahead_m"] = junction_ahead_m(
+                getattr(core, "map", None), tf.location, GOAL_ZONE_M)
         info["goal_pos"] = np.array([goal_loc.x, goal_loc.y], np.float64)
         info["goal_location"] = goal_loc          # the expert oracle wants the
                                                   # carla.Location itself
@@ -164,6 +204,8 @@ class CoreStateWrapper(Wrapper):
         info["target_speed_kmh"] = float(getattr(experiment, "target_speed", 0.0) or 0.0)
 
         off_road = bool(getattr(experiment, "off_road", False))
+        # the reading before OFF_ROAD_JUNCTION_M's distance rule, for logging
+        info["off_road_raw"] = bool(getattr(experiment, "off_road_raw", off_road))
         sensor_illegal = bool(
             raw_lane and (not types or any(
                 t.split(".")[-1] in illegal for t in types)))
@@ -202,6 +244,15 @@ class CoreStateWrapper(Wrapper):
                 "experiment.obs_img is None -- the VAE has no frame to encode. "
                 "Check that the env config's get_img_obs ran this step.")
         info["rgb"] = obs_img
+        # THE GOAL VIEW, for the image-goal arm (2026-10-12). The env config's
+        # goal camera renders at the goal pose every step and get_goal_img_obs
+        # now retains the frame; it is absent on every arm that does not run
+        # that sensor, so this is a soft read and the key is simply missing
+        # rather than zeroed -- a zero frame is a VALID image and would train
+        # the policy on a black goal without anyone noticing.
+        goal_img = getattr(experiment, "goal_img", None)
+        if goal_img is not None:
+            info["goal_rgb"] = goal_img
         info["action_history"] = self._last_action
         return info
 

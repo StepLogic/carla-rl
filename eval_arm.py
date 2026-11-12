@@ -125,6 +125,9 @@ def main():
     # trainer imports it the same way at train_carla_tqc.py:52.
     from vae_nav.latent_source import from_env as latent_from_env
     from vae_nav.policy_io import load_agent_state
+    # Per-episode rule accounting (2026-09-27): off-road, collision and every
+    # crossing classified legal/illegal, plus path driven. See eval_faults.
+    from vae_nav.eval_faults import EpisodeFaults, aggregate
 
     towns = [t for t in args.towns.split(",") if t]
     episodes = T.build_eval_episodes(towns, args.episodes, seed=args.seed)
@@ -169,8 +172,9 @@ def main():
             return None
         try:
             import jax.numpy as jnp
+            from vae_nav.lane_priv import strip_priv
             batched = jax.tree_util.tree_map(lambda x: np.asarray(x)[None],
-                                             observation)
+                                             strip_priv(observation))
             action = np.asarray(agent.eval_actions(observation))[None]
             qs = critic.apply_fn({"params": critic.params}, batched, action)
             return float(jnp.mean(qs))
@@ -179,9 +183,102 @@ def main():
 
     import jax  # noqa: E402  (only needed for the tree_map above)
 
+    # PER-STEP Q TRACE (EVAL_Q_TRACE=1, user 2026-09-27: "does q function predict
+    # fatal states correctly?"). q_at reads only the goal critic at the start
+    # state. This reads, at EVERY step, the critic the actor actually follows in
+    # this mode -- _critic in goal mode, _critic_e in explore mode -- at the
+    # action the policy then takes, as the actor loss reads it (mean over the
+    # ensemble and all quantiles, gated_tqc_learner._gated_actor_update). Rows
+    # carry the reward and the fault flags of the step that action produced, so
+    # an offline pass can ask whether Q falls BEFORE a fault and whether it
+    # matches the realised return-to-go. Written to <out>.qtrace.jsonl.
+    q_trace = os.environ.get("EVAL_Q_TRACE", "0") == "1"
+    # EVAL_FAULT_ENDS (user 2026-09-29: "in eval mode - regardless of policy
+    # mode make lane invasion, offroad and collision end episode"). Evaluation
+    # only; training rules are untouched.
+    #   0      old behaviour (the mode's own rules)
+    #   fault  first off-road, collision or FINED crossing ends it (the graded
+    #          rule: broken on open road, solid/double/kerb/grass/unknown);
+    #          junction turns and unpainted road edges do not
+    #   any    first crossing of any kind ends it
+    # Arrival (goal) / 100 m reached (explore) on the same step still counts.
+    fault_ends = os.environ.get("EVAL_FAULT_ENDS", "0")
+    if fault_ends not in ("0", "fault", "any"):
+        raise SystemExit(f"EVAL_FAULT_ENDS={fault_ends!r} is not 0|fault|any")
+    trace_rows = []
+    from vae_nav.eval_faults import classify_crossing
+
+    # PROBE CAPTURE (EVAL_Q_TRACE_OBS=1, user 2026-09-27 "can the critic learn
+    # from the image latent?" -> "do it"). Alongside each trace row, saves the
+    # observation the critic was fed (latent as float16, goal, state) and the
+    # TRUE lane geometry of that same state from the CARLA map: signed lateral
+    # offset from the lane centre, heading error to the lane, lane width and
+    # the junction flag. A probe then asks whether each predicts a fault a few
+    # steps ahead. Written to <out>.probe.npz.
+    probe_obs = q_trace and os.environ.get("EVAL_Q_TRACE_OBS", "0") == "1"
+    probe = {"latent": [], "goal": [], "state": [], "lane": []}
+    # EVAL_PROBE_RGB=1 (2026-09-28 perception probe): also keep the exact
+    # frame VC-1 encoded, so readouts other than the run's own (pyramid vs the
+    # 7x7 patch grid) can be computed offline from the same pixels.
+    probe_rgb = probe_obs and os.environ.get("EVAL_PROBE_RGB", "0") == "1"
+    if probe_rgb:
+        probe["rgb"] = []
+
+    def world_map_of(e):
+        node = e
+        for _ in range(16):
+            if node is None:
+                return None
+            if getattr(node, "core", None) is not None:
+                return getattr(node.core, "map", None)
+            node = getattr(node, "env", None)
+        return None
+
+    def lane_geometry(info):
+        """[lateral_m, heading_err_rad, lane_width_m, in_junction] at the hero,
+        NaN when there is no pose or no map."""
+        wmap = world_map_of(env)
+        pos = info.get("hero_pos") if info else None
+        if wmap is None or pos is None:
+            return [np.nan] * 4
+        import carla
+        import math
+        loc = carla.Location(x=float(pos[0]), y=float(pos[1]),
+                             z=float(info.get("hero_z", 0.0)))
+        wp = wmap.get_waypoint(loc, project_to_road=True,
+                               lane_type=carla.LaneType.Driving)
+        if wp is None:
+            return [np.nan] * 4
+        tf = wp.transform
+        fwd = tf.get_forward_vector()
+        dx, dy = loc.x - tf.location.x, loc.y - tf.location.y
+        lateral = fwd.x * dy - fwd.y * dx
+        herr = float(info.get("hero_yaw", 0.0)) - math.radians(tf.rotation.yaw)
+        herr = (herr + math.pi) % (2 * math.pi) - math.pi
+        return [lateral, herr, float(wp.lane_width), float(wp.is_junction)]
+
+    def q_mode(observation, action, attr=None):
+        # attr="_critic_p": the PRIVILEGED goal critic (OBS_PRIV runs), which
+        # sees the full observation; the image-only critics never see 'priv'.
+        attr = attr or ("_critic" if args.mode == "goal" else "_critic_e")
+        critic = getattr(agent, attr, None)
+        if critic is None:
+            return None
+        if attr != "_critic_p":
+            from vae_nav.lane_priv import strip_priv
+            observation = strip_priv(observation)
+        import jax.numpy as jnp
+        batched = jax.tree_util.tree_map(lambda x: np.asarray(x)[None],
+                                         observation)
+        qs = critic.apply_fn({"params": critic.params}, batched,
+                             np.asarray(action)[None])
+        return float(jnp.mean(qs))
+
     successes, steps_to_goal, timeouts, lengths = [], [], 0, []
     q0, q0_steps = [], []
     end_reasons = {}
+    ep_detail = []
+    explore_ends = {}
     for ep in episodes:
         # REBUILD ON A TOWN CHANGE, as run_evaluation does. A single-town sweep
         # never triggers this; it exists so a multi-town one is not silently
@@ -197,15 +294,61 @@ def main():
         # property the whole comparison rests on -- silently does not hold.
         # It also produced a 0.000 success rate for an arm whose own training
         # evaluation reads 1.000, because the goal was never resampled.
-        obs, _ = env.reset(seed=ep["seed"])
+        obs, info0 = env.reset(seed=ep["seed"])
         q_start = q_at(obs)
+        faults = EpisodeFaults(start_pos=(info0 or {}).get("hero_pos"))
+        _prev_info = info0 or {}
         done, n, ok = False, 0, False
+        eval_fault_end = None
         while not done and n < args.max_steps:
             action = agent.eval_actions(obs)
+            _q = q_mode(obs, action) if q_trace else None
+            _qp = (q_mode(obs, action, "_critic_p")
+                   if q_trace and args.mode == "goal" else None)
+            if probe_obs:
+                probe["latent"].append(np.asarray(obs["latent"], np.float16))
+                probe["goal"].append(np.asarray(obs["goal"], np.float32))
+                probe["state"].append(np.asarray(obs["state"], np.float32))
+                probe["lane"].append(lane_geometry(_prev_info))
+                if probe_rgb:
+                    probe["rgb"].append(np.asarray(_prev_info.get("rgb")))
             obs, _r, term, trunc, info = env.step(action)
+            _prev_info = info
             n += 1
+            if q_trace:
+                _rem = info.get("route_remaining_m", None)
+                trace_rows.append(dict(
+                    ep=len(ep_detail), t=n - 1, q=_q, q_p=_qp, r=float(_r),
+                    term=bool(term), trunc=bool(trunc),
+                    off_road=bool(info.get("off_road", False)),
+                    collision=bool(info.get("collision", False)),
+                    crossing=classify_crossing(info),
+                    arrived=bool(info.get("is_success", False)),
+                    remaining_m=None if _rem is None else float(_rem),
+                    speed_kmh=float(info.get("speed_kmh", 0.0)),
+                    target_speed_kmh=float(info.get("target_speed_kmh", 0.0) or 0.0),
+                    marks=[str(m).split(".")[-1]
+                           for m in (info.get("lane_marking_types") or [])],
+                    in_junction=bool(info.get("in_junction", False)),
+                    lane_any=bool(info.get("lane_any",
+                                           info.get("lane_invasion_any", False))),
+                    lane_event_lag=info.get("lane_event_lag"),
+                    collision_event_lag=info.get("collision_event_lag")))
             ok = ok or bool(info.get("is_success", False))
             done = bool(term or trunc)
+            faults.step(info)
+            if fault_ends != "0" and not done:
+                _kind = classify_crossing(info)
+                _reached = (ok if args.goal_conditioned
+                            else str(info.get("explore_end", "")) == "reached")
+                _fault = ("collision" if info.get("collision")
+                          else "off_road" if info.get("off_road")
+                          else (f"crossing_{_kind}" if _kind is not None and (
+                              fault_ends == "any" or _kind in ("illegal", "lane_change"))
+                                else None))
+                if _fault and not _reached:
+                    done = True
+                    eval_fault_end = _fault
         # WHY THE EPISODE ENDED. Without this a zero success rate is just a
         # zero: it cannot distinguish "the policy drives badly" from "the
         # harness is configured so episodes end before it can arrive", which is
@@ -216,7 +359,9 @@ def main():
         # label off it reported "arrived=4" for episodes that in fact ran the
         # full 500-step cap. The reason must come from what actually ended the
         # episode.
-        if n >= args.max_steps:
+        if eval_fault_end is not None:
+            reason = f"eval_fault_{eval_fault_end}"
+        elif n >= args.max_steps:
             reason = "step_cap"
         elif ok and args.goal_conditioned:
             reason = "arrived"
@@ -228,6 +373,17 @@ def main():
                     reason = key
                     break
         end_reasons[reason] = end_reasons.get(reason, 0) + 1
+        # EXPLORE MODE'S OWN VERDICT (reached / crossing / off_road / collision /
+        # cap), from the wrapper that ended it. 'reached' means it drove
+        # EXPLORE_GOAL_DIST_M of path without a terminal fault.
+        if args.mode == "explore":
+            _xe = (eval_fault_end if eval_fault_end is not None else
+                   str(info.get("explore_end", "step_cap" if n >= args.max_steps else "?")))
+            explore_ends[_xe] = explore_ends.get(_xe, 0) + 1
+        _arr = (bool(ok) if args.goal_conditioned
+                else str(info.get("explore_end", "")) == "reached")
+        ep_detail.append(dict(faults.summary(_arr), town=ep["town"],
+                              seed=int(ep["seed"]), end=reason))
         # Counted, but NEVER as a termination reason: for an arm that cannot
         # see the goal this is driving past one, not reaching it.
         if ok and not args.goal_conditioned:
@@ -259,6 +415,7 @@ def main():
     out = {
         "arm": args.arm,
         "mode": args.mode,
+        "eval_fault_ends": fault_ends,
         # Explore mode has no goal, so distance bands do not apply to it.
         "band": band if args.mode == "goal" else "n/a",
         # Training is pinned to 5-20 m, so anything beyond it is extrapolation
@@ -305,10 +462,27 @@ def main():
         "q_corr": (float(np.corrcoef(np.array(q0), -np.array(q0_steps))[0, 1])
                    if _calib and len(q0) >= 2 and np.std(q0) > 0 else None),
         "q_n": (len(q0) if _calib else 0),
+        # Driving-rule accounting (vae_nav.eval_faults): how CLEANLY it drove,
+        # not only whether it arrived.
+        "faults": aggregate(ep_detail),
+        "explore_ends": explore_ends if args.mode == "explore" else None,
+        "explore_reached_rate": (round(explore_ends.get("reached", 0)
+                                      / max(1, len(episodes)), 3)
+                                if args.mode == "explore" else None),
+        "episodes_detail": ep_detail,
     }
     os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)
     with open(args.out, "w") as fh:
         json.dump(out, fh, indent=2)
+    if q_trace:
+        with open(args.out + ".qtrace.jsonl", "w") as fh:
+            for row in trace_rows:
+                fh.write(json.dumps(row) + "\n")
+        print(f"[QTrace] {len(trace_rows)} steps -> {args.out}.qtrace.jsonl")
+    if probe_obs:
+        np.savez_compressed(args.out + ".probe.npz",
+                            **{k: np.asarray(v) for k, v in probe.items()})
+        print(f"[Probe] {len(probe['lane'])} rows -> {args.out}.probe.npz")
 
     succ = (f"{out['success']:.3f}" if goal_conditioned
             else "n/a (not a goal-conditioned arm)")
@@ -323,6 +497,16 @@ def main():
     why = "  ".join(f"{k}={v}" for k, v in
                     sorted(end_reasons.items(), key=lambda kv: -kv[1]))
     print(f"[Arm {args.arm}] why episodes ended: {why or '(none)'}", flush=True)
+    _f = out["faults"]
+    print(f"[Arm {args.arm}] rules: clean arrivals {_f['clean_arrival_rate']:.3f} "
+          f"(strict {_f['strict_clean_arrival_rate']:.3f}) | any off-road "
+          f"{_f['frac_any_off_road']:.3f} | any illegal crossing "
+          f"{_f['frac_any_illegal_crossing']:.3f} | any collision "
+          f"{_f['frac_any_collision']:.3f} | any lane change "
+          f"{_f['frac_any_lane_change']:.3f} | path {_f['mean_path_m']:.1f} m", flush=True)
+    if args.mode == "explore":
+        print(f"[Arm {args.arm}] explore: reached {out['explore_reached_rate']:.3f} "
+              f"ends {explore_ends}", flush=True)
     print(f"[Arm {args.arm}] critic-as-distance: bias={bias} corr={corr} "
           f"(n={out['q_n']}) -- bias is how far wrong the value is IN STEPS; "
           f"corr is whether it still ORDERS states correctly", flush=True)

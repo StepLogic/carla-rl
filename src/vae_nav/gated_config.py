@@ -14,6 +14,62 @@ stale goal reward leaked into a goal-free run.
 import os
 
 
+# Every goal reward the wrapper implements. `explore` (2026-10-05) pays explore
+# mode's road-following reward plus a bonus on arrival.
+GOAL_REWARD_KINDS = ("sorb", "shaped", "progress", "explore")
+
+
+def progress_value_bounds(env):
+    """(floor, ceiling) for the goal critic under GATED_GOAL_REWARD=progress.
+
+    ONE definition, read by validate() above and by the trainer's target clip,
+    so the two cannot disagree. Undiscounted bounds are valid for any discount
+    here because every term is bounded per step.
+
+    ceiling = K + 2 * GOAL_DIST_MAX. Arrival terminates, so a state's value
+    covers one goal: at most the route still to drive plus K. Routes run up to
+    ~1.2x the straight-line goal distance on this map (the [Route] ratio lines),
+    so 2x is a safe cover.
+    floor   = -(1 m + lambda) * cap, minus the fines when they are on. No car
+    here moves 1 m in a 0.05 s step (that is 72 km/h), so driving AWAY from the
+    goal for the whole clock cannot lose more.
+    """
+    k = _num(env, "GOAL_PROGRESS_SUCCESS", 10.0)
+    slack = _num(env, "GOAL_PROGRESS_SLACK", 0.01)
+    cap = _num(env, "GATED_GOAL_MAX_STEPS", 1000)
+    dmax = _num(env, "GOAL_DIST_MAX", 200.0)
+    floor = -(1.0 + slack) * cap
+    if _flag(env, "GOAL_PROGRESS_FINES"):
+        floor -= cap * (_num(env, "GOAL_OFF_ROAD_PENALTY", 0.0)
+                        + _num(env, "GOAL_LANE_PENALTY", 0.0)
+                        + _num(env, "GOAL_COLLISION_PENALTY", 0.0))
+    return floor, k + 2.0 * dmax
+
+
+def _positive_return_bound(env, discount):
+    """The largest return the sorb goal reward can pay, with the bonuses on.
+
+    GOAL_ARRIVAL_BONUS + max(0, GOAL_SPEED_BONUS - STEP_COST) / (1 - discount).
+    The arrival term is exact; the velocity term is a per-step MAXIMUM
+    (every remaining step earns at most speed_bonus - step_cost and the
+    episode is capped), so the bound is an upper envelope, not a typical
+    value. It is what the goal critic's target CEILING must be at least as
+    large as -- the trainer's derived ceiling of 0 clips real targets away
+    when the bonuses are on (the TQC_VALUE_CEILING warning below).
+
+    At discount >= 1.0 the velocity term has no geometric tail; it collapses
+    to the arrival bonus when the velocity bonus does not beat the step
+    cost, and is unbounded when it does -- which the warning reports as inf.
+    """
+    arrival = _num(env, "GOAL_ARRIVAL_BONUS", 0.0)
+    speed_bonus = _num(env, "GOAL_SPEED_BONUS", 0.0)
+    step_cost = _num(env, "STEP_COST", 1.0)
+    per_step = max(0.0, speed_bonus - step_cost)
+    if discount >= 1.0:
+        return arrival if per_step == 0.0 else float("inf")
+    return arrival + per_step / (1.0 - discount)
+
+
 def _flag(env, name, default="0"):
     return str(env.get(name, default)) == "1"
 
@@ -28,8 +84,27 @@ def _num(env, name, default):
 def check_gated_run(env=None):
     """Raise ValueError on an incoherent gated configuration. Inert otherwise."""
     env = os.environ if env is None else env
+    # OBS_PRIV (asymmetric goal critic) exists only on the two-critic gated
+    # learner: anywhere else the lane block would reach an actor that was
+    # built to read it, which is exactly what the design forbids.
+    if _flag(env, "OBS_PRIV") and (not _flag(env, "GATED")
+                                   or _flag(env, "GATED_ONE_CRITIC")):
+        raise ValueError(
+            "OBS_PRIV=1 needs GATED=1 with the two-critic learner (not "
+            "GATED_ONE_CRITIC): only GatedTQCLearner strips the privileged "
+            "lane block from the actor's input.")
     if not _flag(env, "GATED"):
         return
+
+    # GOAL_FREEZE_STEPS lumps the freeze into one transition whose discount
+    # rides in the replay mask; the episode relabeller and n-step merger know
+    # nothing about it.
+    if int(env.get("GOAL_FREEZE_STEPS", "0") or 0) > 0 and (
+            _flag(env, "EPISODE_HER") or int(env.get("N_STEP", "1") or 1) > 1):
+        raise ValueError(
+            "GOAL_FREEZE_STEPS>0 needs EPISODE_HER=0 and N_STEP=1: the freeze "
+            "transition's gamma^(K+1) bootstrap is carried only by the plain "
+            "buffer's mask.")
 
     if not _flag(env, "OBS_WITH_MODE"):
         raise ValueError(
@@ -47,16 +122,45 @@ def check_gated_run(env=None):
             "genuinely absent that is the separate goal-free arm, which is the "
             "third leg of the ablation rather than a mode of this one.")
 
-    if not _flag(env, "OBS_WITH_VECTOR"):
+    # THE 2-MODE IMAGE-GOAL PAIRING (IMAGE_GOAL_TASK=1) keeps its velocity in
+    # the mode-independent `state` block (image_goal_coherence demands
+    # OBS_WITH_STATE=1 there) instead of the 4-d `vector` block, so the
+    # requirement below does not apply to it.
+    #
+    # THE v8 ESCAPE (ledger ruling, Tasks 1+2 review) skips the same
+    # requirement: OBS_WITH_VECTOR=0 is permitted with the 9-d state block
+    # (OBS_WITH_STATE=1 AND OBS_STATE_COLLISION=0), because the state block's
+    # slot 0 IS the observable speed the progress reward assumes -- the same
+    # clipped speed/TARGET_SPEED ratio the vector block carried. The collision
+    # flag must be dropped: only the 9-d block has the speed ratio at slot 0.
+    # With the flag unset every frozen arm keeps today's behaviour unchanged.
+    _v8_state_block = (_flag(env, "OBS_WITH_STATE")
+                       and not _flag(env, "OBS_STATE_COLLISION", "1"))
+    if (not _flag(env, "OBS_WITH_VECTOR") and not _flag(env, "IMAGE_GOAL_TASK")
+            and not _v8_state_block):
         raise ValueError(
             "GATED=1 requires the vector block (OBS_WITH_VECTOR=1). BOTH gated "
             "rewards are speed-gated, so a policy that cannot observe its own "
-            "speed sees the gate as an unobservable coin flip.")
+            "speed sees the gate as an unobservable coin flip. "
+            "OBS_WITH_VECTOR=0 is permitted only when the velocity still "
+            "reaches the observation: the 2-mode image-goal pairing "
+            "(IMAGE_GOAL_TASK=1), or the v8 9-d state block (OBS_WITH_STATE=1 "
+            "with OBS_STATE_COLLISION=0), whose slot 0 is the same clipped "
+            "speed ratio.")
 
     perception = str(env.get("PERCEPTION", "vae")).lower()
-    if perception not in ("vae", "", "mobilenet"):
+    # PERCEPTION=vc1|vc1_vitb is the 2-mode image-goal arm's backend (added
+    # additively; the vae/mobilenet acceptance is unchanged). The checkpoint
+    # risk the mobilenet WARNING describes applies to vc1 too -- 768-d
+    # observation, no checkpoint shared with any vae or mobilenet run in
+    # either direction -- and is refused at load time the same way, by
+    # LatentSource.assert_matches / policy_io naming both sides.
+    # segvae (2026-09-28): the frozen ResNet-9 segmentation VAE, 512-d mu;
+    # identity-checked at load like the others (SegVaeSource.name).
+    if perception not in ("vae", "", "mobilenet", "vc1", "vc1_vitb", "segvae"):
         raise ValueError(
-            f"GATED=1 accepts PERCEPTION=vae or mobilenet, not {perception!r}.")
+            f"GATED=1 accepts PERCEPTION=vae, mobilenet, vc1, vc1_vitb or "
+            f"segvae, not {perception!r}.")
     if perception == "mobilenet":
         # RELAXED 2026-09-11 on the user's instruction. This used to be a hard
         # refusal, on the grounds that MobileNet's 384-d latent changes the
@@ -108,9 +212,20 @@ def check_gated_run(env=None):
             "critic received 10-37% of each batch.")
 
     goal_reward = str(env.get("GATED_GOAL_REWARD", "sorb")).lower()
-    if goal_reward not in ("sorb", "shaped"):
+    if goal_reward not in GOAL_REWARD_KINDS:
         raise ValueError(
-            f"GATED_GOAL_REWARD={goal_reward!r} is not sorb|shaped")
+            f"GATED_GOAL_REWARD={goal_reward!r} is not {'|'.join(GOAL_REWARD_KINDS)}")
+    if goal_reward == "explore" and _flag(env, "EPISODE_HER"):
+        # HER RECOMPUTES hindsight rewards per kind, and has no path for this
+        # one. Run with it on and every hindsight row would be priced by a
+        # different reward from the live row beside it -- the mis-costing that
+        # hit 83% of hindsight rows in v13-v15. Refused until a recost path
+        # exists; the explore reward is goal-independent, so that path is just
+        # "stored base + bonus at the relabelled goal".
+        raise ValueError(
+            "GATED_GOAL_REWARD=explore with EPISODE_HER=1: HER has no recost path "
+            "for this reward and would price hindsight rows differently from live "
+            "ones. Set EPISODE_HER=0.")
 
     discount = _num(env, "DISCOUNT", 0.99)
     discount_e = _num(env, "EXPLORE_DISCOUNT", discount)
@@ -172,9 +287,75 @@ def check_gated_run(env=None):
     if goal_reward == "sorb":
         step_cost = _num(env, "STEP_COST", 1.0)
         cap = _num(env, "GATED_GOAL_MAX_STEPS", 1000)
-        print(f"[GatedConfig] goal reward = SORB minimum time, "
-              f"-{step_cost:g}/step, return in [{-step_cost * cap:g}, 0]; "
-              f"goal critic Q reads as -(steps to goal)")
+        # THE COUNTING REGIME'S POSITIVE RETURNS (2026-09-24). With an arrival
+        # bonus and/or a velocity bonus above the step cost, the goal return
+        # is no longer confined to [-step_cost * cap, 0]: arrival pays
+        # +GOAL_ARRIVAL_BONUS and clean steps at speed can pay up to
+        # GOAL_SPEED_BONUS - STEP_COST each. The banner below says so, and the
+        # warning after it points at the ceiling that must grow with them.
+        arrival = _num(env, "GOAL_ARRIVAL_BONUS", 0.0)
+        speed_bonus = _num(env, "GOAL_SPEED_BONUS", 0.0)
+        if arrival > 0.0 or speed_bonus > 0.0 or discount < 1.0:
+            bound = _positive_return_bound(env, discount)
+            print(f"[GatedConfig] goal reward = SORB minimum time, "
+                  f"-{step_cost:g}/step, return in [{-step_cost * cap:g}, "
+                  f"{bound:g}]; POSITIVE RETURNS exist (arrival bonus "
+                  f"{arrival:g}, velocity bonus {speed_bonus:g}), so the "
+                  f"derived target ceiling of 0 CLIPS real targets -- the "
+                  f"goal critic's Q no longer reads as -(steps to goal) "
+                  f"alone; set TQC_VALUE_CEILING >= {bound:g}")
+        else:
+            print(f"[GatedConfig] goal reward = SORB minimum time, "
+                  f"-{step_cost:g}/step, return in [{-step_cost * cap:g}, 0]; "
+                  f"goal critic Q reads as -(steps to goal)")
+        # THE START-UP WARNING: the trainer derives the goal-critic target
+        # ceiling as 0 under SORB (train_carla_tqc.agent_kwargs), which was
+        # exact when every return was negative and now CLIPS the bonuses'
+        # positive targets to 0 -- the critic cannot fit them, silently. The
+        # fix is the existing export TQC_VALUE_CEILING.
+        bound = _positive_return_bound(env, discount)
+        ceiling = _num(env, "TQC_VALUE_CEILING", 0.0)
+        if bound > ceiling + 1e-9:
+            print("=" * 72)
+            print(f"[GatedConfig] WARNING: goal-critic target ceiling "
+                  f"{ceiling:g} is BELOW the realisable return bound "
+                  f"{bound:g}.")
+            print("  The arrival bonus and velocity bonus put POSITIVE "
+                  "returns in reach; a ceiling of 0 clips every such target")
+            print("  to 0, so the critic cannot fit them. Fix: export "
+                  f"TQC_VALUE_CEILING={bound:g}  (bound = GOAL_ARRIVAL_BONUS "
+                  "+ max(0, GOAL_SPEED_BONUS - STEP_COST) / (1 - DISCOUNT)).")
+            print("=" * 72, flush=True)
+    elif goal_reward == "progress":
+        # BONO ET AL. 2023 (gated_reward.goal_reward_progress). Two
+        # misconfigurations would not crash -- they would train a different
+        # task in silence -- so both are refused here.
+        if not _flag(env, "ROUTE_POTENTIAL"):
+            raise ValueError(
+                "GATED_GOAL_REWARD=progress needs ROUTE_POTENTIAL=1: the env "
+                "publishes route_remaining_m only then, and without it the "
+                "reward is -lambda on every step with no progress signal at all.")
+        if str(env.get("ROUTE_REMAINING_MODE", "hop")).lower() != "project":
+            raise ValueError(
+                "GATED_GOAL_REWARD=progress needs ROUTE_REMAINING_MODE=project. The "
+                "default 'hop' measure is a sawtooth: on real Town05 routes, driving "
+                "perfectly forward, 43.1% of steps read as NEGATIVE progress and "
+                "13.6% as +2 m spikes. Harmless-ish as potential shaping; wrong when "
+                "progress IS the reward.")
+        floor, ceiling = progress_value_bounds(env)
+        set_ceiling = env.get("TQC_VALUE_CEILING")
+        if set_ceiling not in (None, "") and float(set_ceiling) < ceiling - 1e-9:
+            raise ValueError(
+                f"TQC_VALUE_CEILING={set_ceiling} clips the progress reward: a "
+                f"goal state can be worth up to {ceiling:g} (arrival "
+                f"{_num(env, 'GOAL_PROGRESS_SUCCESS', 10.0):g} + the whole route, "
+                f"bounded by 2 x GOAL_DIST_MAX). Unset it or set >= {ceiling:g}. "
+                "v13-v15 launched with 10.0, which was right for the minimum-time "
+                "reward and is wrong here.")
+        print(f"[GatedConfig] goal reward = PROGRESS (Bono et al. 2023): "
+              f"K*1[arrived] - Delta(route m) - lambda; value bounds "
+              f"[{floor:g}, {ceiling:g}]; discount {discount:g} is fine "
+              f"(the paper trains a discounted PPO return)")
     else:
         print("[GatedConfig] goal reward = SHAPED (delta + projected), "
               "returns ~order 100")

@@ -74,12 +74,28 @@ from jaxrl2.utils.augmentations import batched_random_crop
 from jaxrl2.utils.misc import augment_batch
 from jaxrl2.utils.target_update import soft_target_update
 
+from vae_nav.lane_priv import (COST_KEY, EXPERT_KEY, PRIV_KEY, strip_expert,
+                               strip_priv)
 from vae_nav.quantile_per_sample import (masked_mean,
                                          quantile_huber_loss_per_sample)
 
 # Must match vae_nav.gated_reward and vae_nav.vae_goal_wrapper.
 GOAL, EXPLORE = 1, 0
 MODE_KEY = "mode"
+
+
+def apply_lane_cost(batch, lane_cost, mu):
+    """-> `batch` with rewards - mu * lane_cost, or `batch` itself if there is no cost.
+
+    Pure, and never mutates its input: the explore critic is updated from the same
+    batch afterwards and must see the unpenalised reward. Called inside the jitted
+    update with mu as a TRACED argument, so a new multiplier every update costs no
+    recompile. See lane_priv.COST_KEY for why the cost is priced here and not when
+    the row is stored.
+    """
+    if lane_cost is None:
+        return batch
+    return {**batch, "rewards": batch["rewards"] - mu * lane_cost}
 
 
 def _mode_mask(batch):
@@ -95,7 +111,9 @@ def _mode_mask(batch):
 
 def _masked_critic_update(key, actor, critic, target_critic_params, temp, batch,
                           discount, backup_entropy, top_quantiles_to_drop,
-                          kappa, mask, value_floor=None, value_ceiling=None):
+                          kappa, mask, n_steps=None,
+                          value_floor=None, value_ceiling=None,
+                          alpha_scale=1.0):
     """One critic's update, restricted to the rows `mask` selects.
 
     value_floor / value_ceiling clip this critic's TARGET only, and are applied
@@ -115,21 +133,62 @@ def _masked_critic_update(key, actor, critic, target_critic_params, temp, batch,
     None here and is left unclipped.
     """
     target_critic = critic.replace(params=target_critic_params)
-    dist = actor.apply_fn({"params": actor.params}, batch["next_observations"])
+    # THE ACTOR NEVER SEES THE PRIVILEGED BLOCK (a no-op without OBS_PRIV).
+    # The critic below reads whatever batch it was handed: the privileged
+    # goal critic gets the full observation, every other critic a stripped one.
+    dist = actor.apply_fn({"params": actor.params},
+                          strip_priv(batch["next_observations"]))
     next_actions, next_log_probs = dist.sample_and_log_prob(seed=key)
     next_quantiles = target_critic.apply_fn(
         {"params": target_critic_params}, batch["next_observations"], next_actions)
-    alpha = temp.apply_fn({"params": temp.params}) if backup_entropy else 0.0
+    # alpha_scale (QNORM_CRITIC_ALPHA, default 1.0 = off). Under ACTOR_Q_NORM
+    # the actor divides its -Q term by the mode's running value spread s, so
+    # the temperature it effectively experiences is alpha * s -- while this
+    # backup still soft-maximises against plain alpha, and the two disagree
+    # by exactly the factor the normalisation introduced. Scaling the
+    # CRITIC'S entropy term by the same s makes the backup match. Default 1.0
+    # multiplies by one and the target is byte-identical to the pre-flag
+    # computation.
+    alpha = (alpha_scale * temp.apply_fn({"params": temp.params})
+             if backup_entropy else 0.0)
 
     # THE TARGET IS COMPUTED FOR EVERY ROW, at this critic's own discount, and
     # the wrong-mode rows are discarded by the mask below. That wastes compute
     # on half the batch and is deliberate: the alternative is dynamic control
     # flow inside a jitted function, whose shapes the compiler cannot fix.
+    #
+    # N-STEP BOOTSTRAP DISCOUNT (v11). With n-step returns the batch carries a
+    # per-row `n_steps` = the ACTUAL merged segment length n', and the discount
+    # becomes gamma**n' per row -- the buffer's reward sum was accumulated in
+    # this same gamma frame, so target = sum_k gamma^k r_{t+k} + gamma^n' * Q
+    # is exactly the n-step soft return. jaxrl2's tqc_target computes
+    # `discount * masks[:, None] * soft`: a FLAT (batch,) discount would
+    # broadcast there as (1, batch) x (batch, 1) -> (batch, batch) -- a silent
+    # outer product, and an instant shape error against soft (batch, kept)
+    # unless kept == batch, in which case it is quietly WRONG MATH. So the
+    # per-row discount is passed pre-shaped to (batch, 1), which multiplies
+    # masks column-wise exactly like the scalar does. The vendored code is
+    # still untouched. With n_steps absent (n_step = 1, every earlier run) the
+    # scalar path is byte-identical.
+    #
+    # ONE DELIBERATE SIMPLIFICATION, stated because it is a deviation from
+    # chaining the 1-step soft operator: the entropy correction -alpha*log pi
+    # is applied at the BOOTSTRAP state only, not at every intermediate step of
+    # the horizon. Chaining would need next_log_probs at each of the n'-1
+    # intermediate states under the CURRENT policy, which the buffer does not
+    # and cannot store. With the temperatures auto-tuned to the entropy target
+    # the correction is alpha * |log pi| ~ 0.01 per step -- two orders below the
+    # -1/step reward -- so the bias is negligible next to the variance n-step
+    # already accepts.
+    if n_steps is None:
+        step_discount = discount
+    else:
+        step_discount = (discount ** n_steps)[:, None]
     target = tqc_target(
         next_quantiles,
         jnp.nan_to_num(batch["rewards"]),
         batch["masks"],
-        discount=discount,
+        discount=step_discount,
         top_quantiles_to_drop=top_quantiles_to_drop,
         alpha=alpha,
         next_log_probs=next_log_probs,
@@ -163,7 +222,9 @@ def _masked_critic_update(key, actor, critic, target_critic_params, temp, batch,
 
 
 def _gated_actor_update(key, actor, critic, critic_e, temp, temp_e, batch,
-                        m_goal, explore_actor_w, q_scale_g=1.0, q_scale_e=1.0):
+                        m_goal, explore_actor_w, q_scale_g=1.0, q_scale_e=1.0,
+                        batch_full=None, bc_mask=None, bc_weight=0.0,
+                        bc_scale=1.0):
     """One actor, choosing its critic and its temperature PER ROW.
 
     q_scale_g / q_scale_e (PER-MODE Q NORMALISATION, default 1.0 = off): each
@@ -181,18 +242,35 @@ def _gated_actor_update(key, actor, critic, critic_e, temp, temp_e, batch,
     is_goal = m_goal > 0.5
     m_explore = 1.0 - m_goal
 
+    # ASYMMETRIC GOAL CRITIC (OBS_PRIV): `critic` is then the PRIVILEGED goal
+    # critic and reads `batch_full` (with the lane block); the actor and the
+    # explore critic read `batch`, which never carries it. Without OBS_PRIV
+    # batch_full is None and this is the original computation.
+    obs_goal_critic = (batch if batch_full is None else batch_full)["observations"]
+
     def actor_loss_fn(params):
         dist = actor.apply_fn({"params": params}, batch["observations"])
         actions, log_probs = dist.sample_and_log_prob(seed=key)
         # Both critics are evaluated on the whole batch and half of each result
         # is thrown away. Same trade as above: a fixed shape the JIT can handle.
         q_g = critic.apply_fn({"params": critic.params},
-                              batch["observations"], actions).mean(axis=(0, 2))
+                              obs_goal_critic, actions).mean(axis=(0, 2))
         q_e = critic_e.apply_fn({"params": critic_e.params},
                                 batch["observations"], actions).mean(axis=(0, 2))
         q = jnp.where(is_goal, q_g / q_scale_g, q_e / q_scale_e)
         alpha = jnp.where(is_goal, alpha_g, alpha_e)
         per_row = alpha * log_probs - q
+        # BEHAVIOUR CLONING ON EXPERT ROWS (BC_WEIGHT, user 2026-09-28 "i
+        # prefer 2"; TD3+BC-style). The deterministic action is pulled toward
+        # the action the expert took, per dimension in units of the action
+        # box's half-range so steer and throttle weigh alike. Q is already
+        # divided by its running spread (ACTOR_Q_NORM), so BC_WEIGHT sets the
+        # balance directly. Absent mask (BC off) -> the original loss.
+        bc_err = None
+        if bc_mask is not None:
+            a_det = dist.mode()
+            bc_err = (((a_det - batch["actions"]) / bc_scale) ** 2).mean(-1)
+            per_row = per_row + bc_weight * bc_mask * bc_err
         # the raw per-mode value spread, for the caller's running normaliser
         def _masked_std(x, m):
             n = jnp.maximum(m.sum(), 1.0)
@@ -210,6 +288,9 @@ def _gated_actor_update(key, actor, critic, critic_e, temp, temp_e, batch,
             "entropy_goal": masked_mean(-log_probs, m_goal),
             "entropy_explore": masked_mean(-log_probs, m_explore),
             "q_std_goal": q_std_g, "q_std_explore": q_std_e,
+            **({} if bc_err is None else {
+                "bc_loss": masked_mean(bc_err, bc_mask),
+                "bc_frac": bc_mask.mean()}),
         }
 
     grads, info = jax.grad(actor_loss_fn, has_aux=True)(actor.params)
@@ -220,7 +301,8 @@ def _gated_actor_update(key, actor, critic, critic_e, temp, temp_e, batch,
     jax.jit,
     static_argnames=("backup_entropy", "top_quantiles_to_drop", "kappa",
                      "target_entropy", "target_entropy_e", "value_floor",
-                     "value_ceiling", "enable_update_temperature", "augument",
+                     "value_ceiling", "value_floor_e", "value_ceiling_e",
+                     "enable_update_temperature", "augument",
                      "share_encoder"))
 def _gated_update_jit(rng, actor, critic, target_critic_params, temp,
                       critic_e, target_critic_e_params, temp_e,
@@ -228,8 +310,12 @@ def _gated_update_jit(rng, actor, critic, target_critic_params, temp,
                       target_entropy, target_entropy_e, backup_entropy,
                       top_quantiles_to_drop, kappa,
                       value_floor=None, value_ceiling=None,
+                      value_floor_e=None, value_ceiling_e=None,
                       enable_update_temperature=True, augument=True,
-                      share_encoder=True, q_scale_g=1.0, q_scale_e=1.0):
+                      share_encoder=True, q_scale_g=1.0, q_scale_e=1.0,
+                      alpha_scale_g=1.0, alpha_scale_e=1.0,
+                      critic_p=None, target_critic_p_params=None,
+                      bc_weight=0.0, bc_scale=1.0, lagrange_mu=0.0):
     if share_encoder:
         # From the GOAL critic, matching the ungated path exactly. Sharing from
         # both would need a rule for combining them, and any such rule is a
@@ -244,15 +330,49 @@ def _gated_update_jit(rng, actor, critic, target_critic_params, temp,
         # kept so the gated path is byte-for-byte the specialists' pipeline.
         rng, batch = augment_batch(key, batch, batched_random_crop)
 
+    # THE TWO VIEWS (OBS_PRIV). `batch_full` keeps the privileged lane block
+    # for the privileged goal critic; `batch` drops it for the actor, the
+    # image-only goal critic and the explore critic. Without the block both
+    # are the same dict and every line below traces as before.
+    bc_mask = (batch["observations"][EXPERT_KEY][:, 0].astype(jnp.float32)
+               if EXPERT_KEY in batch["observations"] else None)
+    # LANE COST (LAGRANGE_LANE). Read before the strips below remove it. Key
+    # presence is a static property of the batch, so this resolves at trace time.
+    lane_cost = (batch["observations"][COST_KEY][:, 0].astype(jnp.float32)
+                 if COST_KEY in batch["observations"] else None)
+    batch_full = strip_expert(batch)
+    batch = strip_priv(batch)
     m_goal = _mode_mask(batch)
     m_explore = 1.0 - m_goal
+
+    # N-STEP (v11): the batch's per-row merged segment length, or None on the
+    # 1-step path. Key presence is a STATIC property of the batch structure, so
+    # this branch resolves at trace time and the jit never sees dynamic control
+    # flow. Both critics read the SAME array: it already encodes each row's
+    # own mode's n', and the row's own critic is the only one whose loss keeps
+    # it, so no per-critic split is needed.
+    n_steps = batch["n_steps"] if "n_steps" in batch else None
+
+    # THE MULTIPLIER IS CHARGED TO THE GOAL SIDE ONLY. The explore critic keeps
+    # `batch` -- its reward has its own lane terms and is not under this
+    # constraint. Goal rows carrying a cost are charged mu per fined crossing.
+    if lane_cost is not None and n_steps is not None:
+        # An n-step row's reward is a SUM over up to n transitions, but the cost
+        # here is one transition's. Charging mu once would under-price every
+        # merged row by however many crossings its tail held.
+        raise ValueError("LAGRANGE_LANE is not defined for n-step returns: the "
+                         "stored cost is per transition, the reward is not")
+    batch_g = apply_lane_cost(batch, lane_cost, lagrange_mu)
+    batch_full_g = apply_lane_cost(batch_full, lane_cost, lagrange_mu)
 
     rng, key_g = jax.random.split(rng)
     # GOAL CRITIC: bounded, because under the SORB reward it runs at gamma=1.0.
     new_critic, info_g = _masked_critic_update(
-        key_g, actor, critic, target_critic_params, temp, batch, discount,
+        key_g, actor, critic, target_critic_params, temp, batch_g, discount,
         backup_entropy, top_quantiles_to_drop, kappa, m_goal,
-        value_floor=value_floor, value_ceiling=value_ceiling)
+        n_steps=n_steps,
+        value_floor=value_floor, value_ceiling=value_ceiling,
+        alpha_scale=alpha_scale_g)
 
     # EXPLORE CRITIC: UNBOUNDED, deliberately.
     #
@@ -272,7 +392,27 @@ def _gated_update_jit(rng, actor, critic, target_critic_params, temp,
     rng, key_e = jax.random.split(rng)
     new_critic_e, info_e = _masked_critic_update(
         key_e, actor, critic_e, target_critic_e_params, temp_e, batch,
-        discount_e, backup_entropy, top_quantiles_to_drop, kappa, m_explore)
+        discount_e, backup_entropy, top_quantiles_to_drop, kappa, m_explore,
+        n_steps=n_steps, alpha_scale=alpha_scale_e,
+        value_floor=value_floor_e, value_ceiling=value_ceiling_e)
+
+    # PRIVILEGED GOAL CRITIC (OBS_PRIV, user 2026-09-27): the SAME reward,
+    # discount, clip, temperature and goal-row mask as the image-only goal
+    # critic above -- it differs only in seeing the lane block. It is the one
+    # the actor follows on goal rows; the image-only critic keeps training on
+    # the same batch, against the same actor, and is what the map builder
+    # reads as a distance (agent._critic).
+    new_critic_p, new_target_p_params, info_p = None, None, None
+    if critic_p is not None:
+        rng, key_p = jax.random.split(rng)
+        new_critic_p, info_p = _masked_critic_update(
+            key_p, actor, critic_p, target_critic_p_params, temp, batch_full_g,
+            discount, backup_entropy, top_quantiles_to_drop, kappa, m_goal,
+            n_steps=n_steps,
+            value_floor=value_floor, value_ceiling=value_ceiling,
+            alpha_scale=alpha_scale_g)
+        new_target_p_params = soft_target_update(
+            new_critic_p.params, target_critic_p_params, tau)
 
     new_target_params = soft_target_update(
         new_critic.params, target_critic_params, tau)
@@ -281,8 +421,11 @@ def _gated_update_jit(rng, actor, critic, target_critic_params, temp,
 
     rng, key_a = jax.random.split(rng)
     new_actor, info_a = _gated_actor_update(
-        key_a, actor, new_critic, new_critic_e, temp, temp_e, batch,
-        m_goal, explore_actor_w, q_scale_g, q_scale_e)
+        key_a, actor, new_critic if critic_p is None else new_critic_p,
+        new_critic_e, temp, temp_e, batch,
+        m_goal, explore_actor_w, q_scale_g, q_scale_e,
+        batch_full=None if critic_p is None else batch_full,
+        bc_mask=bc_mask, bc_weight=bc_weight, bc_scale=bc_scale)
 
     new_temp, new_temp_e = temp, temp_e
     alpha_info = {}
@@ -315,8 +458,12 @@ def _gated_update_jit(rng, actor, critic, target_critic_params, temp,
         "target_actor_entropy_e": info_e["target_actor_entropy"],
         "frac_goal": m_goal.mean(),
     }
+    if info_p is not None:
+        info.update({"critic_loss_p": info_p["critic_loss"], "q_p": info_p["q"],
+                     "td_errors_p": info_p["td_errors"]})
     return (rng, new_actor, new_critic, new_target_params, new_temp,
-            new_critic_e, new_target_e_params, new_temp_e, info)
+            new_critic_e, new_target_e_params, new_temp_e, info,
+            new_critic_p, new_target_p_params)
 
 
 class GatedTQCLearner(TQCLearner):
@@ -329,9 +476,22 @@ class GatedTQCLearner(TQCLearner):
                  actor_freeze_updates: int = 0,
                  actor_q_norm: bool = False,
                  actor_q_norm_tau: float = 0.01,
+                 qnorm_critic_alpha: bool = False,
                  value_floor: Optional[float] = None,
-                 value_ceiling: Optional[float] = None, **kwargs):
-        super().__init__(seed, observations, actions, **kwargs)
+                 value_ceiling: Optional[float] = None,
+                 value_floor_e: Optional[float] = None,
+                 value_ceiling_e: Optional[float] = None,
+                 bc_weight: float = 0.0, **kwargs):
+        # ASYMMETRIC GOAL CRITIC. With the privileged lane block present the
+        # actor, the image-only goal critic and the explore critic are built
+        # WITHOUT it, so none of them has an input layer that could read it.
+        self.asymmetric = hasattr(observations, "keys") and PRIV_KEY in observations
+        # BC weight and the action half-range its error is measured in.
+        self.bc_weight = float(bc_weight)
+        _asp = kwargs.get("action_space")
+        self._bc_scale = (jnp.asarray(0.5 * (_asp.high - _asp.low), jnp.float32)
+                          if _asp is not None else jnp.ones((), jnp.float32))
+        super().__init__(seed, strip_priv(observations), actions, **kwargs)
 
         # GOAL CRITIC ONLY. Under the SORB minimum-time reward the goal return
         # lies in [-step_cost * max_steps, 0] BY CONSTRUCTION, so a target
@@ -340,6 +500,17 @@ class GatedTQCLearner(TQCLearner):
         self.value_floor = None if value_floor is None else float(value_floor)
         self.value_ceiling = (None if value_ceiling is None
                               else float(value_ceiling))
+        # EXPLORE CRITIC BOUND (EXPLORE_VALUE_FLOOR/CEILING, 2026-10-05). Off by
+        # default. The original reason for leaving it unbounded stands -- the
+        # GOAL arm's window says nothing about the explore arm's range -- but the
+        # conclusion did not: v49's explore Q went 20 -> 11,801 against a
+        # realisable maximum near 110 while the clipped goal critic stayed at
+        # 38-65 on the same episodes, and the explore arm's driving collapsed
+        # with it. The fix is a window derived from the EXPLORE reward, which is
+        # what these are.
+        self.value_floor_e = None if value_floor_e is None else float(value_floor_e)
+        self.value_ceiling_e = (None if value_ceiling_e is None
+                                else float(value_ceiling_e))
         self.discount_e = float(discount_e)
         self.target_entropy_e = (float(self.target_entropy)
                                  if target_entropy_e is None
@@ -359,6 +530,15 @@ class GatedTQCLearner(TQCLearner):
         # (std ~ 0) cannot blow the gradient up.
         self.actor_q_norm = bool(actor_q_norm)
         self.actor_q_norm_tau = float(actor_q_norm_tau)
+        # QNORM_CRITIC_ALPHA (opt-in, default off). With ACTOR_Q_NORM the
+        # actor's -Q term is divided by the per-mode value spread s, so its
+        # effective entropy temperature is alpha * s -- while the critics'
+        # backups soft-maximise against plain alpha. With this flag on, each
+        # critic's entropy term is scaled by the SAME s its mode's actor rows
+        # divide by, so the two sides of the TD equation agree again. Off by
+        # default because it changes the critic target: it is a separate
+        # experiment, tested one flag at a time (TQC_VALUE_CEILING first).
+        self.qnorm_critic_alpha = bool(qnorm_critic_alpha)
         self._q_scale_g = None
         self._q_scale_e = None
         self._updates = 0
@@ -374,11 +554,27 @@ class GatedTQCLearner(TQCLearner):
         sib_kwargs = dict(kwargs)
         if init_temperature_e is not None:
             sib_kwargs["init_temperature"] = init_temperature_e
-        sibling = TQCLearner(seed + 10_000, observations, actions, **sib_kwargs)
+        sibling = TQCLearner(seed + 10_000, strip_priv(observations), actions,
+                             **sib_kwargs)
         self._critic_e = sibling._critic
         self._target_critic_e_params = copy.deepcopy(sibling._critic.params)
         self._temp_e = sibling._temp
         del sibling
+
+        # THE PRIVILEGED GOAL CRITIC, built the same way from a sibling that
+        # DOES see the lane block. Its temperature is the goal one (self._temp).
+        self._critic_p = None
+        self._target_critic_p_params = None
+        if self.asymmetric:
+            sib_p = TQCLearner(seed + 20_000, observations, actions, **dict(kwargs))
+            self._critic_p = sib_p._critic
+            self._target_critic_p_params = copy.deepcopy(sib_p._critic.params)
+            del sib_p
+            print("[Gated] ASYMMETRIC goal critic: a PRIVILEGED goal critic "
+                  f"(sees '{PRIV_KEY}') drives the actor on goal rows; the "
+                  "image-only goal critic trains on the same batches and is "
+                  "the distance the map builder reads (agent._critic). The "
+                  f"actor and the explore critic never see '{PRIV_KEY}'.")
 
         bounds = ("unbounded" if self.value_floor is None
                   and self.value_ceiling is None
@@ -389,9 +585,16 @@ class GatedTQCLearner(TQCLearner):
               f"target_entropy_e={self.target_entropy_e} "
               f"explore_actor_warmup={self.explore_actor_warmup} "
               f"actor_freeze_updates={self.actor_freeze_updates} "
-              f"actor_q_norm={self.actor_q_norm}")
-        print(f"[Gated] goal critic target clip {bounds}; "
-              f"explore critic UNCLIPPED (its range is its own, not the goal arm's)")
+              f"actor_q_norm={self.actor_q_norm} "
+              f"qnorm_critic_alpha={self.qnorm_critic_alpha}")
+        # Report what is in effect. This line was hard-coded "UNCLIPPED" and kept
+        # saying so after the explore bound existed -- v51's first launch logged
+        # UNCLIPPED with EXPLORE_VALUE_FLOOR/CEILING set.
+        bounds_e = ("UNCLIPPED (its range is its own, not the goal arm's)"
+                    if self.value_floor_e is None and self.value_ceiling_e is None
+                    else f"clip [{self.value_floor_e}, {self.value_ceiling_e}] "
+                         "(from the EXPLORE reward, not the goal arm's window)")
+        print(f"[Gated] goal critic target clip {bounds}; explore critic {bounds_e}")
         if self.discount >= 1.0 and self.value_floor is None:
             print("[Gated] WARNING: discount=1.0 with NO value floor. V(s) = "
                   "-c + V(s') has no bounded fixed point on a state the agent "
@@ -408,7 +611,8 @@ class GatedTQCLearner(TQCLearner):
         explore_actor_w = (0.0 if self._updates < self.explore_actor_warmup
                            else 1.0)
         (rng, actor, critic, target_params, temp,
-         critic_e, target_e_params, temp_e, info) = _gated_update_jit(
+         critic_e, target_e_params, temp_e, info,
+         critic_p, target_p_params) = _gated_update_jit(
             self._rng, self._actor, self._critic, self._target_critic_params,
             self._temp, self._critic_e, self._target_critic_e_params,
             self._temp_e, batch,
@@ -416,10 +620,27 @@ class GatedTQCLearner(TQCLearner):
             self.target_entropy, self.target_entropy_e, self.backup_entropy,
             self.top_quantiles_to_drop, self.kappa,
             value_floor=self.value_floor, value_ceiling=self.value_ceiling,
+            value_floor_e=self.value_floor_e, value_ceiling_e=self.value_ceiling_e,
             enable_update_temperature=enable_update_temperature,
             augument=self.augument, share_encoder=self.share_encoder,
             q_scale_g=(float(self._q_scale_g) if (self.actor_q_norm and self._q_scale_g) else 1.0),
-            q_scale_e=(float(self._q_scale_e) if (self.actor_q_norm and self._q_scale_e) else 1.0))
+            q_scale_e=(float(self._q_scale_e) if (self.actor_q_norm and self._q_scale_e) else 1.0),
+            # QNORM_CRITIC_ALPHA: the critics' entropy backups see the same
+            # per-mode spread the actor divides Q by. Reuses the running
+            # scales (set only after the first batch carrying each mode) and
+            # stays 1.0 -- byte-identical -- unless BOTH flags are on.
+            alpha_scale_g=(float(self._q_scale_g)
+                           if (self.actor_q_norm and self.qnorm_critic_alpha
+                               and self._q_scale_g) else 1.0),
+            alpha_scale_e=(float(self._q_scale_e)
+                           if (self.actor_q_norm and self.qnorm_critic_alpha
+                               and self._q_scale_e) else 1.0),
+            critic_p=self._critic_p,
+            target_critic_p_params=self._target_critic_p_params,
+            bc_weight=self.bc_weight, bc_scale=self._bc_scale,
+            # Set by the trainer after every [GatedEp] block. A plain float, so
+            # it is traced, not static: a new value each update recompiles nothing.
+            lagrange_mu=float(getattr(self, "lagrange_mu", 0.0)))
 
         self._rng = rng
         frozen = self._updates < self.actor_freeze_updates
@@ -433,6 +654,9 @@ class GatedTQCLearner(TQCLearner):
         self._target_critic_params = target_params
         self._critic_e = critic_e
         self._target_critic_e_params = target_e_params
+        if critic_p is not None:
+            self._critic_p = critic_p
+            self._target_critic_p_params = target_p_params
         self._updates += 1
         info = dict(info)
         info["actor_frozen"] = float(frozen)
@@ -448,3 +672,29 @@ class GatedTQCLearner(TQCLearner):
             info["q_scale_goal"] = float(self._q_scale_g or 1.0)
             info["q_scale_explore"] = float(self._q_scale_e or 1.0)
         return info
+
+    # -- the actor's entry points: never the privileged block --------------
+    # jaxrl2's Agent passes whatever it is given straight to the actor, whose
+    # network has no input layer for the lane block. Every method that reaches
+    # the actor (or the image-only critic) strips it first, so a caller may
+    # hand over the env's full observation.
+    def eval_actions(self, observations):
+        return super().eval_actions(strip_priv(observations))
+
+    def sample_actions(self, observations):
+        return super().sample_actions(strip_priv(observations))
+
+    def act(self, observations):
+        return super().act(strip_priv(observations))
+
+    def action_dist(self, batch):
+        return super().action_dist(strip_priv(batch))
+
+    def eval_log_probs(self, batch):
+        return super().eval_log_probs(strip_priv(batch))
+
+    def extract_features(self, batch):
+        return super().extract_features(strip_priv(batch))
+
+    def ensemble_uncertainty(self, batch, action):
+        return super().ensemble_uncertainty(strip_priv(batch), action)

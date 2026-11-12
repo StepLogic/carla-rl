@@ -1,0 +1,17 @@
+IMAGE z25 (easy | medium | hard)
+  uniform     0.77 0.76 | 0.73 0.72 | 0.11 0.11
+  entropy     0.76 0.76 | 0.73 0.73 | 0.13 0.12
+  sgm_matched 0.73 0.73 | 0.74 0.73 | 0.15 0.14
+  vint uniform 0.55 0.54 | 0.45 0.44 | 0.11 0.10
+ORACLE key-only z25 (easy | medium | hard)
+  uniform     0.75 0.74 | 0.71 0.70 | 0.10 0.09
+  entropy     0.74 0.74 | 0.62 0.62 | 0.08 0.06
+  sgm_matched 0.74 0.73 | 0.70 0.69 | 0.05 0.04
+  key-only map Town02 uniform: 97 nodes
+  key-only map Town02 entropy: 97 nodes
+  key-only map Town02 sgm_matched: 97 nodes
+  key-only map Town03 uniform: 319 nodes
+  key-only map Town03 entropy: 319 nodes
+  key-only map Town03 sgm_matched: 319 nodes
+
+[exited with code 0]

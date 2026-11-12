@@ -1,0 +1,127 @@
+#!/bin/bash
+# Train the torch recurrent-SAC image-goal arm on one cluster GPU.
+#
+# usage:  sbatch slurm/train_sac.sbatch
+#         MAX_STEPS=3000 LEARNING_STARTS=200 sbatch slurm/train_sac.sbatch  # pilot
+#
+# The env block below is v52's recipe at the 5-25 m band the user chose for
+# the image goal, since DEBiT needs the view and the goal to overlap.
+#
+#SBATCH --job-name=sac_train
+#SBATCH --partition=gpu
+#SBATCH --gres=gpu:l40:1
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=8
+#SBATCH --mem=96gb
+#SBATCH --time=24:00:00
+#SBATCH --output=%x_%j.log
+set -uo pipefail
+
+# EVERY ONE OF THESE LINES IS A MEASURED LESSON, NOT A PREFERENCE.
+#
+# 1. apptainer run --nv -e AND NOTHING ELSE. No binds, no Vulkan environment
+#    variables. Binding the host's /usr/share/vulkan/icd.d displaces the image's
+#    own nvidia_icd.json, which --nv already mounts, and CARLA then dies after
+#    4-9 s; every such failure in October came from carrying that bind. The
+#    Ubuntu-22.04 rebuild (carla0915_u22.sif) has no ICD at all -- do not use it.
+# 2. 0.9.16 MOVED THE SIMULATOR TO /workspace/CarlaUE4.sh. In 0.9.15 it was
+#    /home/carla/CarlaUE4.sh.
+# 3. POLL THE PORT WHILE THE SERVER RUNS, and allow at least 150 s. Startup takes
+#    11-76 s depending on cache warmth. A foreground `timeout` around CARLA and a
+#    check afterwards scores a HEALTHY server as dead (exit 124 is the timeout,
+#    not the simulator).
+# 4. PYTHONNOUSERSITE=1, always. The cluster home's ~/.local site-packages leak
+#    into the env and already hold numpy/torch/cv2, so pip reported "already
+#    satisfied" and installed nothing; the env only worked while that leak was
+#    present. With this set, what breaks breaks here rather than mid-run.
+# 5. 0.9.16 ON THE CLUSTER vs 0.9.15 LOCALLY is a real difference in the results,
+#    not a detail: 0.9.15's client ships cp27/cp37 wheels only, so the client and
+#    torch cannot share an interpreter. Every cluster number carries it.
+
+REPO=${REPO:-$HOME/carla-rl}
+# THE REBUILT IMAGE IS THE DEFAULT. The official carlasim/carla:0.9.16
+# image renders on the CPU here (plain ubuntu:20.04, Mesa ICDs, no NVIDIA
+# one) and segfaults at Epic; carla0916nv.sif is that simulator on an
+# nvidia/opengl glvnd base with the ICD baked in, and holds 1684 MiB on
+# the GPU. Do not point this back at the official image.
+SIF=${CARLA_SIF:-$HOME/carla-cluster/carla0916nv.sif}
+PY=${CLUSTER_PY:-$HOME/carla-cluster/envs/carla310/bin/python}
+export CARLA_PORT=${CARLA_PORT:-$((2000 + RANDOM % 900))}
+# ALL TOWNS EXCEPT Town02 AND Town03 (user 2026-10-14); those two stay held
+# out for the transfer read. The trainer rotates the map every TOWN_EVERY
+# episodes on this one server.
+export ENV_TOWNS=${ENV_TOWNS:-Town01,Town04,Town05,Town06,Town07,Town10HD}
+export CARLA_QUALITY=${CARLA_QUALITY:-Epic}
+export RUN_NAME=${RUN_NAME:-carla_sac_debit_v1}
+export MAX_STEPS=${MAX_STEPS:-1000000}
+
+echo "=== $(date +%T) node $(hostname) job ${SLURM_JOB_ID:-none} ==="
+echo "=== town $ENV_TOWNS port $CARLA_PORT quality $CARLA_QUALITY ==="
+nvidia-smi --query-gpu=name,memory.total,driver_version --format=csv,noheader
+module load apptainer 2>/dev/null || echo "[warn] no apptainer module; using PATH"
+for f in "$SIF" "$PY" "$REPO/slurm/smoke_sac_cluster.py"; do
+  [ -e "$f" ] || { echo "FATAL: missing $f"; exit 1; }
+done
+
+# THE TRAINER STARTS CARLA, NOT THIS SCRIPT. It owns the simulator so a town
+# change can restart it (torch_rl/carla_server.py); starting one here too would
+# put two servers on the same port. CARLA_SIF is passed through.
+# Export the RESOLVED path: a bare `export CARLA_SIF` is an unbound
+# variable under set -u when the caller did not set one.
+export CARLA_SIF="$SIF"
+echo "[carla] owned by the trainer (image $CARLA_SIF)"
+
+export PYTHONNOUSERSITE=1
+# rlib_integration IS NESTED: the importable package is
+# dependencies/rlib_integration/rlib_integration, and the directory above it has
+# its own __init__.py. With only $REPO/dependencies on the path, `import
+# rlib_integration` binds to that OUTER wrapper, which holds no carla_env, and
+# the failure reads as a missing module rather than a path one. Locally the
+# package is pip-installed in develop mode, so this never showed up there.
+# $REPO/dependencies IS DELIBERATELY ABSENT. With it on the path, `import
+# rlib_integration` binds to dependencies/rlib_integration/__init__.py -- an
+# EMPTY wrapper -- and shadows the real package one level down, so the failure
+# reads as a missing module rather than a shadowed one. Adding the inner path
+# after it does not help: the first match wins. Locally the package is
+# pip-installed in develop mode, which is why this only appears here. Nothing
+# else needs $REPO/dependencies: debit_encoder puts croco on sys.path itself.
+export PYTHONPATH="$REPO:$REPO/src:$REPO/dependencies/rlib_integration${PYTHONPATH:+:$PYTHONPATH}"
+export DEBIT_SRC=${DEBIT_SRC:-$REPO/dependencies}
+# The peer measured that importing a simulator client can corrupt multi-threaded
+# torch CPU matmuls; they pin these in every worker and so do we.
+export OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1
+export GATED=1 PERCEPTION=debit
+export OBS_WITH_MODE=1 OBS_WITH_GOAL=1 OBS_WITH_STATE=1
+export GATED_GOAL_REWARD=explore GOAL_EXPLORE_ARRIVAL_BONUS=50 EXPLORE_ARRIVAL_BONUS=10
+export DISCOUNT=0.99 EXPLORE_DISCOUNT=0.99
+# CRITIC TARGET FLOOR -1000, not -200 (2026-10-19, user-approved after v8). v8's
+# looping goal episodes realised ~-3.5 a step, worth about -350 at gamma 0.99;
+# a -200 floor clipped that to -200, so the critic could not see how bad
+# looping was. The ceiling stays 150 (the largest return is the 50 arrival).
+export TQC_VALUE_FLOOR=${TQC_VALUE_FLOOR:--1000} EXPLORE_VALUE_FLOOR=${EXPLORE_VALUE_FLOOR:--1000}
+export GOAL_DIST_MIN=5 GOAL_DIST_MAX=25 GOAL_DIST_START=25 GOAL_DIST_TARGET=25
+export LANE_PROGRESS_SCALE=1   # LANE_PROGRESS_MODE comes from v52_reward.env
+export MAX_STEER=1.0 MAX_THROTTLE=1.0 INCREMENTAL_ACTIONS=0 TARGET_SPEED=20.0
+export ENV_IMAGE_SIZE=120 VAE_IMAGE_SIZE=120 ENV_RGB_CHANNEL_FIX=1
+export SHORT_HORIZON=1 LANE_FOLLOW=1 LANE_STRICT=1 LANE_EXPLORE=0
+export GATED_EXPLORE_MAX_STEPS=1000 MAX_EPISODE_STEPS=2000
+export EXPERT_PROB=0 BC_WEIGHT=0 EPISODE_HER=0
+
+# THE REWARD IS v52'S, from the one file that defines it (user 2026-10-14).
+# Do not inline these: a copy is how they drifted last time.
+. "$REPO/slurm/v52_reward.env"
+# A RUN'S DELIBERATE CHANGES go in a named overlay file, sourced AFTER the
+# canonical one and echoed, never inlined on the command line (where the file
+# above would silently overwrite them anyway). REWARD_OVERLAY=slurm/<name>.env
+if [ -n "${REWARD_OVERLAY:-}" ]; then
+  echo "=== reward overlay $REWARD_OVERLAY ==="; grep '^export' "$REPO/$REWARD_OVERLAY"
+  . "$REPO/$REWARD_OVERLAY"
+fi
+
+
+cd "$REPO" || exit 1
+echo "=== $(date +%T) python ==="
+"$PY" -u train_carla_sac.py
+rc=$?
+echo "=== $(date +%T) train rc=$rc ==="
+exit $rc

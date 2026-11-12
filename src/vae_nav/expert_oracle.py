@@ -25,8 +25,31 @@ replay buffer and the HER relabeller cannot tell them apart, which is what
 makes them usable.
 """
 import os
+import sys
 
 import numpy as np
+
+
+def carla_agents_path():
+    """Where CARLA's `agents` package (BasicAgent, LocalPlanner) is imported from.
+
+    CARLA_AGENTS_PATH if set, else the copy vendored from the 0.9.16 server
+    image into dependencies/carla_agents. It used to be a hard-coded local
+    0.9.15 install path, which does not exist on the cluster, whose client env
+    has no `agents` package at all (2026-11-04)."""
+    env = os.environ.get("CARLA_AGENTS_PATH")
+    if env:
+        return env
+    repo = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    return os.path.join(repo, "dependencies", "carla_agents")
+
+
+def _ensure_agents_on_path():
+    """Prepend carla_agents_path() to sys.path once, so `import agents...` works."""
+    p = carla_agents_path()
+    if p not in sys.path:
+        sys.path.insert(0, p)
+
 
 # Replan when the vehicle drifts this far from its planned route: the PID can
 # be pushed off-course by traffic, and following a stale route afterwards
@@ -260,6 +283,44 @@ def should_use_expert(rng, expert_prob):
     return bool(rng.random() < float(expert_prob))
 
 
+def route_has_lane_change(route):
+    """True when a [(waypoint, RoadOption)] route contains a lane change."""
+    return any(str(opt).split(".")[-1] in ("CHANGELANELEFT", "CHANGELANERIGHT")
+               for _, opt in route)
+
+
+def lane_following_route(start_wp, goal_location, step_m=2.0, reach_m=3.0,
+                         slack_m=40.0, stretch=3.0):
+    """[(waypoint, RoadOption.LANEFOLLOW)] from start_wp to the goal using only
+    waypoint.next() -- lane following, no lane changes -- or None.
+
+    Depth-first over the branches next() offers at junctions, bounded by the
+    straight-line distance times `stretch` plus `slack_m` of path (a route
+    through a turn is much longer than the straight line), so it stays small:
+    branches exist only at junctions and a 200 m goal crosses a handful."""
+    _ensure_agents_on_path()
+    from agents.navigation.local_planner import RoadOption
+    gx, gy = goal_location.x, goal_location.y
+
+    def dist(wp):
+        loc = wp.transform.location
+        return float(np.hypot(loc.x - gx, loc.y - gy))
+
+    max_steps = int((stretch * dist(start_wp) + slack_m) / step_m) + 1
+    stack = [(start_wp, [start_wp])]
+    while stack:
+        wp, path = stack.pop()
+        if dist(wp) <= reach_m:
+            return [(w, RoadOption.LANEFOLLOW) for w in path]
+        if len(path) >= max_steps:
+            continue
+        # nearest-first: push the branch closest to the goal LAST so it pops first
+        nxt = sorted(wp.next(step_m), key=dist, reverse=True)
+        for n in nxt:
+            stack.append((n, path + [n]))
+    return None
+
+
 class BasicAgentExpert(ExpertOracle):
     """CARLA's own BasicAgent, wearing ExpertOracle's interface.
 
@@ -287,12 +348,42 @@ class BasicAgentExpert(ExpertOracle):
 
     FINAL_APPROACH_KMH = 6.0
 
+    # THE APPROACH SLOWS BEFORE THE GOAL, not after the route ends (M0
+    # benchmark, jobs 463141-463144): driving the whole route at the cruise
+    # speed, the car entered the 2 m arrival circle at a median 11.6 km/h and
+    # was at 9.7 km/h at its closest point -- arrival hung on coasting the last
+    # metre under the 10 km/h limit -- and where the snapped route end lay at
+    # or past the goal it drove through at 12-14 km/h (5 of 8 goal failures).
+    # The target falls linearly with the straight-line distance to the goal:
+    # cruise until APPROACH_SLOW_FROM_M, FINAL_APPROACH_KMH from
+    # APPROACH_FINAL_AT_M in. The action space has no brake, so the car slows
+    # by coasting (~1.8 m/s^2 measured); from 15 km/h the ramp asks <= 1.5.
+    APPROACH_SLOW_FROM_M = 10.0
+    APPROACH_FINAL_AT_M = 3.0
+
+    @classmethod
+    def approach_speed_kmh(cls, dist_m, cruise_kmh, final_kmh=None):
+        """Target speed at `dist_m` (straight line) from the goal; never above
+        the cruise speed."""
+        cruise = float(cruise_kmh)
+        final = min(cls.FINAL_APPROACH_KMH if final_kmh is None else float(final_kmh), cruise)
+        lo, hi = cls.APPROACH_FINAL_AT_M, cls.APPROACH_SLOW_FROM_M
+        frac = min(1.0, max(0.0, (float(dist_m) - lo) / (hi - lo)))
+        return final + (cruise - final) * frac
+
+    def _target_speed_now(self):
+        """The approach profile in a goal episode; the cruise speed on an
+        explore plan (set every step: the expert outlives episodes, so a goal
+        episode's slow target must not leak into the next drive)."""
+        if self._goal_loc is None:
+            return self.target_speed
+        loc = self._vehicle.get_location()
+        return self.approach_speed_kmh(
+            float(np.hypot(self._goal_loc.x - loc.x, self._goal_loc.y - loc.y)), self.target_speed)
+
     def __init__(self, vehicle, world_map, action_space, **kw):
         super().__init__(vehicle, world_map, action_space, **kw)
-        import sys
-        _p = "/home/robotlab/Apps/CARLA_0.9.15/PythonAPI/carla"
-        if _p not in sys.path:
-            sys.path.append(_p)
+        _ensure_agents_on_path()
         from agents.navigation.basic_agent import BasicAgent
         self._agent = BasicAgent(vehicle, target_speed=self.target_speed,
                                  map_inst=world_map)
@@ -303,10 +394,12 @@ class BasicAgentExpert(ExpertOracle):
         self._agent.ignore_vehicles(True)
         self._goal_loc = None
         self._planned = False
+        self._explore = False            # set_explore_plan sets it, reset clears it
 
     def reset(self, goal_location):
         self.last_plan_error = None
         self._goal_loc = goal_location
+        self._explore = False
         try:
             # PLAN FROM WHERE THE CAR IS NOW, NOT WHERE THE PLANNER LAST WAS.
             # BasicAgent.set_destination(goal) with no start_location traces
@@ -326,18 +419,21 @@ class BasicAgentExpert(ExpertOracle):
             start_wp = self._map.get_waypoint(self._vehicle.get_location())
             end_wp = self._map.get_waypoint(goal_location)
             route = self._agent.trace_route(start_wp, end_wp)
+            # NO LANE CHANGES (user 2026-09-28: "i want no lane change"). Every
+            # goal lies on the start lane's own continuation (origin.next(d)),
+            # yet CARLA's planner took a lane change on 6/600 Town05 routes
+            # (scripts/goal_lane_audit.py) -- and the actor learns from what
+            # the expert drives. Such a route is replaced by the lane-following
+            # one, which always exists for these goals.
+            if route_has_lane_change(route):
+                lf = lane_following_route(start_wp, goal_location)
+                if lf:
+                    route = lf
+                    print(f"[ExpertPlan] lane change in CARLA's route replaced "
+                          f"by a lane-following one ({len(lf)} waypoints)",
+                          flush=True)
             self._agent.set_global_plan(route, clean_queue=True)
-            # PID memories are per-episode too: the derivative/integral
-            # buffers otherwise carry the last episode's final error into the
-            # first steps of this one.
-            # (0.9.15 names them differently: longitudinal _error_buffer,
-            # lateral _e_buffer.)
-            ctrl = lp._vehicle_controller
-            for c in (ctrl._lon_controller, ctrl._lat_controller):
-                for attr in ("_error_buffer", "_e_buffer"):
-                    buf = getattr(c, attr, None)
-                    if buf is not None:
-                        buf.clear()
+            self._clear_pid()
             n = len(lp._waypoints_queue)
         except Exception as e:  # noqa: BLE001
             self.last_plan_error = f"{type(e).__name__}: {e}"
@@ -367,11 +463,74 @@ class BasicAgentExpert(ExpertOracle):
             self.last_plan_error = "BasicAgent produced an empty route"
         return n
 
+    def _clear_pid(self):
+        """PID memories are per-episode too: the derivative/integral buffers
+        otherwise carry the last episode's final error into the first steps of
+        this one. (0.9.15 names them differently: longitudinal _error_buffer,
+        lateral _e_buffer.)"""
+        ctrl = self._agent.get_local_planner()._vehicle_controller
+        for c in (ctrl._lon_controller, ctrl._lat_controller):
+            for attr in ("_error_buffer", "_e_buffer"):
+                buf = getattr(c, attr, None)
+                if buf is not None:
+                    buf.clear()
+
+    def set_explore_plan(self, waypoints):
+        """EXPLORE MODE (imitation-first plan, 2026-11-04): follow `waypoints`
+        (from expert_route.explore_route) as a lane-following plan. There is no
+        goal, so no final approach: act() returns None once the plan is done.
+        Returns the queue length."""
+        from agents.navigation.local_planner import RoadOption
+        self.last_plan_error = None
+        self._goal_loc = None
+        self._explore = True
+        try:
+            self._agent.set_global_plan(
+                [(w, RoadOption.LANEFOLLOW) for w in waypoints], clean_queue=True)
+            self._clear_pid()
+            n = len(self._agent.get_local_planner()._waypoints_queue)
+        except Exception as e:  # noqa: BLE001
+            self.last_plan_error = f"{type(e).__name__}: {e}"
+            n = 0
+        self._planned = n > 0
+        if not self._planned and self.last_plan_error is None:
+            self.last_plan_error = "empty explore plan"
+        return n
+
+    def replan_if_off_route(self, max_off_m=3.0):
+        """DAgger relabelling (imitation-first plan): BasicAgent only plans at
+        reset and then follows that plan, so when the POLICY drives and drifts
+        more than `max_off_m` from it, the expert replans from the car's actual
+        pose -- the goal again in goal mode, the same branch rule for the
+        remaining distance in explore mode. A finished plan is left alone.
+        Returns whether it replanned."""
+        from vae_nav.expert_route import explore_route, needs_replan
+        if not self._planned:
+            return False
+        q = self._agent.get_local_planner()._waypoints_queue
+        if not len(q):
+            return False
+        xy = np.array([[w.transform.location.x, w.transform.location.y]
+                       for w, _ in q], np.float64).reshape(-1, 2)
+        loc = self._vehicle.get_location()
+        if not needs_replan(xy, (loc.x, loc.y), max_off_m):
+            return False
+        if getattr(self, "_explore", False):
+            remaining = max(SAMPLING_RESOLUTION_M * len(q), SAMPLING_RESOLUTION_M)
+            self.set_explore_plan(explore_route(self._map.get_waypoint(loc), remaining))
+        else:
+            self.reset(self._goal_loc)
+        return True
+
     def act(self):
         if not self._planned:
             return None
         if not self._agent.done():
+            self._agent.set_target_speed(self._target_speed_now())
             return self._to_action(self._agent.run_step())
+        if self._goal_loc is None:
+            # An explore plan has no goal to approach: it is simply finished.
+            return None
 
         # ROUTE END REACHED, GOAL NOT. The planner snaps the route's end to a
         # node up to one sampling step short of the goal, so crawl the last
@@ -388,6 +547,15 @@ class BasicAgentExpert(ExpertOracle):
             (tf.get_forward_vector().x, tf.get_forward_vector().y),
             (self._goal_loc.x, self._goal_loc.y))
         if not go:
+            # AT the goal (within FINAL_APPROACH_STOP_M): stop is the answer.
+            # Goal BESIDE or BEHIND the car: the route is spent and the car is
+            # past it -- there is no correction to give, so no label (None): a
+            # recording ends there. Answering "stop" every step was what DAgger
+            # round 1 recorded after each overshoot (~950 rows each, at
+            # 14-18 km/h), and it taught the retrained clone to crawl.
+            gx, gy = self._goal_loc.x - tf.location.x, self._goal_loc.y - tf.location.y
+            if float(np.hypot(gx, gy)) >= self.FINAL_APPROACH_STOP_M:
+                return None
             return self._to_action((0.0, 0.0))
         import carla
         from types import SimpleNamespace

@@ -53,6 +53,8 @@ class ThreadedVecEnv:
         # forever -- the env is unrecoverable and only a rebuild restores it.
         self._env_fns = list(env_fns)
         self.envs = list(self._pool.map(lambda f: f(), env_fns))
+        # Envs replaced by a rebuild, KEPT referenced (see _safe_reset).
+        self._dead_envs = []
 
         self.observation_space = self.envs[0].observation_space
         self.action_space = self.envs[0].action_space
@@ -78,6 +80,13 @@ class ThreadedVecEnv:
             self.envs[i].close()
         except Exception:  # noqa: BLE001
             pass
+        # KEEP THE DEAD ENV REFERENCED (2026-11-05, fine-tune job 463476). Dropped,
+        # its CARLA client and actors were garbage-collected a minute after the
+        # rebuild; a destructor's call to the replaced server timed out, and a C++
+        # exception inside a destructor is std::terminate ("terminate called after
+        # throwing an instance of 'carla::client::TimeoutException'", rc 134) --
+        # uncatchable, and it took all four towns with it.
+        self._dead_envs.append(self.envs[i])
         self.envs[i] = self._env_fns[i]()
         out = self.envs[i].reset()
         return out if isinstance(out, tuple) else (out, {})
@@ -156,6 +165,11 @@ class ThreadedVecEnv:
             if done:
                 inf["episode_return"] = float(self.episode_returns[i])
                 inf["episode_length"] = int(self.episode_lengths[i])
+                # The TERMINAL observation, before the auto-reset overwrites
+                # obs[i] below. A truncated (time-limit) transition still
+                # bootstraps from it, so a replay that stored the reset
+                # observation instead would value the next episode's start.
+                inf["final_obs"] = o
                 final_infos.append(inf)
                 reset_idx.append(i)
             else:

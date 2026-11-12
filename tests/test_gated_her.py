@@ -44,7 +44,7 @@ class _RecordingBuffer:
         self.modes = []
         self.accepts_mode = accepts_mode
 
-    def insert(self, row, mode=None):
+    def insert(self, row, mode=None, segment=None):
         if mode is not None and not self.accepts_mode:
             raise TypeError("insert() got an unexpected keyword 'mode'")
         self.rows.append(row)

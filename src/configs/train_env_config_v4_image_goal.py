@@ -17,6 +17,86 @@ from rlib_integration.base_experiment import BaseExperiment
 from rlib_integration.helper import post_process_image, carla_location_to_np_array
 
 
+# CHANNEL ORDER (user 2026-09-26: "also fix confirmed issues"). obs_img was BGR,
+# not RGB, because the channels are flipped TWICE and the flips cancel:
+#
+#   1. rlib_integration/sensors/sensor.py BaseCamera.parse() takes the BGRA
+#      buffer, drops alpha and applies [:, :, ::-1]  ->  RGB. CORRECT.
+#   2. rlib_integration/helper.py post_process_image() then runs
+#      cv2.cvtColor(image, cv2.COLOR_BGR2RGB) on that already-RGB array,
+#      swapping R and B back  ->  BGR. WRONG.
+#
+# VERIFIED, not inferred: a pure-blue BGRA buffer (B=255) comes out of parse()
+# with the 255 in channel 2 and out of post_process_image() with it in channel 0.
+# Frame statistics could NOT settle it -- Town02's brick facades sit in the sky
+# rows and bright-pixel argmax split 53%/44%.
+#
+# WHY THE FIX IS HERE AND NOT UPSTREAM. Neither flip can simply be deleted:
+#   - parse()'s reversal is LOAD-BEARING for vae_nav/lane_mask.py, which reads
+#     CARLA's semantic tag out of channel 0 precisely because the reversal moved
+#     it there. Removing it empties every lane mask, silently.
+#   - post_process_image() is shared with baseline_env_config and
+#     goal_conditioned_env_config (the CORL 2026 experiments), whose recorded
+#     results are all on the swapped path. Changing it would move their numbers.
+# So the correction is applied in THIS config only, at the point of use.
+#
+# EVERY EXISTING CHECKPOINT WAS TRAINED ON THE SWAPPED FRAMES, so evaluating one
+# with the fix on feeds it out-of-distribution input. ENV_RGB_CHANNEL_FIX=0
+# restores the old path exactly, and the eval/collect scripts for recorded
+# checkpoints set it. The name starts with ENV_, which the train_v10.sh snapshot
+# regex matches, so the setting lands in each run's .env record.
+RGB_CHANNEL_FIX = os.environ.get("ENV_RGB_CHANNEL_FIX", "1") == "1"
+_RGB_FIX_ANNOUNCED = False
+
+# WEATHER RANDOMISATION (v18, user 2026-09-27: suggestions for transfer ->
+# "proceed"). The weather was the fixed "CloudySunset" below, set ONCE when the
+# env was built: every frame of every run had the same sun angle, shadows and
+# sky. With ENV_WEATHER_RANDOM=1 a preset is drawn per episode at reset, from a
+# seeded RNG so a run is reproducible. Daytime and sunset only by default: the
+# camera has no headlights, and a night frame is mostly black -- a harder task,
+# not a more varied one. DustStorm is left out for the same reason.
+# ENV_WEATHER_PRESETS overrides the list; unset keeps the fixed weather, so every
+# earlier recipe and every eval is unchanged.
+WEATHER_RANDOM = os.environ.get("ENV_WEATHER_RANDOM", "0") == "1"
+WEATHER_PRESETS = [w.strip() for w in os.environ.get(
+    "ENV_WEATHER_PRESETS",
+    "ClearNoon,CloudyNoon,WetNoon,WetCloudyNoon,SoftRainNoon,MidRainyNoon,"
+    "HardRainNoon,ClearSunset,CloudySunset,WetSunset,WetCloudySunset,"
+    "SoftRainSunset,MidRainSunset,HardRainSunset").split(",") if w.strip()]
+_bad_weather = [w for w in WEATHER_PRESETS
+                if not hasattr(carla.WeatherParameters, w)]
+if WEATHER_RANDOM and (_bad_weather or not WEATHER_PRESETS):
+    raise ValueError(f"ENV_WEATHER_PRESETS names unknown presets {_bad_weather} "
+                     f"(or is empty); this CARLA build knows "
+                     f"{sorted(n for n in dir(carla.WeatherParameters) if n[:1].isupper())}")
+
+
+def _world_of(env_or_core):
+    """rlib's carla_env passes the CORE to experiment.reset, carla_goal_env the
+    ENV; accept either."""
+    w = getattr(env_or_core, "world", None)
+    if w is None:
+        w = getattr(getattr(env_or_core, "core", None), "world", None)
+    return w
+
+
+def _fix_channel_order(image):
+    """Undo post_process_image's spurious BGR->RGB swap, so the frame really is
+    RGB. Returns the array unchanged when ENV_RGB_CHANNEL_FIX=0."""
+    global _RGB_FIX_ANNOUNCED
+    if not _RGB_FIX_ANNOUNCED:
+        _RGB_FIX_ANNOUNCED = True
+        print(f"[RGB] ENV_RGB_CHANNEL_FIX={'1 -- frames are RGB' if RGB_CHANNEL_FIX else '0 -- frames stay BGR, as every recorded checkpoint was trained'}",
+              flush=True)
+    if not RGB_CHANNEL_FIX:
+        return image
+    if image is None or getattr(image, "ndim", 0) != 3 or image.shape[-1] != 3:
+        # Greyscale or an unexpected shape: nothing to swap, and guessing would
+        # be worse than leaving it.
+        return image
+    return np.ascontiguousarray(image[..., ::-1])
+
+
 def normalize_angle(angle):
     """Normalize angle to [-π, π]"""
     return ((angle + np.pi) % (2 * np.pi)) - np.pi
@@ -122,6 +202,46 @@ LANE_STRICT = os.environ.get("LANE_STRICT", "1") == "1"
 # shorter. The rate stays in the [Why] breakdown either way, so the trade is
 # measurable rather than invisible.
 WEDGE_ON_OFF_ROAD = os.environ.get("WEDGE_ON_OFF_ROAD", "1") == "1"
+# OFF_ROAD_JUNCTION_M (user 2026-11-06: "use distance rule"). Off-road is
+# get_waypoint(..., project_to_road=False) is None: the car's centre on no
+# Driving lane polygon. INSIDE A JUNCTION that fires on asphalt -- a turn a
+# little wider or tighter than CARLA's connector strip. Measured on c0's
+# long-route map runs: 74 of 81 off-road faults were in a junction, every one
+# 1.75-3 m from a lane centre (never on a kerb or sidewalk), and the expert's
+# clean coverage tours raised it 66 / 144 times. With this > 0, an off-road
+# reading INSIDE A JUNCTION counts only when the car's centre is more than this
+# many metres from the nearest Driving-lane centre (3.5 = a lane width: up a
+# kerb or onto a sidewalk). Outside junctions nothing changes. The raw reading
+# stays in self.off_road_raw. 0 = off, every earlier run.
+OFF_ROAD_JUNCTION_M = float(os.environ.get("OFF_ROAD_JUNCTION_M", 0.0) or 0.0)
+# THE IMAGE-GOAL TASK REGIME (user spec 2026-09-18). One flag, three effects,
+# all required together or the task is incoherent:
+#
+#   1. THE GOAL IS FIXED. The env's own mid-episode resample (fires whenever
+#      the hero comes within 2 m of the goal) is SKIPPED: under the image-goal
+#      spec the episode ENDS at the target viewpoint -- a goal that runs away
+#      the moment it is reached is exactly the arrival-erasure bug that made
+#      the oracle's successes invisible (see core_state.py's arrived comment).
+#      Termination belongs to the reward wrapper (ImageGoalReward), not here.
+#   2. THE COLLISION IS A MAGNITUDE AND A LATCH. The env keeps only the
+#      boolean event; the spec's persistent -0.75/step penalty needs the
+#      impulse (to gate sensor noise) and an episode-level latch. Both are
+#      published in info; the reward wrapper latches its own copy from the
+#      impulse, so the env latch is for visibility and Phase 2 (critic z).
+#   3. THE NEW LABELS ARE PUBLISHED: yaw_error_to_goal_deg (relative to the
+#      goal waypoint's road heading, the yaw the goal camera was spawned at),
+#      route_distance_to_goal_m (along-road, euclidean fallback), and
+#      simulator_invalid (hero destroyed).
+#
+# Additive only: with the flag off, nothing in the existing CORL/gated
+# behaviour changes by one bit.
+IMAGE_GOAL_TASK = os.environ.get("IMAGE_GOAL_TASK", "0") == "1"
+# ARRIVAL RADIUS (2026-11-01, the Gibson replication). Arrival was a hard-coded
+# `distance_to_goal < 2`; Gibson's image-goal success is 1.0 m. GOAL_RADIUS_M is
+# the variable train_carla_sac already reads for SPL and HER reads for its
+# hindsight arrivals, so ONE setting now governs the env, SPL and HER together
+# -- they cannot disagree. Default 2.0: every run before this is unchanged.
+ARRIVAL_RADIUS_M = float(os.environ.get("GOAL_RADIUS_M", 2.0))
 
 
 class STBL3Experiment(BaseExperiment):
@@ -155,6 +275,16 @@ class STBL3Experiment(BaseExperiment):
         else:
             self.max_steer = float(os.environ.get("MAX_STEER", 1.0))
             self.max_throttle = float(os.environ.get("MAX_THROTTLE", 1.0))
+        # MIN_THROTTLE: THE DEAD ZONE (measured 2026-11-03, scripts/throttle_probe.py).
+        # From a standstill this vehicle does not move at all below ~0.11
+        # throttle: 0.05, 0.08 and 0.10 all give 0.00 m and 0.0 km/h over 200
+        # steps, while 0.15 drives 11.4 m. So the bottom fifth of the actor's
+        # throttle range is a no-op, and a deterministic policy that lands
+        # there cannot change its own state -- v36 at 600k sat still for the
+        # full 1000 steps in 29 of 40 Town02 episodes. With MIN_THROTTLE set,
+        # the actor's range is rescaled onto [min, max] so no action is inert.
+        # Default 0.0: every earlier run is unchanged.
+        self.min_throttle = float(os.environ.get("MIN_THROTTLE", 0.0))
         # One action = one step of this size on the control.
         self.steer_step = float(os.environ.get("STEER_STEP", 0.01))
         self.throttle_step = float(os.environ.get("THROTTLE_STEP", 0.01))
@@ -265,6 +395,34 @@ class STBL3Experiment(BaseExperiment):
         self.done_speed = False
         self.checkpoint_count=0
 
+        # Per-episode weather (see WEATHER_RANDOM). Seeded once per experiment
+        # object from ENV_WEATHER_SEED (default: the run SEED), so a given run
+        # replays the same weather sequence.
+        if WEATHER_RANDOM:
+            if getattr(self, "_weather_rng", None) is None:
+                _seed = int(os.environ.get("ENV_WEATHER_SEED",
+                                           os.environ.get("SEED", 0)) or 0)
+                self._weather_rng = np.random.default_rng(_seed)
+                print(f"[Weather] randomised per episode over "
+                      f"{len(WEATHER_PRESETS)} presets: {WEATHER_PRESETS}",
+                      flush=True)
+            _name = WEATHER_PRESETS[int(self._weather_rng.integers(
+                len(WEATHER_PRESETS)))]
+            _world = _world_of(env)
+            if _world is not None:
+                _world.set_weather(getattr(carla.WeatherParameters, _name))
+                self.weather_name = _name
+                # The first draws are logged so a run's own log PROVES the
+                # weather varies; a banner alone would not.
+                self._weather_n = getattr(self, "_weather_n", 0) + 1
+                if self._weather_n <= 10:
+                    print(f"[Weather] episode {self._weather_n}: {_name}",
+                          flush=True)
+            elif getattr(self, "_weather_warned", False) is False:
+                self._weather_warned = True
+                print("[Weather] WARNING: no world reachable from reset(); "
+                      "weather NOT randomised", flush=True)
+
         # Hero variables
         self.last_location = None
         self.last_velocity = 0
@@ -284,6 +442,7 @@ class STBL3Experiment(BaseExperiment):
 
         # Control variables
         self.wedged = False
+        self.goal_frozen = False
         self.prev_steer = 0.0
         self.prev_throttle = 0.0
         self.steer = 0.0
@@ -298,6 +457,12 @@ class STBL3Experiment(BaseExperiment):
         self.passed_chckp = False
         self.info = dict()
         self.rewards = []
+        # IMAGE-GOAL LATCHES (IMAGE_GOAL_TASK only; see the flag's comment).
+        # The collision flag is the episode-level persistent state the spec
+        # requires: False at reset, latched True by the first meaningful
+        # impact, never cleared until the next reset.
+        self.collision_impulse = 0.0
+        self.has_collided = False
         
         if self.trajectories is None:
             self._cache_waypoints(env.world)
@@ -371,8 +536,25 @@ class STBL3Experiment(BaseExperiment):
         # spend probability mass on actions the env silently truncates. With
         # the default max_throttle=1.0 this is identical to the old space, so
         # existing runs are unaffected.
+        # THROTTLE SPANS [0, max_throttle] (user 2026-10-19: "change the
+        # action space of the environment to 0 - 1"). Forward only: no
+        # reverse, no brake. A tanh actor's output is rescaled onto this box
+        # by the trainer (train_carla_sac.to_env), not here.
+        # STOP_ACTION=1 (user 2026-10-28): a third dimension by which the car
+        # DECLARES it has arrived, as Habitat's imagenav STOP action does. It
+        # drives nothing -- compute_action ignores it and the reward wrapper
+        # reads info["stop_action"] -- so the vehicle control is unchanged.
+        # The throttle floor is part of the BOX, so the trainer's rescaling
+        # (to_env) spreads the actor's range over [min_throttle, max_throttle]
+        # and no action is a no-op. See MIN_THROTTLE in __init__.
+        lo_thr = getattr(self, "min_throttle", 0.0)
+        if os.environ.get("STOP_ACTION", "0") == "1":
+            return Box(
+                low=np.array([-self.max_steer, lo_thr, -1.0], np.float32),
+                high=np.array([self.max_steer, self.max_throttle, 1.0], np.float32),
+                dtype=np.float32)
         return Box(
-            low=np.array([-self.max_steer, 0.0], np.float32),
+            low=np.array([-self.max_steer, lo_thr], np.float32),
             high=np.array([self.max_steer, self.max_throttle], np.float32),
             dtype=np.float32
         )
@@ -399,6 +581,8 @@ class STBL3Experiment(BaseExperiment):
         Off by default so the existing goal-navigation runs are unchanged.
         """
         a0, a1 = float(action[0]), float(action[1])
+        # The declaration rides in info, never in the control (STOP_ACTION).
+        self.info["stop_action"] = float(action[2]) if len(action) > 2 else 0.0
 
         vehicle_control = carla.VehicleControl()
 
@@ -406,13 +590,33 @@ class STBL3Experiment(BaseExperiment):
         # Full brake rather than merely zero throttle, so it does not coast on
         # for another twenty metres after crossing the line -- "wedged" should
         # mean stationary, not drifting.
-        if getattr(self, "wedged", False):
+        # GOAL_FROZEN: the same hold, set and cleared by GatedReward for the
+        # GOAL_FREEZE_STEPS penalty after a fined crossing (never published as
+        # `wedged`, so no wedge rule reads it).
+        if getattr(self, "wedged", False) or getattr(self, "goal_frozen", False):
             vehicle_control.steer = 0.0
             vehicle_control.throttle = 0.0
             vehicle_control.brake = 1.0
             vehicle_control.hand_brake = True
             vehicle_control.reverse = False
             self.steer = 0.0
+            self.throttle = 0.0
+            self.last_action = vehicle_control
+            return vehicle_control
+        # TRACE_REVERSE (trace-only, 2026-11-06): the unbroken map trace's expert
+        # recovery sets `trace_reverse = (steer, throttle)` to BACK OUT of a block
+        # (job 464244: nose against a wall, full throttle, 30 s without moving --
+        # the action space has no reverse). The action is discarded while it is
+        # set. Never set by training: the attribute does not exist unless
+        # train_carla_sac.run_unbroken_trace creates it.
+        rev = getattr(self, "trace_reverse", None)
+        if rev is not None:
+            vehicle_control.steer = float(np.clip(rev[0], -self.max_steer, self.max_steer))
+            vehicle_control.throttle = float(np.clip(rev[1], 0.0, 1.0))
+            vehicle_control.brake = 0.0
+            vehicle_control.hand_brake = False
+            vehicle_control.reverse = True
+            self.steer = vehicle_control.steer
             self.throttle = 0.0
             self.last_action = vehicle_control
             return vehicle_control
@@ -433,16 +637,15 @@ class STBL3Experiment(BaseExperiment):
         steer, throttle_brake = a0, a1
         vehicle_control.steer = float(np.clip(steer, -self.max_steer, self.max_steer))
 
-        if throttle_brake >= 0:
-            vehicle_control.throttle = float(np.clip(throttle_brake, 0.0, self.max_throttle))
-            vehicle_control.brake = 0.0
-        else:
-            vehicle_control.throttle = 0.0
-            vehicle_control.brake = float(np.clip(-throttle_brake, 0.0, 1.0))
-            
+        # THROTTLE IS FORWARD-ONLY: the action IS the throttle, in [0, max]
+        # (user 2026-10-19). Out-of-box values are clipped. No reverse.
         vehicle_control.reverse = False
+        vehicle_control.throttle = float(np.clip(throttle_brake,
+                                                 getattr(self, "min_throttle", 0.0),
+                                                 self.max_throttle))
+        vehicle_control.brake = 0.0
         vehicle_control.hand_brake = False
-        
+
         self.steer = vehicle_control.steer
         self.throttle = vehicle_control.throttle
         self.last_action = vehicle_control
@@ -579,6 +782,7 @@ class STBL3Experiment(BaseExperiment):
             grayscale=False,
             image_size=self.image_size
         )
+        image = _fix_channel_order(image)
 
         # cv2.imwrite("obs.jpg",image)
 
@@ -616,7 +820,15 @@ class STBL3Experiment(BaseExperiment):
             grayscale=False,
             image_size=self.image_size
         )
+        goal_image = _fix_channel_order(goal_image)
         # cv2.imwrite("goal.jpg",goal_image)
+        # RETAINED, as obs_img is for the current view (core_state publishes that
+        # as info["rgb"]). The DEBiT arm needs the goal PIXELS, not this
+        # MobileNet latent: its binocular encoder reads the pair jointly, and
+        # once the encoder's adapters train the replay must hold pixels rather
+        # than a precomputed vector. Kept BEFORE the mask check so a masked-goal
+        # ablation still records what it masked.
+        self.goal_img = goal_image
         if self.mask_goal or getattr(self, "skip_image_features", False):
             return np.zeros((self._feature_dim()),dtype=np.float32)
         img_tensor = self.image_transform(goal_image.copy()).unsqueeze(0).to(self.device)
@@ -652,6 +864,19 @@ class STBL3Experiment(BaseExperiment):
         # 'lane_invasion' in sensor_data.keys() or
         # self.diff_lane =  wp is None
         self.diff_lane= 'lane_invasion' in sensor_data.keys()
+        # EVENT FRESHNESS (diagnostic, 2026-09-28 goal-reward debugging). Event
+        # sensors share ONE queue and get_data pops at most one item per event
+        # sensor per tick with no frame check, so an event can reach the reward
+        # on a LATER tick than it happened. lag = camera frame - event frame;
+        # 0 = this tick's event. Read by nothing but logging/eval traces.
+        def _lag(key):
+            try:
+                return int(sensor_data['rgb'][0]) - int(sensor_data[key][0])
+            except Exception:  # noqa: BLE001
+                return None
+        self.lane_event_lag = _lag('lane_invasion') if self.diff_lane else None
+        self.collision_event_lag = (_lag('collision')
+                                    if 'collision' in sensor_data.keys() else None)
 
         # WEDGE ON LANE CROSSING. Once the vehicle crosses a marking it stops
         # responding to actions for the rest of the episode -- compute_action
@@ -691,6 +916,18 @@ class STBL3Experiment(BaseExperiment):
         # it would silently change those episodes' termination behaviour.
         # core_state.py ORs this into the sparse path's lane_invasion.
         self.off_road = wp is None
+        self.off_road_raw = self.off_road
+        if self.off_road and OFF_ROAD_JUNCTION_M > 0:
+            try:
+                _loc = hero.get_transform().location
+                _pwp = core.map.get_waypoint(_loc, project_to_road=True,
+                                             lane_type=carla.LaneType.Driving)
+                if _pwp is not None and _pwp.is_junction:
+                    _c = _pwp.transform.location
+                    if ((_loc.x - _c.x) ** 2 + (_loc.y - _c.y) ** 2) ** 0.5 <= OFF_ROAD_JUNCTION_M:
+                        self.off_road = False     # on junction asphalt, not off it
+            except Exception:
+                pass                              # fail closed: keep the raw reading
 
         # ADDITIVE: record WHICH markings were crossed. diff_lane above is left
         # exactly as it was so the dense-reward CORL experiments are unaffected;
@@ -761,14 +998,28 @@ class STBL3Experiment(BaseExperiment):
         _unpainted_marks = {"NONE"}
         _marks = [t.split(".")[-1] for t in self.lane_marking_types]
         # Fail CLOSED on no marking information at all: absent data is not
-        # evidence of a legal crossing.
+        # evidence of a legal crossing. LANE_UNKNOWN_MARKS_FATAL=0 reverses
+        # that (user 2026-09-30: "no marking data at all and offroad false -
+        # non terminal"); off_road is judged separately and still ends the
+        # episode, so this only frees a crossing ON the road whose marking the
+        # sensor did not report. Read from the env on EVERY call, never cached
+        # at import, because lane_explore_reward.lane_departure_is_fatal reads
+        # the same variable and the two rules must not disagree.
+        _unknown_fatal = os.environ.get("LANE_UNKNOWN_MARKS_FATAL", "1") == "1"
         _crossed_illegal = bool(self.diff_lane and (
-            not _marks or any(m in _illegal_marks for m in _marks)))
+            (not _marks and _unknown_fatal)
+            or any(m in _illegal_marks for m in _marks)))
         # Only when EVERY reported marking is unpainted. A mixed Broken+NONE
         # crossing is judged as the Broken one -- the painted line is the real
         # boundary and the junction rule below decides it.
-        _only_unpainted = bool(_marks) and all(m in _unpainted_marks
-                                               for m in _marks)
+        #
+        # NO MARKING DATA joins this branch under LANE_UNKNOWN_MARKS_FATAL=0,
+        # mirroring lane_explore_reward.lane_departure_is_fatal: without it an
+        # unreported marking would fall through to the Broken branch below and
+        # still be fatal on open road, so the flag would be half-applied.
+        _only_unpainted = ((bool(_marks) and all(m in _unpainted_marks
+                                                 for m in _marks))
+                           or (not _marks and not _unknown_fatal))
 
         # THE EXEMPTION IS THE JUNCTION INTERIOR, NOT THE MARKING TYPE.
         #
@@ -820,6 +1071,25 @@ class STBL3Experiment(BaseExperiment):
         if LANE_WEDGE and (_lane_fatal or _off_road_fatal):
             self.wedged = True
         self.collision = 'collision' in sensor_data.keys()
+        if self.collision:
+            # THE MAGNITUDE, kept for the image-goal spec. Collision.parse
+            # returns [other_actor, |normal_impulse|]; the env's own flag
+            # above discards the impulse entirely. Read defensively -- a
+            # malformed event reads as "no meaningful impact" rather than
+            # killing the episode; the magnitude lands in info either way,
+            # so the gap is visible, not silent.
+            if IMAGE_GOAL_TASK:
+                from vae_nav.image_goal_reward import (
+                    COLLISION_IMPULSE_THRESHOLD)
+                try:
+                    raw = sensor_data["collision"]
+                    self.collision_impulse = float(
+                        raw[1] if isinstance(raw, (list, tuple))
+                        and len(raw) > 1 else getattr(raw, "impulse_value", 0.0))
+                except (TypeError, ValueError, IndexError):
+                    self.collision_impulse = 0.0
+                if self.collision_impulse > COLLISION_IMPULSE_THRESHOLD:
+                    self.has_collided = True
         # DISTANCE CAP, env-var gated. Default 200 keeps the CORL dense-reward
         # experiments byte-identical; the long-horizon curriculum raises it.
         #
@@ -839,11 +1109,22 @@ class STBL3Experiment(BaseExperiment):
         
         # Check success condition
         # self.done_dist = self.distance_travelled >= max(50,50*round(self.time_episode/4e4))
-        if distance_to_goal < 2:  # Resample when within 2m of goal (for 4-8m range)
+        # IMAGE-GOAL: the resample is SKIPPED -- the goal is fixed for the
+        # episode and the reward wrapper decides what arrival means. See the
+        # IMAGE_GOAL_TASK comment at the top of this file.
+        if distance_to_goal < ARRIVAL_RADIUS_M and not IMAGE_GOAL_TASK:
+            # Resample when within 2m of goal (for 4-8m range)
             self.passed_chckp = True
             self.checkpoint_count += 1
             print("Checkppoint Passed")
-            core.resample_goal()
+            # GOAL_KEEP_ON_PASS=1 (goal chaining, user 2026-11-02): arrival is
+            # still flagged, but the goal does NOT move here. The image-goal
+            # wrapper latches its frame at reset, so a resample here (a pass
+            # through the radius too fast to count) moved the planner's goal
+            # away from the image the policy was being shown. GatedReward
+            # draws chained goals itself, at a soft reset.
+            if os.environ.get("GOAL_KEEP_ON_PASS", "0") != "1":
+                core.resample_goal()
         # WRONG-DIRECTION TERMINATION, env-var gated and OFF by default.
         #
         # It fires when heading alignment to the goal drops below -0.8 inside a
@@ -878,6 +1159,33 @@ class STBL3Experiment(BaseExperiment):
         )
         
         # Update info
+        _route_remaining = self._route_remaining(core)
+        _ig = {}
+        if IMAGE_GOAL_TASK:
+            # THE IMAGE-GOAL LABELS. Yaw error is relative to the GOAL
+            # waypoint's road heading -- the yaw the goal camera was spawned
+            # at -- so "matches the intended orientation" means facing along
+            # the road as in the goal image. Both headings are read in the
+            # same CARLA convention the rest of this file uses
+            # (radians(rotation.yaw) and atan2 of forward vectors agree).
+            _dest = core.destination
+            _fwd_getter = getattr(_dest, "get_forward_vector", None)
+            _goal_fwd = (_fwd_getter() if _fwd_getter is not None
+                         else _dest.transform.get_forward_vector())
+            _goal_yaw = math.atan2(_goal_fwd.y, _goal_fwd.x)
+            _hero_yaw = math.radians(float(hero.get_transform().rotation.yaw))
+            from vae_nav.image_goal_reward import wrap_deg
+            _ig = dict(
+                collision_impulse=float(getattr(self, "collision_impulse", 0.0)),
+                has_collided=bool(getattr(self, "has_collided", False)),
+                yaw_error_to_goal_deg=wrap_deg(
+                    math.degrees(_goal_yaw - _hero_yaw)),
+                route_distance_to_goal_m=(_route_remaining
+                                          if _route_remaining is not None
+                                          else float(distance_to_goal)),
+                simulator_invalid=not bool(
+                    getattr(hero, "is_alive", True)),
+            )
         self.info.update(dict(
             is_success=self.done_dist,
             # PUBLISHED SO THE REWARD WRAPPER CAN END THE EPISODE EARLY.
@@ -889,17 +1197,22 @@ class STBL3Experiment(BaseExperiment):
             wedged=bool(getattr(self, "wedged", False)),
             # ALONG-ROAD metres left to the goal, or None when no route
             # exists. Phi(s) = -route_remaining_m; GatedReward differences it.
-            route_remaining_m=self._route_remaining(core),
+            route_remaining_m=_route_remaining,
             # Whether the hero was inside a junction. The wedge's exemption
             # turns on this, so it has to be visible in the [Why] breakdown --
             # otherwise "crossings are forgiven correctly" is unfalsifiable.
             in_junction=bool(getattr(self, "in_junction", False)),
+            lane_event_lag=getattr(self, "lane_event_lag", None),
+            collision_event_lag=getattr(self, "collision_event_lag", None),
+            # Which preset this episode is rendered under (logging/provenance).
+            weather=getattr(self, "weather_name", "fixed"),
             distance_travelled=self.distance_completed,
             goal_directed_distances=self.distance_completed,
             checkpoints_passed=self.checkpoint_count,
             max_reward=0,
             min_reward=0,
-            mean_reward=0
+            mean_reward=0,
+            **_ig
         ))
         
         if len(self.rewards) > 0:
@@ -1096,9 +1409,18 @@ config = {
     "env_config": {
         "carla": {
             "host": "localhost",
-            "timeout": 50.0,
+            # CARLA_CLIENT_TIMEOUT: Town10HD stalls >50s mid-episode (HD-map
+            # streaming; measured 2026-09-21 -- the server stayed ALIVE but
+            # stopped answering, the client's C++ TimeoutException is not
+            # catchable in Python and core-dumped the trainer). 180s absorbs
+            # the stall; collect_lane_data.py already uses the same env name.
+            "timeout": float(os.environ.get("CARLA_CLIENT_TIMEOUT", 50.0)),
             "timestep": 0.1,
-            "retries_on_error": 25,
+            # CARLA_CLIENT_RETRIES (2026-11-05): a healthy start never needed a
+            # second load_world attempt; a hung one (UE4 watchdog) only ever
+            # failed all 25, 21 minutes against a dead port. Fail after a few;
+            # the trainer restarts the server (connect_with_restarts).
+            "retries_on_error": int(os.environ.get("CARLA_CLIENT_RETRIES", 3)),
             "resolution_x": 600,
             "resolution_y": 600,
             "quality_level": "Low",
@@ -1131,11 +1453,21 @@ config = {
                     "goal_heading": {
                         "type": "sensor.goal.heading"
                     },
-                    "goal": {
+                    # GOAL_CAM_MATCH=1 (user 2026-10-21, "match the
+                    # cameras"): the goal camera takes the hero rgb camera's
+                    # resolution and FOV, and torch_rl.goal_camera mounts it
+                    # like the hero camera at the goal. Off: the original
+                    # 112x112 at CARLA's default 90 deg.
+                    "goal": ({
+                        "type": "sensor.goal",
+                        "image_size_x": 748,
+                        "image_size_y": 348,
+                        "fov": 110,
+                    } if os.environ.get("GOAL_CAM_MATCH", "0") == "1" else {
                         "type": "sensor.goal",
                         "image_size_x": 112,
                         "image_size_y": 112,
-                    },
+                    }),
                 },
             },
             "background_activity": {

@@ -60,6 +60,12 @@ def agent_state(agent):
     temp_e = getattr(agent, "_temp_e", None)
     if temp_e is not None:
         state["temp_e"] = _to_numpy(temp_e.params)
+    # ASYMMETRIC (OBS_PRIV): the privileged goal critic and its target. Only
+    # written when present, so every other checkpoint keeps its keys.
+    critic_p = getattr(agent, "_critic_p", None)
+    if critic_p is not None:
+        state["critic_p"] = _to_numpy(critic_p.params)
+        state["target_critic_p"] = _to_numpy(agent._target_critic_p_params)
     return state
 
 
@@ -124,6 +130,18 @@ def load_agent_state(agent, state):
               "estimates to be meaningless until it has trained; damp the "
               "explore-mode actor gradient (explore_actor_warmup) or the actor "
               "will follow a critic that knows nothing.")
+    # ASYMMETRIC: restore the privileged goal critic when both sides have one.
+    # A privileged agent loading a checkpoint WITHOUT it is refused: resuming
+    # would hand the actor to a randomly initialised critic.
+    if getattr(agent, "_critic_p", None) is not None:
+        if "critic_p" not in state:
+            raise SystemExit(
+                "this agent has a privileged goal critic (OBS_PRIV=1) but the "
+                "checkpoint has none; the actor would follow an untrained "
+                "critic. Start fresh or load a checkpoint from an OBS_PRIV run.")
+        agent._critic_p = _swap(agent._critic_p, state["critic_p"], "critic_p")
+        agent._target_critic_p_params = state.get("target_critic_p",
+                                                  state["critic_p"])
     return agent
 
 

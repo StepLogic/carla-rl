@@ -71,6 +71,13 @@ except ImportError:
 # progress term.
 K_NOVELTY = float(os.environ.get("K_NOVELTY", 0.2))
 BASE_PENALTY = float(os.environ.get("LANE_BASE_PENALTY", 4e-3))
+# STEER_CHANGE_SCALE (v28, user 2026-10-31) multiplies the per-step |delta
+# steer| cost (0..2, unscaled before). On v27 it averaged ~0.2 a step on
+# failing eval episodes -- more than driving earned -- so the goal critic sat
+# at -20..-48 and ending an episode on a -1 crossing became the cheap way out.
+# The repo this reward follows (nisheeth-golakiya/carla-rl) has no such term.
+# 1 = every earlier run; 0 removes it.
+STEER_CHANGE_SCALE = float(os.environ.get("STEER_CHANGE_SCALE", 1.0))
 COLLISION_PENALTY = float(os.environ.get("LANE_COLLISION_PENALTY", 3.0))
 LANE_DEPARTURE_PENALTY = float(os.environ.get("LANE_DEPARTURE_PENALTY", 5.0))
 SPEED_PENALTY = float(os.environ.get("LANE_SPEED_PENALTY", 3.0))
@@ -187,13 +194,28 @@ def lane_departure_is_fatal(diff_lane, marking_types, in_junction, off_road,
     if (LANE_ANY_FATAL if strict is None else strict):
         return True
     marks = [str(t).split(".")[-1] for t in (marking_types or [])]
-    crossed_illegal = (not marks) or any(m in ILLEGAL_MARKS for m in marks)
+    # LANE_UNKNOWN_MARKS_FATAL=0 (user 2026-09-30: "no marking data at all and
+    # offroad false - non terminal") stops a crossing whose marking the sensor
+    # did not report from ending the episode. off_road is decided ABOVE and is
+    # unaffected, so the freed case is exactly "on the road, crossed something,
+    # no marking data". Default 1 keeps every earlier run's rule. Read per call,
+    # not at import, so it matches the env config's wedge copy of this rule.
+    unknown_fatal = os.environ.get("LANE_UNKNOWN_MARKS_FATAL", "1") == "1"
+    crossed_illegal = ((not marks) and unknown_fatal) or any(
+        m in ILLEGAL_MARKS for m in marks)
     if crossed_illegal:
         return True
     # Only when EVERY reported marking is unpainted. A mixed Broken+NONE
     # crossing is judged as the Broken one -- the painted line is the real
     # boundary, and the junction rule below decides it.
-    if bool(marks) and all(m in UNPAINTED_MARKS for m in marks):
+    #
+    # NO MARKING DATA joins this branch under LANE_UNKNOWN_MARKS_FATAL=0. It
+    # must be decided HERE and not fall through: the final line treats anything
+    # unresolved as a painted crossing, so an early return is the only way an
+    # unreported marking is actually forgiven on open road.
+    if not marks:
+        return bool(unknown_fatal)
+    if all(m in UNPAINTED_MARKS for m in marks):
         return False
     return not bool(in_junction)
 
@@ -293,7 +315,7 @@ class LaneExploreReward(Wrapper):
         steer_change = float(info.get("action_smoothness_penalty", 0.0))
         speed_factor = float(info.get("speed_factor", 0.0))
 
-        reward = -BASE_PENALTY - steer_change
+        reward = -BASE_PENALTY - STEER_CHANGE_SCALE * steer_change
         # Upstream gates the progress term on being under the target speed.
         if speed_factor < 1.0:
             reward += PROGRESS_SCALE * projected      # LANE_PROGRESS_SCALE

@@ -87,7 +87,7 @@ export EXPLORE_PROB=0.5           # strictly between 0 and 1, or one critic
                                   # never trains
 export GOAL_BATCH_FRAC=0.5        # batch composition FIXED on sample, so the
                                   # env-step skew cannot starve either critic
-export GATED_EXPLORE_MAX_STEPS=500   # the goal-free arm's cap
+export GATED_EXPLORE_MAX_STEPS=1000  # the goal-free arm's cap (user 2026-09-18: 500 -> 1000)
 # ---- the goal arm's reward: SORB minimum time --------------------------------
 # -1 per step until arrival, 0 on arrival, as in the Habitat peer. The goal
 # critic then IS the cost-to-go: Q = -(steps to goal). That reading is what a
@@ -122,7 +122,7 @@ export POTENTIAL_K=1.0
 
 export GATED_GOAL_REWARD=sorb
 export STEP_COST=1.0
-export GATED_GOAL_MAX_STEPS=750  # goal return therefore lies in [-750, 0],
+export GATED_GOAL_MAX_STEPS="${GATED_GOAL_MAX_STEPS:-750}"  # goal return therefore lies in [-max_steps, 0],
                                  # ported to match TTG_MAX_STEPS
 export WEDGE_TRUNCATE="${WEDGE_TRUNCATE:-1}"  # a wedge ends the episode BILLED EXACTLY for
                                   # the time it would have burned, so ending
@@ -264,13 +264,14 @@ export DELTA_MODE=positive
 export INCREMENTAL_ACTIONS=0
 export MAX_STEER=0.5 MAX_THROTTLE=0.4   # ported: 0.6 settled ~22 km/h
 export STEER_STEP=0.01 THROTTLE_STEP=0.01
-export OBS_WITH_VECTOR=1          # REQUIRED: BOTH gated rewards are speed-gated
+# v8 gated runs ship the 9-d state block instead of the vector (OBS_WITH_VECTOR=0); default unchanged.
+export OBS_WITH_VECTOR="${OBS_WITH_VECTOR:-1}"   # REQUIRED: BOTH gated rewards are speed-gated
 # OVERRIDABLE so run_gated_her.sh can flip exactly this one flag and nothing
 # else. The two arms must differ by hindsight alone or the comparison measures
 # the difference between two scripts rather than the effect of relabelling.
 export EPISODE_HER="${EPISODE_HER:-0}"
 export CHAIN_MAX_GOALS=1
-export EXPERT_PROB=0.4           # ported: scripted PID on 40% of episodes
+export EXPERT_PROB="${EXPERT_PROB:-0.4}"   # ported: scripted PID on 40% of episodes; overridable (v36, user 2026-09-30 "expert prob = 0")
 # GOAL-MODE EPISODES ONLY (decided 2026-09-11). In explore mode the oracle
 # drives to a goal explore does not have and then parks for the rest of the
 # cap -- rows the explore critic should not see. Until 2026-09-11 the oracle
@@ -357,10 +358,10 @@ export PERCEPTION="${PERCEPTION:-vae}"             # 128-d, shared with BOTH lan
                                   # is 384-d and would change the obs width.
 export VAE_CKPT=checkpoints/lane_vae_120/best.pkl
 export MAX_EPISODE_STEPS=2000     # the GOAL arm's cap; explore truncates at 500
-export MAX_DISTANCE_M=200
+export MAX_DISTANCE_M="${MAX_DISTANCE_M:-200}"
 export TARGET_SPEED=20.0
 export SHORT_HORIZON=1
-export GOAL_DIST_MIN=20.0 GOAL_DIST_START=50.0 GOAL_DIST_TARGET=50.0
+export GOAL_DIST_MIN="${GOAL_DIST_MIN:-20.0}" GOAL_DIST_START="${GOAL_DIST_START:-50.0}" GOAL_DIST_TARGET="${GOAL_DIST_TARGET:-50.0}"
 export JUNCTION_GOAL_FRAC="${JUNCTION_GOAL_FRAC:-0.7}"    # 70% of episodes ROUTED THROUGH a junction
 # ...BUT THE GOAL ITSELF IS NEVER INSIDE ONE. These two are not in tension:
 # JUNCTION_GOAL_FRAC places the ORIGIN one goal-distance BEFORE a junction so
@@ -384,11 +385,16 @@ export TQC_KAPPA=10.0
 export TEMP_LR=3e-4
 export EVAL_VIDEO=1
 export XLA_PYTHON_CLIENT_PREALLOCATE=false
-export XLA_PYTHON_CLIENT_MEM_FRACTION=0.4
+export XLA_PYTHON_CLIENT_MEM_FRACTION="${XLA_PYTHON_CLIENT_MEM_FRACTION:-0.4}"
 # A free-memory check is necessary but NOT sufficient: jax can still die with
 # RESOURCE_EXHAUSTED while instantiating a CUDA command buffer, which no byte
 # count predicts. This removes that allocation.
-export XLA_FLAGS=--xla_gpu_enable_command_buffer=
+export XLA_FLAGS="${XLA_FLAGS:+$XLA_FLAGS }--xla_gpu_enable_command_buffer="
+# v8 (2026-09-21): torch VC-1 + jax must share the ~1 GB left beside two
+# windowed CARLA servers; the cudnn autotune probe dies there
+# (RESOURCE_EXHAUSTED on a 16-18 MB workspace). The picker flag falls back to
+# a default algorithm instead of probing -- selection only, no numerics.
+export XLA_FLAGS="${XLA_FLAGS:+$XLA_FLAGS }--xla_gpu_strict_conv_algorithm_picker=false"
 
 CARLA_SH=/home/robotlab/Apps/CARLA_0.9.15/CarlaUE4.sh
 # pgrep -x CANNOT match: /proc/PID/comm is capped at 15 chars, so the 23-char

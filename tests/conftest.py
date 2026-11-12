@@ -42,3 +42,10 @@ os.environ.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE", "false")
 # count predicts it. Harmless on CPU, and correct if someone overrides the
 # platform back to the GPU.
 os.environ.setdefault("XLA_FLAGS", "--xla_gpu_enable_command_buffer=")
+
+
+def pytest_configure(config):
+    # No plugin: just register the name so @pytest.mark.slow is not an
+    # "unknown marker" warning. Nothing filters on it by default.
+    config.addinivalue_line(
+        "markers", "slow: loads real encoder weights; heavy")

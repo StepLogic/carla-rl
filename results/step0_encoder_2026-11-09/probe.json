@@ -1,0 +1,159 @@
+{
+ "state": {
+  "camera": {
+   "offset": {
+    "ridge": 0.702,
+    "mlp": 0.805,
+    "shuffled": -0.006
+   },
+   "heading_err": {
+    "ridge": 0.046,
+    "mlp": 0.045,
+    "shuffled": -0.0
+   }
+  },
+  "gru": {
+   "offset": {
+    "ridge": 0.546,
+    "mlp": 0.641,
+    "shuffled": -0.005
+   },
+   "heading_err": {
+    "ridge": 0.314,
+    "mlp": 0.363,
+    "shuffled": 0.0
+   }
+  },
+  "binoc": {
+   "offset": {
+    "ridge": 0.674,
+    "mlp": 0.633,
+    "shuffled": -0.012
+   },
+   "heading_err": {
+    "ridge": 0.062,
+    "mlp": -0.031,
+    "shuffled": -0.001
+   }
+  },
+  "speed_only": {
+   "offset": {
+    "ridge": -0.005
+   },
+   "heading_err": {
+    "ridge": -0.0
+   }
+  }
+ },
+ "visibility": {
+  "k1": {
+   "n_all": 43617,
+   "n_labelled": 26582,
+   "noise_sd": 0.148,
+   "ceiling_true_motion": 0.262,
+   "ceiling_true_motion_mlp": 0.325,
+   "camera": {
+    "f_t_only": -0.0,
+    "f_t_and_t+k": -0.001,
+    "f_t_and_t+k_labelled": -0.0,
+    "mlp_f_t_and_t+k": -0.008
+   },
+   "gru": {
+    "f_t_only": -0.0,
+    "f_t_and_t+k": -0.002,
+    "f_t_and_t+k_labelled": -0.001,
+    "mlp_f_t_and_t+k": -0.006
+   },
+   "binoc": {
+    "f_t_and_t+k": -0.003
+   },
+   "critic_input_mlp": -0.057
+  },
+  "k2": {
+   "n_all": 43377,
+   "n_labelled": 26171,
+   "noise_sd": 0.105,
+   "ceiling_true_motion": 0.32,
+   "ceiling_true_motion_mlp": 0.393,
+   "camera": {
+    "f_t_only": -0.001,
+    "f_t_and_t+k": 0.009,
+    "f_t_and_t+k_labelled": 0.008,
+    "mlp_f_t_and_t+k": -0.005
+   },
+   "gru": {
+    "f_t_only": -0.001,
+    "f_t_and_t+k": -0.036,
+    "f_t_and_t+k_labelled": 0.014,
+    "mlp_f_t_and_t+k": 0.039
+   },
+   "binoc": {
+    "f_t_and_t+k": 0.006
+   },
+   "critic_input_mlp": -0.017
+  },
+  "k4": {
+   "n_all": 42898,
+   "n_labelled": 25477,
+   "noise_sd": 0.074,
+   "ceiling_true_motion": 0.268,
+   "ceiling_true_motion_mlp": 0.309,
+   "camera": {
+    "f_t_only": -0.001,
+    "f_t_and_t+k": 0.147,
+    "f_t_and_t+k_labelled": 0.181,
+    "mlp_f_t_and_t+k": 0.131
+   },
+   "gru": {
+    "f_t_only": -0.002,
+    "f_t_and_t+k": 0.027,
+    "f_t_and_t+k_labelled": 0.092,
+    "mlp_f_t_and_t+k": 0.217
+   },
+   "binoc": {
+    "f_t_and_t+k": 0.103
+   },
+   "critic_input_mlp": 0.117
+  }
+ },
+ "transfer": {
+  "camera": {
+   "offset": 0.342,
+   "heading_err": 0.039
+  },
+  "camera_within_Town01": {
+   "offset": 0.726,
+   "heading_err": 0.202
+  },
+  "gru": {
+   "offset": -0.362,
+   "heading_err": 0.276
+  },
+  "gru_within_Town01": {
+   "offset": 0.442,
+   "heading_err": 0.172
+  },
+  "binoc": {
+   "offset": 0.06,
+   "heading_err": -0.037
+  },
+  "binoc_within_Town01": {
+   "offset": 0.529,
+   "heading_err": 0.133
+  }
+ },
+ "counts": {
+  "state_frames_Town05": 53237,
+  "state_episodes_Town05": 407,
+  "state_frames_Town01": 21109
+ },
+ "label_sd": {
+  "offset": 0.21,
+  "heading_err": 3.457
+ },
+ "ckpt": "/home/robotlab/carla-sac-local/checkpoints/il_bc_c0/step_15000",
+ "towns": [
+  "Town05",
+  "Town01"
+ ]
+}

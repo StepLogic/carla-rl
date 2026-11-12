@@ -1,0 +1,91 @@
+% Requires \usepackage{booktabs}.
+
+% ---- Table 1: main result ------------------------------------------------
+\begin{table}[t]
+\centering
+\caption{Goal-image navigation with a paired wrong-goal control (v30, step 300k).
+Each town is driven twice on the same 100 episodes: with the true goal image and
+with another episode's goal image. Success (SR) = within 2\,m at $\leq$10\,km/h;
+lane crossings, leaving the road and collisions end the episode. Discordant
+pairs are episodes solved by exactly one arm; $p$ from an exact McNemar test.
+Brackets: Wilson 95\% intervals. Town02 is held out from training; Town03 was
+never seen.}
+\label{tab:main}
+\begin{tabular}{lcccccc}
+\toprule
+ & \multicolumn{2}{c}{True goal} & Wrong goal & & Discordant & \\
+\cmidrule(lr){2-3}
+Town & SR & SPL & SR & Gap & true / wrong & $p$ \\
+\midrule
+Town02 & 0.560 \tiny[0.46, 0.65] & 0.524 & 0.030 \tiny[0.01, 0.08] & +0.530 & 53 / 0 & $<$0.0001 \\
+Town03 & 0.350 \tiny[0.26, 0.45] & 0.341 & 0.040 \tiny[0.02, 0.10] & +0.310 & 31 / 0 & $<$0.0001 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+% ---- Table 2: retreat-charge ablation --------------------------------------
+\begin{table}[t]
+\centering
+\caption{The charge for driving away from the goal decides whether the goal image
+is used. Retreat charge = cost of a metre driven away from the goal, relative to
+the +1 a metre towards it pays; all else equal. Town02, 100 paired episodes per
+arm, best checkpoint of each run.}
+\label{tab:retreat}
+\begin{tabular}{lccccc}
+\toprule
+Retreat charge & True SR & Wrong SR & Gap & Discordant & $p$ \\
+\midrule
+1.0 & 0.470 \tiny[0.38, 0.57] & 0.300 \tiny[0.22, 0.40] & +0.170 & 24 / 7 & 0.0033 \\
+0.0 & 0.480 \tiny[0.38, 0.58] & 0.470 \tiny[0.38, 0.57] & +0.010 & 7 / 6 & 1.00 \\
+\textbf{0.3} & \textbf{0.560} \tiny[0.46, 0.65] & \textbf{0.030} \tiny[0.01, 0.08] & \textbf{+0.530} & 53 / 0 & $<$0.0001 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+% ---- Table 3: long-distance benchmark --------------------------------------
+\begin{table*}[t]
+\centering
+\caption{Long-distance benchmark following the Gibson/Mezghani ImageNav protocol,
+scaled to CARLA: 4 held-out towns $\times$ 3 route-distance bins $\times$ 100
+fixed episodes = 1{,}200 per arm. Each bin is generated from its own distance
+band, and an episode counts only if its planner route distance falls in the bin.
+SR at Gibson's 1.0\,m radius and at the 2.0\,m training radius (same runs). SPL
+at 1.0\,m. Wrong = the same episodes with another episode's goal image. $p$:
+exact McNemar, Holm-corrected across bins. The policy was trained on goals up to
+25\,m.}
+\label{tab:benchmark}
+\begin{tabular}{lccccccc}
+\toprule
+Difficulty & $n$ & SR @ 1\,m & SR @ 2\,m & SPL & Wrong SR @ 1\,m & Discordant & $p$ \\
+\midrule
+Easy (10--25\,m) & 400 & 0.217 \tiny[0.18, 0.26] & 0.395 \tiny[0.35, 0.44] & 0.209 & 0.013 & 87 / 5 & $<$0.0001 \\
+Medium (25--50\,m) & 400 & 0.120 \tiny[0.09, 0.16] & 0.220 \tiny[0.18, 0.26] & 0.118 & 0.003 & 47 / 0 & $<$0.0001 \\
+Hard (50--100\,m) & 400 & 0.022 \tiny[0.01, 0.04] & 0.062 \tiny[0.04, 0.09] & 0.022 & 0.000 & 9 / 0 & 0.0039 \\
+\midrule
+All & 1200 & 0.120 \tiny[0.10, 0.14] & 0.226 \tiny[0.20, 0.25] & 0.116 & 0.005 & 143 / 5 & $<$0.0001 \\
+\bottomrule
+\end{tabular}
+\end{table*}
+
+% ---- Table 4: benchmark by town and by path type ---------------------------
+\begin{table}[t]
+\centering
+\caption{The benchmark of Table~\ref{tab:benchmark} by town and by path type
+(NRNS: straight if route / straight-line distance $\leq$ 1.20). $p$: exact
+McNemar, Holm-corrected within each block.}
+\label{tab:benchmark-breakdown}
+\begin{tabular}{lcccccc}
+\toprule
+ & $n$ & SR @ 1\,m & SR @ 2\,m & SPL & Wrong @ 1\,m & $p$ \\
+\midrule
+Town02 & 300 & 0.243 \tiny[0.20, 0.29] & 0.340 \tiny[0.29, 0.40] & 0.236 & 0.010 & $<$0.0001 \\
+Town03 & 300 & 0.073 \tiny[0.05, 0.11] & 0.180 \tiny[0.14, 0.23] & 0.071 & 0.000 & $<$0.0001 \\
+Town04 & 300 & 0.090 \tiny[0.06, 0.13] & 0.233 \tiny[0.19, 0.28] & 0.088 & 0.000 & $<$0.0001 \\
+Town10HD & 300 & 0.073 \tiny[0.05, 0.11] & 0.150 \tiny[0.11, 0.19] & 0.071 & 0.010 & 0.0002 \\
+\midrule
+Straight & 1021 & 0.140 \tiny[0.12, 0.16] & 0.264 \tiny[0.24, 0.29] & 0.136 & 0.006 & $<$0.0001 \\
+Curved & 179 & 0.006 \tiny[0.00, 0.03] & 0.006 \tiny[0.00, 0.03] & 0.006 & 0.000 & 1.00 \\
+\bottomrule
+\end{tabular}
+\end{table}
+

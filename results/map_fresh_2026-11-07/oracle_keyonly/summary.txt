@@ -1,0 +1,34 @@
+Town02 uniform      key-only map: 255 nodes, 423 edges
+Town02 entropy      key-only map: 255 nodes, 428 edges
+Town02 sgm_matched  key-only map: 254 nodes, 409 edges
+Town03 uniform      key-only map: 1120 nodes, 2227 edges
+Town03 entropy      key-only map: 1121 nodes, 2207 edges
+Town03 sgm_matched  key-only map: 1100 nodes, 2096 edges
+ORACLE localisation on KEY-ONLY maps, fresh seeds (100 per cell), success rate
+Town02 easy   mapless 0.73 | uniform 0.73 (fallback 0) | entropy 0.74 (fallback 18) | sgm_matched 0.73 (fallback 26)
+Town02 medium mapless 0.68 | uniform 0.76 (fallback 0) | entropy 0.72 (fallback 29) | sgm_matched 0.73 (fallback 30)
+Town02 hard   mapless 0.45 | uniform 0.51 (fallback 0) | entropy 0.40 (fallback 26) | sgm_matched 0.43 (fallback 33)
+Town03 easy   mapless 0.67 | uniform 0.69 (fallback 0) | entropy 0.68 (fallback 27) | sgm_matched 0.63 (fallback 32)
+Town03 medium mapless 0.57 | uniform 0.60 (fallback 0) | entropy 0.58 (fallback 24) | sgm_matched 0.60 (fallback 35)
+Town03 hard   mapless 0.39 | uniform 0.46 (fallback 0) | entropy 0.41 (fallback 23) | sgm_matched 0.42 (fallback 32)
+--- pooled over both towns (200 per band): wins a/b, exact McNemar ---
+easy   entropy      vs mapless      12/10 p 0.83
+easy   entropy      vs sgm_matched  16/10 p 0.33
+easy   entropy      vs uniform      17/17 p 1
+easy   sgm_matched  vs mapless      9/13 p 0.52
+easy   sgm_matched  vs uniform      12/18 p 0.36
+easy   uniform      vs mapless      17/15 p 0.86
+hard   entropy      vs mapless      10/13 p 0.68
+hard   entropy      vs sgm_matched  11/15 p 0.56
+hard   entropy      vs uniform      8/24 p 0.007
+hard   sgm_matched  vs mapless      14/13 p 1
+hard   sgm_matched  vs uniform      15/27 p 0.088
+hard   uniform      vs mapless      21/8 p 0.024
+medium entropy      vs mapless      15/10 p 0.42
+medium entropy      vs sgm_matched  19/22 p 0.76
+medium entropy      vs uniform      16/22 p 0.42
+medium sgm_matched  vs mapless      17/9 p 0.17
+medium sgm_matched  vs uniform      12/15 p 0.7
+medium uniform      vs mapless      24/13 p 0.099
+
+[exited with code 0]

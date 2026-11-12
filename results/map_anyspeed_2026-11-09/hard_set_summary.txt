@@ -1,0 +1,13 @@
+Town02: 1000 probed, 1000 routed, 200 qualify -> keep 100
+Town03: 2000 probed, 2000 routed, 180 qualify -> keep 100
+200 episodes -> /home/egyaase/carla-rl/logs/bench_turns_episodes.json
+no map                       SR 0.06 SPL 0.05 | vs no map 0/0 p 1 | ends {'clock': 29, 'collision': 8, 'crossing': 54, 'off_road': 97, 'reached': 12}
+no map, WRONG goal           SR 0.05 SPL 0.04 | vs no map 6/9 p 0.61 | ends {'clock': 25, 'collision': 6, 'crossing': 56, 'off_road': 104, 'reached': 9}
+uniform image                SR 0.11 SPL 0.11 | vs no map 21/11 p 0.11 | ends {'clock': 71, 'collision': 7, 'crossing': 35, 'off_road': 65, 'reached': 22}
+entropy image                SR 0.06 SPL 0.06 | vs no map 10/11 p 1 | ends {'clock': 65, 'collision': 5, 'crossing': 39, 'off_road': 80, 'reached': 11}
+sgm_matched image            SR 0.13 SPL 0.12 | vs no map 25/12 p 0.047 | ends {'clock': 71, 'crossing': 49, 'off_road': 55, 'reached': 25}
+uniform TRUE POSE key-only   SR 0.08 SPL 0.08 | vs no map 16/12 p 0.57 | ends {'clock': 103, 'crossing': 35, 'off_road': 46, 'reached': 16}
+entropy TRUE POSE key-only   SR 0.08 SPL 0.07 | vs no map 15/11 p 0.56 | ends {'clock': 86, 'collision': 2, 'crossing': 45, 'off_road': 51, 'reached': 16}
+sgm_matched TRUE POSE key-only SR 0.12 SPL 0.12 | vs no map 21/9 p 0.043 | ends {'clock': 82, 'collision': 3, 'crossing': 35, 'off_road': 56, 'reached': 24}
+
+[exited with code 0]

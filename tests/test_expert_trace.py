@@ -23,7 +23,7 @@ from vae_nav import image_map  # noqa: E402
 
 
 def test_trace_only_is_the_one_bypass_of_the_held_out_guard():
-    for t in ("Town02", "Town03"):
+    for t in ("Town02", "Town03", "Town07"):
         with pytest.raises(ValueError, match="held out"):
             assert_recordable_town(t)
         assert_recordable_town(t, trace_only=True)

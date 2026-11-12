@@ -31,7 +31,7 @@ import json
 import os
 import sys
 import time
-from typing import Callable, Dict, Optional
+from typing import Callable, Dict, Optional, Sequence
 
 import numpy as np
 import torch
@@ -88,12 +88,11 @@ class LoopSettings:
 
 def frl_refusals(towns, parallel: bool, env=None) -> list:
     """Settings learner C's loop would silently ignore or get wrong; [] = none. Its loop drives
-    ONE env with no town rotation, trains from scratch with no demos, HER or noise-free
-    episodes, and its trunk is c0's (MONO_CHW=1, SPEED_OBS=1 rows)."""
+    ONE env at a time -- one env per town, the next town at every episode end (train's
+    extra_envs) -- trains from scratch with no demos, HER or noise-free episodes, and its trunk
+    is c0's (MONO_CHW=1, SPEED_OBS=1 rows)."""
     env = os.environ if env is None else env
     out = []
-    if len(towns) != 1:
-        out.append(f"ENV_TOWNS={','.join(towns)}: learner C trains on one town (no rotation)")
     if parallel:
         out.append("PARALLEL_TOWNS=1: learner C drives one env; set PARALLEL_TOWNS=0")
     for k in ("INIT_FROM", "IL_PRELOAD_ROOT"):
@@ -411,28 +410,42 @@ def _mode(obs) -> int:
 def train(env, obs, info, out: str, *, trunk: C0Trunk, row_of: Callable, settings: LoopSettings,
           c0_dir: str, log: Callable = print, probe: Optional[SteerProbe] = None,
           to_env: Callable = box_map, ramp=None, rebuild_env: Optional[Callable] = None,
-          expert=None, learner=None):
-    """FastRLAP's online loop on the CARLA env; returns (learner, replay, the live env). `ramp`
-    (a torch_rl.junction_ramp.JunctionRamp or None): the task's junction curriculum, fed every
-    finished GOAL episode the actor drove, as the parallel loop feeds it. `rebuild_env` (None =
-    a failed reset stops the run): builds a fresh env when a reset fails -- after a simulator
-    fault the actors can be gone, and only a rebuild recovers (vec_env._safe_reset)."""
+          expert=None, learner=None, extra_envs: Sequence = (),
+          towns: Optional[Sequence[str]] = None):
+    """FastRLAP's online loop on the CARLA env; returns (learner, replay, [the live env of each
+    town]). `ramp` (a torch_rl.junction_ramp.JunctionRamp or None): the task's junction
+    curriculum, fed every finished GOAL episode the actor drove, as the parallel loop feeds it.
+    `rebuild_env` (None = a failed reset stops the run): builds a fresh env when a reset fails --
+    after a simulator fault the actors can be gone, and only a rebuild recovers
+    (vec_env._safe_reset).
+
+    `extra_envs` [(env, rebuild or None), ...] (user 2026-11-11, "town05 and town01 train"):
+    more towns, one env each. The loop still drives ONE env at a time -- one transition and one
+    update per step, as with one town -- and moves to the next town at every episode end; a
+    failed step restarts the episode in the same town. `towns` names the envs for the log."""
     dead = []        # KEPT REFERENCED: a collected CARLA client can std::terminate (vec_env)
+    envs = [env] + [e for e, _ in extra_envs]
+    rebuilds = [rebuild_env] + [r for _, r in extra_envs]
+    names = list(towns) if towns is not None else [f"env{i}" for i in range(len(envs))]
+    if len(names) != len(envs):
+        raise ValueError(f"towns {names} name {len(names)} envs; there are {len(envs)}")
+    cur = 0                                  # the town being driven
 
     def safe_reset():
         nonlocal env
         try:
             return env.reset()
         except Exception as e:  # noqa: BLE001
-            if rebuild_env is None:
+            if rebuilds[cur] is None:
                 raise
-            log(f"[Env] reset failed: {type(e).__name__}: {e} -- rebuilding the env")
+            where = f" ({names[cur]})" if len(envs) > 1 else ""
+            log(f"[Env] reset failed{where}: {type(e).__name__}: {e} -- rebuilding the env")
         try:
             env.close()
         except Exception:  # noqa: BLE001
             pass
         dead.append(env)
-        env = rebuild_env()
+        env = envs[cur] = rebuilds[cur]()
         return env.reset()
 
     s = settings
@@ -452,6 +465,8 @@ def train(env, obs, info, out: str, *, trunk: C0Trunk, row_of: Callable, setting
     mode = _mode(obs)
     ep_ret, ep_len, episodes = 0.0, 0, 0
     recent = {"policy": [], "goal": [], "explore": []}
+    town_goal = {n: [] for n in names}       # the last 100 goal arrivals of each town
+    town_eps = {n: 0 for n in names}
     ends, roll = {}, {"n": 0, "lock": 0, "idle_thr": 0}
     upd, t0 = {}, time.time()
     for step in range(1, s.max_steps + 1):
@@ -490,10 +505,16 @@ def train(env, obs, info, out: str, *, trunk: C0Trunk, row_of: Callable, setting
                 recent["goal" if mode == 1 else "explore"].append((arrived, ep_len, ep_ret))
                 for k in recent:
                     recent[k] = recent[k][-100:]
+                town_eps[names[cur]] += 1
+                if mode == 1:
+                    town_goal[names[cur]] = (town_goal[names[cur]] + [arrived])[-100:]
                 if ramp is not None and mode == 1 and step >= s.start_training:
                     msg = ramp.record(bool(arrived))
                     if msg:
                         log(msg)
+                if len(envs) > 1:            # the next town drives the next episode
+                    cur = (cur + 1) % len(envs)
+                    env = envs[cur]
                 obs, info = safe_reset()
                 hidden = trunk.zero_hidden()
                 o_n, hidden = trunk.step(row_of(obs, info), hidden)
@@ -523,7 +544,11 @@ def train(env, obs, info, out: str, *, trunk: C0Trunk, row_of: Callable, setting
                 + f" target_entropy={learner.target_entropy:.4f} | rollout steer_lock="
                 f"{roll['lock'] / max(1, roll['n']):.2f} throttle<0.05="
                 f"{roll['idle_thr'] / max(1, roll['n']):.2f} | "
-                f"{step / max(1e-9, time.time() - t0):.1f} steps/s")
+                f"{step / max(1e-9, time.time() - t0):.1f} steps/s"
+                + (" | towns " + " ".join(
+                    f"{n} goal={float(np.mean(town_goal[n])) if town_goal[n] else float('nan'):.3f}"
+                    f"(n={len(town_goal[n])}) episodes={town_eps[n]}" for n in names)
+                   if len(envs) > 1 else ""))
             ends, roll = {}, {"n": 0, "lock": 0, "idle_thr": 0}
         if step % s.ckpt_every == 0 or step == s.max_steps:
             d = save_checkpoint(os.path.join(out, f"step_{step}"), learner, step=step,
@@ -538,14 +563,16 @@ def train(env, obs, info, out: str, *, trunk: C0Trunk, row_of: Callable, setting
                     f"{k[6:]} corr={v['all']['corr']} full_lock={v['all']['share_full_lock']} "
                     f"|best|={v['all']['mean_abs_best']} (expert {v['all']['mean_abs_expert']})"
                     for k, v in res.items()))
-    return learner, rb, env
+    return learner, rb, envs
 
 
 def run_carla(env, obs, info, server, out: str, *, row_of: Callable, to_env: Callable,
               rebuild_env: Optional[Callable] = None,
-              log: Callable = lambda m: print(m, flush=True)):
+              log: Callable = lambda m: print(m, flush=True), extra_envs: Sequence = (),
+              extra_servers: Sequence = (), towns: Optional[Sequence[str]] = None):
     """train_carla_sac.main's LEARNER=frl branch (after frl_refusals): preflight, train, close.
-    The junction curriculum starts HERE, and the first episode is drawn again under it."""
+    The junction curriculum starts HERE, and the first episode is drawn again under it.
+    `extra_envs`/`extra_servers`/`towns`: more towns, one env and one server each (train)."""
     s = LoopSettings.from_env()
     c0_dir = os.environ.get("FRL_C0", "")
     if not c0_dir:
@@ -603,17 +630,24 @@ def run_carla(env, obs, info, server, out: str, *, row_of: Callable, to_env: Cal
         + (f"{s.expert}: {len(expert)} transitions at k={expert.k}, {expert.meta}" if expert
            else "OFF"))
     log(f"  probe: {cache or 'OFF'} | checkpoints -> {out}")
+    if extra_envs:
+        log(f"  TOWNS: {', '.join(towns or [])} -- one env and one CARLA server each; the loop "
+            f"drives one at a time and moves to the next town at every episode end (one "
+            f"transition and one update per step, as with one town)")
     t0 = time.time()
-    live = env
+    live = [env] + [e for e, _ in extra_envs]
     try:
         _, _, live = train(env, obs, info, out, trunk=trunk, row_of=row_of, settings=s,
                            c0_dir=c0_dir, log=log, probe=probe, to_env=to_env, ramp=ramp,
-                           rebuild_env=rebuild_env, expert=expert)
+                           rebuild_env=rebuild_env, expert=expert, extra_envs=extra_envs,
+                           towns=towns)
     finally:
-        try:
-            live.close()
-        except Exception:  # noqa: BLE001
-            pass
-        if server is not None:
-            server.stop()
+        for e in live:
+            try:
+                e.close()
+            except Exception:  # noqa: BLE001
+                pass
+        for srv in (server, *extra_servers):
+            if srv is not None:
+                srv.stop()
     log(f"[Done] {s.max_steps} steps in {(time.time() - t0) / 3600:.2f} h -> {out}")

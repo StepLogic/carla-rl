@@ -2718,15 +2718,33 @@ def main():
         from torch_rl.frl.carla import run_carla
         _rebuilds = itertools.count(1)
 
-        def _rebuild():
-            # a fresh env on the same server (restarted if it no longer answers); a new seed
-            # so the episode sequence does not repeat from the start
-            k = next(_rebuilds)
-            return connect_with_restarts(
-                lambda: build_env(TOWNS[0], seed=SEED + 100000 * k, encoder=enc, port=PORT,
-                                  state_keys=()), server)
+        def _rebuilder(i, port, srv):
+            def _rebuild():
+                # a fresh env on the same server (restarted if it no longer answers); a new
+                # seed so the episode sequence does not repeat from the start
+                k = next(_rebuilds)
+                return connect_with_restarts(
+                    lambda: build_env(TOWNS[i], seed=SEED + i + 100000 * k, encoder=enc,
+                                      port=port, state_keys=()), srv)
+            return _rebuild
+
+        # MORE TOWNS (user 2026-11-11, "town05 and town01 train"): one server and one env per
+        # town, each server started right before its env (job 455090: an idle Epic server
+        # starves the other); learner C drives one env at a time and moves to the next town at
+        # every episode end (torch_rl/frl/carla.train). Ports as the parallel loop's.
+        extra_envs, extra_servers = [], []
+        for i in range(1, len(TOWNS)):
+            port_i = PORT + 50 * i
+            srv_i = _start_server(i, port_i)
+            env_i = connect_with_restarts(
+                lambda i=i, port_i=port_i: build_env(TOWNS[i], seed=SEED + i, encoder=enc,
+                                                     port=port_i, state_keys=()), srv_i)
+            env_i.reset(seed=SEED + i)
+            extra_envs.append((env_i, _rebuilder(i, port_i, srv_i)))
+            extra_servers.append(srv_i)
         return run_carla(env, obs, info, server, OUT, row_of=obs_row, to_env=to_env,
-                         rebuild_env=_rebuild)
+                         rebuild_env=_rebuilder(0, PORT, server), extra_envs=extra_envs,
+                         extra_servers=extra_servers, towns=list(TOWNS))
     agent = build_agent(binoc_dim, ACT_DIM, critic_layer_norm=checkpoint_critic_layer_norm(EVAL_FROM) if EVAL_FROM else None,
                         critic_proj_dim=checkpoint_critic_proj_dim(EVAL_FROM) if EVAL_FROM else None,
                         **(checkpoint_critic_ensemble(EVAL_FROM) if EVAL_FROM else {}))

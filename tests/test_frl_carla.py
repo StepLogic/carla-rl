@@ -222,7 +222,7 @@ def test_a_failed_reset_rebuilds_the_env_and_the_run_goes_on(c0_dir, tmp_path):
     _, rb, live = fc.train(env, obs, info, str(tmp_path / "run"), trunk=fc.C0Trunk(c0_dir, "cpu"),
                            row_of=_row_of, settings=s, c0_dir=c0_dir, log=msgs.append,
                            rebuild_env=rebuild)
-    assert len(built) == 1 and live is built[0]                 # the caller closes the live env
+    assert len(built) == 1 and live == [built[0]]               # the caller closes the live env
     assert len(rb) == 5 and any("rebuilding" in m for m in msgs)
 
 
@@ -239,7 +239,7 @@ def test_without_a_rebuild_a_failed_reset_still_stops_the_run(c0_dir, tmp_path):
 def test_settings_that_would_be_silently_ignored_or_wrong_are_refused():
     ok = {"MONO_CHW": "1", "SPEED_OBS": "1"}
     assert fc.frl_refusals(["Town05"], False, ok) == []
-    assert any("one town" in m for m in fc.frl_refusals(["Town05", "Town01"], False, ok))
+    assert fc.frl_refusals(["Town05", "Town01"], False, ok) == []   # towns in turn (test_frl_towns)
     assert any("PARALLEL" in m for m in fc.frl_refusals(["Town05"], True, ok))
     for k, v in (("INIT_FROM", "/x"), ("IL_PRELOAD_ROOT", "/y"), ("HER", "1"),
                  ("DET_EPISODE_FRAC", "0.15"), ("MONO_CHW", "0"), ("SPEED_OBS", "0")):

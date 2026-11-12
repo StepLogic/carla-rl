@@ -68,6 +68,9 @@ class LoopSettings:
     # 1 = every town's env stepped AT ONCE (train_parallel; user 2026-11-12 "build it"); 0 = one env at a
     # time, the next town at every episode end (train).
     parallel: int = 0
+    # A checkpoint dir to resume from (train_parallel; user 2026-11-12 "resume current run with new code"):
+    # the whole learner and the step count are restored; the replay is not in a checkpoint and starts fresh.
+    resume: str = ""
 
     def __post_init__(self):
         if self.expert_mode not in ("update", "pinned"):
@@ -591,6 +594,47 @@ def _learn_step(learner, rb, expert, pinned: bool, s: LoopSettings, step: int) -
     return upd
 
 
+# Settings a resumed run may change: run length and cadence, devices, the loop, the resume itself (and
+# the seed, whose streams cannot be continued anyway). Every other LoopSettings field must match.
+RESUME_MAY_DIFFER = ("max_steps", "ckpt_every", "log_every", "device", "replay_device", "parallel",
+                     "resume", "seed", "expert")
+
+
+def restore_learner(learner, ckpt_dir: str, s: LoopSettings, c0_dir: str) -> int:
+    """Load a learner-C checkpoint's whole learner (actor, critic, target critic, temperature, entropy
+    target, the three optimizers) into `learner`; returns its step. Refused (ValueError) when it was
+    made on another c0 trunk, another expert file, other networks or other learning settings."""
+    with open(os.path.join(ckpt_dir, "config.json")) as fh:
+        meta = json.load(fh)
+    if meta.get("learner") != "frl":
+        raise ValueError(f"{ckpt_dir} is not a learner-C checkpoint")
+    if meta["c0_md5"] != params_md5(c0_dir):
+        raise ValueError(f"{ckpt_dir} was trained on c0 md5 {meta['c0_md5']}; this trunk is "
+                         f"{params_md5(c0_dir)}")
+    redq = {k: list(v) if isinstance(v, tuple) else v for k, v in REDQ.items()}
+    if meta.get("redq") != redq or meta.get("latent_dim") != LATENT_DIM:
+        raise ValueError(f"{ckpt_dir}: networks {meta.get('redq')} latent {meta.get('latent_dim')} "
+                         f"!= this run's {redq} latent {LATENT_DIM}")
+    old, new = meta["settings"], dataclasses.asdict(s)
+    bad = [f"{k}: checkpoint {old.get(k)!r} vs run {new[k]!r}" for k in new
+           if k not in RESUME_MAY_DIFFER and old.get(k, new[k]) != new[k]]
+    if os.path.basename(old.get("expert") or "") != os.path.basename(new.get("expert") or ""):
+        bad.append(f"expert: checkpoint {old.get('expert')!r} vs run {new.get('expert')!r}")
+    if bad:
+        raise ValueError(f"{ckpt_dir} was made with other learning settings -- " + "; ".join(bad))
+    st = torch.load(os.path.join(ckpt_dir, "params.pt"), map_location=str(learner.device))
+    learner.actor.load_state_dict(st["actor"])
+    learner.critic.load_state_dict(st["critic"])
+    learner.target_critic.load_state_dict(st["target_critic"])
+    with torch.no_grad():
+        learner.log_temp.copy_(st["log_temp"].to(learner.log_temp.device))
+    learner.target_entropy = float(st["target_entropy"])
+    learner.actor_opt.load_state_dict(st["actor_opt"])
+    learner.critic_opt.load_state_dict(st["critic_opt"])
+    learner.temp_opt.load_state_dict(st["temp_opt"])
+    return int(meta["step"])
+
+
 def _checkpoint(out: str, step: int, learner, c0_dir: str, s: LoopSettings, probe, log) -> None:
     d = save_checkpoint(os.path.join(out, f"step_{step}"), learner, step=step, c0_dir=c0_dir,
                         settings=s)
@@ -635,10 +679,18 @@ def train_parallel(env, obs, info, out: str, *, trunk: C0Trunk, row_of: Callable
         learner = make_learner(trunk.emb_dim, trunk.state_dim, act_dim, s.device, s.seed,
                                actor=s.actor, trunk=trunk)
     pinned = expert is not None and s.expert_mode == "pinned"
+    # RESUME: the whole learner and the step count from a checkpoint; the replay is not in it, so it starts
+    # fresh, and the random streams are reseeded past the resumed step (they cannot be continued).
+    start = restore_learner(learner, s.resume, s, c0_dir) if s.resume else 0
+    if s.resume:
+        log(f"[Resume] {s.resume}: learner restored at step {start}; fresh replay (pinned expert rows "
+            f"{'+ ' if pinned else ''}own rows from 0); updates resume when {s.start_training} own rows "
+            f"are back")
     rb = FeatureReplay(s.replay, trunk.emb_dim, trunk.state_dim, act_dim,
-                       s.replay_device or s.device, s.seed, pinned=expert.t if pinned else None)
-    rng = np.random.default_rng(s.seed)
-    torch.manual_seed(s.seed)
+                       s.replay_device or s.device, s.seed + start,
+                       pinned=expert.t if pinned else None)
+    rng = np.random.default_rng(s.seed + start)
+    torch.manual_seed(s.seed + start)
     pool = ThreadPoolExecutor(max_workers=n)
 
     def safe_reset(i):
@@ -674,7 +726,9 @@ def train_parallel(env, obs, info, out: str, *, trunk: C0Trunk, row_of: Callable
         town_eps = {nm: 0 for nm in names}
         ends, roll = {}, {"n": 0, "lock": 0, "idle_thr": 0}
         upd, t0 = {}, time.time()
-        step, next_log, next_ckpt, last_ckpt = 0, s.log_every, s.ckpt_every, 0
+        step, last_ckpt = start, start
+        next_log = (start // s.log_every + 1) * s.log_every
+        next_ckpt = (start // s.ckpt_every + 1) * s.ckpt_every
         while step < s.max_steps:
             # one batched forward of the actor for the envs past the random start
             acts = [None] * n
@@ -728,7 +782,8 @@ def train_parallel(env, obs, info, out: str, *, trunk: C0Trunk, row_of: Callable
                             if msg:
                                 log(msg)
                         need_reset.append(i)
-                if step >= s.start_training:
+                # a resumed run first refills its own rows to start_training (its fresh replay)
+                if step >= s.start_training and (not s.resume or rb.n >= s.start_training):
                     learn_at.append(step)
             if need_reset:
                 for i, (ob, inf) in zip(need_reset, list(pool.map(safe_reset, need_reset))):
@@ -747,7 +802,7 @@ def train_parallel(env, obs, info, out: str, *, trunk: C0Trunk, row_of: Callable
                     + f" target_entropy={learner.target_entropy:.4f} | rollout steer_lock="
                     f"{roll['lock'] / max(1, roll['n']):.2f} throttle<0.05="
                     f"{roll['idle_thr'] / max(1, roll['n']):.2f} | "
-                    f"{step / max(1e-9, time.time() - t0):.1f} steps/s"
+                    f"{(step - start) / max(1e-9, time.time() - t0):.1f} steps/s"
                     + " | towns " + " ".join(
                         f"{nm} goal={float(np.mean(town_goal[nm])) if town_goal[nm] else float('nan'):.3f}"
                         f"(n={len(town_goal[nm])}) episodes={town_eps[nm]}"

@@ -1,0 +1,1 @@
+/home/robotlab/scratch/carla-rl/.claude/worktrees/gated-impl/thin_entropy_map.py

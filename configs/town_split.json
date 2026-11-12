@@ -1,0 +1,10 @@
+{
+  "_comment": "Frozen train/held-out town split. Committed deliberately rather than regenerated from a seed: two machines with different CARLA installs would silently produce different partitions. Do not edit without a new experiment name.",
+  "created": "2026-08-27",
+  "train": ["Town01", "Town02", "Town04", "Town05"],
+  "heldout": ["Town03", "Town10HD"],
+  "heldout_rationale": {
+    "Town03": "roundabout, tunnel, multi-lane junctions - most structurally complex",
+    "Town10HD": "dense urban HD assets - second independent generalization datapoint"
+  }
+}

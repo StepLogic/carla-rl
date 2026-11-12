@@ -1,0 +1,378 @@
+% Experimental Setup -- ICRA section, IEEEtran two-column.
+%
+% Drop into a paper that already loads: amsmath, amssymb, booktabs, siunitx,
+% url. Uses \texttt for identifiers and no custom macros, so it can be pasted
+% without carrying a preamble.
+%
+% A standalone article-class wrapper is in experimental-setup-standalone.tex.
+
+\section{Experimental Setup}
+\label{sec:setup}
+
+This section specifies the policy, its training, and the mapping and evaluation
+pipeline used for the node-placement study. Quantities are given in the units
+the implementation uses; where a constant is load-bearing, we state why rather
+than only what.
+
+\subsection{Simulation and Task}
+\label{sec:setup:task}
+
+Experiments are conducted in CARLA~0.9.15 at Epic rendering quality. The
+perception front-end is a frozen autoencoder trained on Epic-quality frames, so
+rendering quality is a fixed property of the setup rather than a tunable:
+lowering it would shift the input distribution out from under the encoder.
+
+The agent controls a single ego vehicle in Town02. A task instance is a
+point-goal: the agent is given a goal pose at a controlled geodesic distance
+from its start and must arrive within an arrival radius. Goal distance is drawn
+uniformly from a band; training pins this band to \SI{5}{\meter}--\SI{20}{\meter},
+and evaluation additionally reports \SI{20}{\meter}--\SI{40}{\meter} and
+\SI{40}{\meter}--\SI{70}{\meter}, which are extrapolation with respect to the
+training distribution.
+
+The action space is two-dimensional and continuous,
+$a = (\mathrm{steer}, \mathrm{throttle})$, applied as absolute commands rather
+than increments, with $|\mathrm{steer}| \le 0.5$,
+$\mathrm{throttle} \in [0, 0.6]$, and a target speed of \SI{20}{\kilo\meter\per\hour}.
+The observation records the control \emph{actually applied} to the simulator
+rather than the raw action, since under incremental control the two differ.
+
+\subsection{Observation Space}
+\label{sec:setup:obs}
+
+The policy observes a dictionary of four keys totalling 145 dimensions
+(Table~\ref{tab:obs}). The keys are kept separate rather than concatenated into
+one flat vector so that each is projected independently; flattening
+heterogeneous quantities behind a single normalisation layer mixes incomparable
+scales.
+
+\begin{table}[t]
+\centering
+\caption{Observation space, \num{145} dimensions total.}
+\label{tab:obs}
+\begin{tabular}{@{}llp{4.6cm}@{}}
+\toprule
+Key & Dim. & Contents \\
+\midrule
+\texttt{latent} & 128 & frozen autoencoder embedding of the
+                        $120\!\times\!120$ RGB frame \\
+\texttt{goal}   & 12  & egocentric goal offset (2), heading
+                        $(\sin\psi, \cos\psi)$ (2), action history (8) \\
+\texttt{vector} & 4   & proprioceptive state, bounded to $[-5.1, 5.1]$ \\
+\texttt{mode}   & 1   & commanded task mode; $1$ goal-reaching, $0$ exploration \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\textbf{Perception.} The \texttt{latent} block is produced by an autoencoder
+trained offline and held frozen throughout policy training and evaluation. Its
+identity is recorded in every checkpoint and asserted before evaluation, because
+pairing a policy with a different encoder does not fail loudly---it produces
+confident nonsense.
+
+\textbf{Goal encoding.} The goal offset is expressed in the vehicle frame as the
+forward and left components of the goal displacement
+$d = p_{\mathrm{goal}} - p_{\mathrm{ego}}$. CARLA uses a left-handed frame with
+basis vectors $f = (\cos\psi, \sin\psi)$ and $r = (-\sin\psi, \cos\psi)$, so
+
+\begin{equation}
+\label{eq:goalblock}
+  \mathrm{forward} = d \cdot f,
+  \qquad
+  \mathrm{left} = -\,(d \cdot r).
+\end{equation}
+
+We state \eqref{eq:goalblock} explicitly because an earlier implementation
+applied a textbook right-handed rotation and mirrored the lateral bearing. The
+policy was thereby instructed to steer away from the goal at every turn, a
+defect that manifested only as ``drives competently but never arrives.'' The
+action history holds the last four applied controls ($4\!\times\!2$), supplying
+the short-horizon context required for smooth control.
+
+\textbf{Mode conditioning.} The commanded mode is an \emph{external task bit},
+not a learned switch. It occupies its own observation key, and in exploration
+mode the goal block is \emph{zeroed rather than omitted}, since a single actor
+cannot accept two input widths. The permanently-zero channel in exploration mode
+is the acknowledged cost of gating.
+
+\subsection{Reward Functions}
+\label{sec:setup:reward}
+
+Two rewards are selected by the mode bit, drawn once per episode with
+probability $0.5$.
+
+\textbf{Goal mode: minimum time.} The goal reward is the SoRB-style
+minimum-time objective,
+
+\begin{equation}
+\label{eq:sorb}
+  r_t =
+  \begin{cases}
+    0,  & \text{on arrival (terminal)}\\
+    -1, & \text{otherwise,}
+  \end{cases}
+\end{equation}
+
+with an episode cap of \num{1000} steps, so the undiscounted return lies in
+$[-1000, 0]$ and the optimal value function is exactly the negated time to goal.
+There is no shaping, no arrival bonus, and no coefficient to balance. This is
+not incidental: the study consumes the critic \emph{as a distance}, and only
+under \eqref{eq:sorb} does $Q(s,a)$ read as $-(\text{steps to goal})$.
+
+A vehicle that becomes irrecoverably wedged is billed exactly the remaining
+clock, $-(1 + T_{\max} - t)$, so terminating early is worth precisely nothing.
+Without this, any terminal failure would stop the per-step meter and crashing
+would become optimal.
+
+\textbf{Exploration mode: coverage.} The exploration reward pays displacement
+projected onto the road direction, gated on being under target speed, against a
+small per-step cost:
+
+\begin{align}
+\label{eq:explore}
+  r_t = &-\,\num{4e-3} \;-\; |\Delta \mathrm{steer}| \;+\;
+          g_t\,\mathbb{1}[v_t \le v^{\star}] \nonumber\\
+        &-\; 3.0\,\mathbb{1}[\text{collision}]
+         \;-\; 5.0\,\mathbb{1}[\text{road departure}],
+\end{align}
+
+where $g_t$ is the displacement projected onto the lane forward direction and
+$v^\star$ the target speed.
+
+\textbf{Baseline reward.} The shaped baseline receives the environment's own
+per-step distance reduction plus projected progress under the same speed gate,
+less terminal penalties for collision, lane departure and idling, and a per-step
+steering-smoothness cost. It is the reward supplied by the upstream driving
+codebase; a method that cannot beat the reward practitioners actually use has
+demonstrated nothing.
+
+\textbf{Lane-crossing convention.} Crossing a painted lane marking costs nothing
+and terminates nothing, whereas leaving the drivable surface remains fatal.
+Crossing markings is unavoidable when turning through junctions, and treating
+every crossing as failure terminated \SI{90}{\percent} of episodes at
+\numrange{44}{70} steps in an earlier configuration.
+
+\subsection{Terminal Conditions}
+\label{sec:setup:terminal}
+
+Termination differs by mode, and the difference is material: it determines what
+a success rate is comparing.
+
+\textbf{Goal mode.} \emph{Only arrival terminates.} The environment's own
+termination signal---idle, falling, distance limit, lane invasion, collision,
+speed, wrong direction---is deliberately discarded, and the episode instead
+truncates at the \num{1000}-step cap. Under a per-step cost, any terminal
+failure would stop the meter and become an escape hatch. A wedge terminates but
+is billed the full remaining clock, so it is not an escape either.
+
+\textbf{Exploration mode.} Collision or departure from the drivable surface
+terminates; the episode truncates at \num{500} steps. Off-road is retained as
+fatal because, with lane crossings free, it is the only remaining term that
+discourages leaving the road: the progress term in \eqref{eq:explore} pays
+equally for driving down a road and for circling.
+
+\textbf{Baseline.} The shaped baseline terminates on arrival, collision, idling,
+lane invasion or off-road, and additionally honours the environment's own
+termination. Because this differs from the gated arms' rule, two relaxations
+allow the same frozen checkpoint to be evaluated under the gated rule: one makes
+lane crossings non-terminal, and one admits arrival as the sole terminal event.
+Both must suppress the environment's own termination as well as the wrapper's;
+relaxing only the latter leaves the episode ending anyway, silently, because the
+environment ORs its raw lane flag into its own done signal.
+
+\subsection{Policy Learning}
+\label{sec:setup:learning}
+
+The policy is trained with Truncated Quantile Critics (TQC): five critics of
+\num{25} quantiles each, dropping the two most optimistic quantiles per network,
+MLP trunks of $(256, 256)$, Adam at \num{3e-4} for actor and critics and
+\num{1e-5} for the temperature, $\tau = 0.005$, initial temperature $0.2$, and a
+fixed target entropy of $-2.0$ for the two-dimensional action space.
+
+\textbf{Two critics, two discounts.} Goal and exploration modes have separate
+critic networks, their returns being on different scales with different
+horizons. The goal critic uses $\gamma = 1.0$, which is mandatory rather than
+preferred. At $\gamma = 0.99$ the effective horizon is \num{100} steps, the
+value saturates near $-10$, and a \num{400}-step goal becomes indistinguishable
+from a \num{1000}-step one---the two values differ by \num{0.18}---destroying
+precisely the distance reading this study depends on. The undiscounted return is
+safe here only because every episode terminates or truncates within the cap; it
+would diverge in a genuinely non-terminating task. The exploration critic uses
+$\gamma = 0.99$.
+
+\textbf{Batch composition.} Transitions are held in a mode-partitioned replay
+buffer and every batch is drawn \SI{50}{\percent}/\SI{50}{\percent} across
+modes, so neither critic starves when episode lengths differ between modes
+(\num{1000} steps for goal, \num{500} for exploration).
+
+Training runs for \num{350000} environment steps in Town02 with the
+goal-distance curriculum pinned to \SI{5}{\meter}--\SI{20}{\meter}. Two arms are
+trained identically except for hindsight relabelling of exploration episodes
+into goal-mode data; the launch scripts differ only in that flag and the output
+directory, so the arms cannot drift apart in any other respect.
+
+\subsection{Mapping Algorithm}
+\label{sec:setup:mapping}
+
+The map is a directed topological graph over states visited by the policy
+itself. Construction has three stages and requires no simulator after the first.
+
+\textbf{1) Trace collection.} The policy is driven in \emph{exploration} mode
+for \num{60} episodes of \num{400} steps, recording pose, observation, and the
+fields from which the goal block is computed. Exploration mode is used because
+it produces coverage; the goal half drives direct lines to sampled goals and
+would map only those. Candidates are thinned to one per \SI{5}{\meter} as they
+are recorded, since consecutive simulator steps are $\approx\!\SI{0.28}{\meter}$
+apart and the next stage is quadratic in the candidate count. This yields
+\num{1510} candidates over \SI{7464}{\meter} of driving.
+
+\textbf{2) All-pairs learned distance.} For every ordered pair $(i,j)$, the
+observation at state $i$ is relabelled so that its goal block points at
+candidate $j$, and the goal critic is queried:
+
+\begin{equation}
+\label{eq:dist}
+  D_{ij} \;=\; -\,\frac{1}{c}\,
+  Q\!\left(\,\mathrm{relabel}(o_i, p_j),\; \pi(\cdot \mid o_i)\,\right),
+\end{equation}
+
+with $c$ the per-step cost of \eqref{eq:sorb}. This requires \emph{no
+simulator}: the perception latent records what the camera saw and is independent
+of which goal the step is credited to. Relabelling uses the observation
+wrapper's own transform, so relabelled observations cannot drift from on-policy
+ones. Two constraints are load-bearing. Observations must be forced to goal mode
+before any query, since the goal block is zeroed at mode $0$ and querying the
+goal critic with exploration-mode inputs reads the wrong half of a gated policy.
+And $c$ in \eqref{eq:dist} must be the arm's own value; a mismatch scales every
+edge weight by an order of magnitude without failing.
+
+\textbf{3) Node selection and edges.} Four placement rules
+(Section~\ref{sec:setup:placement}) select nodes from the shared candidate set.
+Edges are directed and weighted by $D_{ij}$. An edge is \emph{rejected} when
+$D_{ij}$ exceeds the horizon $H$ on which the critic was trained
+($H = \SI{30}{\meter} \approx 106$ steps): beyond $H$ the critic extrapolates,
+and graph search actively selects for optimistic extrapolation error. Nothing is
+symmetrised---a one-way street is genuinely asymmetric and the critic represents
+that.
+
+Critic-ensemble disagreement is deliberately \emph{not} used as an edge filter.
+Measured on these agents, disagreement is a proxy for leg length rather than
+local uncertainty---AUC \num{0.533}, chance, once length and $|Q|$ are regressed
+out---and it carries the wrong sign, so rejecting on it would preferentially
+discard the short, reliable edges.
+
+\subsection{Localization Algorithm}
+\label{sec:setup:localization}
+
+Localization is nearest-node lookup in the plane. At episode start, the current
+pose and the goal pose are each associated with the nearest graph node within
+\SI{25}{\meter}. The radius is bounded by the policy's own competence rather
+than tuned: its training band is \SI{5}{\meter}--\SI{20}{\meter}, so a node
+within $\approx\!\SI{25}{\meter}$ is a leg the policy can be expected to drive,
+and a larger radius would assert entry points it cannot reach.
+
+Localization has three distinct failure modes, reported separately rather than
+pooled into the success rate because they answer different questions: the start
+pose has no node within radius, the goal pose has none, or both localize but the
+graph contains no path between them. The last is a statement about graph
+connectivity, not about localization.
+
+\subsection{Node Placement Methods}
+\label{sec:setup:placement}
+
+Four rules select nodes from the \emph{same} candidate set, so placement is the
+only variable. They differ in what their free parameter is, which determines how
+each is swept.
+
+\begin{itemize}
+  \item \textbf{uniform}---nodes at equal arc-length spacing, taken at interval
+        midpoints. It uses no learned quantity, and is the baseline a method
+        must beat to justify its cost.
+  \item \textbf{random}---distinct candidates drawn uniformly at random. The
+        floor.
+  \item \textbf{policy}---peaks of the policy's own action entropy, smoothed and
+        taken greedily by height subject to a minimum separation. Entropy is
+        estimated as $-\log \pi(a\mid s)$ for a single sample, the same
+        estimator reported during training. The hypothesis is that the policy is
+        least certain where the route is \emph{decidable}---at junctions---so
+        that entropy is a free junction detector.
+  \item \textbf{sgm}---Sparse Graphical Memory's two-way consistency merge, in
+        which a candidate merges into an existing node when the two agree,
+        within a cutoff, about their distances \emph{to} and \emph{from} every
+        current node.
+\end{itemize}
+
+The first three have no intrinsic node count and are swept over the number of
+nodes requested. SGM derives its own sparsity from its consistency cutoff and is
+therefore swept over that cutoff, with node count as an \emph{output}. No shared
+node budget is imposed, since the object of study is the Pareto frontier of node
+count against navigation performance.
+
+Two implementation notes affect reproducibility. SGM's published cutoffs are
+expressed in its reference implementation's value scale and do not transfer: at
+the published values nothing merges, and the algorithm silently degenerates to
+retaining every candidate. Cutoffs here are derived from measured quantities on
+the target critic, and a zero-merge outcome is treated as a hard error rather
+than a result. Distances are additionally clipped at $H$ for the merge test,
+because that test is a maximum over all nodes and would otherwise be decided by
+extrapolated values.
+
+\subsection{Evaluation Algorithm}
+\label{sec:setup:eval}
+
+\textbf{Episode set.} Evaluation uses a fixed episode set drawn from a generator
+never touched by training, so every method drives identical start states and
+goals. The environment is reset with each episode's own seed; omitting this
+makes the fixed set decorative, since the simulator then samples freely and the
+property the comparison rests on silently fails to hold.
+
+\textbf{Navigation.} Per episode, the harness localizes start and goal
+(Section~\ref{sec:setup:localization}), computes a shortest path over the
+directed graph by Dijkstra with $D_{ij}$ as edge weights, and drives the node
+sequence by rewriting the policy's goal block to the current waypoint. A
+waypoint is advanced when the vehicle is within \SI{4}{\meter}; a leg not
+completed within \num{200} steps is abandoned and the next waypoint adopted,
+since a leg the policy cannot drive is an edge the graph should not have
+offered. The final waypoint is always the true goal, not the last node.
+Episodes for which the graph offers no path are still driven, with the true goal
+alone: excluding them would score a map on the subset it happened to cover and
+would flatter a sparse or poorly connected graph.
+
+\textbf{Metrics.} Success $S_i \in \{0,1\}$ is the environment's own arrival
+flag, identical to the metric used elsewhere in this codebase. Success weighted
+by Path Length is
+
+\begin{equation}
+\label{eq:spl}
+  \mathrm{SPL} \;=\; \frac{1}{N}\sum_{i=1}^{N}
+  S_i \,\frac{\ell_i}{\max(\ell_i,\, p_i)},
+\end{equation}
+
+where $\ell_i$ is the length of CARLA's own shortest driving route between start
+and goal, obtained from the map's route planner, and $p_i$ is the distance the
+agent actually drove. The geodesic in \eqref{eq:spl} is a road route rather than
+a Euclidean distance, since a straight line through a building is not a shortest
+path and would credit every method with detours it did not avoid. Two
+diagnostics are reported alongside: the number of episodes the graph could not
+route, and the number of subgoal legs abandoned on the step budget.
+
+\textbf{Undefined metrics are refused, not reported as zero.} Success is not
+reported for an arm that cannot observe the goal. SPL is reported as \emph{not
+applicable}, never \num{0.000}, when no road route is available, since a zero
+reads as ``took an infinite detour'' rather than ``was not measured.'' Critic
+calibration is reported only for arms trained on the minimum-time reward, a
+shaped arm's critic predicting a shaped return so that scoring it against
+elapsed steps measures nothing; calibration is computed on arriving episodes
+only, a timeout having no true cost-to-go.
+
+\subsection{Reproducibility}
+\label{sec:setup:repro}
+
+All arms share one trace, one distance matrix, one edge rule, one episode set
+and one policy; placement is the only variable. Results are keyed by distance
+band, since pooling an in-distribution result with an extrapolation one produces
+a number describing neither. Every reported configuration is recorded in the
+result file alongside its metrics---including the node count actually placed,
+the consistency cutoff actually used, and the step cost---so that a row can be
+checked against the configuration that produced it rather than the one that was
+intended.

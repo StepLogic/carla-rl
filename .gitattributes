@@ -1,0 +1,2 @@
+vint filter=lfs diff=lfs merge=lfs -text
+vint.path filter=lfs diff=lfs merge=lfs -text

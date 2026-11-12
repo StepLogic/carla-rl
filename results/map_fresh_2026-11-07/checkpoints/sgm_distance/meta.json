@@ -1,0 +1,19 @@
+{
+ "train_towns": [
+  "Town01",
+  "Town04",
+  "Town05",
+  "Town10HD"
+ ],
+ "episodes": 1920,
+ "val_episodes": 192,
+ "stride_steps": 3,
+ "max_cls": 20,
+ "far_value": 25,
+ "encoder": "dinov2_vitb14 class token, L2-normalised, frozen",
+ "head": "MLP [a,b,a*b,|a-b|] -> 512 -> 512 -> classes",
+ "val_acc": 0.34505021572113037,
+ "val_within1": 0.4442693293094635,
+ "val_far_ok": 0.9797687530517578,
+ "val_mae_frames": 2.4375486373901367
+}

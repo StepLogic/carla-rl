@@ -1,0 +1,79 @@
+"""Packaging a ViNT training checkpoint for EVAL_POLICY=vint: model.pth plus a
+vint.json that records how the model was trained -- its architecture, image
+size, waypoint stride and the measured metres per frame -- so the eval reads
+the waypoints at the scale they were learned at."""
+import json
+import os
+import subprocess
+import sys
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(ROOT, "scripts", "vint"))
+
+
+def test_vint_meta_comes_from_the_training_config_and_the_data_summary():
+    import yaml
+    from export_vint_ckpt import vint_meta
+    cfg = yaml.safe_load(open(os.path.join(ROOT, "scripts", "vint", "vint_carla_expert.yaml")))
+    meta = vint_meta(cfg, {"metric_waypoint_spacing_m": 0.3712})
+    assert meta["stride"] == 3 and meta["metric_step_m"] == 0.3712
+    assert meta["frame_dt_s"] == 0.1          # the shards are 10 Hz env steps
+    assert meta["context_size"] == 5 and meta["len_traj_pred"] == 5
+    assert meta["image_size"] == [85, 64] and meta["dataset"] == "carla_expert"
+    assert meta["mha_num_attention_layers"] == 4 and meta["obs_encoder"] == "efficientnet-b0"
+
+
+def test_a_dagger_config_with_two_datasets_exports_their_shared_stride():
+    """vint_carla_dagger1.yaml trains on carla_expert + carla_dagger1: both use
+    waypoint spacing 3 and the same normaliser, so the export records both names."""
+    import yaml
+    from export_vint_ckpt import vint_meta
+    cfg = yaml.safe_load(open(os.path.join(ROOT, "scripts", "vint", "vint_carla_dagger1.yaml")))
+    meta = vint_meta(cfg, {"metric_waypoint_spacing_m": 0.3782})
+    assert meta["stride"] == 3 and meta["dataset"] == "carla_expert+carla_dagger1"
+
+
+def test_datasets_with_different_strides_are_refused():
+    import pytest
+    from export_vint_ckpt import vint_meta
+    cfg = yaml_cfg = {"datasets": {"a": {"waypoint_spacing": 3}, "b": {"waypoint_spacing": 1}},
+                      "image_size": [85, 64], **{k: 0 for k in (
+                          "context_size", "len_traj_pred", "learn_angle", "obs_encoder",
+                          "obs_encoding_size", "late_fusion", "mha_num_attention_heads",
+                          "mha_num_attention_layers", "mha_ff_dim_factor")}}
+    del yaml_cfg
+    with pytest.raises(SystemExit):
+        vint_meta(cfg, {"metric_waypoint_spacing_m": 0.3782})
+
+
+def test_the_export_writes_model_and_meta(tmp_path):
+    ck = tmp_path / "7.pth"
+    ck.write_bytes(b"weights")
+    summ = tmp_path / "summary.json"
+    summ.write_text(json.dumps({"metric_waypoint_spacing_m": 0.37}))
+    out = tmp_path / "epoch_7"
+    r = subprocess.run([sys.executable, os.path.join(ROOT, "scripts", "vint", "export_vint_ckpt.py"),
+                        "--ckpt", str(ck), "--summary", str(summ), "--out", str(out),
+                        "--config", os.path.join(ROOT, "scripts", "vint", "vint_carla_expert.yaml")],
+                       capture_output=True, text=True, env={**os.environ, "CUDA_VISIBLE_DEVICES": ""})
+    assert r.returncode == 0, r.stderr
+    assert (out / "model.pth").read_bytes() == b"weights"
+    assert not os.path.islink(out / "model.pth")
+    meta = json.loads((out / "vint.json").read_text())
+    assert meta["metric_step_m"] == 0.37 and meta["source_checkpoint"] == str(ck)
+
+
+def test_link_mode_points_at_the_training_checkpoint(tmp_path):
+    """430 MB copies take minutes on CephFS; --link exports in an instant."""
+    ck = tmp_path / "3.pth"
+    ck.write_bytes(b"w3")
+    summ = tmp_path / "summary.json"
+    summ.write_text(json.dumps({"metric_waypoint_spacing_m": 0.37}))
+    out = tmp_path / "epoch_3"
+    r = subprocess.run([sys.executable, os.path.join(ROOT, "scripts", "vint", "export_vint_ckpt.py"),
+                        "--ckpt", str(ck), "--summary", str(summ), "--out", str(out), "--link",
+                        "--config", os.path.join(ROOT, "scripts", "vint", "vint_carla_expert.yaml")],
+                       capture_output=True, text=True, env={**os.environ, "CUDA_VISIBLE_DEVICES": ""})
+    assert r.returncode == 0, r.stderr
+    assert os.path.islink(out / "model.pth") and os.readlink(out / "model.pth") == str(ck)
+    assert (out / "model.pth").read_bytes() == b"w3"

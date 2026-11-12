@@ -1,0 +1,13 @@
+{
+  "dockerFile": "Dockerfile",
+  "containerEnv": {
+    "DISPLAY": "${localEnv:DISPLAY}"
+  },
+  "runArgs": [
+    "--privileged",
+    "--network=host",
+     "--gpus=all"
+  ],
+  "mounts": ["type=bind,source=/dev/input,target=/dev/input"]
+  
+}

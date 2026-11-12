@@ -1,0 +1,8 @@
+z=1.0 (current)  uniform     SR 0.11 SPL 0.11 (T02 0.17, T03 0.05) | vs no map 21/11 p 0.11 | ends {'clock': 71, 'collision': 7, 'crossing': 35, 'off_road': 65, 'reached': 22}
+z=1.0 (current)  entropy     SR 0.06 SPL 0.06 (T02 0.07, T03 0.04) | vs no map 10/11 p 1 | ends {'clock': 65, 'collision': 5, 'crossing': 39, 'off_road': 80, 'reached': 11}
+z=1.0 (current)  sgm_matched SR 0.13 SPL 0.12 (T02 0.21, T03 0.04) | vs no map 25/12 p 0.047 | ends {'clock': 71, 'crossing': 49, 'off_road': 55, 'reached': 25}
+z=2.5            uniform     SR 0.11 SPL 0.11 (T02 0.18, T03 0.04) | vs no map 22/12 p 0.12 | ends {'clock': 66, 'collision': 3, 'crossing': 45, 'off_road': 64, 'reached': 22}
+z=2.5            entropy     SR 0.13 SPL 0.12 (T02 0.18, T03 0.07) | vs no map 24/11 p 0.041 | ends {'clock': 65, 'crossing': 43, 'off_road': 67, 'reached': 25}
+z=2.5            sgm_matched SR 0.15 SPL 0.14 (T02 0.24, T03 0.05) | vs no map 26/9 p 0.006 | ends {'clock': 73, 'collision': 4, 'crossing': 32, 'off_road': 62, 'reached': 29}
+
+[exited with code 0]

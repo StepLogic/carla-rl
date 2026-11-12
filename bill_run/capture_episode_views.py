@@ -1,0 +1,1 @@
+/home/robotlab/scratch/carla-rl/.claude/worktrees/gated-impl/capture_episode_views.py

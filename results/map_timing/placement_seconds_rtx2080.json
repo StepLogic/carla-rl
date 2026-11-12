@@ -1,0 +1,28 @@
+{
+ "town": "Town02",
+ "candidates": 3664,
+ "frames": 12332,
+ "entropy_keys": 255,
+ "sgm_pairs": 250842,
+ "seconds": {
+  "SHARED anyloc descriptors (all maps)": 11.17,
+  "entropy: online MAD + image dedupe": 1.314,
+  "uniform: spacing search to n": 1.267,
+  "SGM: cutoff search to n (pairs given)": 13.577
+ }
+}
+{
+ "town": "Town03",
+ "candidates": 16242,
+ "frames": 77887,
+ "entropy_keys": 1104,
+ "sgm_pairs": 2031569,
+ "seconds": {
+  "SHARED anyloc descriptors (all maps)": 24.341,
+  "entropy: online MAD + image dedupe": 22.797,
+  "uniform: spacing search to n": 7.403,
+  "SGM: cutoff search to n (pairs given)": 160.085
+ }
+}
+
+[exited with code 0]

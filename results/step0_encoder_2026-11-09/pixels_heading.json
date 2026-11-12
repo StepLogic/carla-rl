@@ -1,0 +1,18 @@
+{
+ "frames": 53237,
+ "train": 38798,
+ "val": 3206,
+ "test": 11233,
+ "label_sd": {
+  "heading_err": 3.457,
+  "offset": 0.21
+ },
+ "one_frame": {
+  "heading_err": 0.042,
+  "offset": 0.719
+ },
+ "two_frames": {
+  "heading_err": 0.317,
+  "offset": 0.721
+ }
+}

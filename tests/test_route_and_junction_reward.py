@@ -1,0 +1,500 @@
+"""v26 (user 2026-10-30): one per-step price in both modes -- metres along the
+road towards the episode's target -- with lane invasion ending the episode.
+
+GOAL_ROUTE_ONLY=1. Goal episodes were paid TWICE for driving: explore's forward
+progress (any direction the lane goes) plus the route potential towards the
+goal (POTENTIAL_K). The first pays a car that drives away from the goal down
+the wrong branch. With the switch on, goal mode keeps only the route term.
+
+EXPLORE_JUNCTION_BONUS. Explore episodes have no goal image, so a specific
+target junction would be invisible to the policy: at a fork it would be paid
+for one branch and charged for the other with nothing in its view to tell
+them apart. Instead the target is the next junction ahead, any exit counts:
+forward road progress pays every metre towards it, clearing it pays the
+bonus, and the next junction becomes the target. Clearing = leaving a junction
+after at least EXPLORE_JUNCTION_MIN_STEPS steps inside it, at least
+EXPLORE_JUNCTION_MIN_GAP_M of driving after the last paid one, so a waypoint
+projection flickering at a junction edge cannot be farmed.
+
+HER relabels explore episodes into goal rows, so the explore-only parts
+(forward progress under GOAL_ROUTE_ONLY, the junction bonus) are published as
+info["explore_only"] and removed from the relabelled row's base.
+"""
+import importlib
+import os
+import sys
+
+import numpy as np
+import pytest
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, ROOT)
+sys.path.insert(0, os.path.join(ROOT, "src"))
+pytest.importorskip("gymnasium")
+import gymnasium as gym                       # noqa: E402
+from gymnasium import spaces                  # noqa: E402
+
+STEP_M = 0.3
+
+
+class Road(gym.Env):
+    """Drives STEP_M a step along +x. `junction[t]` says whether step t ends
+    inside a junction; `route[t]` is the route distance left after step t."""
+
+    def __init__(self, junction=None, route=None, collide_at=None, speed=10.0):
+        self.observation_space = spaces.Dict({})
+        self.action_space = spaces.Box(np.array([-1.0, 0.0], np.float32),
+                                       np.array([1.0, 1.0], np.float32))
+        self.junction = list(junction or [])
+        self.route = list(route or [])
+        self.collide_at = collide_at
+        self.speed = float(speed)
+        self.t = 0
+
+    def _info(self):
+        t = self.t
+        inf = {"hero_pos": (STEP_M * t, 0.0), "goal_pos": (500.0, 0.0),
+               "hero_yaw": 0.0, "wp_forward": np.array([1.0, 0.0]),
+               "speed_kmh": self.speed, "speed_factor": self.speed / 20.0,
+               "action_smoothness_penalty": 0.0, "arrived": False,
+               "collision": t > 0 and t == self.collide_at,
+               "off_road": False, "lane_any": False, "lane_marking_types": [],
+               "in_junction": bool(self.junction[t - 1]) if 0 < t <= len(self.junction) else False}
+        if self.route:
+            inf["route_remaining_m"] = float(self.route[min(t, len(self.route) - 1)])
+        return inf
+
+    def reset(self, **kw):
+        self.t = 0
+        return np.zeros(4, np.float32), self._info()
+
+    def step(self, action):
+        self.t += 1
+        return np.zeros(4, np.float32), 0.0, False, False, self._info()
+
+
+@pytest.fixture(autouse=True)
+def _clean_modules():
+    """Every test here reloads the reward modules under its own environment;
+    reload them again afterwards (monkeypatch has restored the environment by
+    then) so the switches do not leak into tests that import them plainly."""
+    yield
+    import vae_nav.lane_explore_reward as ler
+    import vae_nav.gated_reward as gr
+    for k in ("GOAL_ROUTE_ONLY", "EXPLORE_JUNCTION_BONUS", "STEER_CHANGE_SCALE",
+              "ROUTE_PROGRESS_POSITIVE", "ROUTE_RETREAT_SCALE",
+              "ROUTE_PROGRESS_RATCHET"):
+        os.environ.pop(k, None)
+    importlib.reload(ler)
+    importlib.reload(gr)
+
+
+def _gr(monkeypatch, **env):
+    base = dict(GATED_GOAL_REWARD="explore", LANE_PROGRESS_MODE="projected",
+                LANE_PROGRESS_SCALE=1, POTENTIAL_K=1, GOAL_ROUTE_ONLY=0,
+                EXPLORE_JUNCTION_BONUS=0, EXPLORE_JUNCTION_MIN_STEPS=3,
+                EXPLORE_JUNCTION_MIN_GAP_M=2, EXPLORE_GOAL_DIST_M=0,
+                EXPLORE_IDLE_PENALTY=0, LANE_CENTRE_K=0, LANE_HEADING_K=0,
+                STOP_ACTION=0, PROGRESS_SPEED_GATE=0, SHAPING_DISCOUNTED=0)
+    base.update(env)
+    for k, v in base.items():
+        monkeypatch.setenv(k, str(v))
+    import vae_nav.lane_explore_reward as ler
+    importlib.reload(ler)
+    import vae_nav.gated_reward as gr
+    return importlib.reload(gr)
+
+
+def _rewards(gr, env, mode, n):
+    w = gr.GatedReward(env, force_mode=mode, max_steps=500, seed=0)
+    w.reset()
+    out = []
+    for _ in range(n):
+        o, r, term, trunc, info = w.step(np.zeros(2, np.float32))
+        out.append((float(r), term, trunc, dict(info)))
+        if term or trunc:
+            break
+    return out
+
+
+# ---- goal episodes: route progress only -----------------------------------
+
+def test_goal_mode_drops_the_forward_progress_term(monkeypatch):
+    """Route distance flat (driving PAST the goal's branch): the old reward
+    still paid 0.3 a step for moving along the lane; route-only pays nothing."""
+    flat = [40.0] * 10
+    gr = _gr(monkeypatch, GOAL_ROUTE_ONLY=0)
+    old = _rewards(gr, Road(route=flat), gr.GOAL, 5)
+    gr = _gr(monkeypatch, GOAL_ROUTE_ONLY=1)
+    new = _rewards(gr, Road(route=flat), gr.GOAL, 5)
+    for (ro, *_), (rn, *_) in zip(old[1:], new[1:]):
+        assert ro - rn == pytest.approx(STEP_M)
+
+
+def test_goal_mode_pays_each_metre_of_route_progress(monkeypatch):
+    gr = _gr(monkeypatch, GOAL_ROUTE_ONLY=1)
+    route = [40.0 - STEP_M * t for t in range(10)]
+    closing = _rewards(gr, Road(route=route), gr.GOAL, 5)
+    flat = _rewards(gr, Road(route=[40.0] * 10), gr.GOAL, 5)
+    for (rc, *_), (rf, *_) in zip(closing[1:], flat[1:]):
+        assert rc - rf == pytest.approx(STEP_M)
+
+
+def test_route_only_without_a_route_term_is_refused(monkeypatch):
+    """No forward progress AND no potential leaves goal mode no positive dense
+    term at all -- a run that could only ever learn to stand still."""
+    with pytest.raises(ValueError, match="GOAL_ROUTE_ONLY"):
+        _gr(monkeypatch, GOAL_ROUTE_ONLY=1, POTENTIAL_K=0)
+
+
+def test_explore_mode_keeps_forward_progress_under_route_only(monkeypatch):
+    gr = _gr(monkeypatch, GOAL_ROUTE_ONLY=0)
+    a = _rewards(gr, Road(), gr.EXPLORE, 4)
+    gr = _gr(monkeypatch, GOAL_ROUTE_ONLY=1)
+    b = _rewards(gr, Road(), gr.EXPLORE, 4)
+    assert [r for r, *_ in a] == pytest.approx([r for r, *_ in b])
+
+
+# ---- explore episodes: a bonus per junction cleared -----------------------
+
+def _bonus_steps(out, base):
+    return [i for i, (r, *_rest) in enumerate(out) if r - base[i][0] > 1.0]
+
+
+def test_clearing_a_junction_pays_the_bonus_once_and_the_episode_goes_on(monkeypatch):
+    j = [0, 0, 1, 1, 1, 1, 0, 0, 0, 0]
+    gr = _gr(monkeypatch, EXPLORE_JUNCTION_BONUS=10)
+    out = _rewards(gr, Road(junction=j), gr.EXPLORE, 10)
+    gr0 = _gr(monkeypatch, EXPLORE_JUNCTION_BONUS=0)
+    base = _rewards(gr0, Road(junction=j), gr0.EXPLORE, 10)
+    assert _bonus_steps(out, base) == [6]                   # the exit step
+    assert out[6][0] - base[6][0] == pytest.approx(10.0)
+    assert out[6][3]["junction_cleared"] and not out[6][1]  # not terminal
+    assert len(out) == 10
+
+
+def test_a_brush_with_a_junction_edge_pays_nothing(monkeypatch):
+    """Two steps inside (< MIN_STEPS 3) is the projection flickering, not a
+    junction driven through."""
+    j = [0, 1, 1, 0, 0, 0]
+    gr = _gr(monkeypatch, EXPLORE_JUNCTION_BONUS=10)
+    out = _rewards(gr, Road(junction=j), gr.EXPLORE, 6)
+    assert not any(i["junction_cleared"] for *_x, i in out)
+
+
+def test_back_to_back_exits_inside_the_gap_pay_once(monkeypatch):
+    """Gap 2 m = 7 steps at 0.3 m: the second exit comes 4 steps after the
+    first and is not paid; one well past the gap is."""
+    j = [1, 1, 1, 0, 1, 1, 1, 0, 0, 0, 0, 0, 1, 1, 1, 0]
+    gr = _gr(monkeypatch, EXPLORE_JUNCTION_BONUS=10)
+    out = _rewards(gr, Road(junction=j), gr.EXPLORE, len(j))
+    paid = [t for t, (*_x, i) in enumerate(out) if i["junction_cleared"]]
+    assert paid == [3, 15]
+
+
+def test_crashing_inside_a_junction_pays_no_bonus(monkeypatch):
+    j = [0, 1, 1, 1, 1, 0]
+    gr = _gr(monkeypatch, EXPLORE_JUNCTION_BONUS=10, EXPLORE_COLLISION_FATAL=1)
+    out = _rewards(gr, Road(junction=j, collide_at=4), gr.EXPLORE, 6)
+    assert out[-1][1] and not any(i.get("junction_cleared") for *_x, i in out)
+
+
+def test_goal_episodes_never_get_the_junction_bonus(monkeypatch):
+    j = [0, 1, 1, 1, 1, 0, 0]
+    gr = _gr(monkeypatch, EXPLORE_JUNCTION_BONUS=10, GOAL_ROUTE_ONLY=1)
+    out = _rewards(gr, Road(junction=j, route=[40.0] * 10), gr.GOAL, 7)
+    assert not any(i.get("junction_cleared") for *_x, i in out)
+
+
+def test_the_count_resets_between_episodes(monkeypatch):
+    gr = _gr(monkeypatch, EXPLORE_JUNCTION_BONUS=10)
+    w = gr.GatedReward(Road(junction=[1, 1, 1, 0]), force_mode=gr.EXPLORE,
+                       max_steps=500, seed=0)
+    w.reset()
+    for _ in range(4):
+        w.step(np.zeros(2, np.float32))
+    w.reset()
+    infos = [w.step(np.zeros(2, np.float32))[4] for _ in range(4)]
+    assert infos[-1]["junctions_cleared"] == 1
+
+
+# ---- HER: explore-only parts are not carried into goal rows ---------------
+
+def test_explore_only_is_published_for_her(monkeypatch):
+    j = [0, 1, 1, 1, 0]
+    gr = _gr(monkeypatch, EXPLORE_JUNCTION_BONUS=10, GOAL_ROUTE_ONLY=1)
+    out = _rewards(gr, Road(junction=j), gr.EXPLORE, 5)
+    eo = [i["explore_only"] for *_x, i in out]
+    assert eo[0] == pytest.approx(STEP_M)                 # progress only
+    assert eo[4] == pytest.approx(STEP_M + 10.0)          # + the bonus
+
+
+def test_her_removes_explore_only_from_the_base(monkeypatch):
+    from torch_rl.image_her import ImageGoalHER
+    her = ImageGoalHER(None, None, None, goal_bonus=100.0, explore_bonus=10.0)
+    her.begin(0, {}, mode=0)
+    frame = np.zeros((2, 2, 3), np.uint8)
+    her.record(0, np.zeros(3), np.zeros(2), 10.25, False, False, np.zeros(3),
+               {"debit_cur": frame},
+               {"debit_cur": frame, "explore_only": 10.3, "gated_shaping": 0.0})
+    assert her._ep[0]["base"][0] == pytest.approx(-0.05)
+
+
+# ---- the speed gate on the route term (v27, user 2026-10-30) -------------
+# The repo pays nothing above the target speed. With GOAL_ROUTE_ONLY the route
+# term IS goal mode's progress, so PROGRESS_SPEED_GATE now gates it too -- but
+# only what it PAYS: moving away from the goal is charged at any speed, or
+# "approach slowly, retreat fast" would be a loop that earns.
+
+def _route_pay(monkeypatch, speed, route, gate=1):
+    gr = _gr(monkeypatch, GOAL_ROUTE_ONLY=1, PROGRESS_SPEED_GATE=gate)
+    moving = _rewards(gr, Road(route=route, speed=speed), gr.GOAL, 5)
+    still = _rewards(gr, Road(route=[route[0]] * len(route), speed=speed), gr.GOAL, 5)
+    return [m[0] - s[0] for m, s in zip(moving[1:], still[1:])]
+
+
+def test_route_progress_pays_below_the_target_speed(monkeypatch):
+    closing = [40.0 - STEP_M * t for t in range(10)]
+    assert _route_pay(monkeypatch, 15.0, closing) == pytest.approx([STEP_M] * 4)
+
+
+def test_route_progress_pays_nothing_at_or_above_it(monkeypatch):
+    closing = [40.0 - STEP_M * t for t in range(10)]
+    assert _route_pay(monkeypatch, 25.0, closing) == pytest.approx([0.0] * 4)
+
+
+def test_moving_away_is_charged_at_any_speed(monkeypatch):
+    opening = [40.0 + STEP_M * t for t in range(10)]
+    assert _route_pay(monkeypatch, 25.0, opening) == pytest.approx([-STEP_M] * 4)
+
+
+def test_gate_off_pays_at_any_speed(monkeypatch):
+    closing = [40.0 - STEP_M * t for t in range(10)]
+    assert _route_pay(monkeypatch, 25.0, closing, gate=0) == pytest.approx([STEP_M] * 4)
+
+
+# ---- the steering-change cost (v28, user 2026-10-31) ----------------------
+# Every step charged |delta steer| (0..2) unscaled. With absolute actions that
+# averaged ~0.2 a step on v27's failing eval episodes -- more than driving
+# earned -- so their return per step was -0.08 to -0.13, the goal critic sat
+# at -20..-48, and ending an episode on a -1 crossing became the cheap way
+# out. The repo this reward follows has no such term. STEER_CHANGE_SCALE
+# multiplies it; 1 (default) keeps every earlier run, 0 removes it.
+
+class Jitter(Road):
+    def _info(self):
+        inf = super()._info()
+        inf["action_smoothness_penalty"] = 0.5
+        return inf
+
+
+@pytest.mark.parametrize("mode_name", ["GOAL", "EXPLORE"])
+def test_scale_zero_removes_the_steering_cost(monkeypatch, mode_name):
+    gr = _gr(monkeypatch, GOAL_ROUTE_ONLY=1, STEER_CHANGE_SCALE=0)
+    mode = getattr(gr, mode_name)
+    jit = _rewards(gr, Jitter(route=[40.0] * 10), mode, 4)
+    calm = _rewards(gr, Road(route=[40.0] * 10), mode, 4)
+    assert [r for r, *_ in jit] == pytest.approx([r for r, *_ in calm])
+
+
+def test_default_scale_still_charges_it(monkeypatch):
+    gr = _gr(monkeypatch, GOAL_ROUTE_ONLY=1)
+    jit = _rewards(gr, Jitter(route=[40.0] * 10), gr.EXPLORE, 4)
+    calm = _rewards(gr, Road(route=[40.0] * 10), gr.EXPLORE, 4)
+    assert [c - j for (j, *_), (c, *_) in zip(jit, calm)] == pytest.approx([0.5] * 4)
+
+
+def test_lane_explore_reward_uses_the_same_scale(monkeypatch):
+    monkeypatch.setenv("STEER_CHANGE_SCALE", "0")
+    import vae_nav.lane_explore_reward as ler
+    importlib.reload(ler)
+    assert ler.STEER_CHANGE_SCALE == 0.0
+    import inspect
+    assert "STEER_CHANGE_SCALE * steer_change" in inspect.getsource(ler)
+
+
+# ---- clipped route progress (v29, user 2026-10-31) -----------------------
+# ROUTE_PROGRESS_POSITIVE pays route progress and charges NOTHING for moving
+# away. v28's eval records: failing episodes drove 51 m (200k) and 203-366 m
+# (400k-500k) for returns of -21 to +3 -- the car follows lanes but drives the
+# wrong way, and the signed term charges every metre of it, so continuing is
+# worth less than a -1 crossing. The usual objection is that clipping gives up
+# the potential and makes approach-retreat a farmable loop; here retreating
+# means turning round, which crosses a line and ENDS the episode, so the loop
+# cannot be run.
+
+def test_moving_away_is_free_when_clipped(monkeypatch):
+    opening = [40.0 + STEP_M * t for t in range(10)]
+    gr = _gr(monkeypatch, GOAL_ROUTE_ONLY=1, ROUTE_PROGRESS_POSITIVE=1)
+    away = _rewards(gr, Road(route=opening), gr.GOAL, 5)
+    flat = _rewards(gr, Road(route=[40.0] * 10), gr.GOAL, 5)
+    assert [r for r, *_ in away[1:]] == pytest.approx([r for r, *_ in flat[1:]])
+
+
+def test_moving_away_is_charged_when_signed(monkeypatch):
+    opening = [40.0 + STEP_M * t for t in range(10)]
+    gr = _gr(monkeypatch, GOAL_ROUTE_ONLY=1, ROUTE_PROGRESS_POSITIVE=0)
+    away = _rewards(gr, Road(route=opening), gr.GOAL, 5)
+    flat = _rewards(gr, Road(route=[40.0] * 10), gr.GOAL, 5)
+    assert [f - a for (a, *_), (f, *_) in zip(away[1:], flat[1:])] == pytest.approx([STEP_M] * 4)
+
+
+def test_clipping_still_pays_progress(monkeypatch):
+    closing = [40.0 - STEP_M * t for t in range(10)]
+    gr = _gr(monkeypatch, GOAL_ROUTE_ONLY=1, ROUTE_PROGRESS_POSITIVE=1)
+    toward = _rewards(gr, Road(route=closing), gr.GOAL, 5)
+    flat = _rewards(gr, Road(route=[40.0] * 10), gr.GOAL, 5)
+    assert [t - f for (t, *_), (f, *_) in zip(toward[1:], flat[1:])] == pytest.approx([STEP_M] * 4)
+
+
+def test_the_published_shaping_is_clipped_too(monkeypatch):
+    """info["gated_shaping"] is what HER subtracts to rebuild a row's base, so
+    it must be the amount actually paid."""
+    opening = [40.0 + STEP_M * t for t in range(10)]
+    gr = _gr(monkeypatch, GOAL_ROUTE_ONLY=1, ROUTE_PROGRESS_POSITIVE=1)
+    out = _rewards(gr, Road(route=opening), gr.GOAL, 5)
+    assert [i["gated_shaping"] for *_x, i in out] == pytest.approx([0.0] * len(out))
+
+
+def test_clipping_is_refused_when_a_crossing_does_not_end_the_episode(monkeypatch):
+    """What stops approach-retreat being farmed is that turning back crosses a
+    line and ends the episode. Fined crossings reopen the loop."""
+    with pytest.raises(ValueError, match="ROUTE_PROGRESS_POSITIVE"):
+        _gr(monkeypatch, GOAL_ROUTE_ONLY=1, ROUTE_PROGRESS_POSITIVE=1,
+            EXPLORE_LANE_MODE="penalise")
+    with pytest.raises(ValueError, match="ROUTE_PROGRESS_POSITIVE"):
+        _gr(monkeypatch, GOAL_ROUTE_ONLY=1, ROUTE_PROGRESS_POSITIVE=1,
+            LANE_INVASION_NOOP=1)
+
+
+# ---- a PARTIAL retreat charge (v30, 2026-10-31) --------------------------
+# The paired wrong-goal eval settled what the two ends of this dial cost.
+# v27 (full charge): true 0.470 vs wrong 0.300, so the image was worth +0.170
+# (McNemar p=0.0033) -- and the run collapsed, because the charge drove the
+# value negative. v29 (no charge): 0.480 vs 0.470, gap +0.010, p=1.00 -- stable
+# and the policy IGNORES the goal image, driving the lane and collecting
+# whatever goal it passes. Charging for retreat is what forces a choice of
+# direction, and the image is the only way to know the direction.
+# ROUTE_RETREAT_SCALE is that dial: 1 = v27/v28, 0 = v29, between = v30.
+
+def _retreat_pay(monkeypatch, scale, **kw):
+    opening = [40.0 + STEP_M * t for t in range(10)]
+    gr = _gr(monkeypatch, GOAL_ROUTE_ONLY=1, ROUTE_RETREAT_SCALE=scale, **kw)
+    away = _rewards(gr, Road(route=opening), gr.GOAL, 5)
+    flat = _rewards(gr, Road(route=[40.0] * 10), gr.GOAL, 5)
+    return [f - a for (a, *_), (f, *_) in zip(away[1:], flat[1:])]
+
+
+def test_a_partial_scale_charges_that_fraction(monkeypatch):
+    assert _retreat_pay(monkeypatch, 0.3) == pytest.approx([0.3 * STEP_M] * 4)
+
+
+def test_scale_one_is_the_old_full_charge(monkeypatch):
+    assert _retreat_pay(monkeypatch, 1.0) == pytest.approx([STEP_M] * 4)
+
+
+def test_scale_zero_is_free(monkeypatch):
+    assert _retreat_pay(monkeypatch, 0.0) == pytest.approx([0.0] * 4)
+
+
+def test_approach_is_paid_in_full_whatever_the_scale(monkeypatch):
+    closing = [40.0 - STEP_M * t for t in range(10)]
+    gr = _gr(monkeypatch, GOAL_ROUTE_ONLY=1, ROUTE_RETREAT_SCALE=0.3)
+    toward = _rewards(gr, Road(route=closing), gr.GOAL, 5)
+    flat = _rewards(gr, Road(route=[40.0] * 10), gr.GOAL, 5)
+    assert [t - f for (t, *_), (f, *_) in zip(toward[1:], flat[1:])] == pytest.approx([STEP_M] * 4)
+
+
+def test_the_old_flag_still_means_free(monkeypatch):
+    """ROUTE_PROGRESS_POSITIVE=1 is v29's setting and must keep working."""
+    opening = [40.0 + STEP_M * t for t in range(10)]
+    gr = _gr(monkeypatch, GOAL_ROUTE_ONLY=1, ROUTE_PROGRESS_POSITIVE=1)
+    assert gr.ROUTE_RETREAT_SCALE == 0.0
+    away = _rewards(gr, Road(route=opening), gr.GOAL, 5)
+    flat = _rewards(gr, Road(route=[40.0] * 10), gr.GOAL, 5)
+    assert [r for r, *_ in away[1:]] == pytest.approx([r for r, *_ in flat[1:]])
+
+
+def test_the_two_knobs_may_not_disagree(monkeypatch):
+    with pytest.raises(ValueError, match="ROUTE_PROGRESS_POSITIVE"):
+        _gr(monkeypatch, GOAL_ROUTE_ONLY=1, ROUTE_PROGRESS_POSITIVE=1,
+            ROUTE_RETREAT_SCALE=0.3)
+
+
+def test_any_discount_needs_terminal_crossings(monkeypatch):
+    """Any scale below 1 gives up part of the potential, so approach-retreat
+    nets reward per cycle; what stops it is that turning back ends the
+    episode."""
+    with pytest.raises(ValueError, match="ROUTE_RETREAT_SCALE"):
+        _gr(monkeypatch, GOAL_ROUTE_ONLY=1, ROUTE_RETREAT_SCALE=0.3,
+            EXPLORE_LANE_MODE="penalise")
+
+
+def test_out_of_range_is_refused(monkeypatch):
+    for bad in (-0.1, 1.5):
+        with pytest.raises(ValueError, match="ROUTE_RETREAT_SCALE"):
+            _gr(monkeypatch, GOAL_ROUTE_ONLY=1, ROUTE_RETREAT_SCALE=bad)
+
+
+# ---- ratchet progress (v33, user 2026-11-01: "ok") ---------------------------
+# ROUTE_RETREAT_SCALE=0.3 was FARMABLE: circling a block approaches the goal
+# and leaves it again through LEGAL junction turns, so no painted line is
+# crossed and the episode never ends. v32 at 200k scored 0.000 on Town02 with
+# 13/40 episodes driving ~240 m for the full clock and returning up to +95
+# without arriving, on goals ~20 m away. ROUTE_PROGRESS_RATCHET pays only for
+# getting CLOSER THAN EVER BEFORE this episode: max(0, best - d), best = min.
+# Total pay <= the starting distance however many laps; never negative.
+
+def _ratchet(monkeypatch, route, **kw):
+    gr = _gr(monkeypatch, GOAL_ROUTE_ONLY=1, ROUTE_PROGRESS_RATCHET=1,
+             ROUTE_RETREAT_SCALE=1, **kw)
+    moving = _rewards(gr, Road(route=route), gr.GOAL, len(route) - 1)
+    still = _rewards(gr, Road(route=[route[0]] * len(route)), gr.GOAL, len(route) - 1)
+    return [m[0] - s[0] for m, s in zip(moving, still)], moving
+
+
+def test_circling_pays_only_the_first_approach(monkeypatch):
+    # approach 20 -> 14, leave to 20, approach to 14 again, leave, ...
+    lap = [20.0, 18.0, 16.0, 14.0, 16.0, 18.0, 20.0]
+    route = lap + lap[1:] + lap[1:]
+    pay, _ = _ratchet(monkeypatch, route)
+    assert sum(pay) == pytest.approx(6.0)          # 20 -> 14, once
+    assert min(pay) >= -1e-9                       # never charged
+
+
+def test_new_ground_pays_metre_for_metre(monkeypatch):
+    route = [20.0, 18.0, 19.0, 17.0, 15.0, 16.0, 12.0]
+    pay, _ = _ratchet(monkeypatch, route)
+    # best 20 -> 18 (+2), 19 no, 17 (+1), 15 (+2), 16 no, 12 (+3)
+    assert pay == pytest.approx([2.0, 0.0, 1.0, 2.0, 0.0, 3.0])
+
+
+def test_a_replan_jump_is_not_paid(monkeypatch):
+    """A route distance that drops more than ROUTE_RATCHET_MAX_STEP_M in one
+    step is a replan or a planner snap, not driving."""
+    route = [40.0, 39.0, 20.0, 19.0]
+    pay, _ = _ratchet(monkeypatch, route)
+    assert pay == pytest.approx([1.0, 0.0, 1.0])
+
+
+def test_the_ratchet_resets_each_episode(monkeypatch):
+    gr = _gr(monkeypatch, GOAL_ROUTE_ONLY=1, ROUTE_PROGRESS_RATCHET=1,
+             ROUTE_RETREAT_SCALE=1)
+    route = [20.0, 18.0, 16.0, 14.0]
+    w = gr.GatedReward(Road(route=route), force_mode=gr.GOAL, max_steps=50, seed=0)
+    w.reset()
+    first = [w.step(np.zeros(2, np.float32))[1] for _ in range(3)]
+    w.reset()
+    second = [w.step(np.zeros(2, np.float32))[1] for _ in range(3)]
+    assert first == pytest.approx(second)
+
+
+def test_ratchet_and_a_retreat_scale_are_exclusive(monkeypatch):
+    with pytest.raises(ValueError, match="ROUTE_PROGRESS_RATCHET"):
+        _gr(monkeypatch, GOAL_ROUTE_ONLY=1, ROUTE_PROGRESS_RATCHET=1,
+            ROUTE_RETREAT_SCALE=0.3)
+
+
+def test_hindsight_rows_use_no_retreat_charge_under_the_ratchet():
+    src = open(os.path.join(ROOT, "train_carla_sac.py")).read()
+    assert "0.0 if _G.ROUTE_PROGRESS_RATCHET else _G.ROUTE_RETREAT_SCALE" in src

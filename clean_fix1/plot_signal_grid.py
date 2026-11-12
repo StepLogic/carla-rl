@@ -1,0 +1,1 @@
+/home/robotlab/scratch/carla-rl/.claude/worktrees/gated-impl/plot_signal_grid.py

@@ -1,0 +1,517 @@
+"""The mode bit as its own observation key, and the goal block it masks.
+
+WHY A SEPARATE KEY RATHER THAN A FIFTH SLOT IN `vector`. PixelMultiplexer gives
+every non-image key its own Dense -> LayerNorm -> tanh projection before
+concatenating. Appending the bit to `vector` would push a single 0/1 value
+through a LayerNorm shared with steer, throttle and speed, where it would be
+partly normalised away. Its own key gives it its own projection, and it leaves
+the 4-vector layout untouched.
+
+WHAT THIS FILE PROTECTS, beyond the layout. OBS_WITH_GOAL=0 has an existing,
+load-bearing meaning: omit the 4-d goal block, 136 -> 132. run_lanefollow_nogoal.sh
+depends on it and every carla_lanefollow_nogoal checkpoint is 132-d because of
+it. (The goal block was 12-d and 144-d before the action history moved into
+the mode-independent `state` block; the arm it names is unchanged in kind.)
+The gate must NOT overload that flag. Gating needs the goal PRESENT and
+zeroed, because one actor cannot accept two input shapes.
+"""
+import importlib
+import os
+import sys
+
+import numpy as np
+import pytest
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(
+    os.path.abspath(__file__))), "src"))
+
+pytest.importorskip("gymnasium")
+
+from gymnasium import spaces  # noqa: E402
+
+
+def _reload(**env):
+    """Module-level flags are read at import, so a layout change needs a reload.
+
+    Same pattern the explorer layout tests use. Restores nothing on purpose:
+    every test sets every flag it depends on.
+    """
+    for k, v in env.items():
+        os.environ[k] = v
+    import vae_nav.vae_goal_wrapper as m
+    return importlib.reload(m)
+
+
+GATED = dict(OBS_WITH_MODE="1", OBS_WITH_GOAL="1", OBS_WITH_VECTOR="1")
+
+# The v8 flags are new; the older tests in this file do not know to set them,
+# and _reload above restores nothing on purpose. So each of these tests must
+# set every v8 flag it depends on, and this fixture removes them afterwards so
+# neither this file's later tests nor the files that follow inherit a v8
+# layout they never asked for (OBS_LATENT_AS_PIXELS=1 in particular exits on
+# the 128-d stub source).
+_V8_FLAGS = ("OBS_STATE_COLLISION", "OBS_LATENT_AS_PIXELS")
+
+
+@pytest.fixture(autouse=True)
+def _clear_v8_obs_flags():
+    yield
+    for k in _V8_FLAGS:
+        os.environ.pop(k, None)
+
+
+# ---------------------------------------------------------------- flags ----
+
+def test_mode_key_is_off_by_default():
+    m = _reload(OBS_WITH_MODE="0", OBS_WITH_GOAL="1", OBS_WITH_VECTOR="1")
+    assert m.WITH_MODE is False
+
+
+def test_mode_key_is_on_when_requested():
+    m = _reload(**GATED)
+    assert m.WITH_MODE is True
+    assert m.MODE_DIM == 1
+
+
+def test_mode_encoding_matches_the_reward_wrapper():
+    # GOAL=1, EXPLORE=0. Inverting this silently swaps which critic trains on
+    # which mode, and nothing downstream would raise.
+    m = _reload(**GATED)
+    from vae_nav import gated_reward
+    assert (m.GOAL, m.EXPLORE) == (gated_reward.GOAL, gated_reward.EXPLORE)
+
+
+# ------------------------------------------------------------ coherence ----
+
+def test_gating_requires_the_goal_block():
+    m = _reload(OBS_WITH_MODE="1", OBS_WITH_GOAL="0", OBS_WITH_VECTOR="1")
+    with pytest.raises(ValueError, match="requires the goal block"):
+        m.check_gated_coherence()
+
+
+def test_gating_requires_the_vector_block():
+    # BOTH gated rewards are speed-gated, so a policy that cannot observe its
+    # own speed sees the gate as an unobservable coin flip.
+    m = _reload(OBS_WITH_MODE="1", OBS_WITH_GOAL="1", OBS_WITH_VECTOR="0",
+                OBS_WITH_STATE="0")
+    with pytest.raises(ValueError, match="requires the vector block"):
+        m.check_gated_coherence()
+
+
+def test_v8_state_block_replaces_the_vector_as_velocity_carrier():
+    # THE v8 ESCAPE (ledger ruling, Tasks 1+2 review). GATED with
+    # OBS_WITH_VECTOR=0 is permitted when the 9-d state block carries the
+    # velocity: OBS_WITH_STATE=1 with OBS_STATE_COLLISION=0. The state block's
+    # slot 0 IS the same clipped speed/TARGET_SPEED ratio the 4-d vector block
+    # carried, i.e. the observable speed both gated rewards' progress term
+    # assumes.
+    m = _reload(OBS_WITH_MODE="1", OBS_WITH_GOAL="1", OBS_WITH_VECTOR="0",
+                OBS_WITH_STATE="1", OBS_STATE_COLLISION="0")
+    m.check_gated_coherence()
+
+
+def test_v8_escape_requires_the_collision_flag_dropped():
+    # A 10-d state block is NOT the escape: its slot 0 is has_collided, and the
+    # speed ratio it also carries sits behind the collision flag rather than
+    # standing in for the vector's slot layout. That configuration must still
+    # fail with today's message.
+    m = _reload(OBS_WITH_MODE="1", OBS_WITH_GOAL="1", OBS_WITH_VECTOR="0",
+                OBS_WITH_STATE="1", OBS_STATE_COLLISION="1")
+    with pytest.raises(ValueError, match="requires the vector block"):
+        m.check_gated_coherence()
+
+
+def test_the_image_goal_escape_still_passes():
+    # The pre-existing escape is untouched: the 2-mode image-goal pairing keeps
+    # its velocity in the mode-independent `state` block by its own rule.
+    m = _reload(OBS_WITH_MODE="1", OBS_WITH_GOAL="1", OBS_WITH_VECTOR="0",
+                OBS_WITH_STATE="0", IMAGE_GOAL_TASK="1", GATED="1")
+    try:
+        m.check_gated_coherence()
+    finally:
+        os.environ.pop("IMAGE_GOAL_TASK", None)
+        os.environ.pop("GATED", None)
+
+
+def test_a_coherent_gated_configuration_is_accepted():
+    m = _reload(**GATED)
+    m.check_gated_coherence()
+
+
+def test_coherence_check_is_inert_when_not_gating():
+    # It must not fire on the two existing arms, which set neither flag.
+    m = _reload(OBS_WITH_MODE="0", OBS_WITH_GOAL="0", OBS_WITH_VECTOR="0")
+    m.check_gated_coherence()
+
+
+# ----------------------------------------------------------- the masking ----
+
+def test_explore_mode_zeroes_the_goal_block():
+    m = _reload(**GATED)
+    block = np.arange(m.GOAL_DIM, dtype=np.float32) + 1.0
+    assert np.all(m.apply_mode(block.copy(), m.EXPLORE) == 0.0)
+
+
+def test_goal_mode_leaves_the_goal_block_untouched():
+    m = _reload(**GATED)
+    block = np.arange(m.GOAL_DIM, dtype=np.float32) + 1.0
+    assert np.array_equal(m.apply_mode(block.copy(), m.GOAL), block)
+
+
+def test_masking_preserves_shape_and_dtype():
+    # ZEROED, NOT OMITTED: one actor cannot take two input shapes.
+    m = _reload(**GATED)
+    block = np.ones(m.GOAL_DIM, np.float32)
+    out = m.apply_mode(block, m.EXPLORE)
+    assert out.shape == (m.GOAL_DIM,)
+    assert out.dtype == np.float32
+
+
+# -------------------------------------------------- the observation space ----
+
+class _StubSource:
+    """Stands in for LatentSource so the space can be built without a VAE."""
+    name = "stub"
+    latent_dim = 128
+
+    def latent(self, rgb):
+        return np.zeros(self.latent_dim, np.float32)
+
+    def identity(self):
+        return {"backend": "stub", "latent_dim": self.latent_dim}
+
+
+import gymnasium as gym  # noqa: E402
+
+
+class _StubEnv(gym.Env):
+    """Real gymnasium.Env: the Wrapper base asserts on the type."""
+    metadata = {}
+
+    def __init__(self):
+        self.observation_space = spaces.Dict({})
+        self.action_space = spaces.Box(
+            np.array([-0.5, 0.0], np.float32), np.array([0.5, 0.6], np.float32))
+
+    def reset(self, **kw):
+        return {}, {}
+
+    def step(self, a):
+        return {}, 0.0, False, False, {}
+
+
+def _wrapper(module):
+    return module.VAEGoalWrapper(_StubEnv(), source=_StubSource())
+
+
+class _ModeStubEnv(gym.Env):
+    """Publishes a commanded mode in info, as the reward wrappers do."""
+    metadata = {}
+
+    def __init__(self, mode):
+        self.observation_space = spaces.Dict({})
+        self.action_space = spaces.Box(
+            np.array([-0.5, 0.0], np.float32), np.array([0.5, 0.6], np.float32))
+        self._mode = int(mode)
+        self._info = {"mode": self._mode, "rgb": np.zeros((2, 2, 3), np.uint8),
+                      "hero_pos": (0.0, 0.0), "hero_yaw": 0.0,
+                      "goal_pos": (10.0, 0.0)}
+
+    def _raw_obs(self):
+        return {"vector": np.zeros(4, np.float32)}
+
+    def reset(self, **kw):
+        return self._raw_obs(), dict(self._info)
+
+    def step(self, a):
+        return self._raw_obs(), 0.0, False, False, dict(self._info)
+
+
+def test_the_mode_block_reaches_the_observation_unmasked_in_both_modes():
+    # THE MODE-BIT-TO-CRITIC CHECK (user 2026-09-20). The one-critic 2-mode
+    # arm's critic is mode-conditioned ONLY through the obs dict, so the
+    # `mode` key must be emitted with the commanded value in BOTH modes --
+    # apply_mode zeroes the goal block in explore and must never touch the
+    # mode block. Nothing downstream masks it (the vec env, the plain
+    # replay buffer and the learner consume the dict whole).
+    m = _reload(**GATED)
+    act = np.zeros(2, np.float32)
+    for commanded in (m.GOAL, m.EXPLORE):
+        w = m.VAEGoalWrapper(_ModeStubEnv(commanded), source=_StubSource())
+        obs, _ = w.reset()
+        assert "mode" in obs
+        assert float(obs["mode"][0]) == float(commanded)
+        obs, _, _, _, _ = w.step(act)
+        assert float(obs["mode"][0]) == float(commanded)
+        if commanded == m.EXPLORE:
+            assert np.all(obs["goal"] == 0.0)   # the goal block IS masked
+        else:
+            assert obs["goal"].shape == (m.GOAL_DIM,)
+
+
+def test_gated_space_has_all_four_keys_at_the_pinned_widths():
+    # These widths are also pinned by tests/test_mode_split_buffer.py. If the
+    # two disagree, the buffer and the wrapper are building different agents.
+    m = _reload(**GATED)
+    space = _wrapper(m).observation_space
+    assert set(space.spaces) == {"goal", "latent", "vector", "mode"}
+    assert space["goal"].shape == (4,)
+    assert space["latent"].shape == (128,)
+    assert space["vector"].shape == (4,)
+    assert space["mode"].shape == (1,)
+
+
+def test_gated_observation_is_137_wide():
+    # 4 goal + 128 latent + 4 vector + 1 mode. Was 145 when the goal block
+    # still carried the 8 history slots (now in the `state` block).
+    m = _reload(**GATED)
+    space = _wrapper(m).observation_space
+    assert sum(int(np.prod(s.shape)) for s in space.spaces.values()) == 137
+
+
+def test_goal_free_arm_is_still_132_wide():
+    # THE REGRESSION GUARD. run_lanefollow_nogoal.sh and every
+    # carla_lanefollow_nogoal checkpoint depend on OBS_WITH_GOAL=0 meaning
+    # exactly "omit the goal block". Adding the mode key must not change it.
+    m = _reload(OBS_WITH_MODE="0", OBS_WITH_GOAL="0", OBS_WITH_VECTOR="1")
+    space = _wrapper(m).observation_space
+    assert set(space.spaces) == {"latent", "vector"}
+    assert sum(int(np.prod(s.shape)) for s in space.spaces.values()) == 132
+
+
+def test_goal_conditioned_arm_is_still_136_wide():
+    # 4 goal + 128 latent + 4 vector; 144 before the history left the block.
+    m = _reload(OBS_WITH_MODE="0", OBS_WITH_GOAL="1", OBS_WITH_VECTOR="1")
+    space = _wrapper(m).observation_space
+    assert sum(int(np.prod(s.shape)) for s in space.spaces.values()) == 136
+
+
+def test_identity_records_whether_the_run_was_gated():
+    # Merged into the checkpoint so evaluation cannot silently mismatch a gated
+    # policy with a plain one.
+    m = _reload(**GATED)
+    assert _wrapper(m).identity().get("with_mode") is True
+
+
+def test_the_banner_lists_the_mode_key_and_the_total_width(capsys):
+    # CAUGHT IN A LIVE RUN. The space was right but the banner printed only
+    # three keys, so a gated run read on screen as an ordinary
+    # goal-conditioned one. The banner is the single place an operator
+    # confirms the layout, so it must name every key in the space.
+    m = _reload(**GATED)
+    _wrapper(m)
+    out = capsys.readouterr().out
+    assert "'mode': (1,)" in out, out
+    assert "137-d" in out, out
+    assert "GATED" in out, out
+
+
+def test_the_banner_is_unchanged_for_the_goal_free_arm(capsys):
+    m = _reload(OBS_WITH_MODE="0", OBS_WITH_GOAL="0", OBS_WITH_VECTOR="1")
+    _wrapper(m)
+    out = capsys.readouterr().out
+    assert "'mode'" not in out
+    assert "132-d" in out, out
+    assert "GOAL-FREE" in out
+
+
+def test_the_banner_is_unchanged_for_the_goal_conditioned_arm(capsys):
+    m = _reload(OBS_WITH_MODE="0", OBS_WITH_GOAL="1", OBS_WITH_VECTOR="1")
+    _wrapper(m)
+    out = capsys.readouterr().out
+    assert "'mode'" not in out
+    assert "136-d" in out, out
+    assert "GATED" not in out
+
+
+# ------------------------------------------------ the v8 state block ----
+
+class _StateStubEnv(gym.Env):
+    """Publishes rgb, speed, collision and applied controls, as the env does.
+
+    `applied` is consumed one (steer, throttle) pair per step, the way the
+    wrapper's history deque is actually filled on a real run.
+    """
+    metadata = {}
+
+    def __init__(self, speed_kmh=0.0, has_collided=False, applied=None,
+                 mode=None, vector=None):
+        self._applied = list(applied or [])
+        self.speed_kmh = float(speed_kmh)
+        self.has_collided = bool(has_collided)
+        self.mode = mode
+        self.vector = vector
+        self.t = 0
+        self.observation_space = spaces.Dict({})
+        self.action_space = spaces.Box(
+            np.array([-0.5, 0.0], np.float32), np.array([0.5, 1.0], np.float32))
+
+    def _raw_obs(self):
+        # OBS_WITH_VECTOR reads the vector key from the env's raw observation,
+        # not from info (mirroring train_env_config_v4_image_goal).
+        return {} if self.vector is None else {"vector": self.vector}
+
+    def _info(self):
+        info = {"rgb": np.zeros((2, 2, 3), np.uint8),
+                "hero_pos": (0.0, 0.0), "hero_yaw": 0.0,
+                "goal_pos": (10.0, 0.0), "has_collided": self.has_collided,
+                "speed_kmh": self.speed_kmh}
+        if self.mode is not None:
+            info["mode"] = self.mode
+        i = self.t - 1
+        if 0 <= i < len(self._applied):
+            info["applied_steer"], info["applied_throttle"] = self._applied[i]
+        return info
+
+    def reset(self, **kw):
+        self.t = 0
+        return self._raw_obs(), self._info()
+
+    def step(self, a):
+        self.t += 1
+        return self._raw_obs(), 0.0, False, False, self._info()
+
+
+def _driven(module, hist, **env_kw):
+    """A wrapper driven by `hist` applied controls; returns (wrapper, obs)."""
+    w = module.VAEGoalWrapper(_StateStubEnv(applied=hist, **env_kw),
+                              source=_StubSource())
+    w.reset()
+    obs = None
+    for _ in range(len(hist)):
+        obs, _r, _t, _tr, _i = w.step(np.zeros(2, np.float32))
+    return w, obs
+
+
+def test_state_block_is_9d_without_collision():
+    # OBS_STATE_COLLISION=0 (v8): [ratio, *history.flatten()] -- the speed
+    # ratio is entry 0 and has_collided appears NOWHERE, even when the env
+    # reports a collision on the very step.
+    m = _reload(OBS_STATE_COLLISION="0", OBS_WITH_STATE="1",
+                OBS_WITH_GOAL="1", OBS_WITH_VECTOR="0", OBS_WITH_MODE="0",
+                TARGET_SPEED="20.0")
+    assert m.STATE_DIM == 9
+    hist = [(0.1, 0.5), (0.2, 0.4), (0, 0), (0, 0)]
+    _w, obs = _driven(m, hist, speed_kmh=10.0, has_collided=True)
+    s = obs["state"]
+    assert s.shape == (9,)
+    assert s.dtype == np.float32
+    # Layout pinned: [ratio, *history.flatten()], history oldest first.
+    np.testing.assert_allclose(s, [0.5, 0.1, 0.5, 0.2, 0.4, 0, 0, 0, 0],
+                               atol=1e-6)
+    assert 1.0 not in s  # the collision flag never rides the 9-d block
+
+
+def test_state_block_stays_10d_with_the_collision_flag():
+    # THE REGRESSION GUARD. Default (unset) and explicit "1" both keep the
+    # current 10-d block [has_collided, ratio, *history.flatten()].
+    hist = [(0.1, 0.5), (0.2, 0.4), (0, 0), (0, 0)]
+    for coll_env in (None, "1"):
+        os.environ.pop("OBS_STATE_COLLISION", None)
+        kw = {} if coll_env is None else {"OBS_STATE_COLLISION": coll_env}
+        m = _reload(OBS_WITH_STATE="1", OBS_WITH_GOAL="1",
+                    OBS_WITH_VECTOR="0", OBS_WITH_MODE="0",
+                    TARGET_SPEED="20.0", **kw)
+        assert m.STATE_DIM == 10
+        _w, obs = _driven(m, hist, speed_kmh=10.0, has_collided=True)
+        s = obs["state"]
+        assert s.shape == (10,)
+        np.testing.assert_allclose(
+            s, [1.0, 0.5, 0.1, 0.5, 0.2, 0.4, 0, 0, 0, 0], atol=1e-6)
+    os.environ.pop("OBS_STATE_COLLISION", None)
+
+
+def test_9d_state_block_is_identical_in_both_modes():
+    # The mode-independence invariant survives the narrower block: identical
+    # steps in goal and explore mode produce byte-identical 9-d state blocks.
+    m = _reload(OBS_STATE_COLLISION="0", OBS_WITH_STATE="1",
+                OBS_WITH_GOAL="1", OBS_WITH_VECTOR="1", OBS_WITH_MODE="1",
+                TARGET_SPEED="20.0")
+    hist = [(0.1, 0.5), (0.2, 0.4), (0, 0), (0, 0)]
+    _wg, obs_goal = _driven(m, hist, speed_kmh=10.0, mode=1,
+                            vector=np.zeros(4, np.float32))
+    _we, obs_explore = _driven(m, hist, speed_kmh=10.0, mode=0,
+                               vector=np.zeros(4, np.float32))
+    np.testing.assert_array_equal(obs_explore["state"], obs_goal["state"])
+    assert obs_explore["state"].shape == (9,)
+
+
+def test_the_banner_shows_the_9d_state_width(capsys):
+    # The banner is where an operator confirms a live run's layout, so the
+    # narrowed width must be visible there, not just in the space.
+    m = _reload(OBS_STATE_COLLISION="0", OBS_WITH_STATE="1",
+                OBS_WITH_GOAL="1", OBS_WITH_VECTOR="0", OBS_WITH_MODE="0")
+    _wrapper(m)
+    out = capsys.readouterr().out
+    assert "'state': (9,)" in out, out
+    assert "'state': (10,)" not in out, out
+
+
+# --------------------------------------------- the v8 pixels obs key ----
+
+class _PixelsStubSource(_StubSource):
+    """37632-d source standing in for the VC-1 grid2 readout.
+
+    latent() returns arange so the reshape under test is visible in values,
+    not just in shape.
+    """
+
+    def __init__(self, latent_dim=37632):
+        self.latent_dim = latent_dim
+
+    def latent(self, rgb):
+        return np.arange(self.latent_dim, dtype=np.float32)
+
+
+def test_pixels_key_replaces_latent_when_requested():
+    # OBS_LATENT_AS_PIXELS=1 (v8): the flat `latent` key is REPLACED, not
+    # joined, by `pixels` with the (7, 7, 768) VC-1 grid2 shape. Same content:
+    # values equal the source vector reshaped.
+    m = _reload(OBS_LATENT_AS_PIXELS="1", OBS_WITH_STATE="0",
+                OBS_WITH_GOAL="1", OBS_WITH_VECTOR="0", OBS_WITH_MODE="0")
+    w = m.VAEGoalWrapper(_StateStubEnv(), source=_PixelsStubSource())
+    obs, _info = w.reset()
+    assert "latent" not in obs
+    assert "pixels" in obs
+    assert obs["pixels"].shape == (7, 7, 768)
+    assert obs["pixels"].dtype == np.float32
+    np.testing.assert_array_equal(
+        obs["pixels"], np.arange(37632, dtype=np.float32).reshape(7, 7, 768))
+    obs, _r, _t, _tr, _i = w.step(np.zeros(2, np.float32))
+    assert "pixels" in obs and "latent" not in obs
+    assert w.observation_space["pixels"].shape == (7, 7, 768)
+    assert "latent" not in w.observation_space.spaces
+    assert set(w.observation_space.spaces) == {"goal", "pixels"}
+
+
+def test_pixels_flag_refuses_a_non_grid_source():
+    # The (7, 7, 768) shape is pinned to the VC-1 ViT-B grid2 readout; any
+    # other latent_dim must exit at construction rather than be reshaped into
+    # a meaningless grid.
+    m = _reload(OBS_LATENT_AS_PIXELS="1", OBS_WITH_STATE="0",
+                OBS_WITH_GOAL="1", OBS_WITH_VECTOR="0", OBS_WITH_MODE="0")
+    with pytest.raises(SystemExit, match="37632"):
+        m.VAEGoalWrapper(_StateStubEnv(), source=_StubSource())
+
+
+def test_default_keeps_the_flat_latent_key():
+    # THE REGRESSION GUARD. With the flag unset every existing arm keeps the
+    # flat `latent` key byte-identical, and no `pixels` key appears.
+    os.environ.pop("OBS_LATENT_AS_PIXELS", None)
+    m = _reload(OBS_WITH_STATE="0", OBS_WITH_GOAL="1", OBS_WITH_VECTOR="0",
+                OBS_WITH_MODE="0")
+    w = m.VAEGoalWrapper(_StateStubEnv(), source=_StubSource())
+    obs, _info = w.reset()
+    assert "pixels" not in obs
+    assert "latent" in obs and obs["latent"].shape == (128,)
+    assert set(w.observation_space.spaces) == {"goal", "latent"}
+
+
+def test_the_banner_shows_pixels_instead_of_latent(capsys):
+    m = _reload(OBS_LATENT_AS_PIXELS="1", OBS_WITH_STATE="0",
+                OBS_WITH_GOAL="1", OBS_WITH_VECTOR="0", OBS_WITH_MODE="0")
+    m.VAEGoalWrapper(_StateStubEnv(), source=_PixelsStubSource())
+    out = capsys.readouterr().out
+    assert "'pixels': (7, 7, 768)" in out, out
+    assert "'latent'" not in out, out
+    assert "37636-d" in out, out  # 4 goal + 37632 pixels

@@ -1,0 +1,1 @@
+20 seeds | worst start diff 0.000 m, worst goal diff 0.000 m, worst route_m diff 0.000 m | turns equal 20/20, junctions equal 20/20

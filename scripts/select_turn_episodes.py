@@ -22,6 +22,9 @@ ap.add_argument("--min-m", type=float, default=50.0); ap.add_argument("--max-m",
 ap.add_argument("--min-turns", type=int, default=2)
 ap.add_argument("--max-turns", type=int, default=None, help="inclusive; none = no upper limit")
 ap.add_argument("--bin", default="hard", help="the label written to every row")
+ap.add_argument("--skip", type=int, default=0,
+                help="skip the first N qualifying seeds per town (a pilot set that does not "
+                     "overlap the evaluated one: --skip 100 --per-town 20)")
 a = ap.parse_args()
 out = []
 by_town = {}
@@ -34,10 +37,11 @@ for town in sorted(by_town):
             and a.min_m <= p["route_m"] < a.max_m and p["turns"] >= a.min_turns
             and (a.max_turns is None or p["turns"] <= a.max_turns)]
     print(f"{town}: {len(ps)} probed, {sum(1 for p in ps if p.get('route_m') is not None)} routed, "
-          f"{len(keep)} qualify -> keep {min(len(keep), a.per_town)}")
-    if len(keep) < a.per_town:
-        sys.exit(f"{town}: only {len(keep)} qualifying episodes, need {a.per_town}")
-    for p in keep[:a.per_town]:
+          f"{len(keep)} qualify -> skip {a.skip}, keep {min(max(len(keep) - a.skip, 0), a.per_town)}")
+    if len(keep) < a.skip + a.per_town:
+        sys.exit(f"{town}: only {len(keep)} qualifying episodes, need {a.skip + a.per_town} "
+                 f"({a.skip} skipped + {a.per_town})")
+    for p in keep[a.skip:a.skip + a.per_town]:
         out.append({"town": town, "seed": p["seed"], "bin": a.bin, "band": p["band"],
                     "route_m": p["route_m"], "euclid_m": p["euclid_m"],
                     "kind": path_kind(p["route_m"], p["euclid_m"]),

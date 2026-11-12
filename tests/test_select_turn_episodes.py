@@ -50,6 +50,16 @@ def test_three_or_more_band_has_no_upper_limit(tmp_path):
     assert all(e["bin"] == "turns3plus" for e in eps)
 
 
+def test_skip_takes_the_next_seeds_without_overlap(tmp_path):
+    first = _run(tmp_path, "--per-town", "5", "--min-turns", "1", "--max-turns", "1")
+    pilot = _run(tmp_path, "--per-town", "5", "--min-turns", "1", "--max-turns", "1",
+                 "--skip", "5", "--bin", "turns1_pilot")
+    a, b = [e["seed"] for e in first], [e["seed"] for e in pilot]
+    assert not set(a) & set(b)
+    assert max(a) < min(b)                       # the next qualifying seeds in seed order
+    assert all(e["turns"] == 1 and e["bin"] == "turns1_pilot" for e in pilot)
+
+
 def test_too_few_qualifying_episodes_fails(tmp_path):
     out = tmp_path / "eps.json"
     r = subprocess.run([sys.executable, SCRIPT, str(out), str(_probes(tmp_path)),

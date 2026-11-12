@@ -22,6 +22,8 @@ end with the reason.
   - Seeds give identical episodes on CARLA 0.9.16 and 0.9.15 (results/junction_bands/crossversion).
 - The turn-direction sequence of every episode is reconstructed offline from its start and
   goal (carla.Map + GlobalRoutePlanner at 2 m) and checked against the probe's turn count.
+  Result of that check: the rebuilt count equals the probe's on all 740 selected rows
+  (`scripts/annotate_turn_directions.py`; files in `results/junction_bands/episodes/`).
 
 ## Runs
 - c0 (il_bc_c0 step_15000), mapless, local CARLA 0.9.15. Every episode is run twice on the
@@ -51,6 +53,24 @@ end with the reason.
   within each family.
 - The 1-turn band's left-vs-right comparison is reported in every case, even if the other
   bands sit at the floor: it is the simplest goal-directedness statement and needs no map.
+
+## Comparisons across bands (added 2026-11-12 ~12:20, before any junction-band result)
+Written after the map benchmark's partial Town07 hard-band mapless result was known (SR 0.029
+after 68 of 100 episodes; a different episode set). The addition only removes claims.
+- The bands measure routes with more turning decisions. Turn count, route length and the
+  share of routes with a left turn rise together because that is how the towns are built
+  (episode sets: contains a left 57/68/80% in Town02 and 46/73% in Town07 for 1/2/3+ turns;
+  median route 92/118/133 m and 97/122 m). A difference between band means is therefore
+  not attributed to turn count alone, and no test is run across bands.
+- Across-band comparison within the no-left stratum (the only one not confounded by left
+  turns) is descriptive only, with n printed: about 43/32/20 routes in Town02 and 54/27
+  in Town07, too few for a test.
+- The isolated comparison is H-left within each band (test 2 above).
+
+## Checks before any test
+- Each wrong-goal cell's episodes_detail lists the same seeds, in the same order, as its
+  true-goal partner; the analysis asserts this before any McNemar test.
+- entry_speed_kmh is read per episode from episodes_detail (slow-arrival scoring).
 
 ## Reported regardless, per cell
 n, successes, success rate, SPL, the ends breakdown, median route metres, the fraction of

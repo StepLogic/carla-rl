@@ -71,7 +71,12 @@ user's decision. If it runs, these tests apply (written by the map benchmark, be
   advantage is concentrated on left-turn routes", the hypothesis of the post-hoc Town02 split
   (2/72 -> 17-23/72 on contains-left, p <= 0.0007; nothing significant on no-left).
 - WRONG-GOAL CONTROL ON THE MAP ARMS too: same seeds, McNemar true vs wrong within each arm.
-  Without it, "the map helps" cannot be separated from the map arm being handed an easier goal.
+  Without it, "the map helps" cannot be separated from the map arm being handed an easier goal,
+  or from the subgoal sequence acting as a route prior whatever the final goal image shows.
+  For a map arm the wrong goal image also moves the localised GOAL NODE, so the arm plans to the
+  wrong place: the control measures the whole pipeline's dependence on the goal image, not the
+  policy's alone. It is the right control, but not the same quantity as the mapless gap, and
+  the two gaps are not differenced against each other.
 - PLACEMENT VS PLACEMENT IS DESCRIPTIVE ONLY. Entropy vs uniform vs SGM gets no significance
   test at these sample sizes (no pairwise placement difference reached significance in the
   pooled hard band, n = 200).

@@ -86,8 +86,12 @@ def _trainer_src():
 def test_trace_mode_dispatches_before_eval():
     src = _trainer_src()
     i = src.index("if EVAL_TRACE:\n            return run_trace(")
-    j = src.index("return run_eval(env, agent, pxr, server, OUT)")
+    # The learner's eval comes after the trace dispatch. EVAL_POLICY=vint (a ViNT
+    # checkpoint) returns earlier, so it must refuse every trace mode before its eval.
+    j = src.rindex("return run_eval(env, agent, pxr, server, OUT)")
     assert i < j
+    vint = src.split('if EVAL_POLICY == "vint":')[1].split("return run_eval(")[0]
+    assert "EVAL_TRACE or EVAL_SGM_TRACE or EXPERT_TRACE" in vint and "raise ValueError" in vint
 
 
 def test_the_trace_uses_the_same_action_mapping_and_fault_rule_as_eval():

@@ -1,0 +1,161 @@
+"""Driving CARLA from ViNT's predictions (user 2026-11-07: evaluate ViNT like c0).
+
+ViNT predicts where to go (5 waypoints) and how far the goal is; it does not
+predict controls. The driver executes the waypoints with the EXPERT'S OWN
+low-level controller -- the vendored CARLA LocalPlanner defaults the expert
+drove the training data with -- so ViNT is judged on its predictions, not on a
+controller we tuned for it:
+  * lateral PID 1.95 / 0.05 / 0.2 at dt 0.05 on the signed angle to the target,
+    steering moving at most 0.1 per step, |steer| <= 0.8;
+  * target = the first predicted waypoint at least 3 m + 0.5 s x speed away;
+  * longitudinal PID 1.0 / 0.05 / 0 toward the expert's approach profile
+    (15 km/h, slowing from 10 m to 6 km/h at 3 m), fed with ViNT's PREDICTED
+    goal distance instead of the true one;
+  * throttle <= 0.75, brake <= 0.3 as a negative throttle, then the env's box.
+ViNT frame: x forward, y LEFT. CARLA steer: + = RIGHT.
+"""
+import os
+import sys
+
+import numpy as np
+import pytest
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, ROOT)
+sys.path.insert(0, os.path.join(ROOT, "src"))
+
+from torch_rl.vint_driver import (PID, ViNTDriver, approach_kmh_from_time,  # noqa: E402
+                                  pick_waypoint, signed_angle)
+
+LOW, HIGH = np.array([-1.0, -1.0], np.float32), np.array([1.0, 1.0], np.float32)
+STRAIGHT = np.array([[1.1 * k, 0.0] for k in range(1, 6)])
+
+
+class FakePolicy:
+    """(goal distance in ViNT steps, waypoints in metres)."""
+
+    def __init__(self, dist_steps=20.0, wps=STRAIGHT):
+        self.dist_steps, self.wps, self.calls = dist_steps, np.asarray(wps, float), []
+
+    def __call__(self, ctx, goal):
+        self.calls.append((list(ctx), goal))
+        return self.dist_steps, self.wps
+
+
+def test_the_time_profile_is_the_experts_distance_profile_driven_in_time():
+    """ViNT's distance is TIME to the goal (frame steps), learned from the expert
+    slowing down: 15 km/h until 10 m, linearly to 6 km/h at 3 m, then 6 km/h.
+    Driving that profile, the time left is 1.8 s at 3 m and ~4.37 s at 10 m."""
+    from vae_nav.expert_oracle import BasicAgentExpert
+    assert approach_kmh_from_time(0.0, 15.0) == pytest.approx(6.0)
+    assert approach_kmh_from_time(1.8, 15.0) == pytest.approx(6.0)
+    assert approach_kmh_from_time(4.37, 15.0) == pytest.approx(15.0, abs=0.02)
+    assert approach_kmh_from_time(30.0, 15.0) == pytest.approx(15.0)
+    # at every distance on the ramp, the time left maps back to the expert's speed
+    vf, vc = 6 / 3.6, 15 / 3.6
+    k = (vc - vf) / 7.0
+    for d in (3.5, 5.0, 8.0, 9.9):
+        v = vf + k * (d - 3.0)
+        t = 3.0 / vf + np.log(v / vf) / k
+        assert approach_kmh_from_time(t, 15.0) == pytest.approx(
+            BasicAgentExpert.approach_speed_kmh(d, 15.0), rel=1e-6)
+
+
+def _frame(v):
+    return np.full((4, 4, 3), v, np.uint8)
+
+
+def test_the_pid_is_carlas_formula():
+    pid = PID(1.95, 0.05, 0.2, dt=0.05)
+    assert pid.step(0.1) == pytest.approx(1.95 * 0.1)              # no history: P only
+    e = [0.1, 0.3]
+    want = 1.95 * 0.3 + 0.2 * (0.3 - 0.1) / 0.05 + 0.05 * sum(e) * 0.05
+    assert pid.step(0.3) == pytest.approx(np.clip(want, -1, 1))
+    for _ in range(20):
+        pid.step(5.0)
+    assert pid.step(5.0) == 1.0 and len(pid.errors) == 10           # clipped, 10-error memory
+
+
+def test_the_signed_angle_is_positive_to_the_right():
+    assert signed_angle([5.0, -1.0]) > 0 and signed_angle([5.0, 1.0]) < 0
+    assert signed_angle([5.0, 0.0]) == pytest.approx(0.0)
+    assert abs(signed_angle([3.0, -3.0])) == pytest.approx(np.pi / 4)
+
+
+def test_the_target_is_the_first_waypoint_past_the_planners_lookahead():
+    assert pick_waypoint(STRAIGHT, 3.0)[0] == pytest.approx(3.3)
+    assert pick_waypoint(STRAIGHT, 3.0 + 0.5 * 15 / 3.6)[0] == pytest.approx(5.5)
+    assert pick_waypoint(STRAIGHT, 99.0)[0] == pytest.approx(5.5)    # none far enough: the last
+
+
+def test_context_takes_every_stride_frame_newest_last_and_pads_the_start():
+    pol = FakePolicy()
+    d = ViNTDriver(pol, LOW, HIGH, context_size=5, stride=3)
+    d.reset_hidden(1)
+    d.act_env(_frame(0), _frame(99), speed_kmh=0.0)
+    assert [int(f[0, 0, 0]) for f in pol.calls[-1][0]] == [0] * 6
+    for v in range(1, 21):
+        d.act_env(_frame(v), _frame(99), speed_kmh=0.0)
+    assert [int(f[0, 0, 0]) for f in pol.calls[-1][0]] == [5, 8, 11, 14, 17, 20]
+
+
+def test_a_waypoint_to_the_left_steers_left_and_the_rate_is_limited():
+    left = STRAIGHT + np.array([0.0, 1.5])
+    d = ViNTDriver(FakePolicy(wps=left), LOW, HIGH)
+    d.reset_hidden(1)
+    s1 = d.act_env(_frame(1), _frame(2), speed_kmh=10.0)[0]
+    assert s1 == pytest.approx(-0.1)                                  # one step: at most 0.1
+    for _ in range(20):
+        s = d.act_env(_frame(1), _frame(2), speed_kmh=10.0)[0]
+    assert -0.8 <= s < -0.1
+    right = STRAIGHT - np.array([0.0, 1.5])
+    d = ViNTDriver(FakePolicy(wps=right), LOW, HIGH)
+    d.reset_hidden(1)
+    assert d.act_env(_frame(1), _frame(2), speed_kmh=10.0)[0] > 0
+
+
+def test_it_accelerates_from_rest_and_brakes_into_a_near_goal():
+    d = ViNTDriver(FakePolicy(dist_steps=20.0), LOW, HIGH, cruise_kmh=15.0, step_s=0.3)
+    d.reset_hidden(1)
+    assert d.act_env(_frame(1), _frame(2), speed_kmh=0.0)[1] == pytest.approx(0.75)
+    d = ViNTDriver(FakePolicy(dist_steps=2.0), LOW, HIGH, cruise_kmh=15.0, step_s=0.3)
+    d.reset_hidden(1)
+    a = d.act_env(_frame(1), _frame(2), speed_kmh=15.0)
+    assert a[1] < 0 and d.last["target_kmh"] == pytest.approx(6.0)  # the expert's final approach
+    assert d.last["dist_s"] == pytest.approx(0.6)
+
+
+def test_an_intermediate_map_node_is_driven_at_cruise_not_approached():
+    """Map navigation (EVAL_MAP_DIR): subgoal nodes ~6 m apart would otherwise read
+    as 'goal 2 s away' at every node and the car would crawl the whole route --
+    a speed change the mapless arm does not get. Only the real goal is approached."""
+    d = ViNTDriver(FakePolicy(dist_steps=2.0), LOW, HIGH, cruise_kmh=15.0, step_s=0.3)
+    d.reset_hidden(1)
+    d.final_goal = False
+    d.act_env(_frame(1), _frame(2), speed_kmh=10.0)
+    assert d.last["target_kmh"] == pytest.approx(15.0)
+    d.final_goal = True
+    d.act_env(_frame(1), _frame(2), speed_kmh=10.0)
+    assert d.last["target_kmh"] == pytest.approx(6.0)
+    d.final_goal = False
+    d.reset_hidden(1)                                   # a new episode starts on its final goal
+    assert d.final_goal is True
+
+
+def test_actions_are_clipped_to_the_env_box():
+    low, high = np.array([-0.5, -0.2], np.float32), np.array([0.5, 0.4], np.float32)
+    d = ViNTDriver(FakePolicy(dist_steps=20.0), low, high)
+    d.reset_hidden(1)
+    a = d.act_env(_frame(1), _frame(2), speed_kmh=0.0)
+    assert a.dtype == np.float32 and a[1] == pytest.approx(0.4)
+
+
+def test_reset_forgets_the_frames_and_the_controllers():
+    pol = FakePolicy(wps=STRAIGHT + np.array([0.0, 1.5]))
+    d = ViNTDriver(pol, LOW, HIGH)
+    d.reset_hidden(1)
+    for v in range(10):
+        d.act_env(_frame(v), _frame(99), speed_kmh=10.0)
+    d.reset_hidden(1)
+    assert d.act_env(_frame(50), _frame(99), speed_kmh=10.0)[0] == pytest.approx(-0.1)
+    assert [int(f[0, 0, 0]) for f in pol.calls[-1][0]] == [50] * 6

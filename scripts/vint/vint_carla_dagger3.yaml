@@ -1,0 +1,123 @@
+# DAGGER ROUND 3 (overnight 2026-11-08): round 2's config plus carla_dagger3 -- frames
+# driven by round 2's epoch 2 (the validation pick), labelled by the expert plan --
+# WARM-STARTED from round 2's epoch 2 (WEIGHTS=<its .pth>; weights only).
+#
+# LANE-CENTRE LABELS + START PADDING (2026-11-07, "can we fix it?"): identical to
+# vint_carla_expert.yaml except the run name. Two data changes, both from the
+# closed-loop lane diagnostic (lanedbg2 jobs 464604/464605, development set):
+#  1. waypoint labels = the lane centre ahead of the car, with the lane heading (the
+#     expert's aim point): carla_expert_lc.tar, scripts/vint/build_lane_labels.py +
+#     add_lane_labels_to_tar.py, read through scripts/vint/patch_vint_cf_labels.py;
+#  2. VINT_START_PAD=1: samples from frame 0 with first-frame context padding, as
+#     the driver feeds a start (scripts/vint/patch_vint_start_pad.py).
+#
+# ViNT fine-tuned on c0's expert data (user 2026-11-07: "run VINT train on CARLA
+# dataset and evaluate"; choices: c0's expert data with c0's split, fine-tuned from
+# the released vint.pth). Template: slurm/vint_train.sbatch fills __DATA__ (the
+# node-local copy of checkpoints/vint_data) and __WEIGHTS__.
+#
+# Architecture = the released ViNT (EfficientNet-b0, 512-d, 4 heads x 4 layers,
+# context 5, 5 waypoints with angle, 85x64 images), so every weight loads.
+# What is ours:
+#   waypoint_spacing 3: one ViNT step = 3 frames = 0.3 s ~ 1.1 m at the expert's
+#     15 km/h, so the 20 distance classes reach ~22 m -- the eval's goals are
+#     5-25 m ahead (il_expert.env GOAL_DIST_MIN/MAX).
+#   metric_waypoint_spacing: measured per frame by the converter, written into
+#     data_config.yaml by the job.
+#   full fine-tune (train.py, not train_v3.py's frozen backbone): 1,368 episodes,
+#     ~250k frames, not the 191 drives the frozen-backbone runs had.
+project_name: vint_carla
+run_name: vint_carla_dagger3
+
+use_wandb: False
+train: True
+batch_size: 128
+eval_batch_size: 128
+epochs: 20
+gpu_ids: [0]
+num_workers: 12
+lr: 1e-4
+optimizer: adamw
+clipping: False
+max_norm: 1.
+scheduler: "cosine"
+warmup: False
+warmup_epochs: 4
+cyclic_period: 10
+plateau_patience: 3
+plateau_factor: 0.5
+seed: 0
+
+model_type: vint
+obs_encoder: "efficientnet-b0"
+obs_encoding_size: 512
+mha_num_attention_heads: 4
+mha_num_attention_layers: 4
+mha_ff_dim_factor: 4
+late_fusion: False
+
+normalize: True
+context_type: temporal
+context_size: 5
+alpha: 0.5
+
+# Distance classes count STRIDES (patch_vint_dataset.py). ViNT rebuilds them as
+# range(0, 20 + 1, 3), so the top class is 18 strides (~20 m) and negatives get it.
+distance:
+  min_dist_cat: 0
+  max_dist_cat: 20
+# WAYPOINTS FOR EVERY POSITIVE GOAL (my call, 2026-11-07): ViNT's recipe supervises
+# actions only for goals < 10 steps because its deployment feeds near map subgoals.
+# This eval is MAPLESS with goals 5-25 m away (as c0's), so with 10 the waypoints
+# would be untrained for most eval goals; 19 supervises every positive (1..18 strides).
+action:
+  min_dist_cat: 0
+  max_dist_cat: 19
+close_far_threshold: 10
+
+len_traj_pred: 5
+learn_angle: True
+
+image_size: [85, 64]
+goal_type: "image"
+pretrained_checkpoint: __WEIGHTS__
+
+datasets:
+  carla_expert:
+    data_folder: __DATA__/carla_expert
+    train: __DATA__/splits/carla_expert/train/
+    test: __DATA__/splits/carla_expert/test/
+    end_slack: 0          # fault endings were trimmed by the converter
+    goals_per_obs: 1
+    negative_mining: True # far-label goals from other drives: what a wrong goal looks like
+    waypoint_spacing: 3
+  carla_dagger1:
+    data_folder: __DATA__/carla_dagger1
+    train: __DATA__/splits/carla_dagger1/train/
+    test: __DATA__/splits/carla_dagger1/test/
+    end_slack: 0          # DAgger episodes keep their fault endings: the labels are the expert's
+    goals_per_obs: 1
+    negative_mining: True
+    waypoint_spacing: 3
+  carla_dagger2:
+    data_folder: __DATA__/carla_dagger2
+    train: __DATA__/splits/carla_dagger2/train/
+    test: __DATA__/splits/carla_dagger2/test/
+    end_slack: 0          # DAgger episodes keep their fault endings: the labels are the expert's
+    goals_per_obs: 1
+    negative_mining: True
+    waypoint_spacing: 3
+  carla_dagger3:
+    data_folder: __DATA__/carla_dagger3
+    train: __DATA__/splits/carla_dagger3/train/
+    test: __DATA__/splits/carla_dagger3/test/
+    end_slack: 0          # DAgger episodes keep their fault endings: the labels are the expert's
+    goals_per_obs: 1
+    negative_mining: True
+    waypoint_spacing: 3
+
+print_log_freq: 100
+image_log_freq: 0       # 0 = off (train_utils: "image_log_freq != 0 and ...")
+num_images_log: 0
+eval_fraction: 1.0
+wandb_log_freq: 10

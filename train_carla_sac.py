@@ -144,6 +144,30 @@ REPLAY_DEVICE = os.environ.get("REPLAY_DEVICE", "cuda")
 # crossing on open road, off-road, or a collision -- the same crossing rule the
 # training reward fines, so "crossing" means the same thing in both.
 EVAL_FROM = os.environ.get("EVAL_FROM", "")
+
+
+# EVAL_POLICY (user 2026-11-07: train ViNT on c0's expert data, evaluate it like
+# c0). "sac" = the learner at EVAL_FROM, as always. "vint" = EVAL_FROM is a ViNT
+# checkpoint dir (model.pth + vint.json) driven by torch_rl.vint_driver: run_eval's
+# episodes, faults and scoring are unchanged, only the action source differs.
+def validate_eval_policy(name):
+    if name not in ("sac", "vint"):
+        raise ValueError(f"EVAL_POLICY={name!r}: use 'sac' or 'vint'")
+    return name
+
+
+EVAL_POLICY = validate_eval_policy(os.environ.get("EVAL_POLICY", "sac"))
+# VINT_DEBUG=1: a [ViNT] line every VINT_DEBUG_EVERY steps (predicted waypoints,
+# target, steer, throttle, the speed target from the predicted time-to-goal).
+VINT_DEBUG = os.environ.get("VINT_DEBUG", "0") == "1"
+VINT_DEBUG_EVERY = env_int("VINT_DEBUG_EVERY", 1)
+# VINT_ORACLE_AIM=1 (PRIVILEGED diagnostic, development set only, never a result;
+# 2026-11-07 "can we fix it?"): the mapless ViNT controller steers at the true
+# lane-centre aim points (torch_rl.vint_driver.oracle_aim_points, from the env's
+# lane state -- needs lane geometry on, e.g. slurm/lanedbg_easy.env) instead of
+# ViNT's waypoints; ViNT's distance still sets the speed. A drift that remains is
+# the controller's, not ViNT's.
+VINT_ORACLE_AIM = os.environ.get("VINT_ORACLE_AIM", "0") == "1"
 # INIT_FROM (user 2026-11-01, "resume v30 and train for longer"): start TRAINING
 # from a checkpoint -- every module and target, both temperatures, all four
 # optimisers and the update counter. The replay buffer is NOT in a checkpoint,
@@ -260,6 +284,15 @@ EVAL_TRACE = os.environ.get("EVAL_TRACE", "0") == "1"
 # no goal node or no route is recorded end="unroutable" (a failure) without
 # being driven. EVAL_MAP_RESET_HIDDEN=1 resets the GRU at each switch.
 EVAL_MAP_DIR = os.environ.get("EVAL_MAP_DIR", "")
+# EVAL_VINT_TOPOMAP (user 2026-11-07, "ViNT-native topomap"): a directory of
+# <Town>_topomap.npz (scripts/vint/build_topomap.py), ViNT's own topological map
+# of the expert-tour trace. run_eval then localises start and goal and navigates
+# with ViNT's distance head and navigate.py's rule (torch_rl.vint_topomap.
+# VintTopoEpisode); no route -> driven mapless. ViNT only, never with EVAL_MAP_DIR.
+EVAL_VINT_TOPOMAP = os.environ.get("EVAL_VINT_TOPOMAP", "")
+if EVAL_VINT_TOPOMAP and (EVAL_MAP_DIR or EVAL_POLICY != "vint"):
+    raise ValueError("EVAL_VINT_TOPOMAP needs EVAL_POLICY=vint and no EVAL_MAP_DIR: "
+                     "ViNT's own map or the benchmark's, not both")
 # SGM PAIRS (map arm 4): EVAL_SGM_TRACE=<trace dir> reads the goal critic
 # between trace frames instead of driving -- candidates every EVAL_SGM_CAND_M
 # (directional uniform thinning), every aligned (<90 deg) ordered pair within
@@ -386,6 +419,11 @@ EXPERT_EXPLORE_MAX_M = env_float("EXPERT_EXPLORE_MAX_M", 200.0)
 EXPERT_REPLAN_M = env_float("EXPERT_REPLAN_M", 3.0)
 EXPERT_RECORD_ROOT = os.environ.get(
     "EXPERT_RECORD_ROOT", os.path.expanduser("~/carla-rl/checkpoints/il_data"))
+# ViNT DAgger (user 2026-11-07, "use DAGGER"; EXPERT_GOAL_ONLY is defined above):
+# EXPERT_RECORD_AIM=1 stores, per FRAME, the expert plan's lane-centre aim points
+# (vint_lane_labels.aim_from_plan on BasicAgentExpert.plan_xy, after any replan) --
+# ViNT's waypoint labels for the frames the POLICY drove.
+EXPERT_RECORD_AIM = os.environ.get("EXPERT_RECORD_AIM", "0") == "1"
 # EXPERT TRACE (user 2026-11-06, "CAN YOU CREATE MAP FROM A SINGLE TRACE?" ->
 # "I am talking about evaluations"; see run_expert_trace, torch_rl.expert_trace
 # and vae_nav.coverage_tour). EXPERT_TRACE=1 with EVAL_FROM=<the clone> drives
@@ -625,6 +663,25 @@ def _speed_kmh(info):
     0 when absent -- at a reset the car stands still, which is also what the
     recorded episodes pair with their first frame."""
     return float(info.get("speed_kmh", 0.0) or 0.0)
+
+
+def subgoal_reset(agent, hidden):
+    """EVAL_MAP_RESET_HIDDEN at a map subgoal switch or replan. c0's GRU restarts
+    (as Habitat resets DEBiT's per subgoal). A pixel policy (EVAL_POLICY=vint)
+    keeps its observation context: its recent frames are not about the goal, and
+    clearing them mid-drive would show it a car at rest -- only its goal image
+    changes. A documented difference between the two arms' reset rules."""
+    if getattr(agent, "drives_from_pixels", False):
+        return hidden
+    return agent.reset_hidden(1)
+
+
+def pixel_frames(info, pxr):
+    """(current, goal) frames exactly as run_record stored them for training --
+    pxr.to_frame(..., MONO_IMG) as uint8 -- for a policy that reads pixels
+    (EVAL_POLICY=vint; ViNT learned from those recorded frames)."""
+    return (pxr.to_frame(info["debit_cur"], pxr.MONO_IMG).astype(np.uint8),
+            pxr.to_frame(info["debit_goal"], pxr.MONO_IMG).astype(np.uint8))
 
 
 def _priv_m(obs, info):
@@ -1551,6 +1608,8 @@ def run_record(env, agent, pxr, server, out_root):
     if EXPERT_GOAL_ONLY and EXPERT_SEED0 % 2:
         raise ValueError("EXPERT_GOAL_ONLY=1 needs an even EXPERT_SEED0 (even seeds are "
                          "the goal episodes of episode_plan)")
+    from vae_nav.vint_lane_labels import aim_from_plan
+    pixel_policy = EXPERT_DRIVER == "policy" and getattr(agent, "drives_from_pixels", False)
     gated = env
     while not isinstance(gated, GatedReward):
         gated = gated.env
@@ -1672,7 +1731,8 @@ def run_record(env, agent, pxr, server, out_root):
         hidden = goal_blk = None
         if EXPERT_DRIVER == "policy":
             hidden = agent.reset_hidden(1)
-            goal_blk = pxr.goal_block(info["debit_goal"])
+            if not pixel_policy:
+                goal_blk = pxr.goal_block(info["debit_goal"])
         # ONE SEGMENT PER GOAL. Without EXPERT_RECORD_CHAIN there is exactly one; with
         # it, a goal arrival continues the same car to the next chained goal.
         seg = 0
@@ -1683,6 +1743,11 @@ def run_record(env, agent, pxr, server, out_root):
                    "act_exec": [], "act_label": [], "reward": [], "speed": [], "pos": []}
             goal_frame = info["debit_goal"]
             prev = np.asarray(info.get("hero_pos", (0.0, 0.0)), np.float64)[:2]
+            aims = []                     # one per FRAME (EXPERT_RECORD_AIM)
+
+            def _aim(info_):
+                here = np.asarray(info_.get("hero_pos", prev), np.float64)[:2]
+                return aim_from_plan(expert.plan_xy(), here)
             path_m, end, terminal, truncated = 0.0, None, False, False
             # B2: this leg's subgoal node (None: the real goal) and the car's closest
             # approach to it so far.
@@ -1699,6 +1764,8 @@ def run_record(env, agent, pxr, server, out_root):
             while end is None:
                 if EXPERT_DRIVER == "policy":
                     expert.replan_if_off_route(EXPERT_REPLAN_M)
+                if EXPERT_RECORD_AIM:
+                    aims.append(_aim(info))   # this frame's label, after any replan
                 a_exp = expert.act()
                 if a_exp is None:
                     end = no_label_end(mode, len(rec["act_exec"]))
@@ -1706,10 +1773,17 @@ def run_record(env, agent, pxr, server, out_root):
                     break
                 a_pol = None
                 if EXPERT_DRIVER == "policy":
-                    row = pxr.mono_row(info["debit_cur"], _net_mode(obs["mode"]), obs["binoc"],
-                                       speed_kmh=_speed_kmh(info))
-                    a_act, hidden = agent.act(row, hidden, goal=goal_blk, deterministic=True)
-                    a_pol = to_env(np.asarray(a_act, np.float32), box)
+                    if pixel_policy:
+                        # ViNT DAgger: frames in, env action out. It approaches only the
+                        # final goal (a map leg's subgoal is cruised toward), as in its eval.
+                        agent.final_goal = nav is None or bool(nav.final)
+                        a_pol = agent.act_env(*pixel_frames(info, pxr), _speed_kmh(info))
+                    else:
+                        row = pxr.mono_row(info["debit_cur"], _net_mode(obs["mode"]),
+                                           obs["binoc"], speed_kmh=_speed_kmh(info))
+                        a_act, hidden = agent.act(row, hidden, goal=goal_blk,
+                                                  deterministic=True)
+                        a_pol = to_env(np.asarray(a_act, np.float32), box)
                 a_exec, a_label = record_step(EXPERT_DRIVER, a_pol, a_exp, sigma,
                                               rng, low, high,
                                               throttle_sigma=throttle_sigma, burst=burst, bias=bias)
@@ -1743,6 +1817,10 @@ def run_record(env, agent, pxr, server, out_root):
                     leg_min = min(leg_min, sg_m)
                     if sg_m > leg_min + EXPERT_RECORD_MAP_LOST_M:
                         end, truncated = "map_lost", True   # its subgoal fell behind
+            if EXPERT_RECORD_AIM and len(aims) < len(rec["frames"]):
+                if EXPERT_DRIVER == "policy":
+                    expert.replan_if_off_route(EXPERT_REPLAN_M)
+                aims.append(_aim(info))   # the last frame's label
             n = len(rec["act_exec"])
             total += n
             approach = {}
@@ -1766,7 +1844,11 @@ def run_record(env, agent, pxr, server, out_root):
                     "pos": np.asarray(rec["pos"], np.float32).reshape(-1, 2),
                     "mode": np.int8(mode), "terminal": terminal, "truncated": truncated,
                     "goal": pxr.goal_block(goal_frame), "sigma": np.float32(sigma),
-                    "driver": EXPERT_DRIVER, "end": end, "town": town, "seed": np.int64(sid)})
+                    "driver": EXPERT_DRIVER, "end": end, "town": town, "seed": np.int64(sid),
+                    **({"aim": np.asarray([a[0] for a in aims], np.float32),
+                        "aim_yaw": np.asarray([a[1] for a in aims], np.float32),
+                        "aim_ok": np.asarray([bool(a[2]) for a in aims], np.bool_)}
+                       if EXPERT_RECORD_AIM else {})})
                 kept += n
             print(f"[Record {k + 1}/{EXPERT_RECORD_EPISODES}] seed={sid} "
                   f"{'goal' if mode == 1 else 'explore'} sigma={sigma:g} end={end} "
@@ -1788,7 +1870,8 @@ def run_record(env, agent, pxr, server, out_root):
             expert.reset(info["goal_location"])
             if EXPERT_DRIVER == "policy":
                 hidden = agent.reset_hidden(1)       # a chained goal is a new episode
-                goal_blk = pxr.goal_block(info["debit_goal"])
+                if not pixel_policy:
+                    goal_blk = pxr.goal_block(info["debit_goal"])
 
     gate = gate_report([e for e in episodes if e["mode"] == 1],
                        [e for e in episodes if e["mode"] == 0])
@@ -1890,8 +1973,18 @@ def run_eval(env, agent, pxr, server, out_root):
     out = os.path.join(out_root, f"eval_{tag}"
                        + _eval_tag_suffix(EVAL_NOISE_SCALE, EVAL_EXPLORE, EVAL_WRONG_GOAL)
                        + (f"_map-{os.path.basename(os.path.normpath(EVAL_MAP_DIR))}"
-                          if EVAL_MAP_DIR else ""))
+                          if EVAL_MAP_DIR else "")
+                       + (f"_vinttopo-{os.path.basename(os.path.normpath(EVAL_VINT_TOPOMAP))}"
+                          if EVAL_VINT_TOPOMAP else ""))
     from vae_nav.carla_benchmark import EpisodeTracker
+    topo_map = None
+    if EVAL_VINT_TOPOMAP:
+        from torch_rl.vint_topomap import VintTopoEpisode, load_topomap
+        topo_map = load_topomap(os.path.join(EVAL_VINT_TOPOMAP, f"{TOWNS[0]}_topomap.npz"))
+        print(f"[ViNTMap] {EVAL_VINT_TOPOMAP} {TOWNS[0]}: {len(topo_map['ctx85'])} nodes, "
+              f"{len(topo_map['edges'])} links | ViNT localises start and goal (images only), "
+              f"navigate.py radius 4 / close 3, the real goal image on the last leg, no "
+              f"route -> mapless", flush=True)
     gmap = map_frames = goal_wrapper = None
     img_scores = img_thr = None
     if EVAL_MAP_DIR:
@@ -2016,6 +2109,10 @@ def run_eval(env, agent, pxr, server, out_root):
         start_poses = _poses(info)
         nav = map_row = None
         leg_steps, replans, replan_log = 0, 0, []
+        topo = None
+        if topo_map is not None:
+            topo = VintTopoEpisode(topo_map, agent.policy)
+            topo.start(*pixel_frames(info, pxr))
         if gmap is not None:
             hp = np.asarray(info.get("hero_pos", (0.0, 0.0)), np.float64)[:2]
             hy = float(info.get("hero_yaw", 0.0) or 0.0)
@@ -2120,12 +2217,45 @@ def run_eval(env, agent, pxr, server, out_root):
         chain_goals = 0
         while True:
             while end is None:
-                row = pxr.mono_row(info["debit_cur"], _net_mode(obs["mode"]), obs["binoc"],
-                                   speed_kmh=_speed_kmh(info))
-                action, hidden = agent.act(row, hidden, goal=goal_blk,
-                                           deterministic=EVAL_NOISE_SCALE <= 0,
-                                           noise_scale=EVAL_NOISE_SCALE)
-                a_env = to_env(np.asarray(action, np.float32), box)
+                if getattr(agent, "drives_from_pixels", False):
+                    # EVAL_POLICY=vint: frames in, env action out (vint_driver). On a
+                    # map it cruises toward intermediate nodes and approaches only
+                    # the real goal (the planner's own state, not privileged).
+                    if topo is not None:
+                        # EVAL_VINT_TOPOMAP: ViNT's own map and navigate.py rule.
+                        a_env = topo.act(agent, *pixel_frames(info, pxr), _speed_kmh(info))
+                    elif VINT_ORACLE_AIM:
+                        if "lane_priv" not in info:
+                            raise SystemExit("VINT_ORACLE_AIM=1 needs the env's lane state "
+                                             "(info['lane_priv']): turn lane geometry on, "
+                                             "e.g. REWARD_OVERLAY=slurm/lanedbg_easy.env")
+                        from torch_rl.vint_driver import oracle_aim_points
+                        agent.final_goal = nav is None or bool(nav.final)
+                        cur_f, goal_f = pixel_frames(info, pxr)
+                        agent.push(cur_f)
+                        d_or, w_or = agent.policy(agent.context(), np.asarray(goal_f))
+                        aim = oracle_aim_points(info["lane_priv"])
+                        a_env = agent.control(d_or, w_or if aim is None else aim,
+                                              _speed_kmh(info))
+                    else:
+                        agent.final_goal = nav is None or bool(nav.final)
+                        a_env = agent.act_env(*pixel_frames(info, pxr), _speed_kmh(info))
+                    if VINT_DEBUG and t % VINT_DEBUG_EVERY == 0:
+                        lv = agent.last
+                        print(f"[ViNT] ep={k} t={t} v={_speed_kmh(info):.1f} "
+                              f"dist={lv['dist_steps']:.1f}st/{lv['dist_s']:.1f}s "
+                              f"wps={lv['wps']} tgt=({lv['target'][0]:+.2f},{lv['target'][1]:+.2f}) "
+                              f"ang={np.degrees(lv['angle']):+.0f} steer={lv['steer']:+.2f} "
+                              f"thr={lv['throttle']:.2f} v*={lv['target_kmh']:.1f}"
+                              + ("" if topo is None or topo.nav is None else
+                                 f" node={topo.nav.closest}/{topo.nav.goal}"), flush=True)
+                else:
+                    row = pxr.mono_row(info["debit_cur"], _net_mode(obs["mode"]), obs["binoc"],
+                                       speed_kmh=_speed_kmh(info))
+                    action, hidden = agent.act(row, hidden, goal=goal_blk,
+                                               deterministic=EVAL_NOISE_SCALE <= 0,
+                                               noise_scale=EVAL_NOISE_SCALE)
+                    a_env = to_env(np.asarray(action, np.float32), box)
                 vid.add(info["debit_cur"], info["debit_goal"], t, mode, 0.0, a_env, ret)
                 obs, r, term, trunc, info = env.step(a_env)
                 ret += float(r)
@@ -2156,12 +2286,12 @@ def run_eval(env, agent, pxr, server, out_root):
                     if ev is not None:
                         goal_blk = _aim()
                         if EVAL_MAP_RESET_HIDDEN:
-                            hidden = agent.reset_hidden(1)
+                            hidden = subgoal_reset(agent, hidden)
                 elif nav is not None and nav.update(pos, float(info.get("hero_yaw", 0.0) or 0.0)):
                     goal_blk = _aim()
                     leg_steps = 0
                     if EVAL_MAP_RESET_HIDDEN:
-                        hidden = agent.reset_hidden(1)
+                        hidden = subgoal_reset(agent, hidden)
                 elif nav is not None and EVAL_MAP_REPLAN > 0 and not nav.final:
                     leg_steps += 1
                     sg = nav.subgoal_m(pos)
@@ -2184,7 +2314,7 @@ def run_eval(env, agent, pxr, server, out_root):
                         goal_blk = _aim()
                         leg_steps = 0
                         if EVAL_MAP_RESET_HIDDEN:
-                            hidden = agent.reset_hidden(1)
+                            hidden = subgoal_reset(agent, hidden)
                 if traj is not None:
                     _cur = (-1 if nav is None or nav.final else int(nav.current()))
                     if nav is not None and (not traj["paths"] or traj["paths"][-1]["path"] != [int(v) for v in nav.path]):
@@ -2232,6 +2362,11 @@ def run_eval(env, agent, pxr, server, out_root):
                  if ell_eff is not None else float("nan"))
         two = (tracker.finish(reached=reached, t_end=t, route_m=ell)
                if tracker is not None else {"reached_2m": reached, "spl_2m": spl_i})
+        topo_row = None
+        if topo is not None:
+            topo_row = topo.row()
+            if gpos is not None and start_poses.get("start_xy") is not None:
+                topo_row.update(topo.diagnostics(start_poses["start_xy"], gpos, end_xy=pos))
         rows.append({"episode": k, "seed": seed, "town": TOWNS[0], "end": end,
                      **start_poses,
                      **{key: ep[key] for key in ("bin", "kind", "band") if key in ep},
@@ -2254,6 +2389,10 @@ def run_eval(env, agent, pxr, server, out_root):
                                                 "subgoal_m_at_end": (None if nav.subgoal_m(pos) is None
                                                                      else round(nav.subgoal_m(pos), 2))}),
                      "end_xy": [round(float(v), 2) for v in np.asarray(pos, np.float64)[:2]],
+                     # ViNT's own time-to-goal estimate at the end (EVAL_POLICY=vint)
+                     **({"vint_topo": topo_row} if topo_row is not None else {}),
+                     **({"vint_dist_end_s": round(float(agent.last.get("dist_s", float("nan"))), 2)}
+                        if getattr(agent, "drives_from_pixels", False) else {}),
                      "end_in_junction": bool(info.get("in_junction", False)),
                      **(map_row if nav is None and map_row is not None else {}),
                      **(chain_summary(chain_goals, info, end,
@@ -2301,6 +2440,9 @@ def run_eval(env, agent, pxr, server, out_root):
                "episodes_file": EVAL_EPISODES_FILE or None,
                "map_dir": EVAL_MAP_DIR or None,
                "unroutable": sum(1 for x in rows if x["end"] == "unroutable"),
+               "vint_topomap": EVAL_VINT_TOPOMAP or None,
+               "vint_topo_fallback": sum(1 for x in rows
+                                         if (x.get("vint_topo") or {}).get("fallback")),
                "map_fallback": sum(1 for x in rows if x.get("map_fallback")),
                "wilson95": [round(centre - half, 3), round(centre + half, 3)],
                "ends": ends, "fault_ends": "crossing/off_road/collision",
@@ -2703,6 +2845,32 @@ def main():
     # first ("shapes (2,) (3,)") and the smoke run the second ("the expanded
     # size of the tensor (2) must match the existing size (3)").
     ACT_DIM = int(env.action_space.shape[0])
+    if EVAL_POLICY == "vint":
+        if not EVAL_FROM:
+            raise ValueError("EVAL_POLICY=vint needs EVAL_FROM: a ViNT checkpoint dir "
+                             "(model.pth + vint.json)")
+        # Goal evals, mapless or on a map (EVAL_MAP_DIR: the subgoal images reach it
+        # through info["debit_goal"]), and DAgger recording (user 2026-11-07, "use
+        # DAGGER": EXPERT_RECORD=1 EXPERT_DRIVER=policy, run_record); never traces.
+        if (EVAL_TRACE or EVAL_SGM_TRACE or EXPERT_TRACE
+                or (EXPERT_RECORD and EXPERT_DRIVER != "policy")):
+            raise ValueError("EVAL_POLICY=vint drives goal evals (mapless or EVAL_MAP_DIR) "
+                             "and DAgger recording (EXPERT_RECORD=1 EXPERT_DRIVER=policy) only")
+        if ACT_DIM != 2:
+            raise ValueError(f"EVAL_POLICY=vint drives (steer, throttle), not a {ACT_DIM}-d action")
+        from torch_rl.vint_driver import ViNTDriver, load_vint_policy
+        policy, meta = load_vint_policy(EVAL_FROM, device=DEVICE)
+        agent = ViNTDriver(policy, env.action_space.low, env.action_space.high,
+                           context_size=meta["context_size"], stride=meta["stride"],
+                           step_s=meta["stride"] * meta["frame_dt_s"],
+                           cruise_kmh=EXPERT_TARGET_KMH)
+        print(f"  POLICY: ViNT {EVAL_FROM} | context {meta['context_size']} frames x stride "
+              f"{meta['stride']}, {meta['metric_step_m']:g} m/frame | the expert's PID "
+              f"controller at {EXPERT_TARGET_KMH:g} km/h | action box "
+              f"{env.action_space.low.tolist()}..{env.action_space.high.tolist()}", flush=True)
+        if EXPERT_RECORD:
+            return run_record(env, agent, pxr, server, OUT)
+        return run_eval(env, agent, pxr, server, OUT)
     # LEARNER C (user 2026-11-10): its checkpoints evaluate through run_eval with a policy that
     # has GatedRecurrentSAC's acting API; LEARNER=frl trains with learner C's own loop. Both
     # reuse the server and the env built above; every other path continues unchanged below.

@@ -26,7 +26,9 @@ end with the reason.
 ## Runs
 - c0 (il_bc_c0 step_15000), mapless, local CARLA 0.9.15. Every episode is run twice on the
   same seed: once with the TRUE goal image, once with a WRONG goal image (WRONG_GOAL_MODE=1).
-- Map arms on these episodes are the map benchmark's.
+- These bands run c0 mapless ONLY. The map benchmark's existing hard band (the first 100
+  qualifying seeds with >= 2 turns in 50-149 m) uses a different selection rule, straddles
+  the 2-turn and 3+ bands, and is reported separately; its rows are not results on these bands.
 - A pilot of 20 episodes per band in Town07, true goal only, checks the harness and shows any
   floor. The pilot uses qualifying seeds after the first 100 of each band, so the evaluated
   sets are untouched by it. All bands are then run in full, whatever the pilot shows: a band
@@ -47,6 +49,33 @@ end with the reason.
    with no test.
 - 6 tests per family (3 bands x 2 towns); p-values are reported with a Holm correction
   within each family.
+- The 1-turn band's left-vs-right comparison is reported in every case, even if the other
+  bands sit at the floor: it is the simplest goal-directedness statement and needs no map.
+
+## Reported regardless, per cell
+n, successes, success rate, SPL, the ends breakdown, median route metres, the fraction of
+routes that contain a left turn, and the median entry speed of the successes. A cell at the
+floor reports all of it and is never dropped.
+
+## Optional extension (b): map arms on these exact episode files
+Not part of the plan above; it needs GPU time (6 band-town cells x 3 map arms) and is the
+user's decision. If it runs, these tests apply (written by the map benchmark, before results):
+- PRIMARY. Each map arm vs mapless, paired McNemar (exact two-sided on discordant pairs; the
+  arms share seeds), per band and town, any-speed 1 m arrival. Holm within each (band, town)
+  family of 3 arm comparisons.
+- SECONDARY. The same comparisons scored under slow arrival (entry <= 10 km/h), reported
+  alongside, never substituted for the primary. Any speed is the user's rule.
+- H-LEFT FOR THE MAP ARMS. Among the pairs where exactly one of {map arm, mapless} succeeded,
+  test whether which one succeeded is associated with the stratum (contains-left vs no-left):
+  Fisher exact on the 2x2 of stratum x winner. This is the paired form of "the map's
+  advantage is concentrated on left-turn routes", the hypothesis of the post-hoc Town02 split
+  (2/72 -> 17-23/72 on contains-left, p <= 0.0007; nothing significant on no-left).
+- WRONG-GOAL CONTROL ON THE MAP ARMS too: same seeds, McNemar true vs wrong within each arm.
+  Without it, "the map helps" cannot be separated from the map arm being handed an easier goal.
+- PLACEMENT VS PLACEMENT IS DESCRIPTIVE ONLY. Entropy vs uniform vs SGM gets no significance
+  test at these sample sizes (no pairwise placement difference reached significance in the
+  pooled hard band, n = 200).
+- The "reported regardless" list above applies to every map-arm cell too.
 
 ## Changes after results
 (none yet)

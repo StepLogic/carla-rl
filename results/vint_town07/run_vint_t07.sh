@@ -25,7 +25,11 @@ export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 export EVAL_POLICY=vint
 export PYTHONPATH=/home/robotlab/vint/pkgs:/home/robotlab/vint/visualnav/train
 CKPT=/home/robotlab/vint/final/dagger3_e1
-TRACE=$D/checkpoints/trace_expert_jx/trace_expert_Town07
+# ViNT's topomap needs ONE continuous drive (it links nodes in drive order). The Town07
+# expert tour is two: drive 0 (segments 0-17, 34,536 steps) and a 145-step, 56.9 m drive 1
+# resumed after the tour got stuck. The topomap is built from a read-only view of drive 0
+# (index of segments 0-17, links to the original files); the 57 m tail is left out.
+TRACE=$V/trace_expert_Town07_drive0
 TOPO=$V/vint_topomap/dagger3_e1
 MAPROOT=$D/t07/maps_t07_z25
 FRESH=$D/logs/bench_t07_fresh_episodes.json

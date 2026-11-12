@@ -65,6 +65,9 @@ class LoopSettings:
     # batch; "pinned" = the expert rows sit in the main replay, never overwritten, sampled uniformly with
     # the RL's own rows, the temperature tuned on the RL's own rows only (user 2026-11-11).
     expert_mode: str = "update"
+    # 1 = every town's env stepped AT ONCE (train_parallel; user 2026-11-12 "build it"); 0 = one env at a
+    # time, the next town at every episode end (train).
+    parallel: int = 0
 
     def __post_init__(self):
         if self.expert_mode not in ("update", "pinned"):
@@ -566,6 +569,201 @@ def train(env, obs, info, out: str, *, trunk: C0Trunk, row_of: Callable, setting
     return learner, rb, envs
 
 
+# ---- the parallel loop (user 2026-11-12: "build it", "can we add more towns") ---------------------------
+# Its learning, log line and checkpoints MIRROR train()'s above, which stays unchanged for the runs made
+# with it; the helpers below are used by train_parallel only.
+
+def _learn_step(learner, rb, expert, pinned: bool, s: LoopSettings, step: int) -> Dict:
+    """One transition's learning, as train() does it: one update of s.batch split into s.utd
+    minibatches; critic-only while the actor is frozen; FastRLAP's second expert update in "update"
+    mode (none when the expert rows are pinned in the replay)."""
+    frozen = step < s.start_training + s.actor_freeze
+    if frozen:
+        upd = critic_only_update(learner, rb.sample(s.batch), s.utd)
+    else:
+        upd = learner.update(rb.sample(s.batch), utd_ratio=s.utd)
+    if expert is not None and not pinned:
+        from torch_rl.frl import expert as _fx
+        xinfo = (critic_only_update(learner, expert.sample(s.batch), s.utd) if frozen
+                 else _fx.expert_update(learner, expert, s.batch, s.utd))
+        upd.update({f"x_{key}": xinfo[key] for key in ("critic_loss", "q", "actor_loss")
+                    if key in xinfo})
+    return upd
+
+
+def _checkpoint(out: str, step: int, learner, c0_dir: str, s: LoopSettings, probe, log) -> None:
+    d = save_checkpoint(os.path.join(out, f"step_{step}"), learner, step=step, c0_dir=c0_dir,
+                        settings=s)
+    log(f"[Ckpt] {d}")
+    if probe is not None:
+        res = probe(learner.critic)
+        with open(os.path.join(out, "probe.jsonl"), "a") as fh:
+            fh.write(json.dumps({"step": step, **res}) + "\n")
+        log(f"[Probe] step={step} " + " | ".join(
+            f"{k[6:]} corr={v['all']['corr']} full_lock={v['all']['share_full_lock']} "
+            f"|best|={v['all']['mean_abs_best']} (expert {v['all']['mean_abs_expert']})"
+            for k, v in res.items()))
+
+
+def train_parallel(env, obs, info, out: str, *, trunk: C0Trunk, row_of: Callable,
+                   settings: LoopSettings, c0_dir: str, log: Callable = print,
+                   probe: Optional[SteerProbe] = None, to_env: Callable = box_map, ramp=None,
+                   rebuild_env: Optional[Callable] = None, expert=None, learner=None,
+                   extra_envs: Sequence = (), towns: Optional[Sequence[str]] = None):
+    """train() with every town's env STEPPED AT ONCE on a thread pool (one CARLA server each; the
+    client mostly waits on its socket, so N envs cost about one round trip -- vae_nav.vec_env).
+    Per transition it is train(): each env step is one transition, and each step at or past
+    start_training is followed by one update (s.batch split into s.utd minibatches); the entropy
+    target anneals per transition; max_steps, log_every and ckpt_every count transitions, and a
+    checkpoint or log line is made when the count PASSES a multiple, under that multiple's name
+    (step_25000), so evals find it. The actions of one iteration come from one batched forward of the
+    same actor. Each env keeps its own GRU state and episode; a failed step abandons that env's
+    episode only (nothing stored, that env reset, rebuilt if its reset fails). Returns (learner,
+    replay, [the live env of each town])."""
+    from concurrent.futures import ThreadPoolExecutor
+    dead = []        # KEPT REFERENCED: a collected CARLA client can std::terminate (vec_env)
+    envs = [env] + [e for e, _ in extra_envs]
+    rebuilds = [rebuild_env] + [r for _, r in extra_envs]
+    names = list(towns) if towns is not None else [f"env{i}" for i in range(len(envs))]
+    if len(names) != len(envs):
+        raise ValueError(f"towns {names} name {len(names)} envs; there are {len(envs)}")
+    n = len(envs)
+    s = settings
+    box = env.action_space
+    act_dim = int(box.shape[0])
+    if learner is None:
+        learner = make_learner(trunk.emb_dim, trunk.state_dim, act_dim, s.device, s.seed,
+                               actor=s.actor, trunk=trunk)
+    pinned = expert is not None and s.expert_mode == "pinned"
+    rb = FeatureReplay(s.replay, trunk.emb_dim, trunk.state_dim, act_dim,
+                       s.replay_device or s.device, s.seed, pinned=expert.t if pinned else None)
+    rng = np.random.default_rng(s.seed)
+    torch.manual_seed(s.seed)
+    pool = ThreadPoolExecutor(max_workers=n)
+
+    def safe_reset(i):
+        try:
+            return envs[i].reset()
+        except Exception as e:  # noqa: BLE001
+            if rebuilds[i] is None:
+                raise
+            log(f"[Env] reset failed ({names[i]}): {type(e).__name__}: {e} -- rebuilding the env")
+        try:
+            envs[i].close()
+        except Exception:  # noqa: BLE001
+            pass
+        dead.append(envs[i])
+        envs[i] = rebuilds[i]()
+        return envs[i].reset()
+
+    def env_step(i, a):
+        try:
+            return envs[i].step(a), None
+        except Exception as e:  # noqa: BLE001 -- CARLA sensor timeouts and the like
+            return None, e
+
+    try:
+        starts = [(obs, info)] + list(pool.map(safe_reset, range(1, n)))
+        o_t, hidden, mode = [None] * n, [None] * n, [0] * n
+        for i, (ob, inf) in enumerate(starts):
+            o_t[i], hidden[i] = trunk.step(row_of(ob, inf), trunk.zero_hidden())
+            mode[i] = _mode(ob)
+        ep_ret, ep_len, episodes = [0.0] * n, [0] * n, 0
+        recent = {"policy": [], "goal": [], "explore": []}
+        town_goal = {nm: [] for nm in names}
+        town_eps = {nm: 0 for nm in names}
+        ends, roll = {}, {"n": 0, "lock": 0, "idle_thr": 0}
+        upd, t0 = {}, time.time()
+        step, next_log, next_ckpt, last_ckpt = 0, s.log_every, s.ckpt_every, 0
+        while step < s.max_steps:
+            # one batched forward of the actor for the envs past the random start
+            acts = [None] * n
+            pol = [i for i in range(n)
+                   if not (step + 1 + i < s.start_training and s.random_start)]
+            if pol:
+                a_pol = learner.sample_actions(
+                    {k: torch.cat([o_t[i][k] for i in pol], 0) for k in o_t[0]})
+                for j, i in enumerate(pol):
+                    acts[i] = np.asarray(a_pol[j], np.float32)
+            for i in range(n):
+                if acts[i] is None:
+                    acts[i] = rng.uniform(-1.0, 1.0, act_dim).astype(np.float32)
+            a_env = [to_env(a, box) for a in acts]
+            for a, ae in zip(acts, a_env):
+                roll["n"] += 1
+                roll["lock"] += int(abs(float(a[0])) > 0.95)
+                roll["idle_thr"] += int(act_dim > 1 and float(ae[1]) < 0.05)
+            results = list(pool.map(env_step, range(n), a_env))
+            need_reset, learn_at = [], []
+            for i, (res, err) in enumerate(results):
+                step += 1
+                learner.target_entropy -= s.entropy_anneal
+                if err is not None:
+                    log(f"[Env] step {step} failed ({names[i]}): {type(err).__name__}: {err} -- "
+                        f"episode abandoned after {ep_len[i]} real steps, env reset, nothing stored")
+                    ends["env_error"] = ends.get("env_error", 0) + 1
+                    need_reset.append(i)
+                else:
+                    ob, r, term, trunc, inf = res
+                    o_n, hidden[i] = trunk.step(row_of(ob, inf), hidden[i])
+                    rb.add(o_t[i], acts[i], float(r), 0.0 if term else 1.0, o_n)
+                    ep_ret[i] += float(r)
+                    ep_len[i] += 1
+                    o_t[i] = o_n
+                    if term or trunc:
+                        episodes += 1
+                        end = str(inf.get("goal_end") or inf.get("explore_end") or "?")
+                        ends[end] = ends.get(end, 0) + 1
+                        arrived = float(end == "reached")
+                        recent["policy"].append(arrived)
+                        recent["goal" if mode[i] == 1 else "explore"].append(
+                            (arrived, ep_len[i], ep_ret[i]))
+                        for k in recent:
+                            recent[k] = recent[k][-100:]
+                        town_eps[names[i]] += 1
+                        if mode[i] == 1:
+                            town_goal[names[i]] = (town_goal[names[i]] + [arrived])[-100:]
+                        if ramp is not None and mode[i] == 1 and step >= s.start_training:
+                            msg = ramp.record(bool(arrived))
+                            if msg:
+                                log(msg)
+                        need_reset.append(i)
+                if step >= s.start_training:
+                    learn_at.append(step)
+            if need_reset:
+                for i, (ob, inf) in zip(need_reset, list(pool.map(safe_reset, need_reset))):
+                    o_t[i], hidden[i] = trunk.step(row_of(ob, inf), trunk.zero_hidden())
+                    mode[i], ep_ret[i], ep_len[i] = _mode(ob), 0.0, 0
+            for k in learn_at:
+                upd = _learn_step(learner, rb, expert, pinned, s, k)
+            while step >= next_log:
+                g, e = recent["goal"], recent["explore"]
+                mean = lambda xs, j: float(np.mean([x[j] for x in xs])) if xs else float("nan")
+                pol_sr = float(np.mean(recent["policy"])) if recent["policy"] else float("nan")
+                log(f"[FRL] step={next_log} policy={pol_sr:.3f}(n={len(recent['policy'])}) "
+                    f"goal={mean(g, 0):.3f}(n={len(g)}) goal_len={mean(g, 1):.0f} "
+                    f"explore_len={mean(e, 1):.0f} episodes={episodes} ends={ends} | "
+                    + " ".join(f"{k}={v:.4g}" for k, v in sorted(upd.items()))
+                    + f" target_entropy={learner.target_entropy:.4f} | rollout steer_lock="
+                    f"{roll['lock'] / max(1, roll['n']):.2f} throttle<0.05="
+                    f"{roll['idle_thr'] / max(1, roll['n']):.2f} | "
+                    f"{step / max(1e-9, time.time() - t0):.1f} steps/s"
+                    + " | towns " + " ".join(
+                        f"{nm} goal={float(np.mean(town_goal[nm])) if town_goal[nm] else float('nan'):.3f}"
+                        f"(n={len(town_goal[nm])}) episodes={town_eps[nm]}"
+                        for nm in dict.fromkeys(names)))
+                ends, roll = {}, {"n": 0, "lock": 0, "idle_thr": 0}
+                next_log += s.log_every
+            while step >= next_ckpt and next_ckpt <= s.max_steps:
+                _checkpoint(out, next_ckpt, learner, c0_dir, s, probe, log)
+                last_ckpt, next_ckpt = next_ckpt, next_ckpt + s.ckpt_every
+        if last_ckpt != s.max_steps:
+            _checkpoint(out, s.max_steps, learner, c0_dir, s, probe, log)
+    finally:
+        pool.shutdown(wait=False)
+    return learner, rb, envs
+
+
 def run_carla(env, obs, info, server, out: str, *, row_of: Callable, to_env: Callable,
               rebuild_env: Optional[Callable] = None,
               log: Callable = lambda m: print(m, flush=True), extra_envs: Sequence = (),
@@ -630,17 +828,22 @@ def run_carla(env, obs, info, server, out: str, *, row_of: Callable, to_env: Cal
         + (f"{s.expert}: {len(expert)} transitions at k={expert.k}, {expert.meta}" if expert
            else "OFF"))
     log(f"  probe: {cache or 'OFF'} | checkpoints -> {out}")
-    if extra_envs:
+    if s.parallel:
+        log(f"  TOWNS: {', '.join(towns or ['(one)'])} -- one env and one CARLA server each, all "
+            f"stepped IN PARALLEL (thread pool); per transition as train(): one update per "
+            f"transition, the entropy target annealed per transition; replay on {s.replay_device or s.device}")
+    elif extra_envs:
         log(f"  TOWNS: {', '.join(towns or [])} -- one env and one CARLA server each; the loop "
             f"drives one at a time and moves to the next town at every episode end (one "
             f"transition and one update per step, as with one town)")
     t0 = time.time()
     live = [env] + [e for e, _ in extra_envs]
+    loop = train_parallel if s.parallel else train
     try:
-        _, _, live = train(env, obs, info, out, trunk=trunk, row_of=row_of, settings=s,
-                           c0_dir=c0_dir, log=log, probe=probe, to_env=to_env, ramp=ramp,
-                           rebuild_env=rebuild_env, expert=expert, extra_envs=extra_envs,
-                           towns=towns)
+        _, _, live = loop(env, obs, info, out, trunk=trunk, row_of=row_of, settings=s,
+                          c0_dir=c0_dir, log=log, probe=probe, to_env=to_env, ramp=ramp,
+                          rebuild_env=rebuild_env, expert=expert, extra_envs=extra_envs,
+                          towns=towns)
     finally:
         for e in live:
             try:

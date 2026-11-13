@@ -103,4 +103,5 @@ user's decision. If it runs, these tests apply (written by the map benchmark, be
 - The "reported regardless" list above applies to every map-arm cell too.
 
 ## Changes after results
-(none yet)
+None. The analysis ran exactly as specified above: `results/junction_bands/analyse_bands.py`,
+output `results/junction_bands/RESULTS.md` (runs finished 2026-11-12 22:00).

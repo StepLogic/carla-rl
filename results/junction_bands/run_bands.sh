@@ -54,7 +54,8 @@ export BENCH_BASE_OVERLAY=slurm/il_eval_chw_anyspeed.env OFF_ROAD_JUNCTION_M=3.5
   EVAL_MAP_LOCALISE=image CKPT=$C0
 cell() {           # town episodes-file label wrong-goal
   local town=$1 file=$2 label=$3 wg=$4
-  if [ -f "$CKPT_DIR/bench_${label}_mapless_${town}_turns/eval_step_15000/eval.json" ]; then
+  local sfx=""; [ "$wg" = 1 ] && sfx=_wrong        # the trainer names a wrong-goal run eval_<tag>_wrong
+  if [ -f "$CKPT_DIR/bench_${label}_mapless_${town}_turns/eval_step_15000$sfx/eval.json" ]; then
     say "have $label $town"; return 0
   fi
   [ -f "$J/episodes/$file.json" ] || { say "no $file.json -- skip"; return 0; }

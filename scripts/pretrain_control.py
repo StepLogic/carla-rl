@@ -27,8 +27,10 @@ judged them with a ridge probe fitted and scored on the SAME validation rows ("h
 c0's figures come from scripts/probe_c0_features.py, which holds whole episodes out. Scored fairly on
 123 episodes it never loaded, control_pre_n2_k8/step_6000 gives: its own lane head offset R^2 0.38,
 heading 0.10; an episode-held-out probe on its state 0.40 / 0.08; its own action head's steering
-R^2 -0.60 -- worse than c0 on both lane variables, and overfit (val lane loss 0.44 against train 0.12
-in its own log). The validation line below now prints, in the order to read them: the heads' own
+R^2 -0.60 -- so it does not carry heading, which is what it was built for, and it is overfit (val
+lane loss 0.44 against train 0.12 in its own log). It is NOT shown to be worse than c0: on those same
+episodes c0's GRU state probes at offset 0.04, heading 0.03 (scripts/control_stream_vs_c0.py); c0's
+0.31-0.36 came from other, more numerous episodes. The validation line below now prints, in the order to read them: the heads' own
 R^2 (nothing fitted), the probe with episodes held out (torch_rl.control_data.ridge_r2_episode_cv,
 the same procedure as c0's probe), and the old in-sample probe, labelled as such, to show the gap.
 THE GATE IS READ ON THE FIRST TWO.

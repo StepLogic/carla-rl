@@ -261,8 +261,9 @@ class ControlTrunk:
     THE FIRST STREAM DOES NOT (corrected 2026-11-14): "heading 0.66-0.81" was a probe fitted and
     scored on the same rows. On 123 episodes control_pre_n2_k8/step_6000 never loaded, run as
     deployed, its own lane head gives offset R^2 0.38 and heading 0.10, and a probe with episodes
-    held out 0.40 / 0.08 (scripts/control_stream_heldout.py) -- below c0 on both. The class is the
-    plumbing for a stream that passes that gate; this one did not. DEBiT's binocular vector -- the
+    held out 0.40 / 0.08 (scripts/control_stream_heldout.py). c0's GRU state, probed on the same
+    episodes, gives 0.04 / 0.03 (scripts/control_stream_vs_c0.py): heading is in neither. The class
+    is the plumbing for a stream that passes that gate; this one did not. DEBiT's binocular vector -- the
     goal stream -- is passed through untouched, as with c0.
 
     A SECOND MISMATCH, also measured 2026-11-14 and not removed here: pretraining never ran the GRU

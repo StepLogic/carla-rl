@@ -22,10 +22,15 @@ RESULT for control_pre_n2_k8/step_6000 (repeat 8, chunk 12, burn-in 4), whole ep
   123 never-loaded episodes   +0.38    +0.10        +0.40    +0.08             -0.60
    56 validation episodes     +0.27    +0.09        -0.11    -0.02             -0.18
    90 training-pool episodes  +0.56    +0.14        +0.51    +0.11             +0.38
-c0 by the same kind of probe (2026-11-09): camera latent offset 0.70-0.81, heading 0.046; GRU state
-heading 0.31-0.36. So this stream is below c0 on both lane variables, does not fit heading even on
-its own training pool, and its cloning head does not transfer to unseen episodes. It is overfit
-(600-shard pool of 5,400, 6,000 updates; val lane loss 0.44 against train 0.12 in its own log).
+So this stream does not carry heading -- not even on its own training pool -- and its cloning head
+does not transfer to unseen episodes. It is overfit (600-shard pool of 5,400, 6,000 updates; val
+lane loss 0.44 against train 0.12 in its own log).
+
+AGAINST c0: do not set these beside c0's 2026-11-09 figures (camera latent offset 0.70-0.81, heading
+0.046; GRU state heading 0.31-0.36): those are other episodes, and many more of them. On the SAME
+123 episodes and rows, scripts/control_stream_vs_c0.py gives c0's GRU state offset 0.04, heading
+0.03, and DEBiT's binocular vector 0.19 / 0.005. Heading is in none of them there; whether the
+stream is better or worse than c0 is not settled by 123 episodes (see that script's caveat).
 
 usage: /home/robotlab/carla-sac-local/venv/bin/python -I scripts/control_stream_heldout.py CKPT_DIR \
            [n_never_loaded=150] [n_pool=100]

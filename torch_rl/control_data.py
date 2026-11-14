@@ -15,6 +15,27 @@ from typing import Dict
 import numpy as np
 
 
+def transition_actions(shard, n: int) -> np.ndarray:
+    """The action a VALUE LEARNER must condition on: the one that was EXECUTED.
+
+    The shards carry two action columns and they are not interchangeable:
+      * `act_label` is what the EXPERT would have done -- the behaviour-cloning target;
+      * `act_exec` is what the car actually did (the driving policy's action, plus DART noise), so it
+        is the action whose consequence the next frame records.
+    They differ by a lot: on the DAgger chains the executed steering differs from the label with
+    sd 0.199, which is 96% of the expert steering's own sd (DART sigma in {0, 0.1, 0.2}).
+
+    Conditioning a critic on `act_label` is therefore a silent corruption: identical (s, a_label)
+    rows map to DIFFERENT next states according to noise the critic cannot see, TD averages the
+    action-dependence away, and Q comes out flat or monotone in the action -- which is exactly what
+    the first IQL run measured (peak at the edge of every steering band, no interior optimum).
+    torch_rl/frl/expert.py gets this right; scripts/pretrain_critic_iql.py did not, at first.
+    """
+    files = getattr(shard, "files", None) or shard.keys()
+    key = "act_exec" if "act_exec" in files else "act_label"
+    return np.asarray(shard[key], np.float32)[:int(n)]
+
+
 def stack_frames(frames: np.ndarray, t: int, n_frames: int) -> np.ndarray:
     """The n_frames frames ending at t, channels-first, OLDEST FIRST: (3 * n_frames, H, W).
 

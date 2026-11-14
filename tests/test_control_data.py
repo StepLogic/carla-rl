@@ -17,7 +17,22 @@ import pytest
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path[:0] = [ROOT, os.path.join(ROOT, "src")]
 
-from torch_rl.control_data import chunk_from_episode, stack_frames  # noqa: E402
+from torch_rl.control_data import (chunk_from_episode, stack_frames,  # noqa: E402
+                                   transition_actions)
+
+
+def test_behaviour_cloning_takes_the_LABEL_and_a_value_learner_the_EXECUTED_action():
+    """The two action columns are not interchangeable and mixing them is silent. act_label is the
+    expert's intended action (the BC target); act_exec is what the car did, so it is the action whose
+    consequence the next frame records. Conditioning a critic on act_label makes identical (s, a)
+    rows map to different s' by unseen noise, and TD then averages the action-dependence out of Q."""
+    ep = _episode()
+    shard = {"act_label": ep["act_label"],
+             "act_exec": ep["act_label"] + 0.3}                 # the executed action differs
+    assert np.allclose(transition_actions(shard, 10), ep["act_label"] + 0.3)
+    assert np.allclose(chunk_from_episode(ep, 0, 3, 1)["actions"], ep["act_label"][:3])
+    # a shard with no act_exec (expert-driven recordings) falls back to the label
+    assert np.allclose(transition_actions({"act_label": ep["act_label"]}, 4), ep["act_label"][:4])
 
 
 def _episode(t=10, px=8):

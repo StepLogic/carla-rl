@@ -53,7 +53,7 @@ import torch.nn.functional as F  # noqa: E402
 
 from pretrain_control import load_shard  # noqa: E402  (same shard reader and lane labels)
 from torch_rl.control_cnn import ControlGRU  # noqa: E402
-from torch_rl.control_data import stack_frames  # noqa: E402
+from torch_rl.control_data import stack_frames, transition_actions  # noqa: E402
 from torch_rl.frl.iql import IQLLearner  # noqa: E402
 
 ARRIVAL_BONUS = 100.0
@@ -103,7 +103,7 @@ def transitions(paths, net, dev, px, n_frames, lanes, xodr, threads=8, log=print
             if end in FAULT_ENDS:
                 mask[n - 1] = 0.0
             O.append(obs[:n]); O2.append(obs[1:n + 1])
-            A.append(np.asarray(z["act_label"], np.float32)[:n])
+            A.append(transition_actions(z, n))        # EXECUTED action: see control_data
             R.append(r); M.append(mask)
     out = {"observations": torch.cat(O), "next_observations": torch.cat(O2),
            "actions": torch.from_numpy(np.concatenate(A)),

@@ -96,21 +96,24 @@ def stack_frames(frames: np.ndarray, t: int, n_frames: int, stride: int = 1) -> 
 
 
 def chunk_from_episode(ep: Dict[str, np.ndarray], start: int, length: int,
-                       n_frames: int = 1, stride: int = 1) -> Dict[str, np.ndarray]:
-    """`length` consecutive steps of one episode from `start`, ready for the GRU.
+                       n_frames: int = 1, stride: int = 1, step: int = 1) -> Dict[str, np.ndarray]:
+    """`length` GRU steps of one episode from tick `start`, `step` ticks apart.
 
-    Step k of the chunk is frame (start + k), the action taken FROM that frame, the speed at it, and
-    its lane labels. `stride` is the spacing INSIDE each frame stack and must match the decision
-    rate (ACTION_REPEAT) the policy will run at. Raises ValueError if the window would run past the
-    last action.
+    Step j of the chunk is the frame at tick (start + j * step), the action taken FROM that frame,
+    the speed at it, and its lane labels. `stride` is the spacing INSIDE each frame stack. Both must
+    match the decision rate (ACTION_REPEAT=k -> stride = step = k): the policy then decides once
+    every k ticks, so its GRU steps once per decision and its frame pair is k ticks apart, and a
+    stream pretrained at one tick per step would meet a different time scale at deployment.
+    Raises ValueError if the last step would fall past the last action.
     """
     n_act = int(ep["act_label"].shape[0])
-    start, length = int(start), int(length)
-    if start < 0 or length <= 0 or start + length > n_act:
-        raise ValueError(f"chunk [{start}, {start + length}) outside the episode's {n_act} actions")
-    sl = slice(start, start + length)
-    frames = np.stack([stack_frames(ep["frames"], t, n_frames, stride)
-                       for t in range(start, start + length)])
+    start, length, step = int(start), int(length), max(1, int(step))
+    last = start + (length - 1) * step
+    if start < 0 or length <= 0 or last > n_act - 1:
+        raise ValueError(f"chunk ticks {start}..{last} (step {step}) outside the episode's "
+                         f"{n_act} actions")
+    sl = start + step * np.arange(length)
+    frames = np.stack([stack_frames(ep["frames"], int(t), n_frames, stride) for t in sl])
     lane = np.stack([np.asarray(ep["offset"], np.float32)[sl],
                      np.asarray(ep["heading_err"], np.float32)[sl]], axis=-1)
     valid = np.asarray(ep["valid"], bool)[sl].copy()

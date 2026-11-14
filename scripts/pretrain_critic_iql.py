@@ -64,35 +64,43 @@ SPEED_SCALE = 30.0              # speed enters the critic's obs divided by this
 
 
 @torch.no_grad()
-def embed_episode(net, ep, z, dev, px, n_frames):
+def embed_episode(net, ep, z, dev, px, n_frames, repeat=1):
     """Run the FROZEN control stream over one episode -> (T, hidden) GRU states, plus the shard's
     frozen DEBiT features and the speed column, as the critic's observation rows."""
     n = int(ep["n_act"])
-    frames = np.stack([stack_frames(ep["frames"], t, n_frames) for t in range(n + 1)])
+    # the GRU steps at the stream's own decision rate: one step every `repeat` ticks, with the
+    # frame stack `repeat` ticks apart, exactly as it was pretrained and as it will be deployed
+    ticks = list(range(0, n + 1, max(1, int(repeat))))
+    frames = np.stack([stack_frames(ep["frames"], t, n_frames, repeat) for t in ticks])
     x = torch.from_numpy(frames).to(dev).float()
     if x.shape[-1] != px:
         x = F.interpolate(x, size=(px, px), mode="area")
     sp = torch.from_numpy(np.asarray(ep["speed"], np.float32)).to(dev)
     sp = torch.cat([sp, sp[-1:]])[: n + 1]                     # one more row than the actions
+    sp = sp[ticks]
     h = net.reset_hidden(1, dev)
     hs = []
-    for t in range(n + 1):
+    for t in range(len(ticks)):
         out, h = net(x[t:t + 1], sp[t:t + 1].reshape(1, 1), h)
         hs.append(out[0])
     hs = torch.stack(hs)                                        # (n+1, hidden)
-    binoc = torch.from_numpy(np.asarray(z["binoc"], np.float32)).to(dev)[: n + 1]
+    binoc = torch.from_numpy(np.asarray(z["binoc"], np.float32)).to(dev)[: n + 1][ticks]
     obs = torch.cat([hs, binoc, (sp / SPEED_SCALE).reshape(-1, 1)], dim=-1)
     return obs.cpu()
 
 
 def transitions(paths, net, dev, px, n_frames, lanes, xodr, threads=8, log=print, nstep=1,
-                gamma=0.99):
+                gamma=0.99, repeat=1):
     """Every shard -> (obs, action, reward, next_obs, mask) rows for IQL.
 
     nstep > 1 builds the ACTION-REPEAT MDP from the same data (control_data.nstep_rows): one row per
     non-overlapping window of k steps, the action averaged over it, the reward discounted inside it,
     and the next state k steps later. The learner's discount must then be gamma**k.
     """
+    repeat = max(1, int(repeat))
+    if repeat > 1 and int(nstep) != repeat:
+        raise ValueError(f"the control stream runs at one decision per {repeat} ticks, so the "
+                         f"critic's transitions must be {repeat}-step ones (got nstep={nstep})")
     O, A, R, O2, M = [], [], [], [], []
     with ThreadPoolExecutor(threads) as ex:
         for path, ep in zip(paths, ex.map(lambda p: load_shard(p, lanes, xodr, labels=False), paths)):
@@ -100,7 +108,7 @@ def transitions(paths, net, dev, px, n_frames, lanes, xodr, threads=8, log=print
             n = int(ep["n_act"])
             if n < 2 * int(nstep):
                 continue
-            obs = embed_episode(net, ep, z, dev, px, n_frames)
+            obs = embed_episode(net, ep, z, dev, px, n_frames, repeat)   # one row per DECISION
             r = np.asarray(z["reward"], np.float32)[:n].copy()
             end = str(z["end"])
             # the one reward correction: the recording paid arrival at ANY speed
@@ -110,7 +118,9 @@ def transitions(paths, net, dev, px, n_frames, lanes, xodr, threads=8, log=print
             rows = nstep_rows(acts, r, end in FAULT_ENDS, int(nstep), float(gamma))
             if len(rows["starts"]) == 0:
                 continue
-            O.append(obs[rows["starts"]]); O2.append(obs[rows["nexts"]])
+            i0, i1 = rows["starts"] // repeat, rows["nexts"] // repeat   # tick -> decision index
+            assert int(i1[-1]) < obs.shape[0], (int(i1[-1]), obs.shape[0], n, repeat)
+            O.append(obs[i0]); O2.append(obs[i1])
             A.append(rows["actions"]); R.append(rows["rewards"]); M.append(rows["masks"])
     out = {"observations": torch.cat(O), "next_observations": torch.cat(O2),
            "actions": torch.from_numpy(np.concatenate(A)),
@@ -201,10 +211,12 @@ def main():
     t0 = time.time()
     print(f"=== embedding {len(train_paths)} train shards", flush=True)
     train = transitions(train_paths, net, dev, ca["px"], ca["n_frames"], lanes, None,
-                        a.threads, nstep=a.nstep, gamma=a.discount)
+                        a.threads, nstep=a.nstep, gamma=a.discount,
+                        repeat=int(ca.get("repeat", 1)))
     print(f"=== embedding {len(val_paths)} val shards", flush=True)
     val = transitions(val_paths, net, dev, ca["px"], ca["n_frames"], lanes, None,
-                      a.threads, nstep=a.nstep, gamma=a.discount)
+                      a.threads, nstep=a.nstep, gamma=a.discount,
+                      repeat=int(ca.get("repeat", 1)))
     print(f"=== embedded in {time.time()-t0:.0f}s", flush=True)
 
     if a.obs == "nobinoc":

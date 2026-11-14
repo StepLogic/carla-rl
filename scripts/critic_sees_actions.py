@@ -120,7 +120,9 @@ def main():
         for t in a.towns.split(","):
             shards += sorted(glob.glob(os.path.join(root, t, "*.npz")))
     np.random.default_rng(0).shuffle(shards)
-    val = transitions(shards[:a.val_shards], net, dev, ca["px"], ca["n_frames"], {}, None, a.threads)
+    rep = int(ca.get("repeat", 1))          # the stream's decision rate; rows must match it
+    val = transitions(shards[:a.val_shards], net, dev, ca["px"], ca["n_frames"], {}, None,
+                      a.threads, nstep=rep, repeat=rep)
 
     st = torch.load(a.iql, map_location="cpu")
     h = int(ca["hidden"])

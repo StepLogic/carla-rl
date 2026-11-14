@@ -90,16 +90,17 @@ def load_shard(path, lanes_cache, xodr_dir, labels=True):
             "town": town, "n_act": n_act}
 
 
-def batch(pool, rng, b, length, n_frames, dev, px):
+def batch(pool, rng, b, length, n_frames, dev, px, repeat=1):
     """b random chunks from the pool -> device tensors. Episodes too short for a chunk are skipped."""
     picks, tries = [], 0
     while len(picks) < b and tries < 20 * b:
         tries += 1
         ep = pool[rng.integers(len(pool))]
-        if ep["n_act"] <= length:
+        span = (length - 1) * repeat         # ticks covered: GRU steps are `repeat` ticks apart
+        if ep["n_act"] <= span:
             continue
-        picks.append(chunk_from_episode(ep, int(rng.integers(0, ep["n_act"] - length)),
-                                        length, n_frames))
+        picks.append(chunk_from_episode(ep, int(rng.integers(0, ep["n_act"] - span)),
+                                        length, n_frames, stride=repeat, step=repeat))
     f = torch.from_numpy(np.stack([p["frames"] for p in picks])).to(dev, non_blocking=True)
     B, L = f.shape[0], f.shape[1]
     f = f.reshape(B * L, *f.shape[2:]).float()
@@ -160,6 +161,9 @@ def main():
     ap.add_argument("--towns", default="Town01,Town04,Town05,Town10HD")
     ap.add_argument("--n-frames", type=int, default=2)
     ap.add_argument("--px", type=int, default=84)
+    ap.add_argument("--repeat", type=int, default=1,
+                    help="the decision rate the stream will run at (ACTION_REPEAT): the GRU "
+                         "steps once every `repeat` ticks and the frame stack is `repeat` apart")
     ap.add_argument("--latent", type=int, default=50)
     ap.add_argument("--hidden", type=int, default=128)
     ap.add_argument("--updates", type=int, default=6000)
@@ -192,8 +196,8 @@ def main():
     lanes, pool_paths = {}, list(rng.choice(train_paths, min(a.pool, len(train_paths)), replace=False))
     with ThreadPoolExecutor(a.threads) as ex:
         t0 = time.time()
-        pool = [e for e in ex.map(lambda p: load_shard(p, lanes, a.xodr), pool_paths) if e["n_act"] > a.chunk]
-        val = [e for e in ex.map(lambda p: load_shard(p, lanes, a.xodr), val_paths) if e["n_act"] > a.chunk]
+        pool = [e for e in ex.map(lambda p: load_shard(p, lanes, a.xodr), pool_paths) if e["n_act"] > (a.chunk - 1) * a.repeat]
+        val = [e for e in ex.map(lambda p: load_shard(p, lanes, a.xodr), val_paths) if e["n_act"] > (a.chunk - 1) * a.repeat]
     print(f"=== pool {len(pool)} episodes, val {len(val)} episodes, loaded in {time.time()-t0:.0f}s",
           flush=True)
 
@@ -202,11 +206,11 @@ def main():
                      n_frames=a.n_frames).to(dev)
     opt = torch.optim.Adam(net.parameters(), lr=a.lr)
     print(f"=== params {sum(p.numel() for p in net.parameters())/1e6:.2f}M  n_frames={a.n_frames} "
-          f"px={a.px} hidden={a.hidden} aux_lane={a.aux_lane} aug_pad={a.aug_pad}", flush=True)
+          f"px={a.px} hidden={a.hidden} aux_lane={a.aux_lane} aug_pad={a.aug_pad} repeat={a.repeat}", flush=True)
 
     log, t0 = [], time.time()
     for u in range(1, a.updates + 1):
-        bt = batch(pool, rng, a.batch, a.chunk, a.n_frames, dev, a.px)
+        bt = batch(pool, rng, a.batch, a.chunk, a.n_frames, dev, a.px, a.repeat)
         bc, lane, _ = run_chunk(net, bt, a.burn_in, a.aug_pad)
         loss = bc + a.aux_lane * lane
         opt.zero_grad(set_to_none=True)
@@ -218,7 +222,7 @@ def main():
         with torch.no_grad():
             vb, vl, H, Y = [], [], [], []
             for _ in range(8):
-                bv = batch(val, rng, a.batch, a.chunk, a.n_frames, dev, a.px)
+                bv = batch(val, rng, a.batch, a.chunk, a.n_frames, dev, a.px, a.repeat)
                 b_, l_, hs = run_chunk(net, bv, a.burn_in, 0)
                 vb.append(float(b_)); vl.append(float(l_))
                 m = bv["lane_valid"][:, a.burn_in:].reshape(-1).bool().cpu().numpy()

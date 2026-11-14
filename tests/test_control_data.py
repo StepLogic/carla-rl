@@ -154,6 +154,23 @@ def test_the_stack_stride_matches_the_decision_rate():
     assert [int(first["frames"][0, i * 3, 0, 0]) for i in range(3)] == [0, 0, 2]
 
 
+def test_a_chunk_can_step_at_the_decision_rate():
+    """At ACTION_REPEAT=k the policy decides once every k ticks: its GRU steps once per decision and
+    its frame pair is k ticks apart. A stream pretrained with the GRU stepping every tick would meet
+    a different time scale at deployment, so the chunk can advance `step` ticks per GRU step."""
+    ep = _episode(t=30)
+    c = chunk_from_episode(ep, start=0, length=3, n_frames=2, stride=8, step=8)
+    # GRU steps at ticks 0, 8, 16; each stack is (tick - 8, tick), the first repeating frame 0
+    assert [[int(c["frames"][j, i * 3, 0, 0]) for i in range(2)] for j in range(3)] == \
+        [[0, 0], [0, 8], [8, 16]]
+    assert np.allclose(c["actions"][:, 0], [0.0, 0.8, 1.6])        # the label AT each decision tick
+    assert np.allclose(c["speed"], [0, 8, 16])
+    assert np.allclose(c["lane"][:, 1], [0.0, 4.0, 8.0])           # heading label at those ticks
+    with pytest.raises(ValueError):
+        chunk_from_episode(ep, start=8, length=4, n_frames=1, step=8)   # tick 32 > last action 29
+    assert chunk_from_episode(ep, start=5, length=4, n_frames=1, step=8)["actions"].shape == (4, 2)
+
+
 def test_stack_frames_is_channels_first_and_uint8():
     frames = _episode()["frames"]
     out = stack_frames(frames, t=4, n_frames=2)

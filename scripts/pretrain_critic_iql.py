@@ -90,8 +90,15 @@ def embed_episode(net, ep, z, dev, px, n_frames, repeat=1):
 
 
 def transitions(paths, net, dev, px, n_frames, lanes, xodr, threads=8, log=print, nstep=1,
-                gamma=0.99, repeat=1):
+                gamma=0.99, repeat=1, lane_cost=0.0, priv=False):
     """Every shard -> (obs, action, reward, next_obs, mask) rows for IQL.
+
+    lane_cost > 0 (OFFLINE TEST ONLY, 2026-11-14): a per-tick cost lane_cost * (|offset m| +
+    |heading error deg| / 10) is subtracted from the recorded reward, from the shard's positions and
+    the town's OpenDRIVE map. The recorded reward charges the lane only at the terminal crossing, so
+    over one decision a worse steering action costs nothing; this asks whether a critic ranks
+    steering once it does. It is NOT potential-based on purpose: a potential leaves the action
+    ranking unchanged. No run's reward is changed by this flag.
 
     nstep > 1 builds the ACTION-REPEAT MDP from the same data (control_data.nstep_rows): one row per
     non-overlapping window of k steps, the action averaged over it, the reward discounted inside it,
@@ -103,17 +110,63 @@ def transitions(paths, net, dev, px, n_frames, lanes, xodr, threads=8, log=print
                          f"critic's transitions must be {repeat}-step ones (got nstep={nstep})")
     O, A, R, O2, M = [], [], [], [], []
     with ThreadPoolExecutor(threads) as ex:
-        for path, ep in zip(paths, ex.map(lambda p: load_shard(p, lanes, xodr, labels=False), paths)):
+        want = float(lane_cost) > 0 or bool(priv)
+        for path, ep in zip(paths, ex.map(lambda p: load_shard(p, lanes, xodr, labels=want), paths)):
             z = np.load(path)
             n = int(ep["n_act"])
             if n < 2 * int(nstep):
                 continue
             obs = embed_episode(net, ep, z, dev, px, n_frames, repeat)   # one row per DECISION
+            if priv:
+                # PRIVILEGED CRITIC INPUT (offline test, user 2026-11-14: "lets try priveledge critic
+                # with per steering and lane error"): the TRUE lateral offset and heading error at each
+                # decision, standardised as in pretraining, appended to the observation. Training-only
+                # information: at run time it would feed the critic alone, never the actor.
+                dec = np.arange(obs.shape[0]) * max(1, int(repeat))
+                po = np.nan_to_num(np.asarray(ep["offset"], np.float32)[dec], nan=0.0)
+                ph = np.nan_to_num(np.asarray(ep["heading_err"], np.float32)[dec], nan=0.0)
+                pv = np.stack([np.clip(po, -3, 3) / 0.21, np.clip(ph, -90, 90) / 3.457], -1)
+                if int(priv) >= 2:
+                    # THE FULL PRIVILEGED STATE (user 2026-11-14: "add goal and current location etc
+                    # to critic input so it learns to drive lane following"): lane curvature ahead,
+                    # in-junction flag, speed, and the GOAL'S POSITION IN THE CAR'S FRAME. The shards
+                    # store no goal coordinates, so the goal is taken as the last position of a
+                    # goal-mode episode that ended "reached" (within 1 m of it); other episodes get
+                    # zeros and a goal-known flag of 0.
+                    from torch_rl import lane_labels as _ll2
+                    lab = _ll2.episode_labels(z["pos"], lanes[ep["town"]])
+                    pos = np.asarray(z["pos"], np.float32)
+                    T = len(pos)
+                    di = np.minimum(dec, T - 1)
+                    curv = np.clip(np.nan_to_num(np.asarray(lab["curv"], np.float32)[dec]), -90, 90) / 30.0
+                    junc = np.asarray(lab["junction"], bool)[dec].astype(np.float32)
+                    kmh = np.concatenate([[0.0], np.asarray(z["speed"], np.float32)])[dec] / 20.0
+                    nxt = pos[np.minimum(di + 1, T - 1)] - pos[np.maximum(di - 1, 0)]
+                    yaw = np.arctan2(nxt[:, 1], nxt[:, 0])
+                    known = float(int(z["mode"]) == 1 and str(z["end"]) == "reached")
+                    d = (pos[-1][None] - pos[di]) * known
+                    gx = (np.cos(yaw) * d[:, 0] + np.sin(yaw) * d[:, 1]) / 10.0
+                    gy = (-np.sin(yaw) * d[:, 0] + np.cos(yaw) * d[:, 1]) / 10.0
+                    pv = np.concatenate([pv, np.stack([curv, junc, kmh, gx, gy,
+                                                       np.full(len(dec), known, np.float32)], -1)], -1)
+                if int(priv) >= 3:
+                    # CRITIC ON THE PRIVILEGED STATE ALONE (user 2026-11-14: "images go to only
+                    # actor"): no image features in the critic's input at all, only the true state
+                    # and the mode bit.
+                    md = np.full((len(dec), 1), float(int(z["mode"])), np.float32)
+                    obs = torch.from_numpy(np.concatenate([pv.astype(np.float32), md], -1))
+                else:
+                    obs = torch.cat([obs, torch.from_numpy(pv.astype(np.float32))], dim=-1)
             r = np.asarray(z["reward"], np.float32)[:n].copy()
             end = str(z["end"])
             # the one reward correction: the recording paid arrival at ANY speed
             if end == "reached" and float(ep["speed"][n - 1]) > ARRIVAL_MAX_KMH:
                 r[n - 1] -= ARRIVAL_BONUS
+            if float(lane_cost) > 0:
+                off = np.nan_to_num(np.abs(np.asarray(ep["offset"], np.float32)[1:n + 1]), nan=0.0)
+                head = np.nan_to_num(np.abs(np.asarray(ep["heading_err"], np.float32)[1:n + 1]), nan=0.0)
+                # the state AFTER tick t is what action t produced; capped like the pretraining mask
+                r -= float(lane_cost) * (np.minimum(off, 3.0) + np.minimum(head, 90.0) / 10.0)
             acts = transition_actions(z, n)           # EXECUTED action: see control_data
             rows = nstep_rows(acts, r, end in FAULT_ENDS, int(nstep), float(gamma))
             if len(rows["starts"]) == 0:
@@ -183,6 +236,10 @@ def main():
     ap.add_argument("--discount", type=float, default=0.99)
     ap.add_argument("--nstep", type=int, default=1,
                     help="k-step (action-repeat) transitions; the learner discount becomes gamma**k")
+    ap.add_argument("--priv", type=int, default=0,
+                    help="OFFLINE TEST: append the true offset and heading error to the observation")
+    ap.add_argument("--lane-cost", type=float, default=0.0,
+                    help="OFFLINE TEST: per-tick cost K * (|offset m| + |heading deg| / 10)")
     ap.add_argument("--log-every", type=int, default=1000)
     ap.add_argument("--device", default="cuda")
     ap.add_argument("--threads", type=int, default=8)
@@ -208,15 +265,17 @@ def main():
     val_paths = shards[:a.val_shards]
     train_paths = shards[a.val_shards:a.val_shards + a.train_shards]
     lanes = {}
+    from torch_rl import lane_labels as _ll
+    ll_dir = _ll.DEFAULT_XODR_DIR
     t0 = time.time()
-    print(f"=== embedding {len(train_paths)} train shards", flush=True)
-    train = transitions(train_paths, net, dev, ca["px"], ca["n_frames"], lanes, None,
+    print(f"=== embedding {len(train_paths)} train shards | lane_cost {a.lane_cost}", flush=True)
+    train = transitions(train_paths, net, dev, ca["px"], ca["n_frames"], lanes, ll_dir,
                         a.threads, nstep=a.nstep, gamma=a.discount,
-                        repeat=int(ca.get("repeat", 1)))
+                        repeat=int(ca.get("repeat", 1)), lane_cost=a.lane_cost, priv=int(a.priv))
     print(f"=== embedding {len(val_paths)} val shards", flush=True)
-    val = transitions(val_paths, net, dev, ca["px"], ca["n_frames"], lanes, None,
+    val = transitions(val_paths, net, dev, ca["px"], ca["n_frames"], lanes, ll_dir,
                       a.threads, nstep=a.nstep, gamma=a.discount,
-                      repeat=int(ca.get("repeat", 1)))
+                      repeat=int(ca.get("repeat", 1)), lane_cost=a.lane_cost, priv=int(a.priv))
     print(f"=== embedded in {time.time()-t0:.0f}s", flush=True)
 
     if a.obs == "nobinoc":

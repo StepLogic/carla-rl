@@ -96,6 +96,17 @@ class LoopSettings:
     # critic with IQL first"; FastRLAP's iql_learner rules, torch_rl.frl.iql.iql_warmup) on this
     # learner's own critic and actor. 0 = none. Needs an expert replay; a resumed run skips it.
     iql_pretrain: int = 0
+    # THE CRITIC ON THE TRUE STATE (user 2026-11-14: "lets try priveledge critic with per steering and
+    # lane error", "images go to only actor", "add goal and current location etc to critic input"):
+    # 1 = the critic reads NO image features, only the env's true state (priv_vector: lane offset,
+    # heading, lane edges, junction flag, speed, mode, the goal's position in the car's frame, zero in
+    # explore). The actor still reads images only, so the deployed policy needs no map. Training-time
+    # information: no eval path builds or needs it.
+    priv_critic: int = 0
+    # A PER-DECISION LANE COST, deliberately NOT potential-based (a potential cannot change which action
+    # is better): stored reward -= lane_step_cost * ticks * (|lateral offset m| + |heading error deg| / 10)
+    # at the state the decision led to. 0 = the env's reward as it is.
+    lane_step_cost: float = 0.0
 
     def __post_init__(self):
         if self.expert_mode not in ("update", "pinned"):
@@ -381,6 +392,80 @@ class ControlTrunk:
         return torch.stack(embs).cpu().numpy(), torch.stack(states).cpu().numpy()
 
 
+LANE_PRIV_DIM = 13       # vae_nav.lane_priv.PRIV_DIM
+PRIV_EXTRA = 5           # speed / 20, mode, goal ahead / 10, goal to the side / 10, goal known
+PRIV_DIM = LANE_PRIV_DIM + PRIV_EXTRA
+
+
+def priv_vector(info, mode: int) -> np.ndarray:
+    """The critic's TRUE state from the env's info: vae_nav.lane_priv's 13 lane features (offset,
+    sin/cos heading error, lane width, edge distances, markings, junction, found), then speed, the
+    mode bit and the goal's position in the car's frame -- zeros with flag 0 in explore mode."""
+    lp = info.get("lane_priv")
+    if lp is None:
+        raise KeyError("FRL_PRIV_CRITIC=1 needs info['lane_priv']: set OBS_PRIV=1 so the env computes "
+                       "the lane geometry")
+    out = np.zeros(PRIV_DIM, np.float32)
+    out[:LANE_PRIV_DIM] = np.asarray(lp, np.float32)[:LANE_PRIV_DIM]
+    out[LANE_PRIV_DIM] = float(info.get("speed_kmh", 0.0)) / 20.0
+    out[LANE_PRIV_DIM + 1] = float(int(mode))
+    gp, hp = info.get("goal_pos"), info.get("hero_pos")
+    if int(mode) == 1 and gp is not None and hp is not None:
+        d = np.asarray(gp, np.float64)[:2] - np.asarray(hp, np.float64)[:2]
+        yaw = float(info.get("hero_yaw", 0.0))
+        c, sn = np.cos(yaw), np.sin(yaw)
+        out[LANE_PRIV_DIM + 2] = np.clip((c * d[0] + sn * d[1]) / 10.0, -10, 10)
+        out[LANE_PRIV_DIM + 3] = np.clip((-sn * d[0] + c * d[1]) / 10.0, -10, 10)
+        out[LANE_PRIV_DIM + 4] = 1.0
+    return out
+
+
+def lane_step_cost(priv, k: float, ticks: int) -> float:
+    """k * ticks * (|lateral offset m| + |heading error deg| / 10) from a priv_vector row."""
+    p = np.asarray(priv, np.float32).reshape(-1)
+    head = abs(float(np.degrees(np.arctan2(p[2], p[3]))))
+    return float(k) * int(ticks) * (min(abs(float(p[0])), 3.0) + min(head, 90.0) / 10.0)
+
+
+class PrivObs:
+    """A trunk whose observations also carry the TRUE state under "priv", for the critic alone. The
+    loops call trunk.step(row_of(obs, info), hidden); wrap row_of with `.watching` so the info of the
+    very row being stepped is the one the privileged vector is built from. Everything else is the
+    wrapped trunk's."""
+
+    def __init__(self, trunk):
+        self.trunk, self._info, self._mode = trunk, None, 0
+        self.priv_dim = PRIV_DIM
+
+    def __getattr__(self, name):
+        return getattr(self.__dict__["trunk"], name)
+
+    def watching(self, row_of):
+        def f(obs, info):
+            self._info, self._mode = info, _mode(obs)
+            return row_of(obs, info)
+        return f
+
+    def zero_hidden(self):
+        return self.trunk.zero_hidden()
+
+    def step(self, row, hidden):
+        obs, hidden = self.trunk.step(row, hidden)
+        if self._info is None:
+            raise RuntimeError("PrivObs.step before any row: wrap row_of with PrivObs.watching")
+        obs["priv"] = torch.as_tensor(priv_vector(self._info, self._mode)[None],
+                                      device=obs["embeddings"].device)
+        return obs, hidden
+
+
+class _PrivIn(torch.nn.Module):
+    """The privileged critic's trunk: the true-state vector, and nothing from the images."""
+    out_dim = PRIV_DIM
+
+    def forward(self, obs):
+        return obs["priv"].float()
+
+
 class FeatureReplay:
     """Uniform transition replay of learner C's inputs (FastRLAP's ReplayBuffer: sampled
     uniformly with replacement); embeddings stored float16, like the offline cache.
@@ -391,8 +476,15 @@ class FeatureReplay:
     RL's own rows in "online" (bool), which is what the temperature is tuned on."""
 
     def __init__(self, capacity: int, emb_dim: int, state_dim: int, action_dim: int, device,
-                 seed: int = 0, pinned: Optional[Dict] = None):
+                 seed: int = 0, pinned: Optional[Dict] = None, priv_dim: int = 0,
+                 lane_cost: float = 0.0, ticks: int = 1):
         dev = torch.device(device)
+        self.priv_dim, self.lane_cost, self.ticks = int(priv_dim), float(lane_cost), int(ticks)
+        if self.priv_dim and pinned is not None:
+            raise ValueError("pinned expert rows carry no true state: the privileged critic runs "
+                             "without FRL_EXPERT")
+        if self.lane_cost and not self.priv_dim:
+            raise ValueError("lane_step_cost is priced from the true state: it needs priv_critic=1")
         c = int(capacity)
         p = 0 if pinned is None else int(pinned["rewards"].shape[0])
         self.capacity, self.n_pinned = c, p
@@ -404,6 +496,9 @@ class FeatureReplay:
         self.act = torch.zeros(rows, action_dim, device=dev)
         self.rew = torch.zeros(rows, device=dev)
         self.mask = torch.zeros(rows, device=dev)
+        if self.priv_dim:
+            self.priv = torch.zeros(rows, self.priv_dim, device=dev)
+            self.next_priv = torch.zeros(rows, self.priv_dim, device=dev)
         if p:
             for dst, key in ((self.emb, "emb"), (self.next_emb, "next_emb"), (self.st, "states"),
                              (self.next_st, "next_states"), (self.act, "actions"),
@@ -426,6 +521,12 @@ class FeatureReplay:
         self.next_emb[i] = next_obs["embeddings"][0]
         self.next_st[i] = next_obs["states"][0]
         self.act[i] = torch.as_tensor(np.asarray(action, np.float32))
+        if self.priv_dim:
+            self.priv[i] = obs["priv"][0]
+            self.next_priv[i] = next_obs["priv"][0]
+            if self.lane_cost:
+                reward = float(reward) - lane_step_cost(next_obs["priv"][0].cpu().numpy(),
+                                                        self.lane_cost, self.ticks)
         self.rew[i] = float(reward)
         self.mask[i] = float(mask)
         self.i = (self.i + 1) % self.capacity
@@ -434,11 +535,15 @@ class FeatureReplay:
     def sample(self, batch: int) -> Dict:
         idx = torch.as_tensor(self.rng.integers(0, len(self), size=int(batch)),
                               device=self.emb.device)
-        return {"observations": {"embeddings": self.emb[idx].float(), "states": self.st[idx]},
-                "next_observations": {"embeddings": self.next_emb[idx].float(),
-                                      "states": self.next_st[idx]},
-                "actions": self.act[idx], "rewards": self.rew[idx], "masks": self.mask[idx],
-                "online": idx >= self.n_pinned}
+        out = {"observations": {"embeddings": self.emb[idx].float(), "states": self.st[idx]},
+               "next_observations": {"embeddings": self.next_emb[idx].float(),
+                                     "states": self.next_st[idx]},
+               "actions": self.act[idx], "rewards": self.rew[idx], "masks": self.mask[idx],
+               "online": idx >= self.n_pinned}
+        if self.priv_dim:
+            out["observations"]["priv"] = self.priv[idx]
+            out["next_observations"]["priv"] = self.next_priv[idx]
+        return out
 
 
 class C0HeadActor(torch.nn.Module):
@@ -466,7 +571,8 @@ class C0HeadActor(torch.nn.Module):
 
 
 def make_learner(emb_dim: int, state_dim: int, action_dim: int, device, seed: int = 0,
-                 actor: str = "frl", trunk: Optional[C0Trunk] = None, batched_heads: bool = False):
+                 actor: str = "frl", trunk: Optional[C0Trunk] = None, batched_heads: bool = False,
+                 priv_dim: int = 0):
     """Learner C. actor="c0": its actor is replaced by a trainable copy of c0's head (C0HeadActor).
     batched_heads: the critic's heads in one batched pass (the same weights and numbers, faster)."""
     from torch_rl.frl.learner import SACLearner
@@ -482,7 +588,31 @@ def make_learner(emb_dim: int, state_dim: int, action_dim: int, device, seed: in
         raise ValueError(f"actor={actor!r}: 'frl' or 'c0'")
     learner.dims = {"emb_dim": int(emb_dim), "state_dim": int(state_dim),
                     "action_dim": int(action_dim), "actor": actor}
+    if int(priv_dim):
+        # THE CRITIC ON THE TRUE STATE ALONE: same heads (10, LayerNorm), its input the privileged
+        # vector + the action. The actor is untouched and still reads images only.
+        import copy as _copy
+
+        from torch_rl.frl.learner import _Critic
+        if int(priv_dim) != PRIV_DIM:
+            raise ValueError(f"priv_dim={priv_dim}: the privileged vector has {PRIV_DIM} entries")
+        crit = _Critic(_PrivIn(), PRIV_DIM, int(action_dim), REDQ["num_qs"], REDQ["hidden_dims"],
+                       REDQ["critic_layer_norm"], None, batched=bool(batched_heads)).to(learner.device)
+        learner.critic = crit
+        learner.target_critic = _copy.deepcopy(crit)
+        for q in learner.target_critic.parameters():
+            q.requires_grad_(False)
+        learner.critic_opt = torch.optim.Adam(crit.parameters(), lr=REDQ["critic_lr"])
+        learner.dims["priv_dim"] = PRIV_DIM
     return learner
+
+
+def _ticks() -> int:
+    """Simulator ticks per decision (ACTION_REPEAT), for the per-decision lane cost."""
+    try:
+        return max(1, int(os.environ.get("ACTION_REPEAT", "1") or 1))
+    except ValueError:
+        return 1
 
 
 def critic_only_update(learner, batch: Dict, utd: int) -> Dict:
@@ -683,11 +813,14 @@ def train(env, obs, info, out: str, *, trunk: C0Trunk, row_of: Callable, setting
     act_dim = int(box.shape[0])
     if learner is None:
         learner = make_learner(trunk.emb_dim, trunk.state_dim, act_dim, s.device, s.seed,
-                               actor=s.actor, trunk=trunk, batched_heads=bool(s.batched_heads))
+                               actor=s.actor, trunk=trunk, batched_heads=bool(s.batched_heads),
+                               priv_dim=getattr(trunk, "priv_dim", 0))
     pinned = expert is not None and s.expert_mode == "pinned"
     # pinned: the expert rows sit in THIS replay (never overwritten) and there is no second update
     rb = FeatureReplay(s.replay, trunk.emb_dim, trunk.state_dim, act_dim,
-                       s.replay_device or s.device, s.seed, pinned=expert.t if pinned else None)
+                       s.replay_device or s.device, s.seed, pinned=expert.t if pinned else None,
+                       priv_dim=getattr(trunk, "priv_dim", 0), lane_cost=s.lane_step_cost,
+                       ticks=_ticks())
     _iql_warm_up(learner, expert, s, log)        # before the seeds below: the loop's streams unchanged
     rng = np.random.default_rng(s.seed)
     torch.manual_seed(s.seed)
@@ -913,7 +1046,8 @@ def train_parallel(env, obs, info, out: str, *, trunk: C0Trunk, row_of: Callable
     act_dim = int(box.shape[0])
     if learner is None:
         learner = make_learner(trunk.emb_dim, trunk.state_dim, act_dim, s.device, s.seed,
-                               actor=s.actor, trunk=trunk, batched_heads=bool(s.batched_heads))
+                               actor=s.actor, trunk=trunk, batched_heads=bool(s.batched_heads),
+                               priv_dim=getattr(trunk, "priv_dim", 0))
     pinned = expert is not None and s.expert_mode == "pinned"
     # RESUME: the whole learner and the step count from a checkpoint; the replay is not in it, so it starts
     # fresh, and the random streams are reseeded past the resumed step (they cannot be continued).
@@ -924,7 +1058,9 @@ def train_parallel(env, obs, info, out: str, *, trunk: C0Trunk, row_of: Callable
             f"are back")
     rb = FeatureReplay(s.replay, trunk.emb_dim, trunk.state_dim, act_dim,
                        s.replay_device or s.device, s.seed + start,
-                       pinned=expert.t if pinned else None)
+                       pinned=expert.t if pinned else None,
+                       priv_dim=getattr(trunk, "priv_dim", 0), lane_cost=s.lane_step_cost,
+                       ticks=_ticks())
     _iql_warm_up(learner, expert, s, log, resumed=bool(s.resume))
     rng = np.random.default_rng(s.seed + start)
     torch.manual_seed(s.seed + start)
@@ -1082,6 +1218,15 @@ def run_carla(env, obs, info, server, out: str, *, row_of: Callable, to_env: Cal
             raise SystemExit("LEARNER=frl needs FRL_C0: c0's checkpoint directory (frozen trunk)")
         trunk = C0Trunk(c0_dir, s.device)
     os.makedirs(out, exist_ok=True)
+    if s.priv_critic:
+        if s.expert or s.iql_pretrain:
+            raise SystemExit("FRL_PRIV_CRITIC=1 runs without FRL_EXPERT / FRL_IQL_PRETRAIN: the "
+                             "recorded rows carry no true state for the critic")
+        trunk = PrivObs(trunk)
+        row_of = trunk.watching(row_of)
+        cache = ""                    # the steering probe drives a critic that reads image features
+    elif s.lane_step_cost:
+        raise SystemExit("FRL_LANE_STEP_COST is priced from the true state: set FRL_PRIV_CRITIC=1")
     probe = SteerProbe(cache, s.device) if cache else None
     box = env.action_space
     expert = None
@@ -1110,6 +1255,10 @@ def run_carla(env, obs, info, server, out: str, *, row_of: Callable, to_env: Cal
     log(f"  learner: {REDQ} latent {LATENT_DIM}; "
         + ("actor and critics FROM THE IQL WARM-UP, temperature from scratch" if s.iql_pretrain
            else "actor/critics/temperature FROM SCRATCH"))
+    log(f"  CRITIC: TRUE STATE ONLY ({PRIV_DIM}-d: lane offset, heading, edges, junction, speed, mode, "
+        f"goal in the car's frame; no image features) | per-decision lane cost {s.lane_step_cost} x "
+        f"{_ticks()} ticks x (|offset m| + |heading deg|/10)" if s.priv_critic
+        else "  CRITIC: image features (as every earlier run)")
     log(f"  IQL WARM-UP: {s.iql_pretrain} updates on the expert rows before the first env step "
         f"(FastRLAP's IQL rules on this learner's own critic and actor, with its own optimizers; "
         f"the temperature untouched; skipped on resume)" if s.iql_pretrain

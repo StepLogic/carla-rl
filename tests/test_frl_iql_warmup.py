@@ -336,3 +336,20 @@ def test_an_actor_that_is_not_learner_cs_own_is_refused():
     lr.actor = torch.nn.Linear(4, 2)
     with pytest.raises(ValueError, match="actor"):
         fiql.iql_warmup(lr, lambda: _batch(), 1)
+
+
+def test_a_clipped_dataset_action_does_not_become_a_runaway_cloning_target():
+    """2.5% of the expert rows have throttle EXACTLY -1 (full brake, clipped at the box). With the
+    log-probability's 1e-6 clamp such a row asks the actor for a pre-tanh mean of -7.25 and those
+    rows carried 81% of the throttle target's variance: seven same-config warm-ups cloned the
+    throttle with held-out R^2 from -3.84 to +0.87 (review of f0a0958). The warm-up clamps at 0.05
+    (pre-tanh 1.83); the standalone IQLLearner keeps its 1e-6, which its own tests pin."""
+    lr = _learner()
+    assert fiql.IQLLearner.on_learner(lr).action_eps == 0.05
+    obs = _batch()["observations"]
+    x = lr.actor.trunk(obs)
+    full_brake = torch.tensor([[0.0, -1.0]]).expand(x.shape[0], 2)
+    loose = fiql.tanh_normal_log_prob(lr.actor.pi, x, full_brake, eps=1e-6)
+    tight = fiql.tanh_normal_log_prob(lr.actor.pi, x, full_brake, eps=0.05)
+    assert float(tight.mean()) > float(loose.mean())          # a far milder demand on the mean
+    assert abs(math.atanh(1 - 0.05)) < 2.0 < abs(math.atanh(1 - 1e-6))

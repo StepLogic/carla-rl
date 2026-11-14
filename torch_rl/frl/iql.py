@@ -184,6 +184,7 @@ class IQLLearner:
     @classmethod
     def on_learner(cls, learner, *, expectile: float = 0.8, temperature: float = 0.1,
                    awr_clip: float = 100.0, actor_lr: float = 1e-3, critic_lr: float = 3e-4,
+                   action_eps: float = 0.05,
                    value_lr: float = 3e-4, hidden_dims: Sequence[int] = (256, 256),
                    num_vs: int = 1) -> "IQLLearner":
         """THIS class's three steps on a SAC learner's OWN networks (torch_rl.frl.learner.SACLearner,
@@ -207,6 +208,9 @@ class IQLLearner:
         self.expectile, self.temperature = float(expectile), float(temperature)
         self.discount, self.tau = float(learner.discount), float(learner.tau)
         self.awr_clip = float(awr_clip)
+        # clipped dataset actions (2.5% of expert rows: throttle exactly -1) must not become a
+        # pre-tanh target of 7.25; 0.05 caps it at 1.83 (review of f0a0958)
+        self.action_eps = float(action_eps)
         self.latent = 0
         self.actor = _ActorView(learner.actor)
         self.critic, self.target_critic = learner.critic, learner.target_critic
@@ -246,7 +250,8 @@ class IQLLearner:
             q = self.target_critic(b["observations"], b["actions"]).min(dim=0).values
             adv = q - v
             w = torch.clamp(torch.exp(adv * self.temperature), max=self.awr_clip)
-        logp = tanh_normal_log_prob(self.actor, b["observations"], b["actions"])
+        logp = tanh_normal_log_prob(self.actor, b["observations"], b["actions"],
+                                    eps=getattr(self, "action_eps", 1e-6))
         loss = -(w * logp).mean()
         self.actor_opt.zero_grad(set_to_none=True)
         loss.backward()

@@ -123,11 +123,21 @@ def main():
     val = transitions(shards[:a.val_shards], net, dev, ca["px"], ca["n_frames"], {}, None, a.threads)
 
     st = torch.load(a.iql, map_location="cpu")
-    lr = IQLLearner(obs_dim=int(st["obs_dim"]), action_dim=2, num_qs=st["args"]["num_qs"],
-                    device=str(dev), seed=0)
-    lr.load_state_dict(st["iql"])
-
     h = int(ca["hidden"])
+    # the critic is rebuilt the way it was trained: its input compression and whether the DEBiT
+    # block was dropped both come from the checkpoint (older checkpoints have neither key)
+    latent = int(st["args"].get("latent", 0) or 0)
+    if st["args"].get("obs", "all") == "nobinoc":
+        for k in ("observations", "next_observations"):
+            val[k] = torch.cat([val[k][:, :h], val[k][:, -1:]], dim=1)
+    latent_hidden = int(st["args"].get("latent_hidden", 0) or 0)
+    lr = IQLLearner(obs_dim=int(st["obs_dim"]), action_dim=2, num_qs=st["args"]["num_qs"],
+                    latent=latent, latent_hidden=latent_hidden, device=str(dev), seed=0)
+    lr.load_state_dict(st["iql"])
+    print(f"=== critic input: latent={latent or 'none (raw)'} "
+          f"mlp_hidden={latent_hidden or 'none (one layer)'} obs={st['args'].get('obs', 'all')} "
+          f"nstep={st['args'].get('nstep', 1)}", flush=True)
+
     o = val["observations"]
     blocks = {"control GRU state": o[:, :h], "DEBiT binocular": o[:, h:-1], "speed": o[:, -1:],
               "action (steer, throttle)": val["actions"]}

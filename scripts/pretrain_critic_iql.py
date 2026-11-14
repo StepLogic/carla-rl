@@ -162,6 +162,9 @@ def main():
     ap.add_argument("--latent", type=int, default=0,
                     help="compress the observation to N dims first (learner C uses 50); "
                          "0 = raw, which drowns the action at 2 of 3,267 inputs")
+    ap.add_argument("--latent-hidden", type=int, default=0,
+                    help="hidden width of an MLP compression (obs -> hidden -> latent); "
+                         "0 = one layer")
     ap.add_argument("--obs", choices=("all", "nobinoc"), default="all",
                     help="nobinoc drops the 3,136 frozen DEBiT dims from the CRITIC "
                          "(training-only network; the actor keeps them)")
@@ -214,9 +217,10 @@ def main():
     obs_dim = int(train["observations"].shape[1])
     lr = IQLLearner(obs_dim=obs_dim, action_dim=2, num_qs=a.num_qs, expectile=a.expectile,
                     temperature=a.temperature, discount=a.discount ** a.nstep,
-                    latent=a.latent, device=str(dev), seed=0)
+                    latent=a.latent, latent_hidden=a.latent_hidden, device=str(dev),
+                    seed=0)
     print(f"=== IQL obs_dim={obs_dim} num_qs={a.num_qs} expectile={a.expectile} "
-          f"temperature={a.temperature} nstep={a.nstep} latent={a.latent} obs={a.obs}"
+          f"temperature={a.temperature} nstep={a.nstep} latent={a.latent} mlp_hidden={a.latent_hidden} obs={a.obs}"
           f" discount={a.discount ** a.nstep:.4f}"
           f" | gate: span>=5% of |Q|, corr>0.3, full-lock<50%", flush=True)
 

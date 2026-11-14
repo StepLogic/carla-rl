@@ -42,9 +42,17 @@ class Compressed(nn.Module):
     The encoder trains with whichever head wraps it, so the critic's encoder is shaped by the critic
     loss (DrQ's rule) and is copied into the target along with it."""
 
-    def __init__(self, obs_dim: int, latent: int, inner: nn.Module):
+    def __init__(self, obs_dim: int, latent: int, inner: nn.Module, hidden: int = 0):
         super().__init__()
-        self.enc = _latent(int(obs_dim), int(latent))
+        # hidden > 0 makes the compression an MLP (user 2026-11-14: "compress to mlp 10 and add
+        # actions"): obs -> hidden -> ReLU -> latent, LayerNorm, tanh; the action is concatenated
+        # AFTER it by the wrapped head. hidden = 0 is the single layer learner C's Multiplexer uses,
+        # and keeps the parameter names earlier checkpoints were saved with.
+        if int(hidden) > 0:
+            self.enc = nn.Sequential(xavier_(nn.Linear(int(obs_dim), int(hidden))), nn.ReLU(),
+                                     _latent(int(hidden), int(latent)))
+        else:
+            self.enc = _latent(int(obs_dim), int(latent))
         self.inner = inner
 
     def forward(self, obs: torch.Tensor, *rest):
@@ -103,7 +111,8 @@ class IQLLearner:
                  temperature: float = 0.1, discount: float = 0.99, tau: float = 0.005,
                  actor_lr: float = 1e-3, critic_lr: float = 3e-4, value_lr: float = 3e-4,
                  critic_layer_norm: bool = True, device: str = "cpu", seed: int = 0,
-                 batched_heads: bool = False, awr_clip: float = 100.0, latent: int = 0):
+                 batched_heads: bool = False, awr_clip: float = 100.0, latent: int = 0,
+                 latent_hidden: int = 0):
         torch.manual_seed(int(seed))
         self.device = torch.device(device)
         self.expectile, self.temperature = float(expectile), float(temperature)
@@ -114,7 +123,8 @@ class IQLLearner:
         d = self.latent or int(obs_dim)
 
         def wrap(inner):
-            return (Compressed(obs_dim, self.latent, inner) if self.latent else inner).to(self.device)
+            return (Compressed(obs_dim, self.latent, inner, hidden=int(latent_hidden))
+                    if self.latent else inner).to(self.device)
 
         self.actor = wrap(TanhNormalActor(d, action_dim, hidden_dims))
         self.critic = wrap(EnsembleQ(d, action_dim, num_qs=num_qs, hidden_dims=hidden_dims,

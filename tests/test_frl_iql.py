@@ -131,6 +131,23 @@ def test_compression_puts_the_action_in_a_small_vector_and_still_trains():
         assert torch.isfinite(torch.tensor(info[k]))
 
 
+def test_the_compression_can_be_an_mlp_down_to_ten_with_the_action_added_after():
+    """user 2026-11-14: "compress to mlp 10 and add actions". The observation goes through an MLP
+    (one hidden layer) to 10 dims, and the action is concatenated AFTER it, so the Q heads read
+    10 + 2 numbers: the action is 2 of 12 inputs instead of 2 of 3,267."""
+    lr = _learner(latent=10, latent_hidden=32)
+    linears = [m for m in lr.critic.enc.modules() if isinstance(m, torch.nn.Linear)]
+    assert [(m.in_features, m.out_features) for m in linears] == [(12, 32), (32, 10)]
+    head = lr.critic.inner.heads[0][0]
+    first = [m for m in head.modules() if isinstance(m, torch.nn.Linear)][0]
+    assert first.in_features == 10 + 2                     # compressed observation + the action
+    info = lr.update(_batch())
+    assert torch.isfinite(torch.tensor(info["critic_loss"]))
+    # latent_hidden=0 keeps the single-layer compression, so earlier checkpoints still load
+    flat = _learner(latent=10)
+    assert len([m for m in flat.critic.enc.modules() if isinstance(m, torch.nn.Linear)]) == 1
+
+
 def test_the_target_critic_carries_its_encoder_and_is_polyaked():
     lr = _learner(latent=8, tau=0.5)
     t0 = [p.detach().clone() for p in lr.target_critic.enc.parameters()]

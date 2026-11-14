@@ -29,7 +29,33 @@ from typing import Dict, Sequence
 import torch
 from torch import nn
 
-from torch_rl.frl.networks import MLP, EnsembleQ, TanhNormalActor, _log1m_tanh_sq, xavier_
+from torch_rl.frl.networks import (MLP, EnsembleQ, TanhNormalActor, _latent, _log1m_tanh_sq,
+                                   xavier_)
+
+
+class Compressed(nn.Module):
+    """obs -> a LayerNorm+tanh latent -> the wrapped head. Learner C's Multiplexer does this and the
+    first IQL pretraining dropped it "for more capacity", which was a mistake with a measurement
+    behind it: with the raw observation the action is 2 of 3,267 inputs (0.06%), its block L2 is 0.41
+    against the observation's ~21, and shuffling the action moved Q no more than shuffling two
+    arbitrary observation features (ratio 0.89). Compressed to 50 dims the action is 2 of 52.
+    The encoder trains with whichever head wraps it, so the critic's encoder is shaped by the critic
+    loss (DrQ's rule) and is copied into the target along with it."""
+
+    def __init__(self, obs_dim: int, latent: int, inner: nn.Module):
+        super().__init__()
+        self.enc = _latent(int(obs_dim), int(latent))
+        self.inner = inner
+
+    def forward(self, obs: torch.Tensor, *rest):
+        return self.inner(self.enc(obs), *rest)
+
+    def dist_params(self, obs: torch.Tensor):
+        return self.inner.dist_params(self.enc(obs))
+
+    @property
+    def num_qs(self) -> int:
+        return getattr(self.inner, "num_qs", 1)
 
 
 def expectile_loss(diff: torch.Tensor, expectile: float) -> torch.Tensor:
@@ -77,18 +103,25 @@ class IQLLearner:
                  temperature: float = 0.1, discount: float = 0.99, tau: float = 0.005,
                  actor_lr: float = 1e-3, critic_lr: float = 3e-4, value_lr: float = 3e-4,
                  critic_layer_norm: bool = True, device: str = "cpu", seed: int = 0,
-                 batched_heads: bool = False, awr_clip: float = 100.0):
+                 batched_heads: bool = False, awr_clip: float = 100.0, latent: int = 0):
         torch.manual_seed(int(seed))
         self.device = torch.device(device)
         self.expectile, self.temperature = float(expectile), float(temperature)
         self.discount, self.tau, self.awr_clip = float(discount), float(tau), float(awr_clip)
-        self.actor = TanhNormalActor(obs_dim, action_dim, hidden_dims).to(self.device)
-        self.critic = EnsembleQ(obs_dim, action_dim, num_qs=num_qs, hidden_dims=hidden_dims,
-                                use_layer_norm=critic_layer_norm,
-                                batched=bool(batched_heads)).to(self.device)
+        # latent > 0 compresses the observation first, so the action is not drowned in it; each head
+        # gets its OWN encoder, trained by its own loss.
+        self.latent = int(latent)
+        d = self.latent or int(obs_dim)
+
+        def wrap(inner):
+            return (Compressed(obs_dim, self.latent, inner) if self.latent else inner).to(self.device)
+
+        self.actor = wrap(TanhNormalActor(d, action_dim, hidden_dims))
+        self.critic = wrap(EnsembleQ(d, action_dim, num_qs=num_qs, hidden_dims=hidden_dims,
+                                     use_layer_norm=critic_layer_norm, batched=bool(batched_heads)))
         self.target_critic = copy.deepcopy(self.critic).requires_grad_(False)
-        self.value = EnsembleV(obs_dim, num_vs=num_vs, hidden_dims=hidden_dims,
-                               use_layer_norm=critic_layer_norm).to(self.device)
+        self.value = wrap(EnsembleV(d, num_vs=num_vs, hidden_dims=hidden_dims,
+                                    use_layer_norm=critic_layer_norm))
         self.target_value = copy.deepcopy(self.value).requires_grad_(False)
         self.actor_opt = torch.optim.Adam(self.actor.parameters(), lr=actor_lr)
         self.critic_opt = torch.optim.Adam(self.critic.parameters(), lr=critic_lr)

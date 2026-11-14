@@ -159,6 +159,12 @@ def main():
     ap.add_argument("--updates", type=int, default=20000)
     ap.add_argument("--batch", type=int, default=256)
     ap.add_argument("--num-qs", type=int, default=10)
+    ap.add_argument("--latent", type=int, default=0,
+                    help="compress the observation to N dims first (learner C uses 50); "
+                         "0 = raw, which drowns the action at 2 of 3,267 inputs")
+    ap.add_argument("--obs", choices=("all", "nobinoc"), default="all",
+                    help="nobinoc drops the 3,136 frozen DEBiT dims from the CRITIC "
+                         "(training-only network; the actor keeps them)")
     ap.add_argument("--expectile", type=float, default=0.8)
     ap.add_argument("--temperature", type=float, default=0.1)
     ap.add_argument("--discount", type=float, default=0.99)
@@ -198,12 +204,20 @@ def main():
                       a.threads, nstep=a.nstep, gamma=a.discount)
     print(f"=== embedded in {time.time()-t0:.0f}s", flush=True)
 
+    if a.obs == "nobinoc":
+        h = int(ca["hidden"])
+        for dd in (train, val):
+            for k in ("observations", "next_observations"):
+                dd[k] = torch.cat([dd[k][:, :h], dd[k][:, -1:]], dim=1)
+        print(f"=== dropped the DEBiT block from the critic: obs dim now "
+              f"{train['observations'].shape[1]} ({h} control + 1 speed)", flush=True)
     obs_dim = int(train["observations"].shape[1])
     lr = IQLLearner(obs_dim=obs_dim, action_dim=2, num_qs=a.num_qs, expectile=a.expectile,
                     temperature=a.temperature, discount=a.discount ** a.nstep,
-                    device=str(dev), seed=0)
+                    latent=a.latent, device=str(dev), seed=0)
     print(f"=== IQL obs_dim={obs_dim} num_qs={a.num_qs} expectile={a.expectile} "
-          f"temperature={a.temperature} nstep={a.nstep} discount={a.discount ** a.nstep:.4f}"
+          f"temperature={a.temperature} nstep={a.nstep} latent={a.latent} obs={a.obs}"
+          f" discount={a.discount ** a.nstep:.4f}"
           f" | gate: span>=5% of |Q|, corr>0.3, full-lock<50%", flush=True)
 
     n = train["observations"].shape[0]

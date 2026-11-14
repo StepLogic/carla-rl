@@ -114,6 +114,31 @@ def test_a_full_update_moves_value_actor_and_critic_and_polyaks_the_target_criti
         assert k in info and torch.isfinite(torch.tensor(info[k]))
 
 
+def test_compression_puts_the_action_in_a_small_vector_and_still_trains():
+    """The measured reason this exists: with the raw 3,265-d observation the action is 0.06% of the
+    critic's input, its block L2 is 0.41 against the observation's ~21, and shuffling the action
+    moved Q no more than shuffling two arbitrary observation features (ratio 0.89). Compressed to
+    50 dims the action is 2 of 52. Each head owns its encoder and trains it with its own loss."""
+    lr = _learner(latent=8)
+    head = lr.critic.inner.heads[0][0]                     # the first MLP of the first Q head
+    first_linear = [m for m in head.modules() if isinstance(m, torch.nn.Linear)][0]
+    assert first_linear.in_features == 8 + 2               # latent + action, not 12 + 2
+    enc0 = [p.detach().clone() for p in lr.critic.enc.parameters()]
+    info = lr.update(_batch())
+    assert any(not torch.equal(p, q) for p, q in zip(lr.critic.enc.parameters(), enc0)), \
+        "the critic's loss must train the critic's encoder"
+    for k in ("value_loss", "actor_loss", "critic_loss"):
+        assert torch.isfinite(torch.tensor(info[k]))
+
+
+def test_the_target_critic_carries_its_encoder_and_is_polyaked():
+    lr = _learner(latent=8, tau=0.5)
+    t0 = [p.detach().clone() for p in lr.target_critic.enc.parameters()]
+    lr.update(_batch())
+    assert any(not torch.equal(p, q) for p, q in zip(lr.target_critic.enc.parameters(), t0)), \
+        "the target critic's encoder must move with the Polyak update, not stay frozen"
+
+
 def test_terminal_rows_drop_the_bootstrap():
     """masks = 1 - terminal, FastRLAP's convention: target_q = r + gamma * mask * next_v."""
     lr = _learner()

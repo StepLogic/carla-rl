@@ -421,9 +421,14 @@ def priv_vector(info, mode: int) -> np.ndarray:
 
 
 def lane_step_cost(priv, k: float, ticks: int) -> float:
-    """k * ticks * (|lateral offset m| + |heading error deg| / 10) from a priv_vector row."""
+    """k * ticks * (|lateral offset m| + |heading error deg| / 10) from a priv_vector row.
+
+    INSIDE A JUNCTION ONLY THE OFFSET IS CHARGED (2026-11-14): a correct turn has a large heading
+    error against the lane it is leaving, and the first run with this cost (k = 0.5) drifted into
+    slow driving, time-outs and stalls -- at 0.3 m and 5 degrees it charged 0.8 per decision, as much
+    as the progress reward pays at 15 km/h. The lane rule forgives junctions; so does this."""
     p = np.asarray(priv, np.float32).reshape(-1)
-    head = abs(float(np.degrees(np.arctan2(p[2], p[3]))))
+    head = 0.0 if float(p[11]) > 0.5 else abs(float(np.degrees(np.arctan2(p[2], p[3]))))
     return float(k) * int(ticks) * (min(abs(float(p[0])), 3.0) + min(head, 90.0) / 10.0)
 
 
@@ -958,7 +963,10 @@ RESUME_MAY_DIFFER = ("max_steps", "ckpt_every", "log_every", "device", "replay_d
                      "resume", "seed", "expert", "batched_heads", "resume_new_actor",
                      # the stream's PATH (its identity is the checkpoint's c0_md5, checked below) and
                      # the warm-up, which a resumed learner is past
-                     "control", "iql_pretrain")
+                     "control", "iql_pretrain",
+                     # the lane cost's weight: a reward change the user makes on a running policy
+                     # (2026-11-14: "restart with current weights locally")
+                     "lane_step_cost")
 
 
 def restore_learner(learner, ckpt_dir: str, s: LoopSettings, c0_dir: str) -> int:

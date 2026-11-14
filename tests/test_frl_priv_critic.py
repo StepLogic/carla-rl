@@ -126,3 +126,14 @@ def test_the_wrapped_trunk_adds_the_true_state_of_the_row_it_is_stepping():
     assert float(o2["priv"][0, 0]) == pytest.approx(-0.2) and float(o2["priv"][0, fc.LANE_PRIV_DIM + 4]) == 0.0
     with pytest.raises(RuntimeError):
         fc.PrivObs(_Trunk()).step(np.zeros(1), 0)
+
+
+def test_inside_a_junction_the_lane_cost_charges_the_offset_but_not_the_heading():
+    """A correct turn has a large heading error against the lane it is leaving. Charging it made the
+    first run slow down and time out; the lane rule forgives junctions and so does the cost."""
+    info = _info(lat=0.3, head_deg=40.0)
+    on_lane = fc.lane_step_cost(fc.priv_vector(info, 0), 0.1, 2)
+    info["lane_priv"][11] = 1.0                                   # the waypoint is inside a junction
+    in_junction = fc.lane_step_cost(fc.priv_vector(info, 0), 0.1, 2)
+    assert on_lane == pytest.approx(0.1 * 2 * (0.3 + 4.0), abs=1e-4)
+    assert in_junction == pytest.approx(0.1 * 2 * 0.3, abs=1e-4)

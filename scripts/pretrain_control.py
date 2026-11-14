@@ -61,9 +61,19 @@ MAX_OFFSET_M = 3.0
 MAX_HEADING_DEG = 90.0
 
 
-def load_shard(path, lanes_cache, xodr_dir):
+def load_shard(path, lanes_cache, xodr_dir, labels=True):
+    """One shard -> the arrays chunk_from_episode wants. labels=False skips the OpenDRIVE queries
+    (the IQL stage needs frames, actions, speed and rewards but no lane geometry) and returns zeroed
+    label columns with an all-False valid mask, so nothing downstream can mistake them for labels."""
     z = np.load(path)
     town = str(z["town"]) if "town" in z.files else os.path.basename(os.path.dirname(path))
+    if not labels:
+        n_act = int(z["act_label"].shape[0])
+        zeros = np.zeros(n_act + 1, np.float32)
+        return {"frames": z["frames"], "act_label": z["act_label"],
+                "speed": np.asarray(z["speed"], np.float32), "offset": zeros,
+                "heading_err": zeros, "valid": np.zeros(n_act, bool), "town": town,
+                "n_act": n_act}
     if town not in lanes_cache:
         lanes_cache[town] = ll.OpenDriveLanes(town, xodr_dir=xodr_dir)
     lab = ll.episode_labels(z["pos"], lanes_cache[town])

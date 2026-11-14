@@ -76,30 +76,41 @@ def nstep_rows(actions: np.ndarray, rewards: np.ndarray, terminal_at_end: bool, 
     return {"starts": starts, "nexts": nexts, "actions": act, "rewards": rew, "masks": masks}
 
 
-def stack_frames(frames: np.ndarray, t: int, n_frames: int) -> np.ndarray:
-    """The n_frames frames ending at t, channels-first, OLDEST FIRST: (3 * n_frames, H, W).
+def stack_frames(frames: np.ndarray, t: int, n_frames: int, stride: int = 1) -> np.ndarray:
+    """The n_frames frames ending at t, `stride` ticks apart, channels-first, OLDEST FIRST:
+    (3 * n_frames, H, W).
 
-    At the start of an episode there is no frame -1, so the oldest available frame is repeated.
+    STRIDE MUST MATCH THE DECISION RATE. With ACTION_REPEAT=k the policy only sees frames at
+    decision boundaries, k ticks apart, so a stream pretrained on CONSECUTIVE frames would be fed
+    8x the apparent motion at k=8 -- the same optical flow meaning a different heading rate in
+    training and deployment. It also helps: a wider baseline makes heading easier to read (the
+    2026-11-09 probe gives heading R^2 0.042 from one frame and 0.317 from two consecutive ones).
+
+    At the start of an episode there is no frame -stride, so the oldest available frame is repeated.
     Nothing outside this episode's array can ever enter the stack, which is what keeps the
     between-frame motion -- the heading signal the stack exists for -- honest.
     """
-    idx = [max(0, t - k) for k in range(int(n_frames) - 1, -1, -1)]
+    s = max(1, int(stride))
+    idx = [max(0, t - k * s) for k in range(int(n_frames) - 1, -1, -1)]
     return np.concatenate([frames[i].transpose(2, 0, 1) for i in idx], axis=0)
 
 
 def chunk_from_episode(ep: Dict[str, np.ndarray], start: int, length: int,
-                       n_frames: int = 1) -> Dict[str, np.ndarray]:
+                       n_frames: int = 1, stride: int = 1) -> Dict[str, np.ndarray]:
     """`length` consecutive steps of one episode from `start`, ready for the GRU.
 
     Step k of the chunk is frame (start + k), the action taken FROM that frame, the speed at it, and
-    its lane labels. Raises ValueError if the window would run past the last action.
+    its lane labels. `stride` is the spacing INSIDE each frame stack and must match the decision
+    rate (ACTION_REPEAT) the policy will run at. Raises ValueError if the window would run past the
+    last action.
     """
     n_act = int(ep["act_label"].shape[0])
     start, length = int(start), int(length)
     if start < 0 or length <= 0 or start + length > n_act:
         raise ValueError(f"chunk [{start}, {start + length}) outside the episode's {n_act} actions")
     sl = slice(start, start + length)
-    frames = np.stack([stack_frames(ep["frames"], t, n_frames) for t in range(start, start + length)])
+    frames = np.stack([stack_frames(ep["frames"], t, n_frames, stride)
+                       for t in range(start, start + length)])
     lane = np.stack([np.asarray(ep["offset"], np.float32)[sl],
                      np.asarray(ep["heading_err"], np.float32)[sl]], axis=-1)
     valid = np.asarray(ep["valid"], bool)[sl].copy()

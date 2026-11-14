@@ -142,6 +142,18 @@ def test_non_finite_labels_are_scrubbed_not_merely_masked():
     assert c["lane"][2, 1] == 0.0 and c["lane"][4, 0] == 0.0        # replaced, not left as nan
 
 
+def test_the_stack_stride_matches_the_decision_rate():
+    """With ACTION_REPEAT=k the policy sees frames k ticks apart, so a stream pretrained on
+    CONSECUTIVE frames would be fed k times the apparent motion at deployment -- the same optical
+    flow meaning a different heading rate. stride makes training and deployment agree."""
+    ep = _episode(t=20)
+    c = chunk_from_episode(ep, start=16, length=1, n_frames=2, stride=8)
+    assert [int(c["frames"][0, i * 3, 0, 0]) for i in range(2)] == [8, 16]     # 8 ticks apart
+    # at the start of an episode the oldest available frame is repeated, never wrapped
+    first = chunk_from_episode(ep, start=2, length=1, n_frames=3, stride=8)
+    assert [int(first["frames"][0, i * 3, 0, 0]) for i in range(3)] == [0, 0, 2]
+
+
 def test_stack_frames_is_channels_first_and_uint8():
     frames = _episode()["frames"]
     out = stack_frames(frames, t=4, n_frames=2)

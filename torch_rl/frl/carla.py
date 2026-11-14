@@ -6,6 +6,9 @@ monocular ResNet and GRU -- runs online, one GRU step per env step from a zero s
 episode start, exactly as GatedRecurrentSAC.act does (and as scripts/probe_c0_features.py built
 the offline cache the steering probe reads). Its output h_t (512) and the env's frozen DEBiT
 binocular vector (3136) are learner C's `embeddings`; [mode, speed] are its `states`.
+With FRL_CONTROL (user 2026-11-14) the frozen trunk is the pretrained CONTROL STREAM instead
+(ControlTrunk: a frame pair one decision apart -> small CNN -> GRU that also takes the speed),
+whose state carries the heading error c0's features lack; the binocular vector is unchanged.
 
 LEARNER. torch_rl.frl.learner.SACLearner, FastRLAP's embeddings mode: each input group through
 its own Dense(50) -> LayerNorm -> tanh (the critic's trained by the critic loss, the actor's by
@@ -82,6 +85,17 @@ class LoopSettings:
     # so the checkpoint's Adam state does not apply. It also lets `actor` differ from the checkpoint's,
     # which the guard otherwise refuses.
     resume_new_actor: int = 0
+    # THE CONTROL STREAM AS THE TRUNK (user 2026-11-14: "Queue online train for best fixes wirh SAC
+    # with expert pinned rows"): a directory holding the pretrained torch_rl.control_cnn.ControlGRU
+    # (params.pt from scripts/pretrain_control.py). Its frozen GRU state replaces c0's in the
+    # embeddings (ControlTrunk); DEBiT's binocular features stay as they are. "" = c0's trunk
+    # (FRL_C0), as every earlier run. The path may differ between machines: the stream's identity is
+    # the md5 of its params.pt, kept in every checkpoint.
+    control: str = ""
+    # IQL updates on the expert rows BEFORE the first online step (user 2026-11-14: "also pretrain
+    # critic with IQL first"; FastRLAP's iql_learner rules, torch_rl.frl.iql.iql_warmup) on this
+    # learner's own critic and actor. 0 = none. Needs an expert replay; a resumed run skips it.
+    iql_pretrain: int = 0
 
     def __post_init__(self):
         if self.expert_mode not in ("update", "pinned"):
@@ -103,6 +117,23 @@ class LoopSettings:
         return cls(**kw)
 
 
+def warm_start_refusals(control: str, actor: str, iql_pretrain: int, expert: str) -> list:
+    """What the control-stream trunk and the IQL warm-up cannot be combined with; [] = fine. Read
+    from the environment before a server starts (frl_refusals) and again from the run's own
+    settings (run_carla)."""
+    out = []
+    if control and actor == "c0":
+        out.append("FRL_ACTOR=c0 with FRL_CONTROL: c0's head reads c0's trunk, not the control "
+                   "stream's features")
+    if int(iql_pretrain or 0) > 0 and not expert:
+        out.append(f"FRL_IQL_PRETRAIN={iql_pretrain} with no FRL_EXPERT: the warm-up learns from "
+                   f"the expert rows")
+    if int(iql_pretrain or 0) > 0 and actor == "c0":
+        out.append(f"FRL_IQL_PRETRAIN={iql_pretrain} with FRL_ACTOR=c0: the warm-up's AWR step needs "
+                   f"the log-probability of a dataset action, which c0's head does not give")
+    return out
+
+
 def frl_refusals(towns, parallel: bool, env=None) -> list:
     """Settings learner C's loop would silently ignore or get wrong; [] = none. Its loop drives
     ONE env at a time -- one env per town, the next town at every episode end (train's
@@ -122,7 +153,8 @@ def frl_refusals(towns, parallel: bool, env=None) -> list:
                    f"noise-free episodes; set 0")
     for k in ("MONO_CHW", "SPEED_OBS"):
         if str(env.get(k, "")).strip() != "1":
-            out.append(f"{k}={env.get(k)}: c0's trunk reads {k}=1 rows")
+            out.append(f"{k}={env.get(k)}: learner C's trunk (c0's, or the control stream) "
+                       f"reads {k}=1 rows")
     if str(env.get("FRL_EXPERT_MODE", "")).strip() == "pinned" and not env.get("FRL_EXPERT"):
         out.append("FRL_EXPERT_MODE=pinned with no FRL_EXPERT: there are no expert rows to pin")
     # LANE-CENTRE SHAPING IS REMOVED FROM THIS ARM (user 2026-11-14: "Ok remove lanshaping then").
@@ -134,6 +166,8 @@ def frl_refusals(towns, parallel: bool, env=None) -> list:
         if float(env.get(k, "0") or 0.0) != 0.0:
             out.append(f"{k}={env[k]}: lane-centre shaping is removed from learner C (potential-"
                        f"based, so it cannot change dQ/da); set {k}=0")
+    out += warm_start_refusals(env.get("FRL_CONTROL") or "", (env.get("FRL_ACTOR") or "frl").strip(),
+                               int(env.get("FRL_IQL_PRETRAIN") or 0), env.get("FRL_EXPERT") or "")
     return out
 
 
@@ -214,6 +248,128 @@ class C0Trunk:
         obs = {"embeddings": torch.cat([s.float(), st[:, self.state_dim:]], dim=-1),
                "states": st[:, :self.state_dim]}
         return obs, hidden
+
+
+class ControlTrunk:
+    """The pretrained CONTROL STREAM (torch_rl.control_cnn.ControlGRU: a frame pair one decision
+    apart -> small CNN -> GRU that also takes the speed; scripts/pretrain_control.py) as learner C's
+    FROZEN trunk, with C0Trunk's interface: row -> {"embeddings": [stream GRU state | DEBiT
+    binocular], "states": [mode, speed]} (user 2026-11-14).
+
+    WHY: c0's features carry lateral offset (R^2 0.70-0.81) but not heading error (0.046), and
+    heading is what a steering action changes; this stream carries both (at one decision per 8
+    ticks, on 8,644 held-out rows: heading 0.66, offset 0.76; the pretraining log's own figure
+    is an 8-batch draw that ranged 0.61-0.81 for heading over its last three checkpoints). DEBiT's
+    binocular vector -- the goal stream -- is passed through untouched, as with c0.
+
+    IT IS FED WHAT PRETRAINING FED IT, each item pinned by tests/test_frl_control_trunk.py:
+      * the frame pair is (the PREVIOUS DECISION's frame, this one), oldest first. At ACTION_REPEAT=k
+        the env hands one frame per decision, k ticks apart, which is the stride the stream was
+        pretrained at -- so the run's k must equal the stream's `repeat` (run_carla and load_policy
+        refuse anything else). The first decision of an episode repeats its own frame, as
+        control_data.stack_frames does at an episode start;
+      * frames area-resized from the row's 128 px to the stream's px;
+      * the speed in km/h: the row holds km/h / SPEED_SCALE_KMH and is multiplied back;
+      * one GRU step per decision from a zero state at every episode start.
+    ONE KNOWN DIFFERENCE FROM PRETRAINING, stated because it cannot be removed here: the speed's
+    tick. scripts/pretrain_control.py paired frame t with the shard's speed[t], which is the speed
+    AFTER tick t (the recorder stores it with frame t+1; torch_rl/expert_data.py), so pretraining
+    read the speed one tick (0.1 s) AHEAD of its frame. The env can only give the speed at the
+    frame, and embed_ticks takes the same (kmh[f] = the speed when frame f was taken): recorded
+    and online rows agree with each other, and both differ from pretraining by that one tick.
+    Measured 2026-11-14 on the same held-out chunks under both pairings: offset R^2 0.759 vs 0.757,
+    heading 0.663 vs 0.663, the GRU state moved by 2.2% of its sd -- so the stream was not retrained.
+    The hidden is (GRU state, the previous decision's frame at px or None); the loops and the eval
+    harness only reset it and pass it back.
+
+    FROZEN, and that is a limit to state rather than a detail: the replay holds its features, so the
+    critic trains the 50-d compression AFTER the stream but never the stream itself.
+    """
+
+    def __init__(self, ckpt_dir: str, device):
+        from torch_rl import pixel_rows as pxr
+        from torch_rl.control_cnn import ControlGRU
+        if not (pxr.MONO_CHW and pxr.SPEED_OBS) or pxr.n_extra_state() != 1:
+            raise ValueError("ControlTrunk reads [frame (3, s, s) | mode | speed | binoc] rows: "
+                             "MONO_CHW=1 and SPEED_OBS=1, no PRIV_OBS")
+        # tensors, strings and numbers only (scripts/pretrain_control.py), so no pickled code is run
+        ck = torch.load(os.path.join(ckpt_dir, "params.pt"), map_location="cpu", weights_only=True)
+        a = ck["args"]
+        self.n_frames, self.px = int(a["n_frames"]), int(a["px"])
+        self.repeat = int(a.get("repeat", 1))      # ticks per GRU step and inside the frame pair
+        if self.n_frames not in (1, 2):
+            raise ValueError(f"ControlTrunk carries ONE previous frame; this stream was pretrained "
+                             f"with n_frames={self.n_frames}")
+        self.device = torch.device(device)
+        self.net = ControlGRU(latent_dim=int(a["latent"]), hidden_dim=int(a["hidden"]), px=self.px,
+                              n_frames=self.n_frames).to(self.device)
+        self.net.load_state_dict(ck["net"])        # strict: every module
+        self.net.eval()
+        for p in self.net.parameters():
+            p.requires_grad_(False)
+        self.c0_dir = ckpt_dir                     # the trunk's identity, as C0Trunk's (params_md5)
+        self.hidden_dim = int(a["hidden"])
+        self.binoc_dim = int(pxr.BINOC_DIM)
+        self.state_dim = 2                         # [mode, speed / SPEED_SCALE_KMH], as c0's
+        self.emb_dim = self.hidden_dim + self.binoc_dim
+        self._img, self._pix = int(pxr.MONO_IMG), int(pxr.MONO_PIX)
+        self._kmh = float(pxr.SPEED_SCALE_KMH)
+        self._row = self._pix + self.state_dim + self.binoc_dim
+
+    def zero_hidden(self):
+        """(GRU state, the previous decision's frame): zeros and None -- a new episode has neither."""
+        return (self.net.reset_hidden(1, self.device), None)
+
+    def _small(self, x: torch.Tensor) -> torch.Tensor:
+        if x.shape[-1] != self.px or x.shape[-2] != self.px:     # as scripts/pretrain_control.batch
+            x = torch.nn.functional.interpolate(x, size=(self.px, self.px), mode="area")
+        return x
+
+    @torch.no_grad()
+    def step(self, row, hidden):
+        r = torch.as_tensor(np.asarray(row, np.float32), device=self.device).reshape(-1)
+        if r.numel() != self._row:
+            raise ValueError(f"ControlTrunk expects a [frame | mode | speed | binoc] row of "
+                             f"{self._row} values, got {r.numel()}")
+        P, I = self._pix, self._img
+        cur = self._small(r[:P].reshape(1, 3, I, I))            # the row stores the frame / 255, CHW
+        st, binoc = r[P:P + 2], r[P + 2:]
+        h, prev = hidden
+        x = cur if self.n_frames == 1 else torch.cat([cur if prev is None else prev, cur], dim=1)
+        out, h = self.net(x, (st[1:2] * self._kmh).reshape(1, 1), h)      # the stream reads km/h
+        obs = {"embeddings": torch.cat([out.float(), binoc[None]], dim=-1), "states": st[None]}
+        return obs, (h, cur)
+
+    @torch.no_grad()
+    def embed_ticks(self, frames, binoc, mode, kmh, ticks):
+        """The same features for RECORDED frames (the expert rows, torch_rl/frl/expert.py): one GRU
+        step per tick in `ticks`, in order, from a zero state; each frame pair is
+        control_data.stack_frames(frames, t, n_frames, repeat) -- what pretraining fed, including its
+        clamp to frame 0 for a tick less than `repeat` into the episode. frames (N, 128, 128, 3)
+        uint8 as the recorder stores them; kmh[f] = the speed when frame f was taken; binoc[f] its
+        DEBiT vector. -> (embeddings (n, emb_dim), states (n, 2)), float32 numpy.
+
+        For ticks 0, k, 2k, ... this equals step() on the rows the env would hand over for the same
+        frames (pinned by test): recorded and online rows are ONE function of the frames."""
+        from torch_rl.control_data import stack_frames
+        if tuple(np.shape(frames)[1:]) != (self._img, self._img, 3):
+            raise ValueError(f"recorded frames {np.shape(frames)} are not (N, {self._img}, "
+                             f"{self._img}, 3): the env's rows hold {self._img} px frames")
+        h = self.net.reset_hidden(1, self.device)
+        embs, states = [], []
+        for t in (int(t) for t in ticks):
+            x = torch.from_numpy(stack_frames(frames, t, self.n_frames, self.repeat)[None])
+            x = self._small(x.to(self.device).float() / 255.0)
+            # the speed as a row carries it (float32 km/h / scale), multiplied back as step() does
+            sp = torch.tensor([float(kmh[t]) / self._kmh], dtype=torch.float32, device=self.device)
+            out, h = self.net(x, (sp * self._kmh).reshape(1, 1), h)
+            b = torch.as_tensor(np.asarray(binoc[t], np.float32).reshape(-1), device=self.device)
+            embs.append(torch.cat([out[0].float(), b]))
+            states.append(torch.cat([torch.tensor([float(mode)], device=self.device), sp]))
+        if not embs:
+            return (np.zeros((0, self.emb_dim), np.float32),
+                    np.zeros((0, self.state_dim), np.float32))
+        return torch.stack(embs).cpu().numpy(), torch.stack(states).cpu().numpy()
 
 
 class FeatureReplay:
@@ -335,7 +491,8 @@ def critic_only_update(learner, batch: Dict, utd: int) -> Dict:
 
 class FrlC0Policy:
     """Learner C's actor behind c0's frozen trunk, with GatedRecurrentSAC's acting API, so
-    train_carla_sac.run_eval drives it unchanged. The hidden is c0's GRU state."""
+    train_carla_sac.run_eval drives it unchanged. The hidden is the trunk's: c0's GRU state, or
+    the control stream's (GRU state, previous frame) -- opaque to the harness either way."""
 
     def __init__(self, trunk: C0Trunk, actor):
         self.trunk, self.actor = trunk, actor
@@ -386,15 +543,26 @@ def is_frl_checkpoint(d: str) -> bool:
 def load_policy(d: str, device) -> FrlC0Policy:
     with open(os.path.join(d, "config.json")) as fh:
         meta = json.load(fh)
-    # THE TRUNK IS PART OF THE POLICY: the actor was trained on THIS c0's features. FRL_C0 may
-    # only point at the same trunk elsewhere (e.g. another machine's copy), checked by md5.
-    c0 = os.environ.get("FRL_C0") or meta["c0"]
+    # THE TRUNK IS PART OF THE POLICY: the actor was trained on THIS trunk's features -- c0's, or
+    # the control stream's when the checkpoint's settings name one. FRL_C0 / FRL_CONTROL may only
+    # point at the same trunk elsewhere (e.g. another machine's copy), checked by md5.
+    control = bool((meta.get("settings") or {}).get("control"))
+    kind = "control stream" if control else "c0 trunk"
+    c0 = os.environ.get("FRL_CONTROL" if control else "FRL_C0") or meta["c0"]
     if params_md5(c0) != meta["c0_md5"]:
-        raise ValueError(f"c0 trunk {c0} (md5 {params_md5(c0)}) is not the one this checkpoint "
+        raise ValueError(f"{kind} {c0} (md5 {params_md5(c0)}) is not the one this checkpoint "
                          f"was trained on ({meta['c0']}, md5 {meta['c0_md5']})")
-    trunk = C0Trunk(c0, device)
+    trunk = ControlTrunk(c0, device) if control else C0Trunk(c0, device)
+    if control:
+        # A policy trained at one decision per k ticks, driven at another rate, would be handed
+        # frame pairs at the wrong spacing and nothing would look wrong -- so it is refused.
+        from torch_rl.carla_env_build import action_repeat
+        if trunk.repeat != action_repeat():
+            raise ValueError(f"{d} was trained on a control stream that decides once per "
+                             f"{trunk.repeat} ticks; this env acts at ACTION_REPEAT="
+                             f"{action_repeat()}")
     if (trunk.emb_dim, trunk.state_dim) != (meta["emb_dim"], meta["state_dim"]):
-        raise ValueError(f"c0 trunk dims {(trunk.emb_dim, trunk.state_dim)} != the "
+        raise ValueError(f"{kind} dims {(trunk.emb_dim, trunk.state_dim)} != the "
                          f"checkpoint's {(meta['emb_dim'], meta['state_dim'])}")
     learner = make_learner(meta["emb_dim"], meta["state_dim"], meta["action_dim"], device,
                            actor=meta.get("actor", "frl"), trunk=trunk)
@@ -433,6 +601,31 @@ class SteerProbe:
 
 def _mode(obs) -> int:
     return int(round(float(np.asarray(obs["mode"]).ravel()[0])))
+
+
+def _iql_warm_up(learner, expert, s: LoopSettings, log: Callable, resumed: bool = False) -> None:
+    """LoopSettings.iql_pretrain: IQL on the expert rows BEFORE the first env step (user 2026-11-14:
+    "also pretrain critic with IQL first"). torch_rl.frl.iql.iql_warmup applies FastRLAP's IQL rules
+    to the learner's OWN critic and actor, so the SAC loop simply continues with them; the
+    temperature is not touched (recorded rows never tune it). A resumed learner is already past it.
+    With no expert rows it is an error, never a silent skip."""
+    if not s.iql_pretrain:
+        return
+    if resumed:
+        log(f"[IQL] warm-up skipped: the resumed learner is past it (iql_pretrain="
+            f"{s.iql_pretrain})")
+        return
+    if expert is None:
+        raise ValueError(f"iql_pretrain={s.iql_pretrain} needs an expert replay (FRL_EXPERT): the "
+                         f"warm-up learns from the expert rows")
+    from torch_rl.frl.iql import iql_warmup
+    t0 = time.time()
+    log(f"[IQL] warm-up: {s.iql_pretrain} updates on batches of {s.batch} of the {len(expert)} "
+        f"expert rows, before the first env step")
+    info = iql_warmup(learner, lambda: expert.sample(s.batch), s.iql_pretrain, log=log)
+    log(f"[IQL] warm-up done in {time.time() - t0:.0f} s"
+        + "".join(f" {k}={v:.4g}" for k, v in sorted((info or {}).items())
+                  if isinstance(v, (int, float))))
 
 
 def train(env, obs, info, out: str, *, trunk: C0Trunk, row_of: Callable, settings: LoopSettings,
@@ -486,6 +679,7 @@ def train(env, obs, info, out: str, *, trunk: C0Trunk, row_of: Callable, setting
     # pinned: the expert rows sit in THIS replay (never overwritten) and there is no second update
     rb = FeatureReplay(s.replay, trunk.emb_dim, trunk.state_dim, act_dim,
                        s.replay_device or s.device, s.seed, pinned=expert.t if pinned else None)
+    _iql_warm_up(learner, expert, s, log)        # before the seeds below: the loop's streams unchanged
     rng = np.random.default_rng(s.seed)
     torch.manual_seed(s.seed)
     hidden = trunk.zero_hidden()
@@ -619,7 +813,10 @@ def _learn_step(learner, rb, expert, pinned: bool, s: LoopSettings, step: int) -
 # Settings a resumed run may change: run length and cadence, devices, the loop, the resume itself (and
 # the seed, whose streams cannot be continued anyway). Every other LoopSettings field must match.
 RESUME_MAY_DIFFER = ("max_steps", "ckpt_every", "log_every", "device", "replay_device", "parallel",
-                     "resume", "seed", "expert", "batched_heads", "resume_new_actor")
+                     "resume", "seed", "expert", "batched_heads", "resume_new_actor",
+                     # the stream's PATH (its identity is the checkpoint's c0_md5, checked below) and
+                     # the warm-up, which a resumed learner is past
+                     "control", "iql_pretrain")
 
 
 def restore_learner(learner, ckpt_dir: str, s: LoopSettings, c0_dir: str) -> int:
@@ -635,8 +832,8 @@ def restore_learner(learner, ckpt_dir: str, s: LoopSettings, c0_dir: str) -> int
     if meta.get("learner") != "frl":
         raise ValueError(f"{ckpt_dir} is not a learner-C checkpoint")
     if meta["c0_md5"] != params_md5(c0_dir):
-        raise ValueError(f"{ckpt_dir} was trained on c0 md5 {meta['c0_md5']}; this trunk is "
-                         f"{params_md5(c0_dir)}")
+        raise ValueError(f"{ckpt_dir} was trained on trunk md5 {meta['c0_md5']} (c0's, or the "
+                         f"control stream's); this trunk is {params_md5(c0_dir)}")
     redq = {k: list(v) if isinstance(v, tuple) else v for k, v in REDQ.items()}
     if meta.get("redq") != redq or meta.get("latent_dim") != LATENT_DIM:
         raise ValueError(f"{ckpt_dir}: networks {meta.get('redq')} latent {meta.get('latent_dim')} "
@@ -719,6 +916,7 @@ def train_parallel(env, obs, info, out: str, *, trunk: C0Trunk, row_of: Callable
     rb = FeatureReplay(s.replay, trunk.emb_dim, trunk.state_dim, act_dim,
                        s.replay_device or s.device, s.seed + start,
                        pinned=expert.t if pinned else None)
+    _iql_warm_up(learner, expert, s, log, resumed=bool(s.resume))
     rng = np.random.default_rng(s.seed + start)
     torch.manual_seed(s.seed + start)
     pool = ThreadPoolExecutor(max_workers=n)
@@ -857,12 +1055,24 @@ def run_carla(env, obs, info, server, out: str, *, row_of: Callable, to_env: Cal
     The junction curriculum starts HERE, and the first episode is drawn again under it.
     `extra_envs`/`extra_servers`/`towns`: more towns, one env and one server each (train)."""
     s = LoopSettings.from_env()
-    c0_dir = os.environ.get("FRL_C0", "")
-    if not c0_dir:
-        raise SystemExit("LEARNER=frl needs FRL_C0: c0's checkpoint directory (frozen trunk)")
-    os.makedirs(out, exist_ok=True)
-    trunk = C0Trunk(c0_dir, s.device)
+    bad = warm_start_refusals(s.control, s.actor, s.iql_pretrain, s.expert)
+    if bad:
+        raise SystemExit("LEARNER=frl refuses these settings -- " + "; ".join(bad))
     cache = os.environ.get("FRL_PROBE_CACHE", "")
+    if s.control:
+        from torch_rl.carla_env_build import action_repeat as _repeat
+        trunk = ControlTrunk(s.control, s.device)
+        c0_dir = s.control            # the trunk's identity from here on: md5, checkpoints, resume
+        if trunk.repeat != _repeat():
+            raise SystemExit(f"FRL_CONTROL {s.control} was pretrained at one decision per "
+                             f"{trunk.repeat} ticks; this run acts at ACTION_REPEAT={_repeat()}")
+        cache = ""                    # the steering probe's cache holds c0's features
+    else:
+        c0_dir = os.environ.get("FRL_C0", "")
+        if not c0_dir:
+            raise SystemExit("LEARNER=frl needs FRL_C0: c0's checkpoint directory (frozen trunk)")
+        trunk = C0Trunk(c0_dir, s.device)
+    os.makedirs(out, exist_ok=True)
     probe = SteerProbe(cache, s.device) if cache else None
     box = env.action_space
     expert = None
@@ -874,20 +1084,31 @@ def run_carla(env, obs, info, server, out: str, *, row_of: Callable, to_env: Cal
             raise SystemExit(f"FRL_EXPERT {s.expert} was built at action repeat {expert.k}; this run "
                              f"acts at ACTION_REPEAT={action_repeat()}")
         if expert.c0_md5 != params_md5(c0_dir):
-            raise SystemExit(f"FRL_EXPERT {s.expert} was built on c0 md5 {expert.c0_md5}; this run's "
-                             f"trunk is {params_md5(c0_dir)}")
+            raise SystemExit(f"FRL_EXPERT {s.expert} was built on trunk md5 {expert.c0_md5}; this "
+                             f"run's trunk ({'the control stream' if s.control else 'c0'}) is "
+                             f"{params_md5(c0_dir)}")
     ramp = make_ramp()
     if ramp is not None:
         obs, info = env.reset()       # main drew the first goal at the target fraction
     e = os.environ.get
     log(f"=== [{e('RUN_NAME')}] preflight: LEARNER C (FastRLAP SACLearner, embeddings mode) ===")
-    log(f"  front end: c0 FROZEN trunk {c0_dir} -> embeddings [GRU {trunk.hidden_dim} | binoc "
+    front = (f"the CONTROL STREAM (pretrained ControlGRU: {trunk.n_frames} frame(s) {trunk.repeat} "
+             f"ticks apart at {trunk.px} px, one GRU step per decision), FROZEN," if s.control
+             else "c0 FROZEN trunk")
+    log(f"  front end: {front} {c0_dir} -> embeddings [GRU {trunk.hidden_dim} | binoc "
         f"{trunk.binoc_dim}] = {trunk.emb_dim}-d, states [mode, speed] = {trunk.state_dim}-d; "
         f"each -> Dense({LATENT_DIM}) -> LayerNorm -> tanh (critic's trained by the critic)")
-    log(f"  learner: {REDQ} latent {LATENT_DIM}; actor/critics/temperature FROM SCRATCH")
+    log(f"  learner: {REDQ} latent {LATENT_DIM}; "
+        + ("actor and critics FROM THE IQL WARM-UP, temperature from scratch" if s.iql_pretrain
+           else "actor/critics/temperature FROM SCRATCH"))
+    log(f"  IQL WARM-UP: {s.iql_pretrain} updates on the expert rows before the first env step "
+        f"(FastRLAP's IQL rules on this learner's own critic and actor, with its own optimizers; "
+        f"the temperature untouched; skipped on resume)" if s.iql_pretrain
+        else "  IQL WARM-UP: off")
     log(f"  loop: {dataclasses.asdict(s)}; random actions for steps < {s.start_training}; one "
         f"update of {s.batch} split into {s.utd} minibatches per step; mask 0 only on "
-        f"termination. NOT used: HER, noise-free episodes, junction curriculum, demos, warm start")
+        f"termination. NOT used: HER, noise-free episodes, junction curriculum, demos"
+        + ("" if s.iql_pretrain else ", warm start"))
     log(f"  env: towns={e('ENV_TOWNS')} port={e('CARLA_PORT')} quality={e('CARLA_QUALITY')} "
         f"offscreen={e('CARLA_OFFSCREEN')} | action box steer [{box.low[0]:+.2f}, "
         f"{box.high[0]:+.2f}] throttle [{box.low[1]:+.2f}, {box.high[1]:+.2f}]")
@@ -898,11 +1119,13 @@ def run_carla(env, obs, info, server, out: str, *, row_of: Callable, to_env: Cal
         f"{e('EXPLORE_LANE_MODE')} off-road fatal={e('EXPLORE_OFF_ROAD_FATAL')}")
     log(f"  {ramp.describe() if ramp is not None else 'JUNCTION RAMP: off'} (episodes the "
         f"random warm-up drove are not counted)")
-    log(f"  c0 trunk md5 {params_md5(c0_dir)} | the gated loop's settings are NOT read: "
+    log(f"  {'control stream' if s.control else 'c0 trunk'} md5 {params_md5(c0_dir)} | the gated "
+        f"loop's settings are NOT read: "
         + " ".join(f"{k}={e(k)}" for k in ("MAX_STEPS", "CKPT_EVERY", "LEARNING_STARTS",
                                            "UPDATE_EVERY", "REPLAY_CAPACITY") if e(k)))
     log(f"  env rebuild on a failed reset: {'on' if rebuild_env else 'OFF'}")
-    log(f"  ACTOR: {'c0 head (trainable copy; the RL policy starts as c0)' if s.actor == 'c0' else 'learner C (from scratch)'}"
+    own = "learner C (from the IQL warm-up)" if s.iql_pretrain else "learner C (from scratch)"
+    log(f"  ACTOR: {'c0 head (trainable copy; the RL policy starts as c0)' if s.actor == 'c0' else own}"
         f" | critic-only steps after start_training: {s.actor_freeze} | random start: "
         f"{'on' if s.random_start else 'OFF (the actor drives from step 1)'}")
     how = ({"update": "FastRLAP's second update per step on an expert batch, temperature untouched",

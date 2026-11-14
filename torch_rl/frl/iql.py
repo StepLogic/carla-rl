@@ -21,14 +21,21 @@ critic_lr = value_lr = 3e-4, hidden (256, 256). Two deliberate differences, both
     because that is the benchmark-validated critic this project uses everywhere else;
   * the actor is learner C's TanhNormalActor, not FastRLAP's fixed-std unsquashed Normal, because the
     SAC stage that follows needs a squashed stochastic actor and the whole point is to hand it over.
+
+THE HANDOVER (user 2026-11-14: "also pretrain critic with IQL first"): `iql_warmup` runs these same
+three steps on the SAC learner's OWN critic, target critic and actor (`IQLLearner.on_learner`) before
+its first online step, so there is nothing to copy across afterwards -- and no second IQL to drift
+from this one. Only the networks' weights carry into SAC: the warm-up has its own optimizers, and the
+learner's optimizers, temperature and entropy target are left exactly as they were built.
 """
 import copy
 import math
-from typing import Dict, Sequence
+from typing import Callable, Dict, Optional, Sequence
 
 import torch
 from torch import nn
 
+from torch_rl.frl.learner import _to
 from torch_rl.frl.networks import (MLP, EnsembleQ, TanhNormalActor, _latent, _log1m_tanh_sq,
                                    xavier_)
 
@@ -103,6 +110,43 @@ class EnsembleV(nn.Module):
         return torch.stack([h(obs).squeeze(-1) for h in self.heads], dim=0)
 
 
+class _ActorView(nn.Module):
+    """Learner C's actor (learner._Actor: observation trunk -> TanhNormalActor) as IQLLearner reads
+    an actor: `dist_params` of the OBSERVATION. It wraps the learner's own module -- no copy -- so
+    its parameters are the learner's, and a step through the view is a step on the SAC actor."""
+
+    def __init__(self, actor: nn.Module):
+        super().__init__()
+        if not (hasattr(actor, "trunk") and hasattr(getattr(actor, "pi", None), "dist_params")):
+            raise ValueError(
+                f"IQL on the learner's own networks needs learner C's own actor (observation trunk "
+                f"-> TanhNormalActor, FRL_ACTOR=frl); {type(actor).__name__} gives no "
+                f"log-probability of a dataset action, so the AWR step cannot train it")
+        self.actor = actor
+
+    def dist_params(self, obs):
+        return self.actor.pi.dist_params(self.actor.trunk(obs))
+
+
+class _V(nn.Module):
+    """A state-value ensemble behind its own observation trunk (learner C's observations are a
+    dict that only a Multiplexer reads)."""
+
+    def __init__(self, trunk: nn.Module, v: nn.Module):
+        super().__init__()
+        self.trunk, self.v = trunk, v
+
+    def forward(self, obs) -> torch.Tensor:
+        return self.v(self.trunk(obs))
+
+
+def _to_device(obj, device):
+    """A batch onto the device. Observations may be a dict (learner C's embeddings + states)."""
+    if isinstance(obj, dict):
+        return {k: _to_device(v, device) for k, v in obj.items()}
+    return (obj if torch.is_tensor(obj) else torch.as_tensor(obj)).to(device)
+
+
 class IQLLearner:
     """Offline critic (and actor) pretraining on expert transitions, to hand to SAC."""
 
@@ -136,6 +180,48 @@ class IQLLearner:
         self.actor_opt = torch.optim.Adam(self.actor.parameters(), lr=actor_lr)
         self.critic_opt = torch.optim.Adam(self.critic.parameters(), lr=critic_lr)
         self.value_opt = torch.optim.Adam(self.value.parameters(), lr=value_lr)
+
+    @classmethod
+    def on_learner(cls, learner, *, expectile: float = 0.8, temperature: float = 0.1,
+                   awr_clip: float = 100.0, actor_lr: float = 1e-3, critic_lr: float = 3e-4,
+                   value_lr: float = 3e-4, hidden_dims: Sequence[int] = (256, 256),
+                   num_vs: int = 1) -> "IQLLearner":
+        """THIS class's three steps on a SAC learner's OWN networks (torch_rl.frl.learner.SACLearner,
+        learner C). Nothing is built here except the value net, so the rules that run are the ones
+        pinned by tests/test_frl_iql.py and used by every offline critic measurement:
+
+          * critic and target critic: the learner's own objects. V's target and the AWR advantage
+            are therefore the min over ALL its target heads -- REDQ's subset (num_min_qs) belongs to
+            the SAC target and is not drawn here;
+          * actor: the learner's own, through a view that gives log pi of a dataset action;
+          * value: new, behind ITS OWN copy of the critic's observation trunk (so the critic's
+            compression is shaped by the critic loss alone, as with `Compressed`), with LayerNorm
+            iff the critic's heads have it;
+          * discount and tau: the learner's;
+          * optimizers: NEW ones, at FastRLAP's IQL rates. The learner's own actor, critic and
+            temperature optimizers, its temperature and its entropy target are never touched, so
+            the SAC stage starts as if IQL-pretrained weights had been loaded into a fresh learner.
+        """
+        self = cls.__new__(cls)
+        self.device = learner.device
+        self.expectile, self.temperature = float(expectile), float(temperature)
+        self.discount, self.tau = float(learner.discount), float(learner.tau)
+        self.awr_clip = float(awr_clip)
+        self.latent = 0
+        self.actor = _ActorView(learner.actor)
+        self.critic, self.target_critic = learner.critic, learner.target_critic
+        # what a Q head reads besides the action: the trunk's output (or the raw state)
+        first = next(m for m in learner.critic.q.modules() if isinstance(m, nn.Linear))
+        in_dim = int(first.in_features) - int(learner.action_dim)
+        layer_norm = any(isinstance(m, nn.LayerNorm) for m in learner.critic.q.modules())
+        self.value = _V(copy.deepcopy(learner.critic.trunk),
+                        EnsembleV(in_dim, num_vs=num_vs, hidden_dims=hidden_dims,
+                                  use_layer_norm=layer_norm)).to(self.device)
+        self.target_value = copy.deepcopy(self.value).requires_grad_(False)
+        self.actor_opt = torch.optim.Adam(self.actor.parameters(), lr=actor_lr)
+        self.critic_opt = torch.optim.Adam(self.critic.parameters(), lr=critic_lr)
+        self.value_opt = torch.optim.Adam(self.value.parameters(), lr=value_lr)
+        return self
 
     # ---- the three steps, in FastRLAP's order ----------------------------------------------------
 
@@ -191,9 +277,8 @@ class IQLLearner:
                 "critic_loss_per_head": float(per_head.mean().detach()),
                 "target_q_mean": float(target_q.mean())}
 
-    def update(self, b: Dict[str, torch.Tensor]) -> Dict[str, float]:
-        b = {k: (v if torch.is_tensor(v) else torch.as_tensor(v)).to(self.device)
-             for k, v in b.items()}
+    def update(self, b: Dict) -> Dict[str, float]:
+        b = _to_device(b, self.device)
         info = {}
         info.update(self.update_v(b))
         info.update(self.update_actor(b))
@@ -221,3 +306,44 @@ class IQLLearner:
         with torch.no_grad():
             o = obs.unsqueeze(0).expand(actions.shape[0], -1)
             return self.critic(o, actions).min(dim=0).values
+
+
+def iql_warmup(learner, sample: Callable[[], Dict], updates: int, *, expectile: float = 0.8,
+               temperature: float = 0.1, awr_clip: float = 100.0, actor_lr: float = 1e-3,
+               critic_lr: float = 3e-4, value_lr: float = 3e-4,
+               hidden_dims: Sequence[int] = (256, 256),
+               log: Optional[Callable[[str], None]] = None, log_every: int = 5000
+               ) -> Dict[str, float]:
+    """`updates` IQL updates on learner C's OWN critic, target critic and actor from recorded rows,
+    BEFORE its first online step (user 2026-11-14: "also pretrain critic with IQL first").
+
+    Each update is IQLLearner.update on IQLLearner.on_learner(learner) -- V, then the actor, then
+    Q, by FastRLAP's rules -- so nothing is handed over afterwards: the SAC loop simply continues
+    on the same networks. What does NOT carry over is optimizer state: the learner's own
+    optimizers, temperature and entropy target are untouched (recorded rows never tune the
+    temperature, user rule 2026-11-07), and the value net and the warm-up's three optimizers are
+    discarded on return.
+
+    `sample()` -> a batch in the replay's format ({"observations": {...}, "next_observations":
+    {...}, "actions", "rewards", "masks"}, as FeatureReplay and ExpertReplay give it). Returns the
+    last update's info. With `log`, a line "[IQL] u=<u>/<n> key=value ..." goes to it every
+    `log_every` updates and at the end. updates <= 0 does nothing and returns {}.
+    """
+    n = int(updates)
+    if n <= 0:
+        return {}
+    iql = IQLLearner.on_learner(learner, expectile=expectile, temperature=temperature,
+                                awr_clip=awr_clip, actor_lr=actor_lr, critic_lr=critic_lr,
+                                value_lr=value_lr, hidden_dims=hidden_dims)
+    every = max(1, int(log_every))
+    info: Dict[str, float] = {}
+    for u in range(1, n + 1):
+        b = _to(sample(), learner.device)
+        for key in ("actions", "rewards", "masks"):   # float32, as learner C reads them
+            b[key] = b[key].float()
+        info = iql.update(b)
+        if log is not None and (u % every == 0 or u == n):
+            log(f"[IQL] u={u}/{n} " + " ".join(f"{k}={v:.4g}" for k, v in info.items()))
+    for opt in (iql.actor_opt, iql.critic_opt):           # no gradient outlives the warm-up
+        opt.zero_grad(set_to_none=True)
+    return info

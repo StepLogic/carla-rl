@@ -125,6 +125,15 @@ def frl_refusals(towns, parallel: bool, env=None) -> list:
             out.append(f"{k}={env.get(k)}: c0's trunk reads {k}=1 rows")
     if str(env.get("FRL_EXPERT_MODE", "")).strip() == "pinned" and not env.get("FRL_EXPERT"):
         out.append("FRL_EXPERT_MODE=pinned with no FRL_EXPERT: there are no expert rows to pin")
+    # LANE-CENTRE SHAPING IS REMOVED FROM THIS ARM (user 2026-11-14: "Ok remove lanshaping then").
+    # It is potential-based, so Q_shaped(s, a) = Q(s, a) - Phi(s): a function of the state alone,
+    # which leaves dQ/da -- the only thing SAC's actor follows -- unchanged exactly. Job 466411 ran
+    # it for 65k steps and metres per fault stayed at 56 / 55 (66 / 45 before) while strict success
+    # fell 49/80 -> 43/80. Every learner-C overlay inherits 0 from slurm/v26_overlay.env.
+    for k in ("LANE_CENTRE_K", "LANE_HEADING_K"):
+        if float(env.get(k, "0") or 0.0) != 0.0:
+            out.append(f"{k}={env[k]}: lane-centre shaping is removed from learner C (potential-"
+                       f"based, so it cannot change dQ/da); set {k}=0")
     return out
 
 

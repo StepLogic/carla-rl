@@ -86,9 +86,15 @@ class ControlGRU(nn.Module):
     """
 
     def __init__(self, latent_dim: int = 50, hidden_dim: int = 64, px: int = 84,
-                 state_dim: int = 1, in_channels: int = 3):
+                 state_dim: int = 1, n_frames: int = 1, in_channels: int = 3):
         super().__init__()
-        self.cnn = ControlCNN(latent_dim=latent_dim, px=px, in_channels=in_channels)
+        # n_frames > 1 (user 2026-11-13 "ok stack images"): the last n frames concatenated on the
+        # channel axis, DrQ's layout. Heading is visible only as motion BETWEEN frames -- raw-pixel
+        # R^2 0.042 from one frame, 0.317 from two -- so random_shift applies ONE shift per sample
+        # across the whole stack; a per-frame shift would fabricate motion.
+        self.n_frames = int(n_frames)
+        self.cnn = ControlCNN(latent_dim=latent_dim, px=px,
+                              in_channels=int(in_channels) * self.n_frames)
         self.gru = nn.GRUCell(latent_dim + int(state_dim), hidden_dim)
         self.act_head = nn.Linear(hidden_dim, 2)          # steer, throttle (tanh-bounded)
         self.lane_head = nn.Linear(hidden_dim, 2)         # offset (m), heading error (deg)

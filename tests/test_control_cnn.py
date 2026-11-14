@@ -81,6 +81,26 @@ def test_the_heads_give_an_action_and_the_lane_geometry():
     assert aux.shape == (4, 2) and torch.isfinite(aux).all()  # offset (m), heading error (deg)
 
 
+def test_a_frame_stack_goes_in_on_the_channel_axis():
+    """user 2026-11-13 "ok stack images": N frames concatenated as channels, DrQ's layout."""
+    net = ControlGRU(latent_dim=50, hidden_dim=64, n_frames=3)
+    stack = torch.randint(0, 256, (2, 9, 84, 84), dtype=torch.uint8)
+    out, _ = net(stack, torch.zeros(2, 1), net.reset_hidden(2))
+    assert out.shape == (2, 64)
+    assert net.cnn.conv[0].in_channels == 9
+
+
+def test_one_shift_is_shared_by_every_frame_in_the_stack():
+    """THE PROPERTY THAT MATTERS: heading is visible only as motion BETWEEN the stacked frames, so
+    the crop must be the same for all of them. Two identical frames must stay identical after the
+    shift; a per-frame shift would fabricate motion and destroy the signal the stack is there for."""
+    one = torch.randint(0, 256, (5, 3, 84, 84), dtype=torch.uint8).float()
+    stack = torch.cat([one, one], dim=1)                      # frame t == frame t-1
+    shifted = random_shift(stack, pad=4)
+    assert torch.equal(shifted[:, :3], shifted[:, 3:])        # still identical -> one crop per sample
+    assert not torch.equal(shifted, stack)                    # and it really did shift
+
+
 def test_it_is_small_enough_to_train_on_one_gpu():
     net = ControlGRU(latent_dim=50, hidden_dim=64)
     n = sum(p.numel() for p in net.parameters())

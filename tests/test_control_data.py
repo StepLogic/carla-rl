@@ -176,3 +176,63 @@ def test_stack_frames_is_channels_first_and_uint8():
     out = stack_frames(frames, t=4, n_frames=2)
     assert out.shape == (6, 8, 8) and out.dtype == np.uint8
     assert [int(out[i * 3, 0, 0]) for i in range(2)] == [3, 4]
+
+
+# ---- how a pretrained stream is judged --------------------------------------------------------------
+
+def test_r2_needs_no_fitting_and_is_zero_for_the_mean():
+    """The first number to quote for a trained head is its OWN prediction against the label on
+    held-out episodes: nothing is fitted, so nothing can be fitted to the test rows."""
+    from torch_rl.control_data import r2_score
+    y = np.array([1.0, 2.0, 3.0, 4.0])
+    assert r2_score(y, y) == 1.0
+    assert abs(r2_score(y, np.full(4, y.mean()))) < 1e-9
+    assert r2_score(y, -y) < 0                                  # worse than the mean is negative
+
+
+def _fingerprint_data(n_ep=30, per=40, dim=64, seed=0):
+    """Features that identify the EPISODE and know nothing else, and a target that varies mostly
+    between episodes -- heading error in the recorded shards: 80% of its variance sat in 3 of the
+    validation episodes."""
+    rng = np.random.default_rng(seed)
+    groups = np.repeat(np.arange(n_ep), per)
+    level = rng.normal(0.0, 5.0, n_ep)
+    y = (level[groups] + rng.normal(0.0, 0.5, n_ep * per))[:, None].astype(np.float32)
+    H = (rng.normal(0.0, 1.0, (n_ep, dim))[groups]
+         + rng.normal(0.0, 0.05, (n_ep * per, dim))).astype(np.float32)
+    return H, y, groups
+
+
+def test_a_probe_must_hold_out_whole_episodes():
+    """THE MISTAKE THIS PINS (2026-11-14). The control stream's "heading R^2 0.81" was a ridge probe
+    fitted and scored on the SAME rows, compared with c0's 0.046 from an episode-grouped CV probe.
+    Held out by episode the stream scored about 0.1. A probe on rows of the same few episodes can
+    memorise the episodes: here the features carry no information about the target beyond WHICH
+    episode a row is from, the in-sample fit is near perfect, and the honest one is worthless."""
+    from torch_rl.control_data import ridge_r2_episode_cv, ridge_r2_in_sample
+    H, y, groups = _fingerprint_data()
+    assert ridge_r2_in_sample(H, y)[0] > 0.9
+    assert ridge_r2_episode_cv(H, y, groups)[0] < 0.1
+
+
+def test_an_episode_held_out_probe_still_finds_what_the_features_carry():
+    """Holding episodes out does not blind the probe: one feature that really tracks the target,
+    among 63 that are noise, is found."""
+    from torch_rl.control_data import ridge_r2_episode_cv
+    _, y, groups = _fingerprint_data()
+    rng = np.random.default_rng(1)
+    H = rng.normal(0.0, 1.0, (len(y), 64)).astype(np.float32)
+    H[:, 0] = y[:, 0] + rng.normal(0.0, 0.5, len(y))                         # the honest feature
+    assert ridge_r2_episode_cv(H, y, groups)[0] > 0.8
+
+
+def test_an_episode_held_out_probe_never_scores_an_episode_it_was_fitted_on():
+    """Every row is predicted exactly once, by a fit that saw none of its episode's rows."""
+    from torch_rl.control_data import episode_folds
+    groups = np.repeat(np.arange(11), 3)
+    folds = episode_folds(groups, 5, seed=0)
+    assert folds.shape == groups.shape and set(folds.tolist()) == set(range(5))
+    for g in range(11):
+        assert len(set(folds[groups == g].tolist())) == 1      # an episode is never split
+    with pytest.raises(ValueError):
+        episode_folds(np.zeros(6, int), 5)                      # one episode cannot be held out

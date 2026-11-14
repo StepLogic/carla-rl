@@ -131,3 +131,92 @@ def chunk_from_episode(ep: Dict[str, np.ndarray], start: int, length: int,
         "lane": lane,                                                  # (L, 2) offset, heading err
         "lane_valid": valid,                                           # (L,)
     }
+
+
+# ---- how a pretrained stream is judged --------------------------------------------------------------
+#
+# THE RULE (2026-11-14, after getting it wrong): a number that says "the features carry X" must come
+# from rows of EPISODES THE FIT NEVER SAW. The first control streams were gated on a ridge probe
+# fitted and scored on the same rows -- "heading R^2 0.81" -- and compared with c0's 0.046 from
+# scripts/probe_c0_features.py, which holds episodes out. Held out by episode the stream scored
+# about 0.1 (its own lane head: 0.10; offset 0.38). Rows of one episode are a few seconds apart, so
+# a few thousand rows from 30-50 episodes are 30-50 samples, and a 129-weight probe memorises them.
+# Quote, in this order: the trained head's own R^2 on held-out episodes (r2_score, nothing fitted),
+# then ridge_r2_episode_cv. ridge_r2_in_sample exists to show the gap, never as evidence.
+
+def r2_score(target, pred) -> float:
+    """1 - SSE / SST of a prediction nobody fitted here. 0 = no better than the mean; negative =
+    worse than it."""
+    y, p = np.asarray(target, np.float64).reshape(-1), np.asarray(pred, np.float64).reshape(-1)
+    sst = float(((y - y.mean()) ** 2).sum())
+    return float(1.0 - ((y - p) ** 2).sum() / sst) if sst > 0 else float("nan")
+
+
+def _ridge_weights(H: np.ndarray, Y: np.ndarray, lam: float) -> np.ndarray:
+    X = np.concatenate([H, np.ones((len(H), 1), H.dtype)], axis=1).astype(np.float64)
+    return np.linalg.solve(X.T @ X + float(lam) * np.eye(X.shape[1]), X.T @ np.asarray(Y, np.float64))
+
+
+def _ridge_predict(H: np.ndarray, W: np.ndarray) -> np.ndarray:
+    return np.concatenate([H, np.ones((len(H), 1), H.dtype)], axis=1).astype(np.float64) @ W
+
+
+def ridge_r2_in_sample(H: np.ndarray, Y: np.ndarray, lam: float = 1.0) -> list:
+    """A ridge probe from features H (N, D) to each column of Y (N, K), FITTED AND SCORED ON THE
+    SAME ROWS. Optimistic by construction; reported only next to ridge_r2_episode_cv."""
+    P = _ridge_predict(H, _ridge_weights(H, Y, lam))
+    return [r2_score(Y[:, k], P[:, k]) for k in range(Y.shape[1])]
+
+
+def episode_folds(groups: np.ndarray, folds: int = 5, seed: int = 0) -> np.ndarray:
+    """A fold number per row such that an episode is never split across folds."""
+    groups = np.asarray(groups)
+    ids = np.unique(groups)
+    if len(ids) < 2:
+        raise ValueError("holding episodes out needs at least two episodes")
+    k = min(int(folds), len(ids))
+    order = np.random.default_rng(seed).permutation(len(ids))
+    fold_of = {ids[j]: i % k for i, j in enumerate(order)}
+    return np.array([fold_of[g] for g in groups])
+
+
+RIDGE_GRID = (1e-4, 1e-3, 1e-2, 1e-1, 1.0, 10.0)      # x the row count, as probe_c0_features._Ridge
+
+
+def _standardise(Xtr: np.ndarray, *others):
+    mu, sd = Xtr.mean(0), Xtr.std(0)
+    sd = np.where(sd < 1e-6, 1.0, sd)
+    return [(X - mu) / sd for X in (Xtr,) + others]
+
+
+def _ridge_grid(X: np.ndarray, y: np.ndarray) -> list:
+    """(weights, intercept) for every lambda of RIDGE_GRID from one eigendecomposition."""
+    s, V = np.linalg.eigh(X.T @ X)
+    ym = float(y.mean())
+    vc = V.T @ (X.T @ (y - ym))
+    return [(V @ (vc / (s + a * len(X))), ym) for a in RIDGE_GRID]
+
+
+def ridge_r2_episode_cv(H: np.ndarray, Y: np.ndarray, groups: np.ndarray, folds: int = 5,
+                        seed: int = 0) -> list:
+    """The probe with WHOLE EPISODES held out: every row is predicted by a fit that saw no row of its
+    episode, and R^2 is pooled over all rows. It follows scripts/probe_c0_features.ridge_cv -- features
+    standardised on the training fold, lambda chosen on an inner split of 20% of the training fold's
+    EPISODES -- so a stream scored here is comparable with c0's 2026-11-09 figures."""
+    H, Y, groups = np.asarray(H, np.float64), np.asarray(Y, np.float64), np.asarray(groups)
+    f = episode_folds(groups, folds, seed)
+    rng = np.random.default_rng(seed + 1)
+    P = np.zeros(Y.shape, np.float64)
+    for i in np.unique(f):
+        tr, te = np.flatnonzero(f != i), np.flatnonzero(f == i)
+        ug = np.unique(groups[tr])
+        inner_g = set(rng.choice(ug, max(1, len(ug) // 5), replace=False).tolist())
+        iv = np.array([g in inner_g for g in groups[tr]])
+        A, B = _standardise(H[tr[~iv]], H[tr[iv]])
+        A2, C = _standardise(H[tr], H[te])
+        for k in range(Y.shape[1]):
+            ytr = Y[tr, k]
+            scores = [r2_score(ytr[iv], B @ w + b) for w, b in _ridge_grid(A, ytr[~iv])]
+            w, b = _ridge_grid(A2, ytr)[int(np.nanargmax(scores))]
+            P[te, k] = C @ w + b
+    return [r2_score(Y[:, k], P[:, k]) for k in range(Y.shape[1])]

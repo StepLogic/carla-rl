@@ -3,7 +3,9 @@
 
 c0's features carry lateral offset but not heading (R^2 0.046); the pretrained control stream
 (torch_rl/control_cnn.ControlGRU: two frames one decision apart -> small CNN -> GRU that also takes
-the speed) carries both (0.81 / 0.85 at action repeat 8). Here it replaces c0's GRU state in learner
+the speed) was built to carry both. (The first stream does not: its "0.81 / 0.85" was an in-sample
+probe; held out by episode it gives heading about 0.1. These tests pin the PLUMBING, which is
+independent of how good a given stream is.) Here it replaces c0's GRU state in learner
 C's embeddings; DEBiT's binocular features stay as they are. Every defect this glue can have is
 SILENT -- a frame pair at the wrong spacing, the speed in the wrong unit, expert rows computed by a
 different function than the online rows, a checkpoint scored at another decision rate -- so each is

@@ -256,11 +256,19 @@ class ControlTrunk:
     FROZEN trunk, with C0Trunk's interface: row -> {"embeddings": [stream GRU state | DEBiT
     binocular], "states": [mode, speed]} (user 2026-11-14).
 
-    WHY: c0's features carry lateral offset (R^2 0.70-0.81) but not heading error (0.046), and
-    heading is what a steering action changes; this stream carries both (at one decision per 8
-    ticks, on 8,644 held-out rows: heading 0.66, offset 0.76; the pretraining log's own figure
-    is an 8-batch draw that ranged 0.61-0.81 for heading over its last three checkpoints). DEBiT's
-    binocular vector -- the goal stream -- is passed through untouched, as with c0.
+    WHY IT WAS BUILT: c0's features carry lateral offset (R^2 0.70-0.81) but not heading error
+    (0.046), and heading is what a steering action changes; the stream was meant to carry both.
+    THE FIRST STREAM DOES NOT (corrected 2026-11-14): "heading 0.66-0.81" was a probe fitted and
+    scored on the same rows. On 123 episodes control_pre_n2_k8/step_6000 never loaded, run as
+    deployed, its own lane head gives offset R^2 0.38 and heading 0.10, and a probe with episodes
+    held out 0.40 / 0.08 (scripts/control_stream_heldout.py) -- below c0 on both. The class is the
+    plumbing for a stream that passes that gate; this one did not. DEBiT's binocular vector -- the
+    goal stream -- is passed through untouched, as with c0.
+
+    A SECOND MISMATCH, also measured 2026-11-14 and not removed here: pretraining never ran the GRU
+    more than `chunk` steps from a zero state (12 for that checkpoint, 4 of them burn-in), while
+    step() and embed_ticks() carry it for the whole episode; the state then drifts from the regime
+    it was trained in (0.19 sd after decision 12, 0.56 sd after 64).
 
     IT IS FED WHAT PRETRAINING FED IT, each item pinned by tests/test_frl_control_trunk.py:
       * the frame pair is (the PREVIOUS DECISION's frame, this one), oldest first. At ACTION_REPEAT=k
@@ -277,8 +285,8 @@ class ControlTrunk:
     read the speed one tick (0.1 s) AHEAD of its frame. The env can only give the speed at the
     frame, and embed_ticks takes the same (kmh[f] = the speed when frame f was taken): recorded
     and online rows agree with each other, and both differ from pretraining by that one tick.
-    Measured 2026-11-14 on the same held-out chunks under both pairings: offset R^2 0.759 vs 0.757,
-    heading 0.663 vs 0.663, the GRU state moved by 2.2% of its sd -- so the stream was not retrained.
+    Measured 2026-11-14 on the same chunks under both pairings: the GRU state moved by 2.2% of its
+    sd and an (in-sample) probe read the same either way, so the pairing itself changes little.
     The hidden is (GRU state, the previous decision's frame at px or None); the loops and the eval
     harness only reset it and pass it back.
 

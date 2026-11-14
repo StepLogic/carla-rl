@@ -9,13 +9,15 @@ trained stream on the SAME held-out chunks under both pairings: the lane probes 
 and scored per pairing, and fitted on the pretraining pairing then scored on the deployment one),
 the cloning loss, and how far the GRU state moves.
 
-Result 2026-11-14 for control_pre_n2_k8/step_6000 (repeat 8, 34 held-out episodes, 8,644 rows):
-offset 0.759 vs 0.757, heading 0.663 vs 0.663, cross-fitted 0.750 / 0.658, GRU state moved by 2.2%
-of its sd; mean one-tick speed change 0.16 km/h against a speed sd of 5.6. The stream was not
-retrained for it.
+Result 2026-11-14 for control_pre_n2_k8/step_6000 (repeat 8, 34 validation episodes, 8,644 rows):
+the probe reads the same under both pairings (offset 0.759 vs 0.757, heading 0.663 vs 0.663, fitted
+on one and scored on the other 0.750 / 0.658) and the GRU state moves by 2.2% of its sd; mean
+one-tick speed change 0.16 km/h against a speed sd of 5.6. So the PAIRING changes little.
 
-NOTE on the numbers: these R^2 are from 32 batches. The pretraining log's own R^2 is an 8-batch draw
-and moves by about +-0.1 between checkpoints (heading 0.61 / 0.77 / 0.81 at 5000 / 5500 / 6000).
+READ THE R^2 HERE ONLY AS A COMPARISON BETWEEN THE TWO PAIRINGS. They are a ridge probe FITTED AND
+SCORED ON THE SAME ROWS, which says nothing about what the stream carries: held out by episode the
+same stream gives heading about 0.1 (scripts/control_stream_heldout.py). This script's first
+version quoted them as the stream's held-out figures; that was wrong.
 
 usage: /home/robotlab/carla-sac-local/venv/bin/python -I scripts/control_speed_pairing_check.py CKPT_DIR
 """

@@ -22,6 +22,17 @@ THE GATE, declared before the first run: heading R^2 >= 0.5 from the GRU state o
 with offset >= 0.7. c0 scores 0.046 (camera) and 0.31-0.36 (GRU). Below that, the control stream has
 not fixed the measured deficit and there is no point fine-tuning it with SAC.
 
+THE FIRST STREAMS DID NOT PASS IT, AND WERE REPORTED AS PASSING (corrected 2026-11-14). This script
+judged them with a ridge probe fitted and scored on the SAME validation rows ("heading 0.81"), while
+c0's figures come from scripts/probe_c0_features.py, which holds whole episodes out. Scored fairly on
+123 episodes it never loaded, control_pre_n2_k8/step_6000 gives: its own lane head offset R^2 0.38,
+heading 0.10; an episode-held-out probe on its state 0.40 / 0.08; its own action head's steering
+R^2 -0.60 -- worse than c0 on both lane variables, and overfit (val lane loss 0.44 against train 0.12
+in its own log). The validation line below now prints, in the order to read them: the heads' own
+R^2 (nothing fitted), the probe with episodes held out (torch_rl.control_data.ridge_r2_episode_cv,
+the same procedure as c0's probe), and the old in-sample probe, labelled as such, to show the gap.
+THE GATE IS READ ON THE FIRST TWO.
+
 usage (local GPU; this venv has torch+cu121 AND the carla module for the lane labels):
   /home/robotlab/carla-sac-local/venv/bin/python -I scripts/pretrain_control.py \
       --data /home/robotlab/carla-sac-local/checkpoints/il_data,/home/robotlab/carla-sac-local/checkpoints/il_data_dagger_chain1 \
@@ -46,7 +57,8 @@ import torch.nn.functional as F  # noqa: E402
 
 from torch_rl import lane_labels as ll  # noqa: E402
 from torch_rl.control_cnn import ControlGRU, random_shift  # noqa: E402
-from torch_rl.control_data import chunk_from_episode  # noqa: E402
+from torch_rl.control_data import (chunk_from_episode, r2_score, ridge_r2_episode_cv,  # noqa: E402
+                                   ridge_r2_in_sample)
 
 # Label scales from results/step0_encoder_2026-11-09/probe.json (label_sd): offset 0.21 m,
 # heading_err 3.457 deg. The aux targets are divided by these so neither term dominates the other.
@@ -92,15 +104,17 @@ def load_shard(path, lanes_cache, xodr_dir, labels=True):
 
 def batch(pool, rng, b, length, n_frames, dev, px, repeat=1):
     """b random chunks from the pool -> device tensors. Episodes too short for a chunk are skipped."""
-    picks, tries = [], 0
+    picks, which, tries = [], [], 0
     while len(picks) < b and tries < 20 * b:
         tries += 1
-        ep = pool[rng.integers(len(pool))]
+        i = int(rng.integers(len(pool)))
+        ep = pool[i]
         span = (length - 1) * repeat         # ticks covered: GRU steps are `repeat` ticks apart
         if ep["n_act"] <= span:
             continue
         picks.append(chunk_from_episode(ep, int(rng.integers(0, ep["n_act"] - span)),
                                         length, n_frames, stride=repeat, step=repeat))
+        which.append(i)                      # the chunk's EPISODE: a probe must hold episodes out
     f = torch.from_numpy(np.stack([p["frames"] for p in picks])).to(dev, non_blocking=True)
     B, L = f.shape[0], f.shape[1]
     f = f.reshape(B * L, *f.shape[2:]).float()
@@ -111,6 +125,7 @@ def batch(pool, rng, b, length, n_frames, dev, px, repeat=1):
                   ("lane_valid", np.float32)):
         out[k] = torch.from_numpy(np.stack([p[k] for p in picks]).astype(dt)).to(dev)
     out["lane"] = out["lane"] / torch.tensor(SD, device=dev)
+    out["episode"] = np.asarray(which, np.int64)
     return out
 
 
@@ -140,18 +155,11 @@ def run_chunk(net, bt, burn_in, aug_pad):
 
 
 def ridge_r2(H, Y, lam=1.0):
-    """R^2 of a ridge fit from hidden states H (N, D) to each column of Y (N, K), fitted and scored
-    on the SAME held-out episodes (what the 11-09 probe reports)."""
-    H = np.concatenate([H, np.ones((len(H), 1), np.float32)], 1)
-    out = []
-    A = H.T @ H + lam * np.eye(H.shape[1], dtype=np.float32)
-    for k in range(Y.shape[1]):
-        w = np.linalg.solve(A, H.T @ Y[:, k])
-        pred = H @ w
-        sse = float(((Y[:, k] - pred) ** 2).sum())
-        sst = float(((Y[:, k] - Y[:, k].mean()) ** 2).sum())
-        out.append(1.0 - sse / sst if sst > 0 else float("nan"))
-    return out
+    """IN-SAMPLE ridge probe: fitted and scored on the SAME rows. NOT what the 11-09 probe reports
+    (that one holds episodes out) and NOT evidence that the state carries anything -- it gave
+    "heading 0.81" for a stream whose held-out figure is about 0.1. Kept, under its old name, only
+    so the gap to the honest figures stays visible in the log."""
+    return ridge_r2_in_sample(np.asarray(H), np.asarray(Y), lam)
 
 
 def main():
@@ -220,24 +228,40 @@ def main():
             continue
         net.eval()
         with torch.no_grad():
-            vb, vl, H, Y = [], [], [], []
+            vb, vl, H, Y, P, G, SP, SY = [], [], [], [], [], [], [], []
             for _ in range(8):
                 bv = batch(val, rng, a.batch, a.chunk, a.n_frames, dev, a.px, a.repeat)
                 b_, l_, hs = run_chunk(net, bv, a.burn_in, 0)
                 vb.append(float(b_)); vl.append(float(l_))
+                steps = hs.shape[1] - a.burn_in
                 m = bv["lane_valid"][:, a.burn_in:].reshape(-1).bool().cpu().numpy()
                 H.append(hs[:, a.burn_in:].reshape(-1, hs.shape[-1]).cpu().numpy()[m])
                 Y.append((bv["lane"][:, a.burn_in:].reshape(-1, 2).cpu().numpy()
                           * SD)[m])                       # un-standardised: metres and degrees
-            r2 = ridge_r2(np.concatenate(H), np.concatenate(Y))
+                # the stream's OWN heads on the same rows, and each row's episode
+                P.append((net.lane(hs[:, a.burn_in:]).reshape(-1, 2).cpu().numpy() * SD)[m])
+                G.append(np.repeat(bv["episode"], steps)[m])
+                SP.append(net.action(hs[:, a.burn_in:])[..., 0].reshape(-1).cpu().numpy())
+                SY.append(bv["actions"][:, a.burn_in:, 0].reshape(-1).cpu().numpy())
+            H, Y, P, G = (np.concatenate(v) for v in (H, Y, P, G))
+            r2 = ridge_r2(H, Y)                           # in-sample: NOT the gate
+            head = [r2_score(Y[:, k], P[:, k]) for k in range(2)]
+            steer = r2_score(np.concatenate(SY), np.concatenate(SP))
+            cv = (ridge_r2_episode_cv(H, Y, G) if len(np.unique(G)) >= 5
+                  else [float("nan"), float("nan")])
         net.train()
         row = {"update": u, "train_bc": float(bc), "train_lane": float(lane),
                "val_bc": float(np.mean(vb)), "val_lane": float(np.mean(vl)),
-               "r2_offset": r2[0], "r2_heading": r2[1], "secs": round(time.time() - t0)}
+               "head_r2_offset": head[0], "head_r2_heading": head[1], "head_r2_steer": steer,
+               "cv_r2_offset": cv[0], "cv_r2_heading": cv[1], "val_episodes": int(len(np.unique(G))),
+               "r2_offset": r2[0], "r2_heading": r2[1],     # IN-SAMPLE ridge (the old, wrong gate)
+               "secs": round(time.time() - t0)}
         log.append(row)
         print(f"[pre] u={u} bc={row['train_bc']:.4f} lane={row['train_lane']:.4f} | "
-              f"val bc={row['val_bc']:.4f} lane={row['val_lane']:.4f} | "
-              f"R2 offset={r2[0]:.3f} HEADING={r2[1]:.3f} | {row['secs']}s", flush=True)
+              f"val bc={row['val_bc']:.4f} lane={row['val_lane']:.4f} | HELD-OUT own heads: offset="
+              f"{head[0]:+.3f} HEADING={head[1]:+.3f} steer={steer:+.3f} | probe, episodes held out "
+              f"({row['val_episodes']}): offset={cv[0]:+.3f} heading={cv[1]:+.3f} | (in-sample "
+              f"probe {r2[0]:.3f}/{r2[1]:.3f}) | {row['secs']}s", flush=True)
         with open(os.path.join(a.out, "log.jsonl"), "a") as fh:
             fh.write(json.dumps(row) + "\n")
         d = os.path.join(a.out, f"step_{u}")

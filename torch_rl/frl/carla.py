@@ -74,6 +74,14 @@ class LoopSettings:
     # 1 = the critic's heads computed in one batched pass (networks.EnsembleQ.batched): the same weights
     # and numbers, faster; a compute layout, so a resumed run may change it.
     batched_heads: int = 0
+    # 1 = RESUME THE CRITIC BUT KEEP THIS RUN'S ACTOR (user 2026-11-13: "use saved checkpoint. and
+    # replace actor with c0 actor"). restore_learner then loads the critic, the target critic, the
+    # temperature, the entropy target and their optimizers, and leaves the actor `actor` built -- with
+    # actor="c0", a trainable copy of c0's head, so the policy starts as c0 on a critic that already has
+    # the run's value estimates. The actor's optimizer stays fresh: its parameters are a different shape,
+    # so the checkpoint's Adam state does not apply. It also lets `actor` differ from the checkpoint's,
+    # which the guard otherwise refuses.
+    resume_new_actor: int = 0
 
     def __post_init__(self):
         if self.expert_mode not in ("update", "pinned"):
@@ -602,13 +610,17 @@ def _learn_step(learner, rb, expert, pinned: bool, s: LoopSettings, step: int) -
 # Settings a resumed run may change: run length and cadence, devices, the loop, the resume itself (and
 # the seed, whose streams cannot be continued anyway). Every other LoopSettings field must match.
 RESUME_MAY_DIFFER = ("max_steps", "ckpt_every", "log_every", "device", "replay_device", "parallel",
-                     "resume", "seed", "expert", "batched_heads")
+                     "resume", "seed", "expert", "batched_heads", "resume_new_actor")
 
 
 def restore_learner(learner, ckpt_dir: str, s: LoopSettings, c0_dir: str) -> int:
     """Load a learner-C checkpoint's whole learner (actor, critic, target critic, temperature, entropy
     target, the three optimizers) into `learner`; returns its step. Refused (ValueError) when it was
-    made on another c0 trunk, another expert file, other networks or other learning settings."""
+    made on another c0 trunk, another expert file, other networks or other learning settings.
+
+    With s.resume_new_actor the ACTOR AND ITS OPTIMIZER ARE NOT LOADED: `learner` keeps the actor it was
+    built with (actor="c0" -> a trainable copy of c0's head) on the checkpoint's trained critic, and
+    `actor` is allowed to differ from the checkpoint's."""
     with open(os.path.join(ckpt_dir, "config.json")) as fh:
         meta = json.load(fh)
     if meta.get("learner") != "frl":
@@ -621,20 +633,24 @@ def restore_learner(learner, ckpt_dir: str, s: LoopSettings, c0_dir: str) -> int
         raise ValueError(f"{ckpt_dir}: networks {meta.get('redq')} latent {meta.get('latent_dim')} "
                          f"!= this run's {redq} latent {LATENT_DIM}")
     old, new = meta["settings"], dataclasses.asdict(s)
+    new_actor = bool(int(getattr(s, "resume_new_actor", 0) or 0))
+    # The whole point of resume_new_actor is a DIFFERENT actor on the checkpoint's critic.
+    may_differ = set(RESUME_MAY_DIFFER) | ({"actor"} if new_actor else set())
     bad = [f"{k}: checkpoint {old.get(k)!r} vs run {new[k]!r}" for k in new
-           if k not in RESUME_MAY_DIFFER and old.get(k, new[k]) != new[k]]
+           if k not in may_differ and old.get(k, new[k]) != new[k]]
     if os.path.basename(old.get("expert") or "") != os.path.basename(new.get("expert") or ""):
         bad.append(f"expert: checkpoint {old.get('expert')!r} vs run {new.get('expert')!r}")
     if bad:
         raise ValueError(f"{ckpt_dir} was made with other learning settings -- " + "; ".join(bad))
     st = torch.load(os.path.join(ckpt_dir, "params.pt"), map_location=str(learner.device))
-    learner.actor.load_state_dict(st["actor"])
+    if not new_actor:
+        learner.actor.load_state_dict(st["actor"])
+        learner.actor_opt.load_state_dict(st["actor_opt"])
     learner.critic.load_state_dict(st["critic"])
     learner.target_critic.load_state_dict(st["target_critic"])
     with torch.no_grad():
         learner.log_temp.copy_(st["log_temp"].to(learner.log_temp.device))
     learner.target_entropy = float(st["target_entropy"])
-    learner.actor_opt.load_state_dict(st["actor_opt"])
     learner.critic_opt.load_state_dict(st["critic_opt"])
     learner.temp_opt.load_state_dict(st["temp_opt"])
     return int(meta["step"])

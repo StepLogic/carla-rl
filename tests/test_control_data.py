@@ -90,6 +90,44 @@ def test_a_chunk_cannot_run_past_the_last_action():
     assert ok["actions"].shape == (4, 2)
 
 
+def test_nstep_rows_reduce_to_single_steps_at_k_one():
+    from torch_rl.control_data import nstep_rows
+    r = np.array([1.0, 2.0, 3.0, 4.0], np.float32)
+    a = np.stack([np.arange(4), np.zeros(4)], -1).astype(np.float32)
+    out = nstep_rows(a, r, terminal_at_end=False, k=1, gamma=0.99)
+    assert out["starts"].tolist() == [0, 1, 2, 3]
+    assert np.allclose(out["rewards"], r)
+    assert np.allclose(out["actions"], a)
+    assert out["masks"].tolist() == [1, 1, 1, 1]
+    assert out["nexts"].tolist() == [1, 2, 3, 4]
+
+
+def test_nstep_rows_discount_inside_the_window_and_average_the_action():
+    """The k-step transition is (s_t, mean action over the window, sum gamma^i r_{t+i}, s_{t+k}).
+    The mean action is an APPROXIMATION of holding one action for k steps -- the recorded actions
+    varied within the window -- and averaging washes variation out, so it biases toward a FLATTER
+    Q. A span that grows under it is therefore meaningful; a null result is weak evidence."""
+    from torch_rl.control_data import nstep_rows
+    r = np.ones(6, np.float32)
+    a = np.stack([np.array([1.0, 2, 3, 4, 5, 6]), np.zeros(6)], -1).astype(np.float32)
+    out = nstep_rows(a, r, terminal_at_end=False, k=3, gamma=0.5)
+    assert out["starts"].tolist() == [0, 3]
+    assert np.allclose(out["rewards"], [1 + 0.5 + 0.25, 1 + 0.5 + 0.25])
+    assert np.allclose(out["actions"][:, 0], [2.0, 5.0])        # mean of 1,2,3 and of 4,5,6
+    assert out["nexts"].tolist() == [3, 6]
+
+
+def test_nstep_rows_drop_the_bootstrap_only_on_the_window_that_ends_the_episode():
+    from torch_rl.control_data import nstep_rows
+    r = np.ones(6, np.float32)
+    a = np.zeros((6, 2), np.float32)
+    out = nstep_rows(a, r, terminal_at_end=True, k=3, gamma=1.0)
+    assert out["masks"].tolist() == [1, 0]                      # only the last window terminates
+    short = nstep_rows(a, r, terminal_at_end=True, k=4, gamma=1.0)
+    assert short["starts"].tolist() == [0]                      # a partial tail window is dropped
+    assert short["masks"].tolist() == [1]
+
+
 def test_non_finite_labels_are_scrubbed_not_merely_masked():
     """THE BUG THIS PINS: episode_labels leaves NaN where the heading is undefined (car at rest) or
     the lane query hit a fork. In a masked loss `nan * 0` is still nan, so the first backward pass

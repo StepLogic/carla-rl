@@ -53,7 +53,8 @@ import torch.nn.functional as F  # noqa: E402
 
 from pretrain_control import load_shard  # noqa: E402  (same shard reader and lane labels)
 from torch_rl.control_cnn import ControlGRU  # noqa: E402
-from torch_rl.control_data import stack_frames, transition_actions  # noqa: E402
+from torch_rl.control_data import (nstep_rows, stack_frames,  # noqa: E402
+                                   transition_actions)
 from torch_rl.frl.iql import IQLLearner  # noqa: E402
 
 ARRIVAL_BONUS = 100.0
@@ -84,14 +85,20 @@ def embed_episode(net, ep, z, dev, px, n_frames):
     return obs.cpu()
 
 
-def transitions(paths, net, dev, px, n_frames, lanes, xodr, threads=8, log=print):
-    """Every shard -> (obs, action, reward, next_obs, mask) rows for IQL."""
+def transitions(paths, net, dev, px, n_frames, lanes, xodr, threads=8, log=print, nstep=1,
+                gamma=0.99):
+    """Every shard -> (obs, action, reward, next_obs, mask) rows for IQL.
+
+    nstep > 1 builds the ACTION-REPEAT MDP from the same data (control_data.nstep_rows): one row per
+    non-overlapping window of k steps, the action averaged over it, the reward discounted inside it,
+    and the next state k steps later. The learner's discount must then be gamma**k.
+    """
     O, A, R, O2, M = [], [], [], [], []
     with ThreadPoolExecutor(threads) as ex:
         for path, ep in zip(paths, ex.map(lambda p: load_shard(p, lanes, xodr, labels=False), paths)):
             z = np.load(path)
             n = int(ep["n_act"])
-            if n < 2:
+            if n < 2 * int(nstep):
                 continue
             obs = embed_episode(net, ep, z, dev, px, n_frames)
             r = np.asarray(z["reward"], np.float32)[:n].copy()
@@ -99,12 +106,12 @@ def transitions(paths, net, dev, px, n_frames, lanes, xodr, threads=8, log=print
             # the one reward correction: the recording paid arrival at ANY speed
             if end == "reached" and float(ep["speed"][n - 1]) > ARRIVAL_MAX_KMH:
                 r[n - 1] -= ARRIVAL_BONUS
-            mask = np.ones(n, np.float32)
-            if end in FAULT_ENDS:
-                mask[n - 1] = 0.0
-            O.append(obs[:n]); O2.append(obs[1:n + 1])
-            A.append(transition_actions(z, n))        # EXECUTED action: see control_data
-            R.append(r); M.append(mask)
+            acts = transition_actions(z, n)           # EXECUTED action: see control_data
+            rows = nstep_rows(acts, r, end in FAULT_ENDS, int(nstep), float(gamma))
+            if len(rows["starts"]) == 0:
+                continue
+            O.append(obs[rows["starts"]]); O2.append(obs[rows["nexts"]])
+            A.append(rows["actions"]); R.append(rows["rewards"]); M.append(rows["masks"])
     out = {"observations": torch.cat(O), "next_observations": torch.cat(O2),
            "actions": torch.from_numpy(np.concatenate(A)),
            "rewards": torch.from_numpy(np.concatenate(R)),
@@ -155,6 +162,8 @@ def main():
     ap.add_argument("--expectile", type=float, default=0.8)
     ap.add_argument("--temperature", type=float, default=0.1)
     ap.add_argument("--discount", type=float, default=0.99)
+    ap.add_argument("--nstep", type=int, default=1,
+                    help="k-step (action-repeat) transitions; the learner discount becomes gamma**k")
     ap.add_argument("--log-every", type=int, default=1000)
     ap.add_argument("--device", default="cuda")
     ap.add_argument("--threads", type=int, default=8)
@@ -182,16 +191,20 @@ def main():
     lanes = {}
     t0 = time.time()
     print(f"=== embedding {len(train_paths)} train shards", flush=True)
-    train = transitions(train_paths, net, dev, ca["px"], ca["n_frames"], lanes, None, a.threads)
+    train = transitions(train_paths, net, dev, ca["px"], ca["n_frames"], lanes, None,
+                        a.threads, nstep=a.nstep, gamma=a.discount)
     print(f"=== embedding {len(val_paths)} val shards", flush=True)
-    val = transitions(val_paths, net, dev, ca["px"], ca["n_frames"], lanes, None, a.threads)
+    val = transitions(val_paths, net, dev, ca["px"], ca["n_frames"], lanes, None,
+                      a.threads, nstep=a.nstep, gamma=a.discount)
     print(f"=== embedded in {time.time()-t0:.0f}s", flush=True)
 
     obs_dim = int(train["observations"].shape[1])
     lr = IQLLearner(obs_dim=obs_dim, action_dim=2, num_qs=a.num_qs, expectile=a.expectile,
-                    temperature=a.temperature, discount=a.discount, device=str(dev), seed=0)
+                    temperature=a.temperature, discount=a.discount ** a.nstep,
+                    device=str(dev), seed=0)
     print(f"=== IQL obs_dim={obs_dim} num_qs={a.num_qs} expectile={a.expectile} "
-          f"temperature={a.temperature} | gate: span>=5% of |Q|, corr>0.3, full-lock<50%", flush=True)
+          f"temperature={a.temperature} nstep={a.nstep} discount={a.discount ** a.nstep:.4f}"
+          f" | gate: span>=5% of |Q|, corr>0.3, full-lock<50%", flush=True)
 
     n = train["observations"].shape[0]
     t0 = time.time()

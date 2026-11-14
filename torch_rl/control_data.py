@@ -36,6 +36,46 @@ def transition_actions(shard, n: int) -> np.ndarray:
     return np.asarray(shard[key], np.float32)[:int(n)]
 
 
+def nstep_rows(actions: np.ndarray, rewards: np.ndarray, terminal_at_end: bool, k: int,
+               gamma: float) -> Dict[str, np.ndarray]:
+    """Non-overlapping k-step transitions for an ACTION-REPEAT test (user 2026-11-14: "ok use action
+    repeat at 8"): (s_t, mean action over [t, t+k), sum_i gamma^i r_{t+i}, s_{t+k}).
+
+    WHY. The measured problem is that Q is almost flat in the action: over the band the data lives
+    in it spans 0.30% of |Q|, and the peak sits at the edge of any grid. One steering value held for
+    0.05-0.1 s moves the car about a centimetre and the behaviour policy corrects it at the next
+    step, so the return genuinely barely responds. Holding one action for k steps makes the
+    perturbation sustained -- the advantage should grow with the action's duration (Tallec, Blier &
+    Ollivier, ICML 2019). This builds that MDP from existing data so the prediction can be checked
+    before spending GPU time in CARLA.
+
+    CAVEAT, stated here because it bounds the conclusion: the recorded actions VARIED inside each
+    window, so the mean is only an approximation of holding one action, and averaging washes out
+    variation -- it biases the result toward a flatter Q. A span that GROWS under this is therefore
+    real evidence; a null result is weak evidence.
+
+    A partial tail window (fewer than k steps left) is dropped. `terminal_at_end` marks the episode
+    as ending in a fault or an arrival, in which case only the final window loses its bootstrap.
+    """
+    k = int(k)
+    n = int(len(rewards))
+    starts = np.arange(0, n - k + 1, k, dtype=np.int64)
+    if len(starts) == 0:
+        z = np.zeros((0,), np.float32)
+        return {"starts": starts, "nexts": starts, "actions": np.zeros((0, actions.shape[1]),
+                np.float32), "rewards": z, "masks": z}
+    disc = gamma ** np.arange(k, dtype=np.float64)
+    rew = np.array([float((np.asarray(rewards[s:s + k], np.float64) * disc).sum())
+                    for s in starts], np.float32)
+    act = np.stack([np.asarray(actions[s:s + k], np.float64).mean(axis=0) for s in starts]
+                   ).astype(np.float32)
+    nexts = starts + k
+    masks = np.ones(len(starts), np.float32)
+    if terminal_at_end and nexts[-1] >= n:
+        masks[-1] = 0.0
+    return {"starts": starts, "nexts": nexts, "actions": act, "rewards": rew, "masks": masks}
+
+
 def stack_frames(frames: np.ndarray, t: int, n_frames: int) -> np.ndarray:
     """The n_frames frames ending at t, channels-first, OLDEST FIRST: (3 * n_frames, H, W).
 

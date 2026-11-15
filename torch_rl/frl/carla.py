@@ -772,6 +772,53 @@ def _iql_warm_up(learner, expert, s: LoopSettings, log: Callable, resumed: bool 
                   if isinstance(v, (int, float))))
 
 
+FAULT_ENDS = ("crossing", "off_road", "collision")
+
+
+class Odometer:
+    """METRES DRIVEN PER TRAINING EPISODE (user 2026-11-14: "distance travelled logged"). Sums the
+    steps of info['hero_pos'] for each env; start() at every reset so the jump to the new spawn is not
+    counted. summary() is over the last 100 finished episodes: mean metres of a goal episode, of an
+    explore episode, and metres per fault end (all metres / episodes ending on a crossing, off-road
+    or collision). nan where there is nothing to average. Logging only: nothing is learned from it."""
+
+    def __init__(self, n: int = 1):
+        self.pos = [None] * n
+        self.m = [0.0] * n
+        self.done = []                           # (mode, metres, end) of finished episodes
+
+    @staticmethod
+    def _xy(info):
+        p = info.get("hero_pos") if info is not None else None
+        return None if p is None else np.asarray(p, np.float64)[:2]
+
+    def start(self, i: int, info) -> None:
+        self.pos[i], self.m[i] = self._xy(info), 0.0
+
+    def step(self, i: int, info) -> None:
+        p = self._xy(info)
+        if p is not None and self.pos[i] is not None:
+            self.m[i] += float(np.linalg.norm(p - self.pos[i]))
+        if p is not None:
+            self.pos[i] = p
+
+    def end(self, i: int, mode: int, end: str) -> None:
+        self.done = (self.done + [(int(mode), float(self.m[i]), str(end))])[-100:]
+
+    def summary(self) -> Dict:
+        mean = lambda xs: float(np.mean(xs)) if xs else float("nan")
+        faults = sum(e in FAULT_ENDS for _, _, e in self.done)
+        return {"goal_m": mean([m for md, m, _ in self.done if md == 1]),
+                "explore_m": mean([m for md, m, _ in self.done if md != 1]),
+                "m_per_fault": (sum(m for _, m, _ in self.done) / faults) if faults else float("nan"),
+                "episodes": len(self.done)}
+
+    def line(self) -> str:
+        s = self.summary()
+        return (f"goal_m={s['goal_m']:.0f} explore_m={s['explore_m']:.0f} "
+                f"m_per_fault={s['m_per_fault']:.0f}")
+
+
 def train(env, obs, info, out: str, *, trunk: C0Trunk, row_of: Callable, settings: LoopSettings,
           c0_dir: str, log: Callable = print, probe: Optional[SteerProbe] = None,
           to_env: Callable = box_map, ramp=None, rebuild_env: Optional[Callable] = None,
@@ -832,6 +879,8 @@ def train(env, obs, info, out: str, *, trunk: C0Trunk, row_of: Callable, setting
     hidden = trunk.zero_hidden()
     o_t, hidden = trunk.step(row_of(obs, info), hidden)
     mode = _mode(obs)
+    odo = Odometer(1)
+    odo.start(0, info)
     ep_ret, ep_len, episodes = 0.0, 0, 0
     recent = {"policy": [], "goal": [], "explore": []}
     town_goal = {n: [] for n in names}       # the last 100 goal arrivals of each town
@@ -857,6 +906,7 @@ def train(env, obs, info, out: str, *, trunk: C0Trunk, row_of: Callable, setting
                 f"{ep_len} real steps, env reset, nothing stored")
             ends["env_error"] = ends.get("env_error", 0) + 1
             obs, info = safe_reset()
+            odo.start(0, info)
             hidden = trunk.zero_hidden()
             o_t, hidden = trunk.step(row_of(obs, info), hidden)
             mode, ep_ret, ep_len = _mode(obs), 0.0, 0
@@ -865,9 +915,11 @@ def train(env, obs, info, out: str, *, trunk: C0Trunk, row_of: Callable, setting
             rb.add(o_t, a, float(r), 0.0 if term else 1.0, o_n)
             ep_ret += float(r)
             ep_len += 1
+            odo.step(0, info)
             if term or trunc:
                 episodes += 1
                 end = str(info.get("goal_end") or info.get("explore_end") or "?")
+                odo.end(0, mode, end)
                 ends[end] = ends.get(end, 0) + 1
                 arrived = float(end == "reached")
                 recent["policy"].append(arrived)
@@ -885,6 +937,7 @@ def train(env, obs, info, out: str, *, trunk: C0Trunk, row_of: Callable, setting
                     cur = (cur + 1) % len(envs)
                     env = envs[cur]
                 obs, info = safe_reset()
+                odo.start(0, info)
                 hidden = trunk.zero_hidden()
                 o_n, hidden = trunk.step(row_of(obs, info), hidden)
                 mode, ep_ret, ep_len = _mode(obs), 0.0, 0
@@ -908,7 +961,7 @@ def train(env, obs, info, out: str, *, trunk: C0Trunk, row_of: Callable, setting
             pol = float(np.mean(recent["policy"])) if recent["policy"] else float("nan")
             log(f"[FRL] step={step} policy={pol:.3f}(n={len(recent['policy'])}) "
                 f"goal={mean(g, 0):.3f}(n={len(g)}) goal_len={mean(g, 1):.0f} "
-                f"explore_len={mean(e, 1):.0f} episodes={episodes} ends={ends} | "
+                f"explore_len={mean(e, 1):.0f} {odo.line()} episodes={episodes} ends={ends} | "
                 + " ".join(f"{k}={v:.4g}" for k, v in sorted(upd.items()))
                 + f" target_entropy={learner.target_entropy:.4f} | rollout steer_lock="
                 f"{roll['lock'] / max(1, roll['n']):.2f} throttle<0.05="
@@ -1098,9 +1151,11 @@ def train_parallel(env, obs, info, out: str, *, trunk: C0Trunk, row_of: Callable
     try:
         starts = [(obs, info)] + list(pool.map(safe_reset, range(1, n)))
         o_t, hidden, mode = [None] * n, [None] * n, [0] * n
+        odo = Odometer(n)
         for i, (ob, inf) in enumerate(starts):
             o_t[i], hidden[i] = trunk.step(row_of(ob, inf), trunk.zero_hidden())
             mode[i] = _mode(ob)
+            odo.start(i, inf)
         ep_ret, ep_len, episodes = [0.0] * n, [0] * n, 0
         recent = {"policy": [], "goal": [], "explore": []}
         town_goal = {nm: [] for nm in names}
@@ -1144,10 +1199,12 @@ def train_parallel(env, obs, info, out: str, *, trunk: C0Trunk, row_of: Callable
                     rb.add(o_t[i], acts[i], float(r), 0.0 if term else 1.0, o_n)
                     ep_ret[i] += float(r)
                     ep_len[i] += 1
+                    odo.step(i, inf)
                     o_t[i] = o_n
                     if term or trunc:
                         episodes += 1
                         end = str(inf.get("goal_end") or inf.get("explore_end") or "?")
+                        odo.end(i, mode[i], end)
                         ends[end] = ends.get(end, 0) + 1
                         arrived = float(end == "reached")
                         recent["policy"].append(arrived)
@@ -1170,6 +1227,7 @@ def train_parallel(env, obs, info, out: str, *, trunk: C0Trunk, row_of: Callable
                 for i, (ob, inf) in zip(need_reset, list(pool.map(safe_reset, need_reset))):
                     o_t[i], hidden[i] = trunk.step(row_of(ob, inf), trunk.zero_hidden())
                     mode[i], ep_ret[i], ep_len[i] = _mode(ob), 0.0, 0
+                    odo.start(i, inf)
             for k in learn_at:
                 upd = _learn_step(learner, rb, expert, pinned, s, k)
             while step >= next_log:
@@ -1178,7 +1236,7 @@ def train_parallel(env, obs, info, out: str, *, trunk: C0Trunk, row_of: Callable
                 pol_sr = float(np.mean(recent["policy"])) if recent["policy"] else float("nan")
                 log(f"[FRL] step={next_log} policy={pol_sr:.3f}(n={len(recent['policy'])}) "
                     f"goal={mean(g, 0):.3f}(n={len(g)}) goal_len={mean(g, 1):.0f} "
-                    f"explore_len={mean(e, 1):.0f} episodes={episodes} ends={ends} | "
+                    f"explore_len={mean(e, 1):.0f} {odo.line()} episodes={episodes} ends={ends} | "
                     + " ".join(f"{k}={v:.4g}" for k, v in sorted(upd.items()))
                     + f" target_entropy={learner.target_entropy:.4f} | rollout steer_lock="
                     f"{roll['lock'] / max(1, roll['n']):.2f} throttle<0.05="

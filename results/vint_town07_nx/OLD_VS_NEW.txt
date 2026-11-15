@@ -1,0 +1,9 @@
+easy   mapless  old  52 new  50 | both 46, lost  6, gained  4 | entry km/h of LOST (old run) 5.8, of GAINED (new run) 5.8, of BOTH (old/new) 5.8/5.8 | lost now end: collision,crossing,off_road
+easy   uniform  old  52 new  49 | both 41, lost 11, gained  8 | entry km/h of LOST (old run) 9.6, of GAINED (new run) 9.3, of BOTH (old/new) 13.1/13.9 | lost now end: collision,crossing,off_road
+easy   vinttopo old  35 new  35 | both 31, lost  4, gained  4 | entry km/h of LOST (old run) 14.2, of GAINED (new run) 14.1, of BOTH (old/new) 10.4/10.6 | lost now end: crossing
+medium mapless  old  15 new  19 | both 10, lost  5, gained  9 | entry km/h of LOST (old run) 5.8, of GAINED (new run) 5.8, of BOTH (old/new) 5.8/5.8 | lost now end: crossing,off_road
+medium uniform  old  33 new  20 | both 14, lost 19, gained  6 | entry km/h of LOST (old run) 11.4, of GAINED (new run) 9.2, of BOTH (old/new) 10.5/9.9 | lost now end: collision,crossing,off_road
+medium vinttopo old  18 new  18 | both  6, lost 12, gained 12 | entry km/h of LOST (old run) 14.5, of GAINED (new run) 13.1, of BOTH (old/new) 11.5/9.9 | lost now end: collision,crossing,off_road
+turns  mapless  old   1 new   1 | both  1, lost  0, gained  0 | entry km/h of LOST (old run) -, of GAINED (new run) -, of BOTH (old/new) 5.8/5.8 | lost now end: 
+turns  uniform  old   3 new   5 | both  1, lost  2, gained  4 | entry km/h of LOST (old run) 10.3, of GAINED (new run) 6.7, of BOTH (old/new) 5.8/5.8 | lost now end: collision,off_road
+turns  vinttopo old   4 new   0 | both  0, lost  4, gained  0 | entry km/h of LOST (old run) 11.3, of GAINED (new run) -, of BOTH (old/new) -/- | lost now end: collision,crossing,off_road

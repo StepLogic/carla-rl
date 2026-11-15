@@ -91,7 +91,15 @@ def node_frames(trace, indices):
     for i in indices:
         s = int(trace["seg"][i])
         if s not in cache:
-            cache = {s: np.load(os.path.join(trace["dir"], trace["files"][s]))["frame"]}
+            # CACHE EVERY SEGMENT, not just the last one. `indices` is an
+            # UNSORTED random sample here, so a one-segment cache reloaded and
+            # decompressed an 86 MB npz on nearly every one of 2,000 iterations
+            # and RSS reached 50 GB before GC caught up (Town07, 2026-11-12;
+            # the cluster's --mem=160G for this step was a workaround).
+            # Output is bit-identical: frames are appended in `indices` order
+            # whatever the cache holds. Bounded by the trace: 19 segments x
+            # 86 MB = 1.6 GB for Town07, 3.4 GB for Town03.
+            cache[s] = np.load(os.path.join(trace["dir"], trace["files"][s]))["frame"]
         out.append(np.asarray(cache[s][int(trace["local"][i])], np.uint8))
     return np.stack(out) if out else np.zeros((0,), np.uint8)
 

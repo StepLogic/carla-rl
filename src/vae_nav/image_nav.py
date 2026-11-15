@@ -14,6 +14,10 @@ relayed procedure: memory habitat-map-procedure-2026-11).
                 of the three AND at least `thr` on 2 consecutive steps. thr is
                 OUR 2% far-false point (their 0.54 is theirs, set the same way).
                 Theirs also ends a leg on DEBiT's STOP; c0 has no STOP action.
+                next_advance (user 2026-11-15, Habitat's DEBIT_ITN_ARRIVAL_NOSKIP=1):
+                when the NEXT path node scores highest of the three and at least
+                `thr` on 2 consecutive steps, the subgoal advances by ONE node (the
+                car has passed the current one). Off = the rule of every earlier cell.
   timeout       150 steps on one leg -> relocalise (top-1 image) and replan to the
                 same goal node, up to 3 times; then hand over the real goal image
 
@@ -26,7 +30,8 @@ import numpy as np
 class ImageNavigator:
     """Subgoal state along a node path, driven by per-step image scores."""
 
-    def __init__(self, path, thr, confirm_steps=2, leg_steps=150, max_replans=3, node_xy=None):
+    def __init__(self, path, thr, confirm_steps=2, leg_steps=150, max_replans=3, node_xy=None,
+                 next_advance=False):
         # node_xy: map node positions, used ONLY by subgoal_m() for the episode
         # record (scoring / analysis); navigation never reads a pose
         self._xy = None if node_xy is None else np.asarray(node_xy, np.float64)
@@ -41,6 +46,9 @@ class ImageNavigator:
         self._wins = 0
         self._leg = 0
         self.gave_up = False
+        self.next_advance = bool(next_advance)
+        self.next_advances = 0        # switches made on a next-node win
+        self._nwins = 0
 
     @property
     def final(self):
@@ -59,18 +67,29 @@ class ImageNavigator:
         self._leg += 1
         cur = self.path[self.k]
         rivals = [self.path[self.k - 1]] if self.k >= 1 else []
-        if self.k + 1 < len(self.path):
-            rivals.append(self.path[self.k + 1])
+        nxt = self.path[self.k + 1] if self.k + 1 < len(self.path) else None
+        if nxt is not None:
+            rivals.append(nxt)
         s_cur = float(scores[cur])
         won = s_cur >= self.thr and all(s_cur > float(scores[r]) for r in rivals)
         self._wins = self._wins + 1 if won else 0
         if self._wins >= self.confirm:
             self.k += 1
             self.switches += 1
-            self._wins = self._leg = 0
+            self._wins = self._leg = self._nwins = 0
             return "switch"
+        if self.next_advance and nxt is not None:
+            s_nxt = float(scores[nxt])
+            nwon = s_nxt >= self.thr and all(s_nxt > float(scores[r]) for r in rivals if r != nxt) and s_nxt > s_cur
+            self._nwins = self._nwins + 1 if nwon else 0
+            if self._nwins >= self.confirm:
+                self.k += 1               # ONE node only, whatever scores further along the path
+                self.switches += 1
+                self.next_advances += 1
+                self._wins = self._leg = self._nwins = 0
+                return "switch"
         if self._leg >= self.leg_steps:
-            self._wins = self._leg = 0
+            self._wins = self._leg = self._nwins = 0
             return "timeout"
         return None
 
@@ -90,7 +109,7 @@ class ImageNavigator:
             return False
         self.replans += 1
         self.path, self.k = list(new_path), 1
-        self._wins = self._leg = 0
+        self._wins = self._leg = self._nwins = 0
         return True
 
 

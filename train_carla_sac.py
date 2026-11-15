@@ -322,6 +322,10 @@ EVAL_MAP_LOCALISE = os.environ.get("EVAL_MAP_LOCALISE", "pose")
 if EVAL_MAP_LOCALISE not in ("pose", "image"):
     raise ValueError(f"EVAL_MAP_LOCALISE={EVAL_MAP_LOCALISE!r}: use 'pose' or 'image'")
 EVAL_MAP_LEG_TIMEOUT = int(os.environ.get("EVAL_MAP_LEG_TIMEOUT", 150) or 150)
+# EVAL_MAP_NEXT_ADVANCE=1 (user 2026-11-15: "Gibson advances one node when the next node wins; ours does
+# nothing in that case. - lets ad this here"): image_nav.ImageNavigator(next_advance=True). Default 0 =
+# the rule every earlier benchmark cell was scored under.
+EVAL_MAP_NEXT_ADVANCE = os.environ.get("EVAL_MAP_NEXT_ADVANCE", "0") == "1"
 EVAL_MAP_ARRIVE_STEPS = int(os.environ.get("EVAL_MAP_ARRIVE_STEPS", 2) or 2)
 EVAL_MAP_LEG_STEPS = int(os.environ.get("EVAL_MAP_LEG_STEPS", 100) or 100)
 EVAL_MAP_OFFROUTE_M = float(os.environ.get("EVAL_MAP_OFFROUTE_M", 15.0) or 15.0)
@@ -1925,7 +1929,8 @@ def run_eval(env, agent, pxr, server, out_root):
                 return (d @ _D.T)[0].cpu().numpy()
             print(f"[Map] IMAGE localisation: top-1 start / goal, arrival competition at "
                   f"{img_thr:.3f} x{EVAL_MAP_ARRIVE_STEPS} steps, leg timeout "
-                  f"{EVAL_MAP_LEG_TIMEOUT}, replans {EVAL_MAP_REPLAN or 3}", flush=True)
+                  f"{EVAL_MAP_LEG_TIMEOUT}, replans {EVAL_MAP_REPLAN or 3}, "
+                  f"next-node advance {'ON' if EVAL_MAP_NEXT_ADVANCE else 'off'}", flush=True)
         print(f"[Map] {EVAL_MAP_DIR} {TOWNS[0]}: {len(gmap.nodes)} nodes, "
               f"{len(gmap.edges)} edges, placement={gmap.meta.get('placement')} | "
               f"start<= {EVAL_MAP_START_M:g} m, goal<= {EVAL_MAP_GOAL_M:g} m, "
@@ -2079,7 +2084,8 @@ def run_eval(env, agent, pxr, server, out_root):
                     from vae_nav.image_nav import ImageNavigator
                     nav = ImageNavigator(route, img_thr, confirm_steps=EVAL_MAP_ARRIVE_STEPS,
                                          leg_steps=EVAL_MAP_LEG_TIMEOUT,
-                                         max_replans=EVAL_MAP_REPLAN or 3, node_xy=gmap._xy)
+                                         max_replans=EVAL_MAP_REPLAN or 3, node_xy=gmap._xy,
+                                         next_advance=EVAL_MAP_NEXT_ADVANCE)
                 else:
                     nav = image_map.Navigator(gmap, route, switch_m=EVAL_MAP_SWITCH_M,
                                               lookahead_m=EVAL_MAP_LOOKAHEAD_M)

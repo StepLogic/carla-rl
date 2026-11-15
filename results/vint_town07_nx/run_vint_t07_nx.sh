@@ -14,6 +14,15 @@
 #   - leg budget 150 TICKS in every case: AR=2 -> LEG_TIMEOUT 75 / LEG_STEPS 50,
 #     AR=1 -> the defaults 150 / 100.
 # VINT_AR is REQUIRED (the user decides ViNT's action repeat); the label carries it.
+# USER DECISION 2026-11-15 (relayed by the map benchmark session): VINT_AR=1, ViNT at its own
+# native rate, with the default leg budget (LEG_TIMEOUT 150 / LEG_STEPS 100 = 150 ticks).
+# Why: every significance test in the table is WITHIN one policy's block (paired exact
+# McNemar against that policy's own no-map arm, Holm across the three maps of a band), so
+# the rate need only be consistent inside a block. ViNT is a third-party baseline never
+# tuned for a held action; forcing AR=2 on it would risk a weakened baseline with no
+# measure of how much of any deficit came from the rate. Cost: the c0 block (AR=2) and the
+# ViNT block (AR=1) run at different rates. The table states the rate per block, and
+# cross-policy ABSOLUTE numbers are not rate-matched: never quote them head-to-head.
 # Final ViNT dagger3_e1, run once; the Town07 ViNT topomap built 2026-11-12 (drive 0).
 # Each cell is skipped if its eval.json exists. Refuses to start beside another CARLA.
 set -u

@@ -1,0 +1,791 @@
+{
+ "checkpoint": "/home/robotlab/carla-sac-local/checkpoints/il_bc_c0/step_15000",
+ "episodes": 20,
+ "success_rate": 0.25,
+ "spl": 0.24736368058158725,
+ "spl_shortest_from_route": 20,
+ "arrival_radius_m": 1.0,
+ "success_rate_2m": 0.25,
+ "episodes_file": "/home/robotlab/scratch/carla-rl/.claude/worktrees/vint-carla/results/junction_bands/episodes/Town07_turns1_pilot.json",
+ "map_dir": null,
+ "unroutable": 0,
+ "map_fallback": 0,
+ "wilson95": [
+  0.112,
+  0.469
+ ],
+ "ends": {
+  "off_road": 4,
+  "crossing": 11,
+  "reached": 5
+ },
+ "fault_ends": "crossing/off_road/collision",
+ "deterministic": true,
+ "noise_scale": 0.0,
+ "towns": [
+  "Town07"
+ ],
+ "seed0": 10000,
+ "episodes_detail": [
+  {
+   "episode": 0,
+   "seed": 41226,
+   "town": "Town07",
+   "end": "off_road",
+   "start_xy": [
+    -101.016,
+    66.774
+   ],
+   "start_yaw": -1.4775,
+   "goal_xy": [
+    4.631,
+    62.499
+   ],
+   "bin": "turns1_pilot",
+   "kind": "straight",
+   "band": "turns",
+   "reached_2m": false,
+   "closest_m": 104.853,
+   "speed_at_closest_kmh": 14.76,
+   "entry_speed_kmh": null,
+   "min_speed_inside_kmh": null,
+   "spl_2m": 0.0,
+   "steps": 523,
+   "return": -30.19,
+   "reached": false,
+   "shortest_m": 114.0,
+   "shortest_src": "route",
+   "straight_m": 105.73,
+   "path_m": 210.6,
+   "spl": 0.0,
+   "video": "/home/robotlab/scratch/carla-rl/.claude/worktrees/vint-carla/results/junction_bands/checkpoints/bench_jbpilot_turns1_mapless_Town07_turns/eval_step_15000/videos/ep000000_off_road.mp4",
+   "end_xy": [
+    -67.86,
+    -91.54
+   ],
+   "end_in_junction": false
+  },
+  {
+   "episode": 1,
+   "seed": 41228,
+   "town": "Town07",
+   "end": "crossing",
+   "start_xy": [
+    -114.759,
+    -162.246
+   ],
+   "start_yaw": -3.1319,
+   "goal_xy": [
+    -201.545,
+    -120.85
+   ],
+   "bin": "turns1_pilot",
+   "kind": "curved",
+   "band": "turns",
+   "reached_2m": false,
+   "closest_m": 43.793,
+   "speed_at_closest_kmh": 15.63,
+   "entry_speed_kmh": null,
+   "min_speed_inside_kmh": null,
+   "spl_2m": 0.0,
+   "steps": 225,
+   "return": 94.76,
+   "reached": false,
+   "shortest_m": 125.61,
+   "shortest_src": "route",
+   "straight_m": 96.15,
+   "path_m": 89.14,
+   "spl": 0.0,
+   "video": null,
+   "end_xy": [
+    -199.24,
+    -171.31
+   ],
+   "end_in_junction": false
+  },
+  {
+   "episode": 2,
+   "seed": 41229,
+   "town": "Town07",
+   "end": "crossing",
+   "start_xy": [
+    -80.164,
+    -135.938
+   ],
+   "start_yaw": 1.8624,
+   "goal_xy": [
+    -102.369,
+    -74.597
+   ],
+   "bin": "turns1_pilot",
+   "kind": "straight",
+   "band": "turns",
+   "reached_2m": false,
+   "closest_m": 23.681,
+   "speed_at_closest_kmh": 18.7,
+   "entry_speed_kmh": null,
+   "min_speed_inside_kmh": null,
+   "spl_2m": 0.0,
+   "steps": 153,
+   "return": 50.19,
+   "reached": false,
+   "shortest_m": 67.79,
+   "shortest_src": "route",
+   "straight_m": 65.24,
+   "path_m": 50.67,
+   "spl": 0.0,
+   "video": null,
+   "end_xy": [
+    -109.01,
+    -97.33
+   ],
+   "end_in_junction": false
+  },
+  {
+   "episode": 3,
+   "seed": 41230,
+   "town": "Town07",
+   "end": "reached",
+   "start_xy": [
+    -5.862,
+    45.78
+   ],
+   "start_yaw": 1.5791,
+   "goal_xy": [
+    58.853,
+    63.942
+   ],
+   "bin": "turns1_pilot",
+   "kind": "straight",
+   "band": "turns",
+   "reached_2m": true,
+   "closest_m": 0.859,
+   "speed_at_closest_kmh": 6.5,
+   "entry_speed_kmh": 4.93,
+   "min_speed_inside_kmh": 4.93,
+   "spl_2m": 1.0,
+   "steps": 202,
+   "return": 192.67,
+   "reached": true,
+   "shortest_m": 78.34,
+   "shortest_src": "route",
+   "straight_m": 67.21,
+   "path_m": 76.33,
+   "spl": 1.0,
+   "video": null,
+   "end_xy": [
+    58.0,
+    64.08
+   ],
+   "end_in_junction": false
+  },
+  {
+   "episode": 4,
+   "seed": 41233,
+   "town": "Town07",
+   "end": "reached",
+   "start_xy": [
+    -199.432,
+    62.853
+   ],
+   "start_yaw": -1.5595,
+   "goal_xy": [
+    -125.174,
+    52.144
+   ],
+   "bin": "turns1_pilot",
+   "kind": "straight",
+   "band": "turns",
+   "reached_2m": true,
+   "closest_m": 0.788,
+   "speed_at_closest_kmh": 9.11,
+   "entry_speed_kmh": 9.4,
+   "min_speed_inside_kmh": 9.11,
+   "spl_2m": 1.0,
+   "steps": 264,
+   "return": 198.91,
+   "reached": true,
+   "shortest_m": 82.49,
+   "shortest_src": "route",
+   "straight_m": 75.03,
+   "path_m": 81.41,
+   "spl": 1.0,
+   "video": null,
+   "end_xy": [
+    -125.96,
+    52.23
+   ],
+   "end_in_junction": false
+  },
+  {
+   "episode": 5,
+   "seed": 41238,
+   "town": "Town07",
+   "end": "off_road",
+   "start_xy": [
+    -101.72,
+    53.693
+   ],
+   "start_yaw": -1.9865,
+   "goal_xy": [
+    -202.623,
+    62.08
+   ],
+   "bin": "turns1_pilot",
+   "kind": "straight",
+   "band": "turns",
+   "reached_2m": false,
+   "closest_m": 100.501,
+   "speed_at_closest_kmh": 12.69,
+   "entry_speed_kmh": null,
+   "min_speed_inside_kmh": null,
+   "spl_2m": 0.0,
+   "steps": 312,
+   "return": -32.07,
+   "reached": false,
+   "shortest_m": 114.45,
+   "shortest_src": "route",
+   "straight_m": 101.25,
+   "path_m": 124.63,
+   "spl": 0.0,
+   "video": null,
+   "end_xy": [
+    -93.48,
+    -69.08
+   ],
+   "end_in_junction": true
+  },
+  {
+   "episode": 6,
+   "seed": 41242,
+   "town": "Town07",
+   "end": "crossing",
+   "start_xy": [
+    -0.917,
+    56.291
+   ],
+   "start_yaw": -2.236,
+   "goal_xy": [
+    -32.175,
+    -3.029
+   ],
+   "bin": "turns1_pilot",
+   "kind": "curved",
+   "band": "turns",
+   "reached_2m": false,
+   "closest_m": 29.824,
+   "speed_at_closest_kmh": 16.25,
+   "entry_speed_kmh": null,
+   "min_speed_inside_kmh": null,
+   "spl_2m": 0.0,
+   "steps": 750,
+   "return": 5.89,
+   "reached": false,
+   "shortest_m": 86.54,
+   "shortest_src": "route",
+   "straight_m": 67.05,
+   "path_m": 320.78,
+   "spl": 0.0,
+   "video": null,
+   "end_xy": [
+    28.09,
+    -229.14
+   ],
+   "end_in_junction": false
+  },
+  {
+   "episode": 7,
+   "seed": 41246,
+   "town": "Town07",
+   "end": "reached",
+   "start_xy": [
+    -99.112,
+    -29.225
+   ],
+   "start_yaw": -1.5655,
+   "goal_xy": [
+    -60.232,
+    -62.172
+   ],
+   "bin": "turns1_pilot",
+   "kind": "curved",
+   "band": "turns",
+   "reached_2m": true,
+   "closest_m": 0.858,
+   "speed_at_closest_kmh": 9.06,
+   "entry_speed_kmh": 9.8,
+   "min_speed_inside_kmh": 9.06,
+   "spl_2m": 0.9471297063518632,
+   "steps": 218,
+   "return": 169.61,
+   "reached": true,
+   "shortest_m": 68.65,
+   "shortest_src": "route",
+   "straight_m": 50.96,
+   "path_m": 71.42,
+   "spl": 0.9472736116317454,
+   "video": null,
+   "end_xy": [
+    -61.09,
+    -62.08
+   ],
+   "end_in_junction": false
+  },
+  {
+   "episode": 8,
+   "seed": 41250,
+   "town": "Town07",
+   "end": "crossing",
+   "start_xy": [
+    -188.123,
+    -162.962
+   ],
+   "start_yaw": -3.1319,
+   "goal_xy": [
+    -198.31,
+    -212.181
+   ],
+   "bin": "turns1_pilot",
+   "kind": "straight",
+   "band": "turns",
+   "reached_2m": false,
+   "closest_m": 41.273,
+   "speed_at_closest_kmh": 18.1,
+   "entry_speed_kmh": null,
+   "min_speed_inside_kmh": null,
+   "spl_2m": 0.0,
+   "steps": 46,
+   "return": 14.16,
+   "reached": false,
+   "shortest_m": 56.33,
+   "shortest_src": "route",
+   "straight_m": 50.26,
+   "path_m": 13.95,
+   "spl": 0.0,
+   "video": null,
+   "end_xy": [
+    -197.36,
+    -170.92
+   ],
+   "end_in_junction": false
+  },
+  {
+   "episode": 9,
+   "seed": 41251,
+   "town": "Town07",
+   "end": "off_road",
+   "start_xy": [
+    -4.007,
+    0.125
+   ],
+   "start_yaw": 2.1582,
+   "goal_xy": [
+    -71.913,
+    54.628
+   ],
+   "bin": "turns1_pilot",
+   "kind": "curved",
+   "band": "turns",
+   "reached_2m": false,
+   "closest_m": 57.516,
+   "speed_at_closest_kmh": 17.26,
+   "entry_speed_kmh": null,
+   "min_speed_inside_kmh": null,
+   "spl_2m": 0.0,
+   "steps": 494,
+   "return": -45.77,
+   "reached": false,
+   "shortest_m": 121.14,
+   "shortest_src": "route",
+   "straight_m": 87.07,
+   "path_m": 232.07,
+   "spl": 0.0,
+   "video": null,
+   "end_xy": [
+    -73.31,
+    -134.01
+   ],
+   "end_in_junction": true
+  },
+  {
+   "episode": 10,
+   "seed": 41257,
+   "town": "Town07",
+   "end": "off_road",
+   "start_xy": [
+    -143.093,
+    -36.5
+   ],
+   "start_yaw": -3.1339,
+   "goal_xy": [
+    -143.864,
+    51.982
+   ],
+   "bin": "turns1_pilot",
+   "kind": "straight",
+   "band": "turns",
+   "reached_2m": false,
+   "closest_m": 88.485,
+   "speed_at_closest_kmh": 7.33,
+   "entry_speed_kmh": null,
+   "min_speed_inside_kmh": null,
+   "spl_2m": 0.0,
+   "steps": 608,
+   "return": -30.33,
+   "reached": false,
+   "shortest_m": 99.74,
+   "shortest_src": "route",
+   "straight_m": 88.48,
+   "path_m": 248.67,
+   "spl": 0.0,
+   "video": "/home/robotlab/scratch/carla-rl/.claude/worktrees/vint-carla/results/junction_bands/checkpoints/bench_jbpilot_turns1_mapless_Town07_turns/eval_step_15000/videos/ep000010_off_road.mp4",
+   "end_xy": [
+    -119.1,
+    -155.71
+   ],
+   "end_in_junction": false
+  },
+  {
+   "episode": 11,
+   "seed": 41262,
+   "town": "Town07",
+   "end": "crossing",
+   "start_xy": [
+    -7.469,
+    0.23
+   ],
+   "start_yaw": -0.0098,
+   "goal_xy": [
+    68.035,
+    -42.447
+   ],
+   "bin": "turns1_pilot",
+   "kind": "curved",
+   "band": "turns",
+   "reached_2m": false,
+   "closest_m": 72.522,
+   "speed_at_closest_kmh": 13.79,
+   "entry_speed_kmh": null,
+   "min_speed_inside_kmh": null,
+   "spl_2m": 0.0,
+   "steps": 52,
+   "return": 10.62,
+   "reached": false,
+   "shortest_m": 122.84,
+   "shortest_src": "route",
+   "straight_m": 86.73,
+   "path_m": 14.74,
+   "spl": 0.0,
+   "video": null,
+   "end_xy": [
+    6.39,
+    -4.25
+   ],
+   "end_in_junction": false
+  },
+  {
+   "episode": 12,
+   "seed": 41267,
+   "town": "Town07",
+   "end": "crossing",
+   "start_xy": [
+    -190.123,
+    -162.981
+   ],
+   "start_yaw": -3.1319,
+   "goal_xy": [
+    -201.571,
+    -52.482
+   ],
+   "bin": "turns1_pilot",
+   "kind": "straight",
+   "band": "turns",
+   "reached_2m": false,
+   "closest_m": 111.068,
+   "speed_at_closest_kmh": 7.19,
+   "entry_speed_kmh": null,
+   "min_speed_inside_kmh": null,
+   "spl_2m": 0.0,
+   "steps": 185,
+   "return": -18.63,
+   "reached": false,
+   "shortest_m": 118.61,
+   "shortest_src": "route",
+   "straight_m": 111.09,
+   "path_m": 79.35,
+   "spl": 0.0,
+   "video": null,
+   "end_xy": [
+    -194.47,
+    -237.23
+   ],
+   "end_in_junction": false
+  },
+  {
+   "episode": 13,
+   "seed": 41268,
+   "town": "Town07",
+   "end": "crossing",
+   "start_xy": [
+    -86.253,
+    -120.094
+   ],
+   "start_yaw": 2.0238,
+   "goal_xy": [
+    -4.801,
+    -81.076
+   ],
+   "bin": "turns1_pilot",
+   "kind": "curved",
+   "band": "turns",
+   "reached_2m": false,
+   "closest_m": 90.079,
+   "speed_at_closest_kmh": 14.75,
+   "entry_speed_kmh": null,
+   "min_speed_inside_kmh": null,
+   "spl_2m": 0.0,
+   "steps": 704,
+   "return": -55.82,
+   "reached": false,
+   "shortest_m": 119.15,
+   "shortest_src": "route",
+   "straight_m": 90.31,
+   "path_m": 324.55,
+   "spl": 0.0,
+   "video": null,
+   "end_xy": [
+    -196.48,
+    104.84
+   ],
+   "end_in_junction": false
+  },
+  {
+   "episode": 14,
+   "seed": 41269,
+   "town": "Town07",
+   "end": "crossing",
+   "start_xy": [
+    -102.376,
+    -73.188
+   ],
+   "start_yaw": 1.5761,
+   "goal_xy": [
+    -67.835,
+    0.819
+   ],
+   "bin": "turns1_pilot",
+   "kind": "curved",
+   "band": "turns",
+   "reached_2m": false,
+   "closest_m": 32.646,
+   "speed_at_closest_kmh": 17.95,
+   "entry_speed_kmh": null,
+   "min_speed_inside_kmh": null,
+   "spl_2m": 0.0,
+   "steps": 669,
+   "return": 44.12,
+   "reached": false,
+   "shortest_m": 105.72,
+   "shortest_src": "route",
+   "straight_m": 81.67,
+   "path_m": 272.67,
+   "spl": 0.0,
+   "video": null,
+   "end_xy": [
+    -195.33,
+    105.3
+   ],
+   "end_in_junction": false
+  },
+  {
+   "episode": 15,
+   "seed": 41272,
+   "town": "Town07",
+   "end": "crossing",
+   "start_xy": [
+    -98.065,
+    52.844
+   ],
+   "start_yaw": -2.8169,
+   "goal_xy": [
+    -149.543,
+    31.097
+   ],
+   "bin": "turns1_pilot",
+   "kind": "curved",
+   "band": "turns",
+   "reached_2m": false,
+   "closest_m": 50.25,
+   "speed_at_closest_kmh": 14.86,
+   "entry_speed_kmh": null,
+   "min_speed_inside_kmh": null,
+   "spl_2m": 0.0,
+   "steps": 302,
+   "return": -31.5,
+   "reached": false,
+   "shortest_m": 68.0,
+   "shortest_src": "route",
+   "straight_m": 55.88,
+   "path_m": 129.75,
+   "spl": 0.0,
+   "video": null,
+   "end_xy": [
+    -98.02,
+    -75.28
+   ],
+   "end_in_junction": false
+  },
+  {
+   "episode": 16,
+   "seed": 41274,
+   "town": "Town07",
+   "end": "reached",
+   "start_xy": [
+    -5.862,
+    45.78
+   ],
+   "start_yaw": 1.5791,
+   "goal_xy": [
+    -61.873,
+    55.201
+   ],
+   "bin": "turns1_pilot",
+   "kind": "straight",
+   "band": "turns",
+   "reached_2m": true,
+   "closest_m": 0.817,
+   "speed_at_closest_kmh": 8.22,
+   "entry_speed_kmh": 8.07,
+   "min_speed_inside_kmh": 8.07,
+   "spl_2m": 1.0,
+   "steps": 262,
+   "return": 179.53,
+   "reached": true,
+   "shortest_m": 65.51,
+   "shortest_src": "route",
+   "straight_m": 56.8,
+   "path_m": 62.95,
+   "spl": 1.0,
+   "video": null,
+   "end_xy": [
+    -61.06,
+    55.26
+   ],
+   "end_in_junction": false
+  },
+  {
+   "episode": 17,
+   "seed": 41276,
+   "town": "Town07",
+   "end": "crossing",
+   "start_xy": [
+    78.015,
+    5.692
+   ],
+   "start_yaw": -2.3265,
+   "goal_xy": [
+    59.929,
+    -72.882
+   ],
+   "bin": "turns1_pilot",
+   "kind": "straight",
+   "band": "turns",
+   "reached_2m": false,
+   "closest_m": 67.141,
+   "speed_at_closest_kmh": 11.39,
+   "entry_speed_kmh": null,
+   "min_speed_inside_kmh": null,
+   "spl_2m": 0.0,
+   "steps": 54,
+   "return": 14.9,
+   "reached": false,
+   "shortest_m": 88.43,
+   "shortest_src": "route",
+   "straight_m": 80.63,
+   "path_m": 14.73,
+   "spl": 0.0,
+   "video": null,
+   "end_xy": [
+    73.24,
+    -7.07
+   ],
+   "end_in_junction": false
+  },
+  {
+   "episode": 18,
+   "seed": 41277,
+   "town": "Town07",
+   "end": "reached",
+   "start_xy": [
+    -5.862,
+    45.78
+   ],
+   "start_yaw": 1.5791,
+   "goal_xy": [
+    -140.912,
+    48.907
+   ],
+   "bin": "turns1_pilot",
+   "kind": "straight",
+   "band": "turns",
+   "reached_2m": true,
+   "closest_m": 0.841,
+   "speed_at_closest_kmh": 9.58,
+   "entry_speed_kmh": 9.81,
+   "min_speed_inside_kmh": 9.58,
+   "spl_2m": 1.0,
+   "steps": 452,
+   "return": 275.38,
+   "reached": true,
+   "shortest_m": 145.5,
+   "shortest_src": "route",
+   "straight_m": 135.09,
+   "path_m": 143.0,
+   "spl": 1.0,
+   "video": null,
+   "end_xy": [
+    -140.1,
+    48.67
+   ],
+   "end_in_junction": false
+  },
+  {
+   "episode": 19,
+   "seed": 41280,
+   "town": "Town07",
+   "end": "crossing",
+   "start_xy": [
+    -190.745,
+    -162.987
+   ],
+   "start_yaw": -3.1319,
+   "goal_xy": [
+    -202.313,
+    -24.961
+   ],
+   "bin": "turns1_pilot",
+   "kind": "straight",
+   "band": "turns",
+   "reached_2m": false,
+   "closest_m": 138.509,
+   "speed_at_closest_kmh": 0.0,
+   "entry_speed_kmh": null,
+   "min_speed_inside_kmh": null,
+   "spl_2m": 0.0,
+   "steps": 38,
+   "return": 1.1,
+   "reached": false,
+   "shortest_m": 145.52,
+   "shortest_src": "route",
+   "straight_m": 138.51,
+   "path_m": 11.21,
+   "spl": 0.0,
+   "video": null,
+   "end_xy": [
+    -197.28,
+    -170.86
+   ],
+   "end_in_junction": false
+  }
+ ]
+}

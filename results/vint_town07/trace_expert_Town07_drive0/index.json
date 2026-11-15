@@ -1,0 +1,405 @@
+{
+ "town": "Town07",
+ "checkpoint": "/home/robotlab/carla-sac-local/checkpoints/il_bc_c0/step_15000",
+ "spacing_m": null,
+ "driver": "expert",
+ "target_kmh": 15.0,
+ "tour_edges": 482,
+ "tour_m": 14074.1,
+ "lanes": 280,
+ "lanes_m": 7129.4,
+ "tour_waypoints": 6817,
+ "junction_turns_required": true,
+ "lanes_left_out": 2,
+ "lanes_left_out_m": 38.6,
+ "plan_waypoints": 6829,
+ "closing_waypoints": 12,
+ "trace_only": true,
+ "segments": [
+  {
+   "seg": 0,
+   "file": "seg_00000.npz",
+   "drive": 0,
+   "continues": false,
+   "jumped": false,
+   "start_xy": [
+    -147.78,
+    -85.08
+   ],
+   "stop_xy": [
+    -81.82,
+    -107.71
+   ],
+   "end": null,
+   "steps": 2000,
+   "kept": 2000,
+   "metres": 796.96,
+   "plan_index": 399,
+   "crossings_steps": 9
+  },
+  {
+   "seg": 1,
+   "file": "seg_00001.npz",
+   "drive": 0,
+   "continues": true,
+   "jumped": false,
+   "start_xy": [
+    -81.44,
+    -107.55
+   ],
+   "stop_xy": [
+    -133.05,
+    -33.32
+   ],
+   "end": null,
+   "steps": 2000,
+   "kept": 2000,
+   "metres": 803.32,
+   "plan_index": 799,
+   "crossings_steps": 8
+  },
+  {
+   "seg": 2,
+   "file": "seg_00002.npz",
+   "drive": 0,
+   "continues": true,
+   "jumped": false,
+   "start_xy": [
+    -132.63,
+    -33.32
+   ],
+   "stop_xy": [
+    -201.5,
+    -204.38
+   ],
+   "end": null,
+   "steps": 2000,
+   "kept": 2000,
+   "metres": 801.93,
+   "plan_index": 1193,
+   "crossings_steps": 0
+  },
+  {
+   "seg": 3,
+   "file": "seg_00003.npz",
+   "drive": 0,
+   "continues": true,
+   "jumped": false,
+   "start_xy": [
+    -201.5,
+    -203.98
+   ],
+   "stop_xy": [
+    -92.29,
+    -60.37
+   ],
+   "end": null,
+   "steps": 2000,
+   "kept": 2000,
+   "metres": 803.29,
+   "plan_index": 1593,
+   "crossings_steps": 6
+  },
+  {
+   "seg": 4,
+   "file": "seg_00004.npz",
+   "drive": 0,
+   "continues": true,
+   "jumped": false,
+   "start_xy": [
+    -91.89,
+    -60.47
+   ],
+   "stop_xy": [
+    2.97,
+    -242.88
+   ],
+   "end": null,
+   "steps": 2000,
+   "kept": 2000,
+   "metres": 803.26,
+   "plan_index": 1988,
+   "crossings_steps": 6
+  },
+  {
+   "seg": 5,
+   "file": "seg_00005.npz",
+   "drive": 0,
+   "continues": true,
+   "jumped": false,
+   "start_xy": [
+    2.55,
+    -242.88
+   ],
+   "stop_xy": [
+    -151.58,
+    -69.1
+   ],
+   "end": null,
+   "steps": 2000,
+   "kept": 2000,
+   "metres": 803.16,
+   "plan_index": 2383,
+   "crossings_steps": 7
+  },
+  {
+   "seg": 6,
+   "file": "seg_00006.npz",
+   "drive": 0,
+   "continues": true,
+   "jumped": false,
+   "start_xy": [
+    -151.59,
+    -68.71
+   ],
+   "stop_xy": [
+    -134.58,
+    -162.44
+   ],
+   "end": null,
+   "steps": 2000,
+   "kept": 2000,
+   "metres": 803.46,
+   "plan_index": 2777,
+   "crossings_steps": 8
+  },
+  {
+   "seg": 7,
+   "file": "seg_00007.npz",
+   "drive": 0,
+   "continues": true,
+   "jumped": false,
+   "start_xy": [
+    -134.98,
+    -162.44
+   ],
+   "stop_xy": [
+    -168.78,
+    48.43
+   ],
+   "end": null,
+   "steps": 2000,
+   "kept": 2000,
+   "metres": 802.65,
+   "plan_index": 3181,
+   "crossings_steps": 9
+  },
+  {
+   "seg": 8,
+   "file": "seg_00008.npz",
+   "drive": 0,
+   "continues": true,
+   "jumped": false,
+   "start_xy": [
+    -169.19,
+    48.44
+   ],
+   "stop_xy": [
+    -165.76,
+    109.23
+   ],
+   "end": null,
+   "steps": 2000,
+   "kept": 2000,
+   "metres": 803.52,
+   "plan_index": 3571,
+   "crossings_steps": 7
+  },
+  {
+   "seg": 9,
+   "file": "seg_00009.npz",
+   "drive": 0,
+   "continues": true,
+   "jumped": false,
+   "start_xy": [
+    -166.16,
+    109.19
+   ],
+   "stop_xy": [
+    56.18,
+    -68.08
+   ],
+   "end": null,
+   "steps": 2000,
+   "kept": 2000,
+   "metres": 801.92,
+   "plan_index": 3974,
+   "crossings_steps": 6
+  },
+  {
+   "seg": 10,
+   "file": "seg_00010.npz",
+   "drive": 0,
+   "continues": true,
+   "jumped": false,
+   "start_xy": [
+    56.14,
+    -67.69
+   ],
+   "stop_xy": [
+    -149.42,
+    24.84
+   ],
+   "end": null,
+   "steps": 2000,
+   "kept": 2000,
+   "metres": 803.6,
+   "plan_index": 4369,
+   "crossings_steps": 2
+  },
+  {
+   "seg": 11,
+   "file": "seg_00011.npz",
+   "drive": 0,
+   "continues": true,
+   "jumped": false,
+   "start_xy": [
+    -149.42,
+    24.43
+   ],
+   "stop_xy": [
+    -149.29,
+    33.93
+   ],
+   "end": null,
+   "steps": 2000,
+   "kept": 2000,
+   "metres": 802.42,
+   "plan_index": 4770,
+   "crossings_steps": 6
+  },
+  {
+   "seg": 12,
+   "file": "seg_00012.npz",
+   "drive": 0,
+   "continues": true,
+   "jumped": false,
+   "start_xy": [
+    -149.3,
+    33.54
+   ],
+   "stop_xy": [
+    74.49,
+    7.86
+   ],
+   "end": null,
+   "steps": 2000,
+   "kept": 2000,
+   "metres": 802.34,
+   "plan_index": 5163,
+   "crossings_steps": 8
+  },
+  {
+   "seg": 13,
+   "file": "seg_00013.npz",
+   "drive": 0,
+   "continues": true,
+   "jumped": false,
+   "start_xy": [
+    74.77,
+    8.14
+   ],
+   "stop_xy": [
+    -84.49,
+    -62.21
+   ],
+   "end": null,
+   "steps": 2000,
+   "kept": 2000,
+   "metres": 803.83,
+   "plan_index": 5563,
+   "crossings_steps": 3
+  },
+  {
+   "seg": 14,
+   "file": "seg_00014.npz",
+   "drive": 0,
+   "continues": true,
+   "jumped": false,
+   "start_xy": [
+    -84.08,
+    -62.21
+   ],
+   "stop_xy": [
+    -105.14,
+    109.48
+   ],
+   "end": null,
+   "steps": 2000,
+   "kept": 2000,
+   "metres": 802.85,
+   "plan_index": 5967,
+   "crossings_steps": 2
+  },
+  {
+   "seg": 15,
+   "file": "seg_00015.npz",
+   "drive": 0,
+   "continues": true,
+   "jumped": false,
+   "start_xy": [
+    -105.19,
+    109.1
+   ],
+   "stop_xy": [
+    -185.22,
+    -162.93
+   ],
+   "end": null,
+   "steps": 2000,
+   "kept": 2000,
+   "metres": 801.93,
+   "plan_index": 6363,
+   "crossings_steps": 5
+  },
+  {
+   "seg": 16,
+   "file": "seg_00016.npz",
+   "drive": 0,
+   "continues": true,
+   "jumped": false,
+   "start_xy": [
+    -185.63,
+    -162.94
+   ],
+   "stop_xy": [
+    -74.63,
+    -2.61
+   ],
+   "end": null,
+   "steps": 2000,
+   "kept": 2000,
+   "metres": 802.02,
+   "plan_index": 6750,
+   "crossings_steps": 0
+  },
+  {
+   "seg": 17,
+   "file": "seg_00017.npz",
+   "drive": 0,
+   "continues": true,
+   "jumped": false,
+   "start_xy": [
+    -75.02,
+    -2.61
+   ],
+   "stop_xy": [
+    -145.03,
+    -38.1
+   ],
+   "end": "stuck",
+   "steps": 536,
+   "kept": 536,
+   "metres": 94.84,
+   "plan_index": 6797,
+   "crossings_steps": 2
+  }
+ ],
+ "done": true,
+ "faults": {
+  "collision": 304,
+  "off_road": 248,
+  "crossing": 94
+ },
+ "view_note": "drive 0 only of /home/robotlab/carla-sac-local/checkpoints/trace_expert_jx/trace_expert_Town07 (segments 0-17, 34,536 of 34,681 steps); drive 1 (segment 18, 145 steps, 56.9 m, resumed after 'stuck') left out because ViNT's topomap links nodes in drive order. Built 2026-11-12 for ViNT's Town07 topomap."
+}

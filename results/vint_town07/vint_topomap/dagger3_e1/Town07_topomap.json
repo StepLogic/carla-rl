@@ -1,0 +1,27 @@
+{
+ "steps": 34536,
+ "nodes": 3454,
+ "every": 10,
+ "drive_links": 3453,
+ "seq_dist_median": 3.4379844665527344,
+ "tau": 6.239554214477531,
+ "q": 0.95,
+ "radius_m": 8.0,
+ "min_gap": 3,
+ "revisit_candidates": 23462,
+ "kept_revisits": 14404,
+ "edges": 17857,
+ "scc_largest": 3454,
+ "scc_largest_frac": 1.0,
+ "scc_count": 1,
+ "trace": "/home/robotlab/scratch/carla-rl/.claude/worktrees/vint-carla/results/vint_town07/trace_expert_Town07_drive0",
+ "ckpt": "/home/robotlab/vint/final/dagger3_e1",
+ "town": "Town07",
+ "image_size": [
+  85,
+  64
+ ],
+ "context_size": 5,
+ "stride": 3,
+ "odometry": "revisit candidates only (disclosed)"
+}

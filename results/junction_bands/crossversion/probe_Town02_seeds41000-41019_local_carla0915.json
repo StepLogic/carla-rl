@@ -1,0 +1,382 @@
+[
+ {
+  "town": "Town02",
+  "seed": 41000,
+  "band": "turns",
+  "start_xy": [
+   43.842,
+   234.807
+  ],
+  "start_yaw": 1.0195,
+  "goal_xy": [
+   120.719,
+   240.917
+  ],
+  "turns": 0,
+  "junctions": 1,
+  "plan_m": 77.57,
+  "route_m": 80.141,
+  "euclid_m": 77.119
+ },
+ {
+  "town": "Town02",
+  "seed": 41001,
+  "band": "turns",
+  "start_xy": [
+   138.862,
+   236.537
+  ],
+  "start_yaw": -2.727,
+  "goal_xy": [
+   189.689,
+   202.834
+  ],
+  "turns": 2,
+  "junctions": 3,
+  "plan_m": 101.89,
+  "route_m": 106.333,
+  "euclid_m": 60.986
+ },
+ {
+  "town": "Town02",
+  "seed": 41002,
+  "band": "turns",
+  "start_xy": [
+   177.541,
+   191.633
+  ],
+  "start_yaw": 0.0004,
+  "goal_xy": [
+   167.27,
+   236.945
+  ],
+  "turns": 2,
+  "junctions": 2,
+  "plan_m": 72.85,
+  "route_m": 76.546,
+  "euclid_m": 46.461
+ },
+ {
+  "town": "Town02",
+  "seed": 41003,
+  "band": "turns",
+  "start_xy": [
+   -7.435,
+   151.237
+  ],
+  "start_yaw": 1.573,
+  "goal_xy": [
+   33.618,
+   191.568
+  ],
+  "turns": 1,
+  "junctions": 1,
+  "plan_m": 75.55,
+  "route_m": 78.082,
+  "euclid_m": 57.549
+ },
+ {
+  "town": "Town02",
+  "seed": 41004,
+  "band": "turns",
+  "start_xy": [
+   132.181,
+   191.613
+  ],
+  "start_yaw": 0.0004,
+  "goal_xy": [
+   193.682,
+   168.963
+  ],
+  "turns": 1,
+  "junctions": 2,
+  "plan_m": 77.94,
+  "route_m": 81.07,
+  "euclid_m": 65.539
+ },
+ {
+  "town": "Town02",
+  "seed": 41005,
+  "band": "turns",
+  "start_xy": [
+   15.399,
+   187.56
+  ],
+  "start_yaw": -3.1411,
+  "goal_xy": [
+   18.468,
+   109.501
+  ],
+  "turns": 1,
+  "junctions": 1,
+  "plan_m": 109.3,
+  "route_m": 113.66,
+  "euclid_m": 78.119
+ },
+ {
+  "town": "Town02",
+  "seed": 41006,
+  "band": "turns",
+  "start_xy": [
+   132.117,
+   232.272
+  ],
+  "start_yaw": 1.5718,
+  "goal_xy": [
+   45.853,
+   226.252
+  ],
+  "turns": 1,
+  "junctions": 2,
+  "plan_m": 96.42,
+  "route_m": 97.851,
+  "euclid_m": 86.474
+ },
+ {
+  "town": "Town02",
+  "seed": 41007,
+  "band": "turns",
+  "start_xy": [
+   41.855,
+   249.962
+  ],
+  "start_yaw": 1.5707,
+  "goal_xy": [
+   92.492,
+   306.545
+  ],
+  "turns": 1,
+  "junctions": 1,
+  "plan_m": 100.3,
+  "route_m": 104.198,
+  "euclid_m": 75.932
+ },
+ {
+  "town": "Town02",
+  "seed": 41008,
+  "band": "turns",
+  "start_xy": [
+   45.851,
+   204.208
+  ],
+  "start_yaw": -1.5709,
+  "goal_xy": [
+   -3.439,
+   152.637
+  ],
+  "turns": 2,
+  "junctions": 2,
+  "plan_m": 91.69,
+  "route_m": 94.918,
+  "euclid_m": 71.338
+ },
+ {
+  "town": "Town02",
+  "seed": 41009,
+  "band": "turns",
+  "start_xy": [
+   130.181,
+   191.612
+  ],
+  "start_yaw": 0.0004,
+  "goal_xy": [
+   193.682,
+   171.963
+  ],
+  "turns": 1,
+  "junctions": 2,
+  "plan_m": 75.94,
+  "route_m": 80.07,
+  "euclid_m": 66.472
+ },
+ {
+  "town": "Town02",
+  "seed": 41010,
+  "band": "turns",
+  "start_xy": [
+   188.444,
+   242.982
+  ],
+  "start_yaw": 0.8982,
+  "goal_xy": [
+   173.413,
+   302.51
+  ],
+  "turns": 0,
+  "junctions": 1,
+  "plan_m": 69.32,
+  "route_m": 72.982,
+  "euclid_m": 61.396
+ },
+ {
+  "town": "Town02",
+  "seed": 41011,
+  "band": "turns",
+  "start_xy": [
+   45.855,
+   252.898
+  ],
+  "start_yaw": -1.5709,
+  "goal_xy": [
+   107.715,
+   240.909
+  ],
+  "turns": 1,
+  "junctions": 1,
+  "plan_m": 67.89,
+  "route_m": 71.829,
+  "euclid_m": 63.011
+ },
+ {
+  "town": "Town02",
+  "seed": 41012,
+  "band": "turns",
+  "start_xy": [
+   57.72,
+   236.879
+  ],
+  "start_yaw": -3.141,
+  "goal_xy": [
+   -3.396,
+   278.458
+  ],
+  "turns": 2,
+  "junctions": 2,
+  "plan_m": 139.78,
+  "route_m": 142.76,
+  "euclid_m": 73.918
+ },
+ {
+  "town": "Town02",
+  "seed": 41013,
+  "band": "turns",
+  "start_xy": [
+   7.777,
+   187.556
+  ],
+  "start_yaw": -3.1411,
+  "goal_xy": [
+   -7.429,
+   257.501
+  ],
+  "turns": 1,
+  "junctions": 1,
+  "plan_m": 79.77,
+  "route_m": 82.948,
+  "euclid_m": 71.579
+ },
+ {
+  "town": "Town02",
+  "seed": 41014,
+  "band": "turns",
+  "start_xy": [
+   188.444,
+   242.982
+  ],
+  "start_yaw": 0.8982,
+  "goal_xy": [
+   182.134,
+   302.407
+  ],
+  "turns": 0,
+  "junctions": 1,
+  "plan_m": 60.07,
+  "route_m": 64.273,
+  "euclid_m": 59.759
+ },
+ {
+  "town": "Town02",
+  "seed": 41015,
+  "band": "turns",
+  "start_xy": [
+   52.291,
+   187.576
+  ],
+  "start_yaw": -3.1411,
+  "goal_xy": [
+   73.856,
+   240.888
+  ],
+  "turns": 1,
+  "junctions": 2,
+  "plan_m": 83.46,
+  "route_m": 87.011,
+  "euclid_m": 57.509
+ },
+ {
+  "town": "Town02",
+  "seed": 41016,
+  "band": "turns",
+  "start_xy": [
+   42.637,
+   305.028
+  ],
+  "start_yaw": -0.6548,
+  "goal_xy": [
+   15.158,
+   187.559
+  ],
+  "turns": 1,
+  "junctions": 3,
+  "plan_m": 139.98,
+  "route_m": 144.901,
+  "euclid_m": 120.64
+ },
+ {
+  "town": "Town02",
+  "seed": 41017,
+  "band": "turns",
+  "start_xy": [
+   66.98,
+   240.884
+  ],
+  "start_yaw": 0.0006,
+  "goal_xy": [
+   97.883,
+   187.597
+  ],
+  "turns": 2,
+  "junctions": 2,
+  "plan_m": 150.15,
+  "route_m": 153.708,
+  "euclid_m": 61.599
+ },
+ {
+  "town": "Town02",
+  "seed": 41018,
+  "band": "turns",
+  "start_xy": [
+   125.98,
+   240.92
+  ],
+  "start_yaw": 0.0006,
+  "goal_xy": [
+   189.673,
+   289.462
+  ],
+  "turns": 1,
+  "junctions": 2,
+  "plan_m": 105.72,
+  "route_m": 109.83,
+  "euclid_m": 80.082
+ },
+ {
+  "town": "Town02",
+  "seed": 41019,
+  "band": "turns",
+  "start_xy": [
+   136.11,
+   195.978
+  ],
+  "start_yaw": -1.6617,
+  "goal_xy": [
+   25.808,
+   187.564
+  ],
+  "turns": 0,
+  "junctions": 2,
+  "plan_m": 113.2,
+  "route_m": 117.279,
+  "euclid_m": 110.622
+ }
+]

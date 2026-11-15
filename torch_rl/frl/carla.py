@@ -393,7 +393,10 @@ class ControlTrunk:
 
 
 LANE_PRIV_DIM = 13       # vae_nav.lane_priv.PRIV_DIM
-PRIV_EXTRA = 5           # speed / 20, mode, goal ahead / 10, goal to the side / 10, goal known
+# speed / 20, mode, goal ahead / 10, goal to the side / 10, goal known, then (2026-11-15, so the critic
+# sees what the reward pays) the explore distance as a share of the distance bonus, and the ROUTE
+# distance to the goal / 10 (the straight-line columns differ from what is paid at a turn).
+PRIV_EXTRA = 7
 PRIV_DIM = LANE_PRIV_DIM + PRIV_EXTRA
 
 
@@ -417,7 +420,37 @@ def priv_vector(info, mode: int) -> np.ndarray:
         out[LANE_PRIV_DIM + 2] = np.clip((c * d[0] + sn * d[1]) / 10.0, -10, 10)
         out[LANE_PRIV_DIM + 3] = np.clip((-sn * d[0] + c * d[1]) / 10.0, -10, 10)
         out[LANE_PRIV_DIM + 4] = 1.0
+    if int(mode) == 1:
+        rem = info.get("route_remaining_m")
+        if rem is not None:
+            out[LANE_PRIV_DIM + 6] = np.clip(float(rem) / 10.0, 0.0, 10.0)
+    else:
+        out[LANE_PRIV_DIM + 5] = np.clip(float(info.get("explore_frac", 0.0) or 0.0), 0.0, 1.0)
     return out
+
+
+@torch.no_grad()
+def steer_agreement(learner, batch, grid: int = 21) -> Dict:
+    """DO THE ACTOR AND THE CRITIC AGREE ON WHICH WAY TO STEER? (user 2026-11-15). On a replay batch:
+    the steering the critic prefers (its best of `grid` values in [-1, 1], the actor's own throttle
+    held, mean over the Q heads) against the steering of the actor's deterministic action.
+    steer_agree: share of states where both steer to the same side, over the states where the actor
+    steers at all (|steer| > 0.05); nan when there are none. steer_gap: mean |critic best - actor|.
+    A diagnostic: no gradient, nothing stored."""
+    obs = {k: v.to(learner.device) for k, v in batch["observations"].items()}
+    a = learner.actor.sample(obs)[2].float()
+    g = torch.linspace(-1.0, 1.0, int(grid), device=a.device)
+    qs = []
+    for v in g:
+        b = a.clone()
+        b[:, 0] = v
+        qs.append(learner.critic(obs, b).mean(0))
+    best = g[torch.stack(qs, 0).argmax(0)]
+    steer = a[:, 0]
+    turning = steer.abs() > 0.05
+    agree = (float((torch.sign(best[turning]) == torch.sign(steer[turning])).float().mean())
+             if bool(turning.any()) else float("nan"))
+    return {"steer_agree": agree, "steer_gap": float((best - steer).abs().mean())}
 
 
 def lane_step_cost(priv, k: float, ticks: int) -> float:
@@ -962,7 +995,8 @@ def train(env, obs, info, out: str, *, trunk: C0Trunk, row_of: Callable, setting
             log(f"[FRL] step={step} policy={pol:.3f}(n={len(recent['policy'])}) "
                 f"goal={mean(g, 0):.3f}(n={len(g)}) goal_len={mean(g, 1):.0f} "
                 f"explore_len={mean(e, 1):.0f} {odo.line()} episodes={episodes} ends={ends} | "
-                + " ".join(f"{k}={v:.4g}" for k, v in sorted(upd.items()))
+                + " ".join(f"{k}={v:.4g}" for k, v in sorted(
+                    dict(upd, **(steer_agreement(learner, rb.sample(s.batch)) if upd else {})).items()))
                 + f" target_entropy={learner.target_entropy:.4f} | rollout steer_lock="
                 f"{roll['lock'] / max(1, roll['n']):.2f} throttle<0.05="
                 f"{roll['idle_thr'] / max(1, roll['n']):.2f} | "
@@ -1237,7 +1271,8 @@ def train_parallel(env, obs, info, out: str, *, trunk: C0Trunk, row_of: Callable
                 log(f"[FRL] step={next_log} policy={pol_sr:.3f}(n={len(recent['policy'])}) "
                     f"goal={mean(g, 0):.3f}(n={len(g)}) goal_len={mean(g, 1):.0f} "
                     f"explore_len={mean(e, 1):.0f} {odo.line()} episodes={episodes} ends={ends} | "
-                    + " ".join(f"{k}={v:.4g}" for k, v in sorted(upd.items()))
+                    + " ".join(f"{k}={v:.4g}" for k, v in sorted(
+                        dict(upd, **(steer_agreement(learner, rb.sample(s.batch)) if upd else {})).items()))
                     + f" target_entropy={learner.target_entropy:.4f} | rollout steer_lock="
                     f"{roll['lock'] / max(1, roll['n']):.2f} throttle<0.05="
                     f"{roll['idle_thr'] / max(1, roll['n']):.2f} | "

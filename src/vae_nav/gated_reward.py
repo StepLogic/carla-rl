@@ -1594,6 +1594,12 @@ class GatedReward(Wrapper):
         # driven the distance.
         self._path_m = getattr(self, "_path_m", 0.0) + float(np.linalg.norm(disp))
         info["explore_dist_m"] = float(self._path_m)
+        # explore_frac (2026-11-15): the share of EXPLORE_GOAL_DIST_M this explore episode has covered,
+        # measured as the arrival test measures it (EXPLORE_DIST_MODE). For the privileged critic, which
+        # otherwise cannot see how close the distance bonus is. 0 in goal mode and when the bonus is off.
+        info["explore_frac"] = (
+            float(min(self._explore_dist() / EXPLORE_GOAL_DIST_M, 1.0))
+            if (self.mode != GOAL and EXPLORE_GOAL_DIST_M > 0.0) else 0.0)
 
         if self.mode == GOAL and self.goal_kind == "progress":
             # BONO ET AL. 2023 (see PROGRESS_K). The same fault counters as the

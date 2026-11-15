@@ -13,6 +13,7 @@ import sys
 
 import numpy as np
 import pytest
+import torch
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path[:0] = [ROOT, os.path.join(ROOT, "src")]
@@ -46,7 +47,7 @@ def test_the_true_state_holds_the_lane_the_speed_the_mode_and_the_goal_in_the_ca
 def test_in_explore_mode_the_goal_columns_are_zero():
     v = fc.priv_vector(_info(), mode=0)
     assert v[fc.LANE_PRIV_DIM + 1] == 0.0
-    assert np.all(v[fc.LANE_PRIV_DIM + 2:] == 0.0)                # user: "but during exploration zero"
+    assert np.all(v[fc.LANE_PRIV_DIM + 2:fc.LANE_PRIV_DIM + 5] == 0.0)   # user: "but during exploration zero"
 
 
 def test_without_the_envs_lane_geometry_it_fails_loudly():
@@ -137,3 +138,57 @@ def test_inside_a_junction_the_lane_cost_charges_the_offset_but_not_the_heading(
     in_junction = fc.lane_step_cost(fc.priv_vector(info, 0), 0.1, 2)
     assert on_lane == pytest.approx(0.1 * 2 * (0.3 + 4.0), abs=1e-4)
     assert in_junction == pytest.approx(0.1 * 2 * 0.3, abs=1e-4)
+
+
+# --- the critic sees what the reward pays (user 2026-11-15: "how can we make the actor and critic agree",
+#     "ok fix it"): the explore distance toward the 200 m bonus, and the ROUTE distance to the goal ---
+
+def test_explore_mode_carries_the_distance_toward_the_bonus_and_still_no_goal():
+    info = dict(_info(), explore_frac=0.4, route_remaining_m=17.0)
+    v = fc.priv_vector(info, mode=0)
+    assert v[fc.LANE_PRIV_DIM + 5] == pytest.approx(0.4)          # 80 m of the 200 m
+    assert np.all(v[fc.LANE_PRIV_DIM + 2:fc.LANE_PRIV_DIM + 5] == 0.0)   # goal columns stay zero
+    assert v[fc.LANE_PRIV_DIM + 6] == 0.0                         # and no route distance in explore
+
+
+def test_goal_mode_carries_the_route_distance_and_no_explore_distance():
+    info = dict(_info(), explore_frac=0.4, route_remaining_m=17.0)
+    v = fc.priv_vector(info, mode=1)
+    assert v[fc.LANE_PRIV_DIM + 6] == pytest.approx(1.7)          # 17 m of road / 10
+    assert v[fc.LANE_PRIV_DIM + 5] == 0.0
+    # no route published (ROUTE_POTENTIAL off, or the reset step): zero, not a crash
+    assert fc.priv_vector(dict(_info(), route_remaining_m=None), mode=1)[fc.LANE_PRIV_DIM + 6] == 0.0
+
+
+class _FakeActor:
+    def __init__(self, steer):
+        self.steer = steer
+
+    def sample(self, obs):
+        n = obs["priv"].shape[0]
+        a = torch.tensor([[self.steer, 0.5]]).repeat(n, 1)
+        return a, torch.zeros(n), a
+
+
+class _FakeLearner:
+    """A critic that prefers steering = `best` in every state, and an actor that steers `steer`."""
+
+    def __init__(self, steer, best):
+        self.actor, self.best, self.device = _FakeActor(steer), best, "cpu"
+
+    def critic(self, obs, a):
+        return torch.stack([-(a[:, 0] - self.best) ** 2] * 2, 0)
+
+
+def test_steer_agreement_is_one_when_the_critic_prefers_the_actors_side_and_zero_when_opposite():
+    batch = {"observations": {"priv": torch.zeros(16, fc.PRIV_DIM)}}
+    same = fc.steer_agreement(_FakeLearner(0.3, 0.5), batch)
+    assert same["steer_agree"] == 1.0 and same["steer_gap"] == pytest.approx(0.2, abs=0.06)
+    opp = fc.steer_agreement(_FakeLearner(0.3, -0.5), batch)
+    assert opp["steer_agree"] == 0.0 and opp["steer_gap"] == pytest.approx(0.8, abs=0.06)
+
+
+def test_steer_agreement_ignores_states_where_the_actor_drives_straight():
+    batch = {"observations": {"priv": torch.zeros(16, fc.PRIV_DIM)}}
+    out = fc.steer_agreement(_FakeLearner(0.0, 0.5), batch)
+    assert math.isnan(out["steer_agree"]) and out["steer_gap"] == pytest.approx(0.5, abs=0.06)

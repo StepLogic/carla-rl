@@ -1,0 +1,338 @@
+% Notes
+% Contibution -> claine
+% Ditch uncertainty and use high entropy  ->
+% Rename decision states
+% Experiment questions should match claims
+% State with comparison with State of ART
+% -> Compare with other baselines
+%  -> Show Habitat experiments
+%  -> Show HM3D experiments
+%  -> Show comparison: TSGM - SGM -show improvement
+% Table
+% 1) Imaganv benchamrk
+% -> Twin Siamese (us)
+% -> TSGM
+% -> SPTM
+% -> VGM
+% 2) NRNS
+% -> TSGM
+% -> SPTM
+% 3) HM3D LH / Gibson LH
+% 5) Map with/without gap nodes
+% 4) CARLA - SH / LH
+% -> Discuss different choices in supplementary
+%     ->
+%     -> If it fits  move it in experiment setup
+%     ->
+% -> Compare
+% \definecolor{oracle}{RGB}{200,220,245}
+\section{Experiments and Evaluation}
+\label{sec:experiments}
+Our method is motivated by two observations. First, a learned low-level visual policy can follow corridors, sidewalks, and lanes without map guidance. Second, the policy's action entropy rises at locations where it must choose between alternatives such as junctions and doorways. Entropy alone is not a sufficient node-selection rule; the high-level policy also needs visual references to localize along segments the low-level policy traverses unaided.
+We test the claim that entropy places nodes at decision points, and that entropy maps with gap nodes match maps built by uniform spacing or learned reachability (SGM~\cite{emmons2020sparse}) with the same number of key nodes, without spacing tuned per environment or a learned critic.
+\MAS{Question numbers are not in order (1-2-4-3)? Also, questions are different from 5.4. You may want to remove last one.}
+\begin{enumerate}
+    \item[Q1.] Does policy entropy concentrate at decision points such as junctions or doorways?
+    \item[Q2.] When does a strong low-level policy still need maps?
+    \item[Q3.] How does an entropy map compare to other mapping approaches?
+    \item[Q5.] What do gap nodes contribute to a map?
+\end{enumerate}
+
+\subsection{Experimental Setup}
+\label{sec:exp-setup}
+\paragraph{Low-level Policies}
+For Habitat, we use the released Gibson-trained DEBiT~\cite{bono2024end} weights as the low-level policy, with no training.
+This controller receives an RGB observation
+and a goal image, and selects among
+\textsc{Forward}, \textsc{Turn Left}, \textsc{Turn Right},
+and \textsc{Stop}.
+Experiments are conducted in Habitat~\cite{habitat19iccv}.
+
+For CARLA~\cite{dosovitskiy2017carla}, controllers trained by
+behavior cloning and by
+Soft Actor-Critic (SAC) are evaluated. These experiments test
+whether entropy-based node selection extends beyond
+the discrete-action DEBiT controller and remains
+useful under different training objectives and environments.
+We conduct the experiments in Town02 and Town03, which single and multilane urban environments, respectively
+
+\paragraph{High-level Policy}
+The high-level policy is fixed across maps. It retrieves the
+current and goal nodes using  visual place recognition over
+stored views, plans with Dijkstra's algorithm, and
+provides a low-level policy with one waypoint image at a time.
+
+\subsection{Baselines}
+\textbf{Dense:}
+All candidate frames of the exploration trace are used in the map.
+
+\textbf{Uniform [$d$]:}
+This baseline assumes access to odometry, and the map nodes are obtained from the exploration trace by placing nodes at uniform distances from one another. $d$ is set per environment.
+
+\textbf{SGM~\cite{emmons2020sparse}}:
+Sparse Graphical Memory (SGM) constructs a sparse graph using a learned goal-conditioned value network. Our implementation uses this network to select observations to represent with a common node. This baseline tests whether a critic-derived reachability criterion is sufficient for sparsifying the map. With DEBiT~\cite{bono2024end}, we use its value function; with the imitation policy, we train a goal-conditioned distance network and use it as the value function.
+
+\textbf{Entropy (Ours):}
+The entropy map contains key nodes from Figure.~\ref{fig:pipeline}.
+
+\textbf{ViNT~\cite{shah2023vint}:}
+The pretrained ViNT policy is fine-tuned on data from Town01, Town04, Town05, and Town10 in CARLA.
+For a controlled comparison, we compare ViNT and our algorithm as a system-level comparison
+
+
+\subsection{Evaluation Metrics}
+We evaluate all methods using standard metrics for visual navigation: (1) \textbf{Success Rate (SR)} measures the fraction of episodes in which the agent reaches the goal within a fixed step budget; (2) \textbf{Success weighted by Path Length (SPL)}~\cite{anderson2018evaluation} penalizes unnecessarily long paths by weighting each success by the ratio of the shortest-path length to the actual path length taken; \textbf{Nodes} (number of topological nodes) as a
+proxy for memory cost.
+
+\subsection{Results}
+\label{sec:results}
+\textit{\textbf{Q1:} Does policy entropy concentrate at decision points such as
+junctions or doorways?}
+\textbf{Entropy map places nodes at junctions}.
+As shown in Table~\ref{tab:junction_nodes} and qualitatively in Fig~\ref{fig:town02_entopy nodes}, entropy concentrates significantly on junction nodes, matching our intuition, because the learned-level policy increases entropy at junctions where it needs goal information to decide. This transfers across different environments such as Gibson and HM3D, where nodes in the entropy map appear at the ends of corridors and doorways.
+
+\begin{table}[H]
+\centering
+\caption{Key nodes inside a junction. Uniform, SG,M and random are matched to entropy's key count
+(96 in Town02, 323 in Town03); the matched uniform spacing is 26.8\,m and 21.6\,m.}
+\label{tab:junction_nodes}
+\begin{tabular}{lrr}
+\toprule
+Placement & Town02 & Town03 \\
+\midrule
+Trace   & 894/3664 (24.4\%) & 6454/16242 (39.7\%) \\
+\midrule
+Entropy & 45/96 (46.9\%) & 175/323 (54.2\%) \\
+Uniform & 27/96 (28.1\%) & 110/323 (34.1\%) \\
+SGM     & 21/96 (21.9\%) & 115/323 (35.6\%) \\
+Random  & 20/96 (20.8\%) & 133/323 (41.2\%) \\
+\bottomrule
+\end{tabular}
+\end{table}
+\begin{figure}
+    \centering
+    \includegraphics[width=1\linewidth]{fig_entropy_locations_combined.pdf}
+    \caption{Policy entropy along the exploration drive in a) Gibson~\cite{xiazamirhe2018gibsonenv},b) HM3D and in c) Town02 and Town03 in CARLA~\cite{dosovitskiy2017carla} Entropy peaks at intersections and stays low on straight segments.}
+    \label{fig:town02_entopy nodes}
+\end{figure}
+% Comments
+% Remove gap nodes  - show only key nodes
+% Show node density as heatmap - number of nodes per 1m
+
+\textit{\textbf{Q2} -When does a strong low-level policy still need maps?}
+\textbf{Maps are increase success rate of state-of-art polices on long horizon trajectories}.
+We evaluate the utility of maps for long-horizon navigation by comparing performance in both indoor and outdoor simulation environments. As shown in Table~\ref{tab:imagenav_habitat} on the ImageNav Benchmark, maps significantly improve the navigation agent's performance on harder long-horizon trajectories. In contrast, a strong low-level policy like DEBiT~\cite{bono2024end} can easily beat the baselines without a map. We further investigate this by generating and evaluating a state-of-the-art low-level policy on even harder image nav problems where the trajectories are at least 10\,m long. Under these conditions, maps yield consistent improvement over the low-level with no map~Table~\ref{tab:long_horizon_debit}.
+
+% Comments
+% Previous shown improvement
+% Do we still need maps with increase performance of low level polices
+\begin{table}[H]
+\centering
+\footnotesize
+\setlength{\tabcolsep}{4pt}
+\caption{\textbf{Long-horizon navigation in CARLA~\cite{dosovitskiy2017carla}}: routes of 50--150\,m with at
+least two junction turns, by held-out town.}
+\label{tab:long_horizon_carla}
+\begin{tabular}{@{}lrrrr@{}}
+\toprule
+& \multicolumn{2}{c}{Town02 ($n{=}100$)} & \multicolumn{2}{c}{Town03 ($n{=}100$)} \\
+\cmidrule(lr){2-3}\cmidrule(lr){4-5}
+Map & SR & SPL & SR & SPL \\
+\midrule
+\multicolumn{5}{@{}l}{\textit{BC policy}} \\
+No Map & 0.07 & 0.06 & 0.05 & 0.05 \\
+Uniform & 0.18 & 0.18 & 0.04 & 0.04 \\
+SGM~\cite{emmons2020sparse} & \textbf{0.24} & \textbf{0.24} & 0.05 & 0.05 \\
+Entropy & 0.18 & 0.18 & \textbf{0.07} & \textbf{0.07} \\
+\midrule
+\multicolumn{5}{@{}l}{\textit{ViNT}~\cite{shah2023vint}} \\
+No Map & 0.04 & 0.04 & 0.00 & 0.00 \\
+With map & 0.10 & 0.10 & 0.01 & 0.01 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+
+
+
+\begin{table}[H]
+\centering
+\footnotesize
+\setlength{\tabcolsep}{4pt}
+\caption{
+\textbf{Long-horizon image-goal navigation with DeBiT~\cite{bono2024end}}}
+\label{tab:long_horizon_debit}
+\begin{tabular}{@{}lrrrr@{}}
+\toprule
+& \multicolumn{2}{c}{Gibson LH ($n{=}223$)}
+& \multicolumn{2}{c}{HM3D LH ($n{=}230$)} \\
+\cmidrule(lr){2-3}
+\cmidrule(lr){4-5}
+Method (Mapping / Low-level) & SR & SPL & SR & SPL \\
+\midrule
+No Map / ~DEBiT~\cite{bono2024end}
+& 0.664 & 36.9 & 0.513 & 23.9 \\
+Uniform / ~\cite{bono2024end}
+& \textbf{0.843} & 45.0 & 0.670 & 33.8 \\
+SGM~\cite{emmons2020sparse} Map /~\cite{bono2024end}
+& 0.807 & \textbf{45.5} & 0.691 & 34.1 \\
+\textbf{Entropy Map /~\cite{bono2024end}}
+& 0.798 & 44.8 & 0.665 & 34.0 \\
+\bottomrule
+\end{tabular}
+\end{table}
+% Driving-goal entropy, MAD z=1, no budget; uniform/temporal/SGM key-matched per house (Gibson 87 keys, HM3D 798; SGM 800);
+% every map + own gap nodes; image-based localisation + arrival. HM3D LH = 27 single-floor val houses, 230 eps, 10-17 m.
+% Gibson temporal running -- fill when complete.
+% remove overall
+% Show Curve Case -> only for NRNS
+% split able up
+% Add standard deviation
+% Bolden our method
+
+\textit{\textbf{Q3 -  How does an entropy map compare to other mapping approaches?}}
+\textbf{Entropy map has comparable success rates to other mapping approaches at lower computational efficiency}
+We compare our algorithm to other relevant baselines.
+The  policy entropy retains
+We compare our approach to other relevant methods in the literature to situate our work. The entropy-based map remains competitive with the other approaches.
+\begin{table}[H]
+\centering
+\scriptsize
+\setlength{\tabcolsep}{3pt}
+\caption{\textbf{NRNS episodes}~\cite{hahn2021no} (Gibson), SR/SPL in \%; Hard = 5--10\,m. The results with $\dagger$ are as published in TSGM~\cite{kim2023topological}}
+\label{tab:nrns}
+\begin{tabular}{@{}l cc cc cc cc@{}}
+\toprule
+& \multicolumn{4}{c}{Straight (2{,}806)} & \multicolumn{4}{c}{Curved (3{,}000)} \\
+\cmidrule(lr){2-5}\cmidrule(l){6-9}
+& \multicolumn{2}{c}{Hard} & \multicolumn{2}{c}{Overall} & \multicolumn{2}{c}{Hard} & \multicolumn{2}{c}{Overall} \\
+Method (Mapping / Low-Level) & SR & SPL & SR & SPL & SR & SPL & SR & SPL \\
+\midrule
+NRNS~\cite{hahn2021no}$^\dagger$         & 32.6 & 22.4 & 50.7 & 40.5 & 19.2 & 10.4 & 26.6 & 12.3 \\
+VGM~\cite{kwon2021visual}$^\dagger$     & 67.3 & 54.4 & 76.7 & 59.6 & 62.2 & 46.9 & 74.0 & 50.6 \\
+TSGM~\cite{kim2023topological}$^\dagger$ & 70.3 & \textbf{62.8} & 85.7 & \textbf{79.7} & 64.2 & \textbf{55.0} & 82.5 & \textbf{74.1} \\
+No Map / DEBiT~\cite{bono2024end})             & 80.4 & 59.7 & \textbf{91.8} & 77.0 & 72.4 & 48.3 & 86.4 & 62.1 \\
+ \midrule
+ Uniform map /~\cite{bono2024end}           & 79.8 & 51.6 & 90.4 & 63.0 & 74.4 & 45.2 & 86.6 & 53.4 \\
+\midrule
+Temporal map / ~\cite{bono2024end}         & 79.3 & 52.4 & 89.6 & 63.5 & 72.9 & 44.1 & 85.6 & 52.3 \\
+SGM map / ~\cite{bono2024end}                & 80.4 & 53.9 & 90.0 & 63.1 & 74.3 & 44.4 & 86.4 & 52.4 \\
+\textbf{Entropy map (ours) / ~\cite{bono2024end}}    & \textbf{81.6} & 54.6 & 90.8 & 64.3 & \textbf{75.7} & 44.9 & \textbf{86.8} & 53.1 \\
+\midrule
+No Map / OVRL~\cite{yadav2023offline}      & 30.9 & 21.8 & 45.4 & 31.3 & 30.3 & 19.7 & 43.6 & 28.3 \\
+\midrule
+
+ Uniform map /~\cite{yadav2023offline}          & 37.5 & 19.0 & 46.8 & 20.8 & 35.0 & 17.2 & 45.9 & 20.2 \\
+ \midrule
+Temporal map  /~\cite{yadav2023offline}         & 35.4 & 17.9 & 46.4 & 20.3 & 33.6 & 17.4 & 46.5 & 20.8 \\
+SGM map /~\cite{yadav2023offline}               & 33.3 & 16.6 & 45.3 & 19.8 & 33.2 & 16.9 & 45.0 & 19.7 \\
+\textbf{Entropy map  /~\cite{yadav2023offline}}    & 35.5 & 17.8 & 45.8 & 20.5 & 34.6 & 17.9 & 45.5 & 20.8 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+
+
+\begin{table}[H]
+\centering
+\footnotesize
+\setlength{\tabcolsep}{4pt}
+\caption{\textbf{Image-goal navigation in CARLA~\cite{dosovitskiy2017carla}}, pooled over three held-out towns (Town02, Town03, Town07; 100 episodes each, $n{=}300$ per cell). Success: reaching within 1\,m of the goal, at any speed. Easy: 10--25\,m. Medium: 25--50\,m with at least one junction turn. Hard: 50--149\,m with at least two junction turns. $^{*}$ $p<0.05$, paired exact McNemar against \emph{No Map}, Holm-corrected within each band.}
+\label{tab:map_navigation}
+\begin{tabular}{@{}lrrrrrr@{}}
+\toprule
+& \multicolumn{2}{c}{Easy} & \multicolumn{2}{c}{Medium} & \multicolumn{2}{c}{Hard} \\
+\cmidrule(lr){2-3}\cmidrule(lr){4-5}\cmidrule(lr){6-7}
+Map & SR & SPL & SR & SPL & SR & SPL \\
+\midrule
+\multicolumn{7}{@{}l}{\textit{BC policy}} \\
+No Map & 0.78 & 0.78 & 0.32 & 0.32 & 0.05 & 0.05 \\
+Uniform & 0.79 & 0.79 & 0.34 & 0.34 & 0.13$^{*}$ & 0.13 \\
+SGM~\cite{emmons2020sparse} & 0.77 & 0.76 & 0.31 & 0.31 & 0.13$^{*}$ & 0.13 \\
+Entropy & 0.78 & 0.78 & 0.37 & 0.36 & 0.13$^{*}$ & 0.13 \\
+\midrule
+\multicolumn{7}{@{}l}{\textit{ViNT}~\cite{shah2023vint}} \\
+No Map & 0.51 & 0.49 & 0.20 & 0.19 & 0.02 & 0.02 \\
+Uniform (ours) & 0.56 & 0.54 & 0.35$^{*}$ & 0.34 & 0.08$^{*}$ & 0.07 \\
+ViNT map & 0.44 & 0.43 & 0.24 & 0.24 & 0.05$^{*}$ & 0.05 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Algorithmic design}
+% show progression of algorithm design here
+\textit{\textbf{What is the role of gap nodes in map?}}
+As stated earlier, gap nodes are intended to provide visual references for high-level policy localization. To show their necessity, we show that in both environments, i.e in CARLA~\cite{dosovitskiy2017carla} and Habitat~\cite{habitat19iccv} on the HM3D dataset, gap nodes allow the map to close the performance gap between an oracle high-level policy that uses the pose of the agent and the nodes to localize both the agent and goal images, as opposed to using visual place recognition. The map used in this experiment contains only nodes selected by the node placer algorithm, and we compare uniform node spacing with nodes selected with high entropy at a matched node count.
+% Comment
+% Start with baseline policy
+% Show benefits of entropy nodes
+% Show benefits of gap nodes
+\begin{table}[H]
+\centering
+\footnotesize
+\setlength{\tabcolsep}{3.5pt}
+\caption{Comparison of node placers with key nodes only in Town02 and Town03 in
+CARLA~\cite{dosovitskiy2017carla}, localising by the ground-truth pose. SR and SPL
+on the same 200 held-out episodes per band. Hard: 50--150\,m routes with at least
+two junction turns.}
+\label{tab:map_navigation_pose}
+\begin{tabular}{lcccccc}
+\toprule
+ & \multicolumn{2}{c}{Easy} & \multicolumn{2}{c}{Medium} & \multicolumn{2}{c}{Hard} \\
+\cmidrule(lr){2-3}\cmidrule(lr){4-5}\cmidrule(lr){6-7}
+Map & SR & SPL & SR & SPL & SR & SPL \\
+\midrule
+\multicolumn{7}{l}{\textit{Imitation policy}} \\
+\rowcolor{gray!15}Uniform & 0.74 & 0.73 & 0.73 & 0.73 & 0.08 & 0.08 \\
+\rowcolor{blue!12}Entropy & 0.76 & 0.76 & 0.72 & 0.71 & 0.08 & 0.07 \\
+SGM & 0.78 & 0.77 & 0.72 & 0.71 & 0.12 & 0.12 \\
+\midrule
+\multicolumn{7}{l}{\textit{RL policy}} \\
+\rowcolor{gray!15}Uniform & -- & -- & -- & -- & -- & -- \\
+\rowcolor{blue!12}Entropy & -- & -- & -- & -- & -- & -- \\
+SGM & -- & -- & -- & -- & -- & -- \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{table}[H]
+\centering
+\scriptsize
+\setlength{\tabcolsep}{2pt}
+\caption{\textbf{Effect of gap nodes} on 230 HM3D single-floor episodes (10--17\,m). SR and SPL in \%. \emph{Keys}: key nodes over the 27 houses; \emph{key}: key nodes only; \emph{+ gap}: with gap nodes. Top: key count set by uniform spacing (1.40\,m), entropy matched to it. Bottom: key count chosen by causal entropy (MAD, $z{=}1$, no budget), uniform matched to it. \textbf{Bold}: best.}
+\label{tab:gap_nodes}
+\begin{tabular}{@{}lrrr@{}}
+\toprule
+Map & Keys & SR & SPL \\
+\midrule
+No map                     & --    & 51.3 & 23.9 \\
+Entropy (causal) key       & 558     & 52.6 & 24.4 \\
+\quad + gap                &         & 64.8 & 34.1 \\
+Uniform key                & 556     & 50.4 & 24.1 \\
+\quad + gap                &         & 63.9 & 33.3 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{table}[H]
+\centering
+\scriptsize
+\setlength{\tabcolsep}{2.5pt}
+\caption{\textbf{How episodes end} (230 HM3D single-floor episodes, 10--17\,m; key-node count set by causal entropy, uniform matched to it). \% of episodes. \emph{Wrong STOP}: STOP called $>$1\,m from the goal. \emph{Lost}: no STOP within 1{,}000 steps, ending within 3\,m (\emph{near}) or farther (\emph{far}) from the goal.}
+\label{tab:failures}
+\begin{tabular}{@{}lrrrr@{}}
+\toprule
+& & \multicolumn{3}{c}{Failure} \\
+\cmidrule(l){3-5}
+Map & Success & Wrong STOP & Lost, near & Lost, far \\
+\midrule
+No map                 & 51 & 2 & 2 & 45 \\
+\midrule
+Entropy (causal) key   & 53 & 2 & 3 & 43 \\
+\quad + gap            & \textbf{65} & 3 & 4 & \textbf{28} \\
+\midrule
+Uniform key            & 50 & 2 & 3 & 45 \\
+\quad + gap            & 64 & 2 & 1 & 33 \\
+\bottomrule
+\end{tabular}
+\end{table}

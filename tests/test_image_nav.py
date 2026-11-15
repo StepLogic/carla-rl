@@ -85,3 +85,44 @@ def test_the_benchmark_navigates_by_image_without_reading_pose():
     step = body.split("if nav is not None and img_scores is not None:")[1].split("elif nav is not None and nav.update(")[0]
     assert "pos" not in step.replace("map_row[\"map_goal_node\"]", "")       # no pose in the loop
     assert "nav.step(img_scores(" in step and "top1(img_scores(" in step
+
+
+# THE NEXT NODE WINS (user 2026-11-15: "Gibson advances one node when the next node wins; ours does nothing in
+# that case. - lets ad this here"). Habitat's DEBIT_ITN_ARRIVAL_NOSKIP=1: a next-node win advances by ONE node.
+def test_a_next_node_win_advances_by_one_node_when_asked():
+    nav = ImageNavigator([0, 1, 2, 3], thr=0.5, next_advance=True)
+    passed = {0: 0.45, 1: 0.59, 2: 0.75, 3: 0.90}       # the car is past node 1: node 2 beats it and node 0
+    assert nav.step(passed) is None
+    assert nav.step(passed) == "switch"
+    assert nav.current() == 2                           # ONE node, although node 3 scores higher still
+    assert nav.switches == 1 and nav.next_advances == 1
+
+
+def test_a_next_node_win_needs_the_threshold_and_both_rivals_beaten():
+    nav = ImageNavigator([0, 1, 2, 3], thr=0.5, next_advance=True)
+    for scores in ({0: 0.30, 1: 0.40, 2: 0.45, 3: 0.0},      # next is best but under the threshold
+                   {0: 0.80, 1: 0.59, 2: 0.75, 3: 0.0}):     # the previous node still beats the next
+        for _ in range(5):
+            assert nav.step(scores) is None
+    assert nav.current() == 1 and nav.next_advances == 0
+
+
+def test_a_next_node_win_must_hold_two_steps_in_a_row():
+    nav = ImageNavigator([0, 1, 2, 3], thr=0.5, next_advance=True)
+    win, lose = {0: 0.45, 1: 0.59, 2: 0.75, 3: 0.0}, {0: 0.45, 1: 0.59, 2: 0.55, 3: 0.0}
+    assert [nav.step(s) for s in (win, lose, win)] == [None, None, None]
+    assert nav.step(win) == "switch"
+
+
+def test_the_last_node_has_no_next_to_win():
+    nav = ImageNavigator([0, 1], thr=0.5, next_advance=True)
+    for _ in range(5):
+        assert nav.step({0: 0.9, 1: 0.2}) is None
+    assert nav.current() == 1
+
+
+def test_without_the_flag_a_next_node_win_does_nothing():
+    nav = ImageNavigator([0, 1, 2, 3], thr=0.5)
+    for _ in range(5):
+        assert nav.step({0: 0.45, 1: 0.59, 2: 0.75, 3: 0.0}) is None
+    assert nav.current() == 1

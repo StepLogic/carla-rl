@@ -18,9 +18,14 @@ from), turned into learner C's transitions exactly as the online loop (torch_rl/
     truncated, so the critic is never paid the +100 for the expert's approach;
   * expert-driven episodes only; the steering probe's held-out episodes excluded.
 The replay is fixed (never overwritten) and never moves the temperature -- the prerecorded-data rule.
+
+With the CONTROL STREAM as the run's trunk (carla.ControlTrunk; user 2026-11-14: "Queue online train for best
+fixes with SAC with expert pinned rows") the rows are the same in every respect but one: the features come from
+that trunk (episode_transitions_control). Windows, executed action, summed relabelled reward, arrival cut and
+terminal mask are assembled by the SAME code for both trunks (_plan, _rows), so they cannot drift apart.
 """
 import json
-from typing import Dict, List, Optional, Sequence
+from typing import Callable, Dict, List, Optional, Sequence
 
 import numpy as np
 import torch
@@ -55,16 +60,15 @@ def select_episodes(names: Sequence[str], drivers: Sequence[str],
     return [n for n, d in zip(names, drivers) if str(d) == "expert" and n not in held_out]
 
 
-@torch.no_grad()
-def episode_transitions(trunk, ep: Dict, k: int, idle_penalty: float, junction_bonus: float,
-                        idle_kmh: float = 2.0, cut: int = ARRIVAL_CUT) -> Dict[str, np.ndarray]:
-    """One recorded episode -> learner C transitions at action repeat k (every phase)."""
-    from torch_rl import pixel_rows as pxr
+def _plan(ep: Dict, idle_penalty: float, junction_bonus: float, idle_kmh: float, cut: int):
+    """What one recorded episode's rows share whatever the trunk: (ticks used, whether the last of them is
+    terminal, mode, the per-tick relabelled rewards, the speed each FRAME was taken at) -- or None for a
+    reached episode no longer than the arrival cut, which has no rows."""
     T = int(len(ep["act_exec"]))
     mode = int(np.asarray(ep["mode"]))
     if str(np.asarray(ep["end"])) == "reached":
         if T <= cut:
-            return _empty(trunk)
+            return None
         T_eff, terminal = T - cut, False
     else:
         T_eff, terminal = T, bool(np.asarray(ep["terminal"]))
@@ -72,12 +76,14 @@ def episode_transitions(trunk, ep: Dict, k: int, idle_penalty: float, junction_b
                           junction_bonus)
     speed = np.asarray(ep["speed"], np.float32)
     kmh = np.concatenate([[0.0], speed])                   # frame f pairs with the speed after tick f-1
-    rows = np.stack([pxr.mono_row(ep["frames"][f], float(mode), np.asarray(ep["binoc"][f], np.float32),
-                                  speed_kmh=float(kmh[f])) for f in range(T_eff + 1)])
-    a = trunk.agent
-    x = torch.as_tensor(rows, device=trunk.device)
-    e = a._embed(a.compress, a.act_embed, x).float()
-    st = a._state(x).float()
+    return T_eff, terminal, mode, rew, kmh
+
+
+def _rows(ep: Dict, k: int, T_eff: int, terminal: bool, rew: np.ndarray,
+          features: Callable) -> Dict[str, np.ndarray]:
+    """Every phase's transitions. `features(visit) -> (emb, states)`, one row per visited tick, is the only
+    thing a trunk contributes; `visit` is a phase's window starts plus the end of its last window, so row j's
+    next observation is feature j + 1 -- the observation of the next decision on the same recurrent path."""
     out = {key: [] for key in ("emb", "states", "next_emb", "next_states", "actions", "rewards",
                                "masks")}
     for phase in range(int(k)):
@@ -85,11 +91,7 @@ def episode_transitions(trunk, ep: Dict, k: int, idle_penalty: float, junction_b
         if not wins:
             continue
         visit = [f for f, _ in wins] + [wins[-1][1]]
-        hs, _ = a.core(e[visit][None], torch.zeros(1, 1, trunk.hidden_dim, device=trunk.device))
-        hs = hs[0].float()
-        sv = st[visit]
-        emb = torch.cat([hs, sv[:, trunk.state_dim:]], dim=-1).cpu().numpy()
-        states = sv[:, :trunk.state_dim].cpu().numpy()
+        emb, states = features(visit)
         for j, (f, end) in enumerate(wins):
             out["emb"].append(emb[j])
             out["states"].append(states[j])
@@ -105,6 +107,67 @@ def episode_transitions(trunk, ep: Dict, k: int, idle_penalty: float, junction_b
             "actions": np.asarray(out["actions"], np.float32),
             "rewards": np.asarray(out["rewards"], np.float32),
             "masks": np.asarray(out["masks"], np.float32)}
+
+
+@torch.no_grad()
+def episode_transitions(trunk, ep: Dict, k: int, idle_penalty: float, junction_bonus: float,
+                        idle_kmh: float = 2.0, cut: int = ARRIVAL_CUT) -> Dict[str, np.ndarray]:
+    """One recorded episode -> learner C transitions at action repeat k (every phase)."""
+    from torch_rl import pixel_rows as pxr
+    plan = _plan(ep, idle_penalty, junction_bonus, idle_kmh, cut)
+    if plan is None:
+        return _empty(trunk)
+    T_eff, terminal, mode, rew, kmh = plan
+    rows = np.stack([pxr.mono_row(ep["frames"][f], float(mode), np.asarray(ep["binoc"][f], np.float32),
+                                  speed_kmh=float(kmh[f])) for f in range(T_eff + 1)])
+    a = trunk.agent
+    x = torch.as_tensor(rows, device=trunk.device)
+    e = a._embed(a.compress, a.act_embed, x).float()
+    st = a._state(x).float()
+
+    def features(visit):
+        hs, _ = a.core(e[visit][None], torch.zeros(1, 1, trunk.hidden_dim, device=trunk.device))
+        hs = hs[0].float()
+        sv = st[visit]
+        return (torch.cat([hs, sv[:, trunk.state_dim:]], dim=-1).cpu().numpy(),
+                sv[:, :trunk.state_dim].cpu().numpy())
+
+    return _rows(ep, k, T_eff, terminal, rew, features)
+
+
+@torch.no_grad()
+def episode_transitions_control(trunk, ep: Dict, k: int, idle_penalty: float, junction_bonus: float,
+                                idle_kmh: float = 2.0, cut: int = ARRIVAL_CUT) -> Dict[str, np.ndarray]:
+    """episode_transitions for the CONTROL-STREAM trunk (carla.ControlTrunk): the same decision windows in
+    every phase, the same executed action at each window's first tick, the same summed and relabelled
+    reward, the same arrival cut and terminal mask (all of it _plan and _rows, shared with the c0 arm) --
+    ONLY THE FEATURES DIFFER: trunk.embed_ticks(frames, binoc, mode, kmh, visit), the stream stepped once per
+    visited tick from a zero state, with kmh[f] the speed when frame f was taken (frame t + 1 was recorded
+    with speed[t], torch_rl/expert_data.py; the online row carries the same quantity, info["speed_kmh"]).
+
+    The stream must have been pretrained at this run's decision rate: its frame pair and its GRU step are
+    `trunk.repeat` ticks apart, so rows at any other k would hold features the online trunk never produces.
+    """
+    if int(trunk.repeat) != int(k):
+        raise ValueError(f"the control stream was pretrained at one decision per {int(trunk.repeat)} "
+                         f"ticks; expert rows at action repeat {int(k)} would not match what the "
+                         f"online trunk computes")
+    plan = _plan(ep, idle_penalty, junction_bonus, idle_kmh, cut)
+    if plan is None:
+        return _empty(trunk)
+    T_eff, terminal, mode, rew, kmh = plan
+
+    def features(visit):
+        emb, states = trunk.embed_ticks(ep["frames"], ep["binoc"], mode, kmh, visit)
+        emb, states = np.asarray(emb), np.asarray(states, np.float32)
+        want = ((len(visit), int(trunk.emb_dim)), (len(visit), int(trunk.state_dim)))
+        if (emb.shape, states.shape) != want:          # a silent mismatch would be stored and trained on
+            raise ValueError(f"embed_ticks gave emb {emb.shape} and states {states.shape} for "
+                             f"{len(visit)} ticks; the trunk's emb_dim and state_dim say {want}")
+        return emb, states
+
+    tr = _rows(ep, k, T_eff, terminal, rew, features)
+    return tr if len(tr["rewards"]) else _empty(trunk)
 
 
 def _empty(trunk) -> Dict[str, np.ndarray]:

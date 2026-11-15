@@ -1118,6 +1118,31 @@ def goal_reward_explore(info, disp, t, max_steps=GOAL_MAX_STEPS):
     return float(reward), False, bool(t >= max_steps), False
 
 
+# GOAL_MISS_END_M (user 2026-11-15, "ok. do it"): with the goal kept fixed (GOAL_KEEP_ON_PASS=1) a car that
+# drove past its goal went on driving AWAY from it for up to GATED_GOAL_MAX_STEPS decisions, charged for
+# the retreat and the lane cost on every one. Measured on c0 (Town01, 6,000 decisions): goal mode netted
+# -0.28 per decision even counting its +100 arrivals, and the critic valued every state negative. With
+# this on, a goal episode ENDS AS A FAILURE ("missed") once the car is this many metres further from the
+# goal, in a straight line, than the closest it has been: no charge beyond the lost future. It also
+# ends an episode that took the wrong branch at a junction. 0 = off, every earlier run unchanged.
+GOAL_MISS_END_M = float(os.environ.get("GOAL_MISS_END_M", 0.0) or 0.0)
+
+
+def goal_distance_m(info):
+    """Straight-line metres from the car to its goal, or None when either is unknown. Pure."""
+    gp, hp = info.get("goal_pos"), info.get("hero_pos")
+    if gp is None or hp is None:
+        return None
+    return float(np.linalg.norm(np.asarray(gp, np.float64)[:2] - np.asarray(hp, np.float64)[:2]))
+
+
+def goal_missed(dist_m, best_m, miss_m) -> bool:
+    """Is the car `miss_m` metres further from the goal than its closest so far? Pure. Off at 0."""
+    if not miss_m or float(miss_m) <= 0.0 or dist_m is None or best_m is None:
+        return False
+    return bool(float(dist_m) > float(best_m) + float(miss_m))
+
+
 def goal_explore_end(info, arrived, truncated):
     """Why a GATED_GOAL_REWARD=explore episode ended, from this step's info.
     Same order as explore mode's explore_end: arrival, then the clock, then the
@@ -1132,6 +1157,8 @@ def goal_explore_end(info, arrived, truncated):
         return "collision"
     if EXPLORE_OFF_ROAD_FATAL and bool(info.get("off_road", False)):
         return "off_road"
+    if info.get("goal_missed"):
+        return "missed"
     return "crossing"
 
 
@@ -1505,6 +1532,7 @@ class GatedReward(Wrapper):
         self._best_remaining = None if _r0 is None else float(_r0)
         self._prev = np.asarray(info.get("hero_pos", (0.0, 0.0)), np.float64)
         self._start = self._prev.copy()
+        self._best_goal_m = goal_distance_m(info)        # GOAL_MISS_END_M: closest to the goal so far
         # The potential is a DIFFERENCE, so step 1 has nothing to difference
         # against and must pay no shaping. A stale value here would pay the
         # whole route length as a one-off reward on the first step of every
@@ -1594,6 +1622,12 @@ class GatedReward(Wrapper):
         # driven the distance.
         self._path_m = getattr(self, "_path_m", 0.0) + float(np.linalg.norm(disp))
         info["explore_dist_m"] = float(self._path_m)
+        # explore_frac (2026-11-15): the share of EXPLORE_GOAL_DIST_M this explore episode has covered,
+        # measured as the arrival test measures it (EXPLORE_DIST_MODE). For the privileged critic, which
+        # otherwise cannot see how close the distance bonus is. 0 in goal mode and when the bonus is off.
+        info["explore_frac"] = (
+            float(min(self._explore_dist() / EXPLORE_GOAL_DIST_M, 1.0))
+            if (self.mode != GOAL and EXPLORE_GOAL_DIST_M > 0.0) else 0.0)
 
         if self.mode == GOAL and self.goal_kind == "progress":
             # BONO ET AL. 2023 (see PROGRESS_K). The same fault counters as the
@@ -1694,6 +1728,14 @@ class GatedReward(Wrapper):
                     reward += _shaped
             self._prev_remaining = None if _rem is None else float(_rem)
             info["gated_shaping"] = float(_shaped)
+            # GOAL_MISS_END_M: a missed goal ends the episode (a fault or an arrival on this step wins).
+            _gd = goal_distance_m(info)
+            _best = getattr(self, "_best_goal_m", None)
+            if not (terminated or truncated) and goal_missed(_gd, _best, GOAL_MISS_END_M):
+                terminated, truncated = True, False
+                info["goal_missed"] = True
+            if _gd is not None:
+                self._best_goal_m = _gd if _best is None else min(_best, _gd)
             if terminated or truncated:
                 # NAME THE ACTUAL CAUSE, in explore mode's own order. NOT
                 # classify_goal_end: that reads the goal arm's fault COUNTERS

@@ -20,7 +20,9 @@ HIGH = np.array([1.0, 1.0], np.float32)
 
 
 def test_held_out_towns_refused():
-    for t in ("Town02", "Town03"):
+    # Town07 joined them 2026-11-12 (user: it replaces Town03 in the main tables, so it is an
+    # evaluation town); Town03 stays held out for the appendix.
+    for t in ("Town02", "Town03", "Town07"):
         with pytest.raises(ValueError, match="held out"):
             assert_recordable_town(t)
     assert_recordable_town("Town05")

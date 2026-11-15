@@ -21,7 +21,9 @@ import os
 
 import numpy as np
 
-HELD_OUT_TOWNS = ("Town02", "Town03")
+# Evaluation towns: no expert data may be recorded in them (user rule). Town07 joined on 2026-11-12,
+# when it replaced Town03 in the paper's main tables (Town03 moved to the appendix and stays held out).
+HELD_OUT_TOWNS = ("Town02", "Town03", "Town07")
 FAULT_ENDS = ("crossing", "off_road", "collision")
 SIGMAS = tuple(float(x) for x in os.environ.get("EXPERT_SIGMAS", "0,0.1,0.2").split(","))
 

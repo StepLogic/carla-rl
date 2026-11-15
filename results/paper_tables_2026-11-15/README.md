@@ -14,7 +14,8 @@ SR/SPL equal to the file's own summary).
 | `experiments_section_original.tex` | the section as pasted by the user, for diffing |
 | `build_section.py` | original + generated tables -> updated section |
 | `cells_used.json` | every cell used, with path, checkpoint, map build, episode file, n, successes |
-| `generator_output.txt` | the generator's printed output for this version |
+| `generator_output.txt` | the generator's printed output for this version (1218 checks, 0 failed) |
+| `carla_tables_preview.pdf` | `carla_tables.tex` compiled on its own, to look at the layout |
 
 Regenerate (needs an rsync copy of the cluster's `~/carla-rl/checkpoints`, eval.json files only):
 

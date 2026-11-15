@@ -1,0 +1,220 @@
+% ==================================================================================================
+% CARLA TABLES of the image-navigation paper. GENERATED -- do not edit numbers by hand.
+% Generator: results/paper_tables_2026-11-15/make_carla_tables.py (ed1bbfd),
+% branch vint-rerun-2026-11-15 of the vint-carla worktree. Every number is recomputed from the
+% per-episode records of the bench eval.json files; 1218 automated checks, 0 failed
+% (one eval.json per cell, n=100, town, checkpoint, map build, episode file, paired seeds and
+% identical start/goal across arms and policies, SR/SPL equal to the file's own summary).
+% Cell list with paths: cells_used.json next to this file.
+% ==================================================================================================
+
+% Junction counts carried from the mapping session's t07/tab_junction_nodes.tex (2026-11-13; junction
+% membership from logs/junctions_<town>.xodr). Key counts and uniform spacings re-read 2026-11-15 from the
+% map metadata: Town02 96 keys / 26.75 m, Town03 323 / 21.6 m, Town07 193 / 30.15 m (t07_build.log:
+% "entropy MAD 326 -> 193 image-distinct; uniform 193 (spacing 30.15 m); random 193", 9093 candidates).
+\begin{table}[H]
+\centering
+\caption{Key nodes inside a junction. Uniform, SGM and Random are matched to entropy's key count
+(96 in Town02, 323 in Town03, 193 in Town07); the matched uniform spacing is 26.8\,m, 21.6\,m and 30.2\,m.
+\emph{Trace}: all candidate frames of the exploration drive.}
+\label{tab:junction_nodes}
+\begin{tabular}{lrrr}
+\toprule
+Placement & Town02 & Town03 & Town07 \\
+\midrule
+Trace   & 894/3664 (24.4\%) & 6454/16242 (39.7\%) & 3004/9093 (33.0\%) \\
+\midrule
+Entropy & 45/96 (46.9\%) & 175/323 (54.2\%) & 96/193 (49.7\%) \\
+Uniform & 27/96 (28.1\%) & 110/323 (34.1\%) & 72/193 (37.3\%) \\
+SGM     & 21/96 (21.9\%) & 115/323 (35.6\%) & 46/193 (23.8\%) \\
+Random  & 20/96 (20.8\%) & 133/323 (41.2\%) & 67/193 (34.7\%) \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+% MAIN TABLE -- Town07, ALIGNED navigator (EVAL_MAP_NEXT_ADVANCE=1), z25 maps in all bands, any
+% speed, LANE_UNKNOWN_MARKS_FATAL unset (=1), CARLA 0.9.15 local, episode sets
+% bench_t07_fresh_episodes.json (easy, medium) and bench_t07_turns_episodes.json (hard).
+%   c0    label na25            AR=2  image leg 75 decisions = 150 ticks  ckpt /home/robotlab/carla-sac-local/checkpoints/il_bc_c0/step_15000
+%   sac   label sacna25         AR=2  image leg 75 decisions = 150 ticks  ckpt /home/robotlab/carla-sac-local/checkpoints/frl_c0actor_priv_4towns_lc01_miss_2m_cluster/step_100000
+%   vint  label vintd3_nx_ar1   AR=1  image leg 150 decisions = 150 ticks  ckpt /home/robotlab/vint/final/dagger3_e1
+% SAC = frl_c0actor_priv_4towns_lc01_miss_2m (trained on Town05,Town01,Town04,Town10HD per its
+% training log; Town07 held out), checkpoint step_100000: an intermediate snapshot of a 2M-step run.
+% Rates differ by block (c0/SAC AR=2, ViNT AR=1): the claims are within-block map effects only.
+% Runners: carla-sac-local/t07/run_t07_na_ar2.sh (c0), run_t07_sacna.sh (SAC),
+%          vint-carla results/vint_town07_nx/run_vint_t07_nx.sh (ViNT).
+\begin{table}[H]
+\centering
+\footnotesize
+\setlength{\tabcolsep}{3.5pt}
+\caption{\textbf{Image-goal navigation in CARLA~\cite{dosovitskiy2017carla}}, held-out Town07, 100 episodes per cell; every policy and map runs the same episodes. Success: reaching within 1\,m of the goal, at any speed; a lane invasion reported by the simulator ends the episode. Easy: 10--25\,m. Medium: 25--50\,m with at least one junction turn. Hard: 50--149\,m with at least two junction turns. Uniform, Entropy and SGM maps hold 193 key nodes each plus 614--653 image gap nodes; \emph{ViNT map} is ViNT's own topological graph, built by its own procedure from the Town07 expert tour. The high-level policy advances to the next path node when that node wins the image match, as in Habitat. SAC is initialised from the BC policy and trained for 100k steps in Town01, Town04, Town05 and Town10HD. The BC and SAC policies act every second simulator tick and ViNT every tick, and every subgoal leg gets 150 ticks, so maps are compared within a policy, not absolute numbers across policies. $^{*}$/$^{\dagger}$: better/worse than \emph{None} of the same policy, $p<0.05$, paired exact McNemar, Holm-corrected across that policy's maps within each band.}
+\label{tab:map_navigation}
+\begin{tabular}{lcccccc}
+\toprule
+ & \multicolumn{2}{c}{Easy} & \multicolumn{2}{c}{Medium} & \multicolumn{2}{c}{Hard} \\
+\cmidrule(lr){2-3}\cmidrule(lr){4-5}\cmidrule(lr){6-7}
+Map & SR & SPL & SR & SPL & SR & SPL \\
+\midrule
+\multicolumn{7}{l}{\textit{BC policy}} \\
+None & 0.69 & 0.69 & 0.18 & 0.18 & 0.02 & 0.02 \\
+Uniform & 0.77 & 0.76 & 0.27 & 0.27 & 0.10 & 0.10 \\
+Entropy & 0.82$^{*}$ & 0.81 & 0.29 & 0.29 & 0.06 & 0.06 \\
+SGM & 0.78 & 0.77 & 0.28 & 0.28 & 0.07 & 0.07 \\
+\midrule
+\multicolumn{7}{l}{\textit{SAC fine-tuned from the BC policy}} \\
+None & 0.70 & 0.69 & 0.32 & 0.30 & 0.01 & 0.01 \\
+Uniform & 0.67 & 0.66 & 0.43 & 0.42 & 0.08$^{*}$ & 0.08 \\
+Entropy & 0.72 & 0.71 & 0.37 & 0.36 & 0.05 & 0.05 \\
+SGM & 0.65 & 0.64 & 0.24 & 0.23 & 0.06 & 0.06 \\
+\midrule
+\multicolumn{7}{l}{\textit{ViNT}~\cite{shah2023vint}} \\
+None & 0.50 & 0.48 & 0.19 & 0.19 & 0.01 & 0.01 \\
+Uniform & 0.49 & 0.47 & 0.20 & 0.19 & 0.05 & 0.05 \\
+ViNT map & 0.35$^{\dagger}$ & 0.33 & 0.18 & 0.17 & 0.00 & 0.00 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+% LONG-HORIZON TABLE -- the hard band of the main table with the discordant pairs behind each test.
+\begin{table}[H]
+\centering
+\footnotesize
+\setlength{\tabcolsep}{4pt}
+\caption{\textbf{Long-horizon navigation in CARLA~\cite{dosovitskiy2017carla}}: the hard band of Table~\ref{tab:map_navigation} (held-out Town07, routes of 50--149\,m with at least two junction turns, 100 episodes per cell, the same episodes in every row). \emph{Map only} / \emph{None only}: episodes that succeed with the map and fail without it, and the reverse. $p$: paired exact McNemar against \emph{None}, Holm-corrected across that policy's maps.}
+\label{tab:long_horizon_carla}
+\begin{tabular}{@{}lrrrrr@{}}
+\toprule
+Map & SR & SPL & Map only & None only & $p$ \\
+\midrule
+\multicolumn{6}{@{}l}{\textit{BC policy}} \\
+None & 0.02 & 0.02 & -- & -- & -- \\
+Uniform & 0.10 & 0.10 & 10 & 2 & 0.116 \\
+Entropy & 0.06 & 0.06 & 6 & 2 & 0.359 \\
+SGM & 0.07 & 0.07 & 7 & 2 & 0.359 \\
+\midrule
+\multicolumn{6}{@{}l}{\textit{SAC fine-tuned from the BC policy}} \\
+None & 0.01 & 0.01 & -- & -- & -- \\
+Uniform & 0.08 & 0.08 & 7 & 0 & 0.047 \\
+Entropy & 0.05 & 0.05 & 4 & 0 & 0.125 \\
+SGM & 0.06 & 0.06 & 5 & 0 & 0.125 \\
+\midrule
+\multicolumn{6}{@{}l}{\textit{ViNT}~\cite{shah2023vint}} \\
+None & 0.01 & 0.01 & -- & -- & -- \\
+Uniform & 0.05 & 0.05 & 5 & 1 & 0.438 \\
+ViNT map & 0.00 & 0.00 & 0 & 1 & 1.000 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+% KEY-ONLY MAPS, GROUND-TRUTH POSE -- c0 at ACTION_REPEAT=1 (all cells before 2026-11-15), any speed.
+%   key-only maps: cluster maps_expert_jx_keys_z25 (Town02 97 keys, Town03 319), local
+%   t07/maps_t07_keys_z25 (Town07 193). Cells: bench_oraclez25_* (easy, hard; Town07 all bands),
+%   bench_medturnoracle_* (Town02/Town03 medium = >=1 junction turn). Reference: the no-map cells of
+%   the same episodes (bench_fresh_any_mapless / bench_medturn_mapless / bench_turns_mapless,
+%   Town07 bench_imagez25_mapless / bench_t07_mapless). The pose arm uses no image navigator, so
+%   the subgoal-advance rule does not apply. Largest SCC recomputed 2026-11-15 from the map edges.
+\begin{table}[H]
+\centering
+\footnotesize
+\setlength{\tabcolsep}{3.5pt}
+\caption{\textbf{Key nodes alone, localised by ground-truth pose}, in CARLA, pooled over Town02, Town03 and Town07 (100 episodes per town, $n{=}300$ per cell); BC policy acting every simulator tick. The maps hold only the key nodes (97, 319 and 193; no gap nodes), and the agent and goal are placed on the graph by their true pose. \emph{No map} is the same policy on the same episodes. Without gap nodes the graphs fragment: the largest strongly connected component covers 0.93, 0.93 and 0.82 of the uniform graph, 0.69, 0.72 and 0.17 of the entropy graph and 0.49, 0.22 and 0.23 of the SGM graph (Town02, Town03, Town07), against 1.00 for the full maps. Bands and success as in Table~\ref{tab:map_navigation}. $^{*}$/$^{\dagger}$: better/worse than \emph{No map}, $p<0.05$, paired exact McNemar, Holm-corrected across the three maps within each band.}
+\label{tab:map_navigation_pose}
+\begin{tabular}{lcccccc}
+\toprule
+ & \multicolumn{2}{c}{Easy} & \multicolumn{2}{c}{Medium} & \multicolumn{2}{c}{Hard} \\
+\cmidrule(lr){2-3}\cmidrule(lr){4-5}\cmidrule(lr){6-7}
+Map (key nodes only) & SR & SPL & SR & SPL & SR & SPL \\
+\midrule
+No map & 0.78 & 0.78 & 0.32 & 0.32 & 0.05 & 0.05 \\
+\midrule
+Uniform & 0.72$^{\dagger}$ & 0.72 & 0.25$^{\dagger}$ & 0.25 & 0.07 & 0.07 \\
+Entropy & 0.74 & 0.74 & 0.23$^{\dagger}$ & 0.23 & 0.06 & 0.05 \\
+SGM & 0.73$^{\dagger}$ & 0.73 & 0.29 & 0.28 & 0.04 & 0.04 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+% --------------------------------------------------------------------------------------------------
+% APPENDIX / ALTERNATIVE -- the EARLIER protocol (original subgoal rule: the CURRENT node had to win),
+% c0 and ViNT at ACTION_REPEAT=1, pooled Town02 + Town03 + Town07, any speed, crossings fatal.
+% z25-CONSISTENT: every map cell is on the z=2.5 maps the paper describes. This differs from the
+% 2026-11-14 tab_map_navigation_main.tex in two places, both of which used the DENSER
+% maps_expert_jx_img build (255/1104 key nodes) for Town02/Town03:
+%   c0 easy maps: bench_imagez25_* here (z25) instead of bench_fresh_imageany_* (jx_img);
+%   ViNT uniform easy + hard: bench_vintd3_z25_uniform here instead of vintd3_fresh_any_uniform /
+%   vintd3_turns_uniform (jx_img). Medium cells (medturn) were already z25 for both policies.
+%   c0   easy   None      bench_fresh_any_mapless_Town02_easy, bench_fresh_any_mapless_Town03_easy, bench_imagez25_mapless_Town07_easy
+%   c0   easy   Uniform   bench_imagez25_uniform_Town02_easy, bench_imagez25_uniform_Town03_easy, bench_imagez25_uniform_Town07_easy
+%   c0   easy   Entropy   bench_imagez25_entropy_Town02_easy, bench_imagez25_entropy_Town03_easy, bench_imagez25_entropy_Town07_easy
+%   c0   easy   SGM       bench_imagez25_sgm_matched_Town02_easy, bench_imagez25_sgm_matched_Town03_easy, bench_imagez25_sgm_matched_Town07_easy
+%   c0   medium None      bench_medturn_mapless_Town02_medium, bench_medturn_mapless_Town03_medium, bench_imagez25_mapless_Town07_medium
+%   c0   medium Uniform   bench_medturn_uniform_Town02_medium, bench_medturn_uniform_Town03_medium, bench_imagez25_uniform_Town07_medium
+%   c0   medium Entropy   bench_medturn_entropy_Town02_medium, bench_medturn_entropy_Town03_medium, bench_imagez25_entropy_Town07_medium
+%   c0   medium SGM       bench_medturn_sgm_matched_Town02_medium, bench_medturn_sgm_matched_Town03_medium, bench_imagez25_sgm_matched_Town07_medium
+%   c0   turns  None      bench_turns_mapless_Town02_turns, bench_turns_mapless_Town03_turns, bench_t07_mapless_Town07_turns
+%   c0   turns  Uniform   bench_turnsz25_uniform_Town02_turns, bench_turnsz25_uniform_Town03_turns, bench_t07_uniform_Town07_turns
+%   c0   turns  Entropy   bench_turnsz25_entropy_Town02_turns, bench_turnsz25_entropy_Town03_turns, bench_t07_entropy_Town07_turns
+%   c0   turns  SGM       bench_turnsz25_sgm_matched_Town02_turns, bench_turnsz25_sgm_matched_Town03_turns, bench_t07_sgm_matched_Town07_turns
+%   vint easy   None      bench_vintd3_fresh_any_mapless_Town02_easy, bench_vintd3_fresh_any_mapless_Town03_easy, bench_vintd3_t07_mapless_Town07_easy
+%   vint easy   Uniform   bench_vintd3_z25_uniform_Town02_easy, bench_vintd3_z25_uniform_Town03_easy, bench_vintd3_t07_uniform_Town07_easy
+%   vint easy   ViNT map  bench_vintd3_fresh_any_vinttopo_Town02_easy, bench_vintd3_fresh_any_vinttopo_Town03_easy, bench_vintd3_t07_vinttopo_Town07_easy
+%   vint medium None      bench_vintd3_medturn_mapless_Town02_medium, bench_vintd3_medturn_mapless_Town03_medium, bench_vintd3_t07_mapless_Town07_medium
+%   vint medium Uniform   bench_vintd3_medturn_uniform_Town02_medium, bench_vintd3_medturn_uniform_Town03_medium, bench_vintd3_t07_uniform_Town07_medium
+%   vint medium ViNT map  bench_vintd3_medturn_vinttopo_Town02_medium, bench_vintd3_medturn_vinttopo_Town03_medium, bench_vintd3_t07_vinttopo_Town07_medium
+%   vint turns  None      bench_vintd3_turns_mapless_Town02_turns, bench_vintd3_turns_mapless_Town03_turns, bench_vintd3_t07_mapless_Town07_turns
+%   vint turns  Uniform   bench_vintd3_z25_uniform_Town02_turns, bench_vintd3_z25_uniform_Town03_turns, bench_vintd3_t07_uniform_Town07_turns
+%   vint turns  ViNT map  bench_vintd3_turns_vinttopo_Town02_turns, bench_vintd3_turns_vinttopo_Town03_turns, bench_vintd3_t07_vinttopo_Town07_turns
+\begin{table}[H]
+\centering
+\footnotesize
+\setlength{\tabcolsep}{3.5pt}
+\caption{\textbf{Earlier protocol, pooled over three held-out towns} (Town02, Town03, Town07; 100 episodes each, $n{=}300$ per cell). Bands, success rule and maps as in Table~\ref{tab:map_navigation} (96, 323 and 193 key nodes plus 300--875 image gap nodes), but the high-level policy advanced only when the \emph{current} path node won the image match, both policies acted every simulator tick, and Town02 and Town03 ran on CARLA 0.9.16 (Town07 on 0.9.15). $^{*}$/$^{\dagger}$ as in Table~\ref{tab:map_navigation}.}
+\label{tab:map_navigation_orignav}
+\begin{tabular}{lcccccc}
+\toprule
+ & \multicolumn{2}{c}{Easy} & \multicolumn{2}{c}{Medium} & \multicolumn{2}{c}{Hard} \\
+\cmidrule(lr){2-3}\cmidrule(lr){4-5}\cmidrule(lr){6-7}
+Map & SR & SPL & SR & SPL & SR & SPL \\
+\midrule
+\multicolumn{7}{l}{\textit{BC policy}} \\
+None & 0.78 & 0.78 & 0.32 & 0.32 & 0.05 & 0.05 \\
+Uniform & 0.79 & 0.79 & 0.34 & 0.34 & 0.13$^{*}$ & 0.13 \\
+Entropy & 0.78 & 0.78 & 0.37 & 0.36 & 0.13$^{*}$ & 0.13 \\
+SGM & 0.77 & 0.76 & 0.31 & 0.31 & 0.13$^{*}$ & 0.13 \\
+\midrule
+\multicolumn{7}{l}{\textit{ViNT}~\cite{shah2023vint}} \\
+None & 0.51 & 0.49 & 0.20 & 0.19 & 0.02 & 0.02 \\
+Uniform & 0.54 & 0.53 & 0.35$^{*}$ & 0.34 & 0.08$^{*}$ & 0.07 \\
+ViNT map & 0.44 & 0.43 & 0.24 & 0.24 & 0.05$^{*}$ & 0.05 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+% APPENDIX / ALTERNATIVE -- hard band of the earlier protocol, by town (same cells as above).
+%   wrong goal: bench_turnswrong_mapless_Town02/03_turns (cluster), bench_t07wrong_mapless_Town07_turns.
+\begin{table}[H]
+\centering
+\footnotesize
+\setlength{\tabcolsep}{4pt}
+\caption{\textbf{Earlier protocol, long-horizon routes by town}: the hard band of Table~\ref{tab:map_navigation_orignav} (50--149\,m, at least two junction turns, $n{=}100$ per cell). \emph{No Map, wrong goal}: the BC policy on the same episodes given a goal image from elsewhere in the town, i.e.\ what lane following alone reaches. $^{*}$/$^{\dagger}$ as in Table~\ref{tab:map_navigation}, tested within each town.}
+\label{tab:long_horizon_carla_orignav}
+\begin{tabular}{@{}lrrrrrr@{}}
+\toprule
+& \multicolumn{2}{c}{Town02} & \multicolumn{2}{c}{Town03} & \multicolumn{2}{c}{Town07} \\
+\cmidrule(lr){2-3}\cmidrule(lr){4-5}\cmidrule(lr){6-7}
+Map & SR & SPL & SR & SPL & SR & SPL \\
+\midrule
+\multicolumn{7}{@{}l}{\textit{BC policy}} \\
+None & 0.07 & 0.06 & 0.05 & 0.05 & 0.03 & 0.03 \\
+No Map, wrong goal & 0.04 & 0.03 & 0.05 & 0.05 & 0.01 & 0.01 \\
+Uniform & 0.18 & 0.18 & 0.04 & 0.04 & 0.17$^{*}$ & 0.17 \\
+Entropy & 0.18 & 0.18 & 0.07 & 0.07 & 0.15$^{*}$ & 0.15 \\
+SGM & 0.24$^{*}$ & 0.24 & 0.05 & 0.05 & 0.10 & 0.10 \\
+\midrule
+\multicolumn{7}{@{}l}{\textit{ViNT}~\cite{shah2023vint}} \\
+None & 0.04 & 0.04 & 0.00 & 0.00 & 0.01 & 0.01 \\
+Uniform & 0.21$^{*}$ & 0.19 & 0.00 & 0.00 & 0.03 & 0.03 \\
+ViNT map & 0.10 & 0.10 & 0.01 & 0.01 & 0.04 & 0.04 \\
+\bottomrule
+\end{tabular}
+\end{table}

@@ -1,0 +1,128 @@
+====================================================================================================
+BLOCK A  Town07, aligned navigator (next-node advance), z25 maps, any speed, crossings fatal
+====================================================================================================
+
+--- c0  AR=2  label=na25
+  easy  ckpt=/home/robotlab/carla-sac-local/checkpoints/il_bc_c0/step_15000  episodes=bench_t07_fresh_episodes.json
+    None      SR 0.690 [0.59,0.77] SPL 0.687  fast-reached 12
+    Uniform   SR 0.770 [0.68,0.84] SPL 0.764  fast-reached  9  map-only 10 none-only  2 p 0.0386 pHolm 0.0771
+    Entropy   SR 0.820 [0.73,0.88] SPL 0.811  fast-reached  4  map-only 15 none-only  2 p 0.0023 pHolm 0.0070  *
+    SGM       SR 0.780 [0.69,0.85] SPL 0.774  fast-reached  4  map-only 13 none-only  4 p 0.0490 pHolm 0.0771
+  medium  ckpt=/home/robotlab/carla-sac-local/checkpoints/il_bc_c0/step_15000  episodes=bench_t07_fresh_episodes.json
+    None      SR 0.180 [0.12,0.27] SPL 0.179  fast-reached  6
+    Uniform   SR 0.270 [0.19,0.36] SPL 0.270  fast-reached  0  map-only 17 none-only  8 p 0.1078 pHolm 0.1299
+    Entropy   SR 0.290 [0.21,0.39] SPL 0.290  fast-reached  3  map-only 18 none-only  7 p 0.0433 pHolm 0.1299
+    SGM       SR 0.280 [0.20,0.37] SPL 0.278  fast-reached  0  map-only 17 none-only  7 p 0.0639 pHolm 0.1299
+  turns  ckpt=/home/robotlab/carla-sac-local/checkpoints/il_bc_c0/step_15000  episodes=bench_t07_turns_episodes.json
+    None      SR 0.020 [0.01,0.07] SPL 0.020  fast-reached  0
+    Uniform   SR 0.100 [0.06,0.17] SPL 0.100  fast-reached  2  map-only 10 none-only  2 p 0.0386 pHolm 0.1157
+    Entropy   SR 0.060 [0.03,0.12] SPL 0.060  fast-reached  2  map-only  6 none-only  2 p 0.2891 pHolm 0.3594
+    SGM       SR 0.070 [0.03,0.14] SPL 0.070  fast-reached  1  map-only  7 none-only  2 p 0.1797 pHolm 0.3594
+
+--- sac  AR=2  label=sacna25
+  easy  ckpt=/home/robotlab/carla-sac-local/checkpoints/frl_c0actor_priv_4towns_lc01_miss_2m_cluster/step_100000  episodes=bench_t07_fresh_episodes.json
+    None      SR 0.700 [0.60,0.78] SPL 0.686  fast-reached  4
+    Uniform   SR 0.670 [0.57,0.75] SPL 0.660  fast-reached 16  map-only 11 none-only 14 p 0.6900 pHolm 1.0000
+    Entropy   SR 0.720 [0.63,0.80] SPL 0.711  fast-reached 17  map-only 14 none-only 12 p 0.8450 pHolm 1.0000
+    SGM       SR 0.650 [0.55,0.74] SPL 0.644  fast-reached  8  map-only 10 none-only 15 p 0.4244 pHolm 1.0000
+  medium  ckpt=/home/robotlab/carla-sac-local/checkpoints/frl_c0actor_priv_4towns_lc01_miss_2m_cluster/step_100000  episodes=bench_t07_fresh_episodes.json
+    None      SR 0.320 [0.24,0.42] SPL 0.300  fast-reached  0
+    Uniform   SR 0.430 [0.34,0.53] SPL 0.424  fast-reached  3  map-only 23 none-only 12 p 0.0895 pHolm 0.2686
+    Entropy   SR 0.370 [0.28,0.47] SPL 0.365  fast-reached  3  map-only 19 none-only 14 p 0.4869 pHolm 0.4869
+    SGM       SR 0.240 [0.17,0.33] SPL 0.233  fast-reached  4  map-only 14 none-only 22 p 0.2430 pHolm 0.4860
+  turns  ckpt=/home/robotlab/carla-sac-local/checkpoints/frl_c0actor_priv_4towns_lc01_miss_2m_cluster/step_100000  episodes=bench_t07_turns_episodes.json
+    None      SR 0.010 [0.00,0.05] SPL 0.010  fast-reached  0
+    Uniform   SR 0.080 [0.04,0.15] SPL 0.079  fast-reached  0  map-only  7 none-only  0 p 0.0156 pHolm 0.0469  *
+    Entropy   SR 0.050 [0.02,0.11] SPL 0.050  fast-reached  0  map-only  4 none-only  0 p 0.1250 pHolm 0.1250
+    SGM       SR 0.060 [0.03,0.12] SPL 0.059  fast-reached  2  map-only  5 none-only  0 p 0.0625 pHolm 0.1250
+
+--- vint  AR=1  label=vintd3_nx_ar1
+  easy  ckpt=/home/robotlab/vint/final/dagger3_e1  episodes=bench_t07_fresh_episodes.json
+    None      SR 0.500 [0.40,0.60] SPL 0.482  fast-reached  6
+    Uniform   SR 0.490 [0.39,0.59] SPL 0.474  fast-reached 29  map-only 12 none-only 13 p 1.0000 pHolm 1.0000
+    ViNT map  SR 0.350 [0.26,0.45] SPL 0.334  fast-reached 18  map-only  9 none-only 24 p 0.0135 pHolm 0.0271  *
+  medium  ckpt=/home/robotlab/vint/final/dagger3_e1  episodes=bench_t07_fresh_episodes.json
+    None      SR 0.190 [0.13,0.28] SPL 0.188  fast-reached  0
+    Uniform   SR 0.200 [0.13,0.29] SPL 0.193  fast-reached 10  map-only 14 none-only 13 p 1.0000 pHolm 1.0000
+    ViNT map  SR 0.180 [0.12,0.27] SPL 0.170  fast-reached  9  map-only 16 none-only 17 p 1.0000 pHolm 1.0000
+  turns  ckpt=/home/robotlab/vint/final/dagger3_e1  episodes=bench_t07_turns_episodes.json
+    None      SR 0.010 [0.00,0.05] SPL 0.010  fast-reached  0
+    Uniform   SR 0.050 [0.02,0.11] SPL 0.046  fast-reached  0  map-only  5 none-only  1 p 0.2188 pHolm 0.4375
+    ViNT map  SR 0.000 [0.00,0.04] SPL 0.000  fast-reached  0  map-only  0 none-only  1 p 1.0000 pHolm 1.0000
+
+====================================================================================================
+BLOCK B  original navigator, pooled Town02+Town03+Town07 (n=300)
+====================================================================================================
+
+--- ('c0', 'easy')
+    None      SR 0.783 SPL 0.780  [02:83/100 03:71/100 07:81/100]  fast 28  maps ['']
+    Uniform   SR 0.787 SPL 0.783  [02:77/100 03:75/100 07:84/100]  fast 20  maps ['maps_expert_jx_img', 'maps_t07_z25']  map-only 18 none-only 17 p 1.0000 pHolm 1.0000
+    Entropy   SR 0.773 SPL 0.769  [02:75/100 03:74/100 07:83/100]  fast 17  maps ['maps_expert_jx_img', 'maps_t07_z25']  map-only 18 none-only 21 p 0.7493 pHolm 1.0000
+    SGM       SR 0.807 SPL 0.802  [02:78/100 03:80/100 07:84/100]  fast 21  maps ['maps_expert_jx_img', 'maps_t07_z25']  map-only 24 none-only 17 p 0.3489 pHolm 1.0000
+
+--- ('c0', 'easy_z25')
+    None      SR 0.783 SPL 0.780  [02:83/100 03:71/100 07:81/100]  fast 28  maps ['']
+    Uniform   SR 0.790 SPL 0.787  [02:79/100 03:74/100 07:84/100]  fast 19  maps ['maps_expert_jx_img_z25', 'maps_t07_z25']  map-only 17 none-only 15 p 0.8601 pHolm 1.0000
+    Entropy   SR 0.783 SPL 0.780  [02:79/100 03:73/100 07:83/100]  fast 16  maps ['maps_expert_jx_img_z25', 'maps_t07_z25']  map-only 17 none-only 17 p 1.0000 pHolm 1.0000
+    SGM       SR 0.767 SPL 0.764  [02:76/100 03:70/100 07:84/100]  fast 17  maps ['maps_expert_jx_img_z25', 'maps_t07_z25']  map-only 15 none-only 20 p 0.4996 pHolm 1.0000
+
+--- ('c0', 'medium')
+    None      SR 0.323 SPL 0.322  [02:47/100 03:22/100 07:28/100]  fast 24  maps ['']
+    Uniform   SR 0.340 SPL 0.338  [02:35/100 03:25/100 07:42/100]  fast 10  maps ['maps_expert_jx_img_z25', 'maps_t07_z25']  map-only 54 none-only 49 p 0.6937 pHolm 1.0000
+    Entropy   SR 0.367 SPL 0.364  [02:49/100 03:27/100 07:34/100]  fast 10  maps ['maps_expert_jx_img_z25', 'maps_t07_z25']  map-only 52 none-only 39 p 0.2082 pHolm 0.6245
+    SGM       SR 0.310 SPL 0.310  [02:40/100 03:20/100 07:33/100]  fast 15  maps ['maps_expert_jx_img_z25', 'maps_t07_z25']  map-only 42 none-only 46 p 0.7493 pHolm 1.0000
+
+--- ('c0', 'turns')
+    None      SR 0.050 SPL 0.045  [02:7/100 03:5/100 07:3/100]  fast  6  maps ['']
+    Uniform   SR 0.130 SPL 0.130  [02:18/100 03:4/100 07:17/100]  fast  8  maps ['maps_expert_jx_img_z25', 'maps_t07_z25']  map-only 38 none-only 14 p 0.0012 pHolm 0.0019  *
+    Entropy   SR 0.133 SPL 0.132  [02:18/100 03:7/100 07:15/100]  fast  7  maps ['maps_expert_jx_img_z25', 'maps_t07_z25']  map-only 38 none-only 13 p 0.0006 pHolm 0.0019  *
+    SGM       SR 0.130 SPL 0.130  [02:24/100 03:5/100 07:10/100]  fast  6  maps ['maps_expert_jx_img_z25', 'maps_t07_z25']  map-only 36 none-only 12 p 0.0007 pHolm 0.0019  *
+
+--- ('vint', 'easy')
+    None      SR 0.510 SPL 0.486  [02:74/100 03:27/100 07:52/100]  fast  6  maps ['']
+    Uniform   SR 0.557 SPL 0.538  [02:83/100 03:32/100 07:52/100]  fast 94  maps ['maps_expert_jx_img', 'maps_t07_z25']  map-only 45 none-only 31 p 0.1354 pHolm 0.1354
+    ViNT map  SR 0.443 SPL 0.430  [02:77/100 03:21/100 07:35/100]  fast 33  maps ['']  map-only 29 none-only 49 p 0.0308 pHolm 0.0616
+
+--- ('vint', 'easy_z25uni')
+    None      SR 0.510 SPL 0.486  [02:74/100 03:27/100 07:52/100]  fast  6  maps ['']
+    Uniform   SR 0.540 SPL 0.527  [02:84/100 03:26/100 07:52/100]  fast 87  maps ['maps_expert_jx_img_z25', 'maps_t07_z25']  map-only 43 none-only 34 p 0.3620 pHolm 0.3620
+    ViNT map  SR 0.443 SPL 0.430  [02:77/100 03:21/100 07:35/100]  fast 33  maps ['']  map-only 29 none-only 49 p 0.0308 pHolm 0.0616
+
+--- ('vint', 'medium')
+    None      SR 0.200 SPL 0.190  [02:41/100 03:4/100 07:15/100]  fast  0  maps ['']
+    Uniform   SR 0.347 SPL 0.337  [02:69/100 03:2/100 07:33/100]  fast 55  maps ['maps_expert_jx_img_z25', 'maps_t07_z25']  map-only 63 none-only 19 p 0.0000 pHolm 0.0000  *
+    ViNT map  SR 0.243 SPL 0.240  [02:50/100 03:5/100 07:18/100]  fast 17  maps ['']  map-only 44 none-only 31 p 0.1654 pHolm 0.1654
+
+--- ('vint', 'turns')
+    None      SR 0.017 SPL 0.016  [02:4/100 03:0/100 07:1/100]  fast  0  maps ['']
+    Uniform   SR 0.067 SPL 0.063  [02:17/100 03:0/100 07:3/100]  fast  9  maps ['maps_expert_jx_img', 'maps_t07_z25']  map-only 19 none-only  4 p 0.0026 pHolm 0.0052  *
+    ViNT map  SR 0.050 SPL 0.050  [02:10/100 03:1/100 07:4/100]  fast  4  maps ['']  map-only 13 none-only  3 p 0.0213 pHolm 0.0213  *
+
+--- ('vint', 'turns_z25uni')
+    None      SR 0.017 SPL 0.016  [02:4/100 03:0/100 07:1/100]  fast  0  maps ['']
+    Uniform   SR 0.080 SPL 0.073  [02:21/100 03:0/100 07:3/100]  fast 12  maps ['maps_expert_jx_img_z25', 'maps_t07_z25']  map-only 23 none-only  4 p 0.0003 pHolm 0.0006  *
+    ViNT map  SR 0.050 SPL 0.050  [02:10/100 03:1/100 07:4/100]  fast  4  maps ['']  map-only 13 none-only  3 p 0.0213 pHolm 0.0213  *
+
+    wrong goal (c0, hard, no map): Town02: SR 0.04 SPL 0.03  Town03: SR 0.05 SPL 0.05  Town07: SR 0.01 SPL 0.01
+
+====================================================================================================
+BLOCK K  key-only z25 maps, ground-truth pose, pooled Town02+Town03+Town07
+====================================================================================================
+
+--- easy  no map (reference) SR 0.783 SPL 0.780
+    Uniform   SR 0.720 SPL 0.716 [02:78/100 03:71/100 07:67/100] fast 53  maps ['maps_expert_jx_keys_z25', 'maps_t07_keys_z25']  map-only 9 none-only 28 pHolm 0.0077
+    Entropy   SR 0.743 SPL 0.739 [02:76/100 03:72/100 07:75/100] fast 81  maps ['maps_expert_jx_keys_z25', 'maps_t07_keys_z25']  map-only 10 none-only 22 pHolm 0.0501
+    SGM       SR 0.733 SPL 0.730 [02:77/100 03:70/100 07:73/100] fast 42  maps ['maps_expert_jx_keys_z25', 'maps_t07_keys_z25']  map-only 8 none-only 23 pHolm 0.0213
+
+--- medium  no map (reference) SR 0.323 SPL 0.322
+    Uniform   SR 0.250 SPL 0.248 [02:34/100 03:16/100 07:25/100] fast 23  maps ['maps_expert_jx_keys_z25', 'maps_t07_keys_z25']  map-only 29 none-only 51 pHolm 0.0366
+    Entropy   SR 0.230 SPL 0.229 [02:31/100 03:15/100 07:23/100] fast 28  maps ['maps_expert_jx_keys_z25', 'maps_t07_keys_z25']  map-only 18 none-only 46 pHolm 0.0019
+    SGM       SR 0.287 SPL 0.285 [02:33/100 03:24/100 07:29/100] fast 18  maps ['maps_expert_jx_keys_z25', 'maps_t07_keys_z25']  map-only 27 none-only 38 pHolm 0.2145
+
+--- turns  no map (reference) SR 0.050 SPL 0.045
+    Uniform   SR 0.070 SPL 0.066 [02:17/100 03:3/100 07:1/100] fast 5  maps ['maps_expert_jx_keys_z25', 'maps_t07_keys_z25']  map-only 18 none-only 12 pHolm 1.0000
+    Entropy   SR 0.063 SPL 0.053 [02:13/100 03:2/100 07:4/100] fast 7  maps ['maps_expert_jx_keys_z25', 'maps_t07_keys_z25']  map-only 13 none-only 9 pHolm 1.0000
+    SGM       SR 0.040 SPL 0.035 [02:4/100 03:5/100 07:3/100] fast 6  maps ['maps_expert_jx_keys_z25', 'maps_t07_keys_z25']  map-only 9 none-only 12 pHolm 1.0000
+
+====================================================================================================
+CHECKS: 1218 run, 0 failed

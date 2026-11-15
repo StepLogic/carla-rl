@@ -1,0 +1,463 @@
+% Notes
+% Contibution -> claine
+% Ditch uncertainty and use high entropy  ->
+% Rename decision states
+% Experiment questions should match claims
+% State with comparison with State of ART
+% -> Compare with other baselines
+%  -> Show Habitat experiments
+%  -> Show HM3D experiments
+%  -> Show comparison: TSGM - SGM -show improvement
+% Table
+% 1) Imaganv benchamrk
+% -> Twin Siamese (us)
+% -> TSGM
+% -> SPTM
+% -> VGM
+% 2) NRNS
+% -> TSGM
+% -> SPTM
+% 3) HM3D LH / Gibson LH
+% 5) Map with/without gap nodes
+% 4) CARLA - SH / LH
+% -> Discuss different choices in supplementary
+%     ->
+%     -> If it fits  move it in experiment setup
+%     ->
+% -> Compare
+% \definecolor{oracle}{RGB}{200,220,245}
+\section{Experiments and Evaluation}
+\label{sec:experiments}
+Our method is motivated by two observations. First, a learned low-level visual policy can follow corridors, sidewalks, and lanes without map guidance. Second, the policy's action entropy rises at locations where it must choose between alternatives such as junctions and doorways. Entropy alone is not a sufficient node-selection rule; the high-level policy also needs visual references to localize along segments the low-level policy traverses unaided.
+We test the claim that entropy places nodes at decision points, and that entropy maps with gap nodes match maps built by uniform spacing or learned reachability (SGM~\cite{emmons2020sparse}) with the same number of key nodes, without spacing tuned per environment or a learned critic.
+\MAS{Question numbers are not in order (1-2-4-3)? Also, questions are different from 5.4. You may want to remove last one.}
+\begin{enumerate}
+    \item[Q1.] Does policy entropy concentrate at decision points such as junctions or doorways?
+    \item[Q2.] When does a strong low-level policy still need maps?
+    \item[Q3.] How does an entropy map compare to other mapping approaches?
+    \item[Q5.] What do gap nodes contribute to a map?
+\end{enumerate}
+
+\subsection{Experimental Setup}
+\label{sec:exp-setup}
+\paragraph{Low-level Policies}
+For Habitat, we use the released Gibson-trained DEBiT~\cite{bono2024end} weights as the low-level policy, with no training.
+This controller receives an RGB observation
+and a goal image, and selects among
+\textsc{Forward}, \textsc{Turn Left}, \textsc{Turn Right},
+and \textsc{Stop}.
+Experiments are conducted in Habitat~\cite{habitat19iccv}.
+
+For CARLA~\cite{dosovitskiy2017carla}, controllers trained by
+behavior cloning and by
+Soft Actor-Critic (SAC) are evaluated. These experiments test
+whether entropy-based node selection extends beyond
+the discrete-action DEBiT controller and remains
+useful under different training objectives and environments.
+% NOTE 2026-11-15 (tables regenerated): the CARLA main table (tab:map_navigation) is now held-out
+% Town07 for all three policies; Town02 and Town03 appear in tab:junction_nodes, tab:map_navigation_pose
+% and the appendix tables. This sentence still names Town02 and Town03 only.
+We conduct the experiments in Town02 and Town03, which single and multilane urban environments, respectively
+
+\paragraph{High-level Policy}
+The high-level policy is fixed across maps. It retrieves the
+current and goal nodes using  visual place recognition over
+stored views, plans with Dijkstra's algorithm, and
+provides a low-level policy with one waypoint image at a time.
+
+\subsection{Baselines}
+\textbf{Dense:}
+All candidate frames of the exploration trace are used in the map.
+
+\textbf{Uniform [$d$]:}
+This baseline assumes access to odometry, and the map nodes are obtained from the exploration trace by placing nodes at uniform distances from one another. $d$ is set per environment.
+
+\textbf{SGM~\cite{emmons2020sparse}}:
+Sparse Graphical Memory (SGM) constructs a sparse graph using a learned goal-conditioned value network. Our implementation uses this network to select observations to represent with a common node. This baseline tests whether a critic-derived reachability criterion is sufficient for sparsifying the map. With DEBiT~\cite{bono2024end}, we use its value function; with the imitation policy, we train a goal-conditioned distance network and use it as the value function.
+
+\textbf{Entropy (Ours):}
+The entropy map contains key nodes from Figure.~\ref{fig:pipeline}.
+
+\textbf{ViNT~\cite{shah2023vint}:}
+The pretrained ViNT policy is fine-tuned on data from Town01, Town04, Town05, and Town10 in CARLA.
+For a controlled comparison, we compare ViNT and our algorithm as a system-level comparison
+
+
+\subsection{Evaluation Metrics}
+We evaluate all methods using standard metrics for visual navigation: (1) \textbf{Success Rate (SR)} measures the fraction of episodes in which the agent reaches the goal within a fixed step budget; (2) \textbf{Success weighted by Path Length (SPL)}~\cite{anderson2018evaluation} penalizes unnecessarily long paths by weighting each success by the ratio of the shortest-path length to the actual path length taken; \textbf{Nodes} (number of topological nodes) as a
+proxy for memory cost.
+
+\subsection{Results}
+\label{sec:results}
+\textit{\textbf{Q1:} Does policy entropy concentrate at decision points such as
+junctions or doorways?}
+\textbf{Entropy map places nodes at junctions}.
+As shown in Table~\ref{tab:junction_nodes} and qualitatively in Fig~\ref{fig:town02_entopy nodes}, entropy concentrates significantly on junction nodes, matching our intuition, because the learned-level policy increases entropy at junctions where it needs goal information to decide. This transfers across different environments such as Gibson and HM3D, where nodes in the entropy map appear at the ends of corridors and doorways.
+
+% Junction counts carried from the mapping session's t07/tab_junction_nodes.tex (2026-11-13; junction
+% membership from logs/junctions_<town>.xodr). Key counts and uniform spacings re-read 2026-11-15 from the
+% map metadata: Town02 96 keys / 26.75 m, Town03 323 / 21.6 m, Town07 193 / 30.15 m (t07_build.log:
+% "entropy MAD 326 -> 193 image-distinct; uniform 193 (spacing 30.15 m); random 193", 9093 candidates).
+\begin{table}[H]
+\centering
+\caption{Key nodes inside a junction. Uniform, SGM and Random are matched to entropy's key count
+(96 in Town02, 323 in Town03, 193 in Town07); the matched uniform spacing is 26.8\,m, 21.6\,m and 30.2\,m.
+\emph{Trace}: all candidate frames of the exploration drive.}
+\label{tab:junction_nodes}
+\begin{tabular}{lrrr}
+\toprule
+Placement & Town02 & Town03 & Town07 \\
+\midrule
+Trace   & 894/3664 (24.4\%) & 6454/16242 (39.7\%) & 3004/9093 (33.0\%) \\
+\midrule
+Entropy & 45/96 (46.9\%) & 175/323 (54.2\%) & 96/193 (49.7\%) \\
+Uniform & 27/96 (28.1\%) & 110/323 (34.1\%) & 72/193 (37.3\%) \\
+SGM     & 21/96 (21.9\%) & 115/323 (35.6\%) & 46/193 (23.8\%) \\
+Random  & 20/96 (20.8\%) & 133/323 (41.2\%) & 67/193 (34.7\%) \\
+\bottomrule
+\end{tabular}
+\end{table}
+\begin{figure}
+    \centering
+    \includegraphics[width=1\linewidth]{fig_entropy_locations_combined.pdf}
+    \caption{Policy entropy along the exploration drive in a) Gibson~\cite{xiazamirhe2018gibsonenv},b) HM3D and in c) Town02 and Town03 in CARLA~\cite{dosovitskiy2017carla} Entropy peaks at intersections and stays low on straight segments.}
+    \label{fig:town02_entopy nodes}
+\end{figure}
+% Comments
+% Remove gap nodes  - show only key nodes
+% Show node density as heatmap - number of nodes per 1m
+
+% NOTE 2026-11-15: in CARLA under the aligned navigator (Town07, tab:map_navigation and
+% tab:long_horizon_carla) no hard-band map effect is significant for any policy. The significant
+% hard-band effect (0.05 -> 0.13, n=300) is in the earlier-protocol pooled table (appendix).
+\textit{\textbf{Q2} -When does a strong low-level policy still need maps?}
+\textbf{Maps are increase success rate of state-of-art polices on long horizon trajectories}.
+We evaluate the utility of maps for long-horizon navigation by comparing performance in both indoor and outdoor simulation environments. As shown in Table~\ref{tab:imagenav_habitat} on the ImageNav Benchmark, maps significantly improve the navigation agent's performance on harder long-horizon trajectories. In contrast, a strong low-level policy like DEBiT~\cite{bono2024end} can easily beat the baselines without a map. We further investigate this by generating and evaluating a state-of-the-art low-level policy on even harder image nav problems where the trajectories are at least 10\,m long. Under these conditions, maps yield consistent improvement over the low-level with no map~Table~\ref{tab:long_horizon_debit}.
+
+% Comments
+% Previous shown improvement
+% Do we still need maps with increase performance of low level polices
+% LONG-HORIZON TABLE -- the hard band of the main table with the discordant pairs behind each test.
+\begin{table}[H]
+\centering
+\footnotesize
+\setlength{\tabcolsep}{4pt}
+\caption{\textbf{Long-horizon navigation in CARLA~\cite{dosovitskiy2017carla}}: the hard band of Table~\ref{tab:map_navigation} (held-out Town07, routes of 50--149\,m with at least two junction turns, 100 episodes per cell, the same episodes in every row). \emph{Map only} / \emph{None only}: episodes that succeed with the map and fail without it, and the reverse. $p$: paired exact McNemar against \emph{None}, Holm-corrected across that policy's maps.}
+\label{tab:long_horizon_carla}
+\begin{tabular}{@{}lrrrrr@{}}
+\toprule
+Map & SR & SPL & Map only & None only & $p$ \\
+\midrule
+\multicolumn{6}{@{}l}{\textit{BC policy}} \\
+None & 0.02 & 0.02 & -- & -- & -- \\
+Uniform & 0.10 & 0.10 & 10 & 2 & 0.116 \\
+Entropy & 0.06 & 0.06 & 6 & 2 & 0.359 \\
+SGM & 0.07 & 0.07 & 7 & 2 & 0.359 \\
+\midrule
+\multicolumn{6}{@{}l}{\textit{SAC fine-tuned from the BC policy}} \\
+None & 0.01 & 0.01 & -- & -- & -- \\
+Uniform & 0.08 & 0.08 & 7 & 0 & 0.047 \\
+Entropy & 0.05 & 0.05 & 4 & 0 & 0.125 \\
+SGM & 0.06 & 0.06 & 5 & 0 & 0.125 \\
+\midrule
+\multicolumn{6}{@{}l}{\textit{ViNT}~\cite{shah2023vint}} \\
+None & 0.01 & 0.01 & -- & -- & -- \\
+Uniform & 0.05 & 0.05 & 5 & 1 & 0.438 \\
+ViNT map & 0.00 & 0.00 & 0 & 1 & 1.000 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+
+
+
+\begin{table}[H]
+\centering
+\footnotesize
+\setlength{\tabcolsep}{4pt}
+\caption{
+\textbf{Long-horizon image-goal navigation with DeBiT~\cite{bono2024end}}}
+\label{tab:long_horizon_debit}
+\begin{tabular}{@{}lrrrr@{}}
+\toprule
+& \multicolumn{2}{c}{Gibson LH ($n{=}223$)}
+& \multicolumn{2}{c}{HM3D LH ($n{=}230$)} \\
+\cmidrule(lr){2-3}
+\cmidrule(lr){4-5}
+Method (Mapping / Low-level) & SR & SPL & SR & SPL \\
+\midrule
+No Map / ~DEBiT~\cite{bono2024end}
+& 0.664 & 36.9 & 0.513 & 23.9 \\
+Uniform / ~\cite{bono2024end}
+& \textbf{0.843} & 45.0 & 0.670 & 33.8 \\
+SGM~\cite{emmons2020sparse} Map /~\cite{bono2024end}
+& 0.807 & \textbf{45.5} & 0.691 & 34.1 \\
+\textbf{Entropy Map /~\cite{bono2024end}}
+& 0.798 & 44.8 & 0.665 & 34.0 \\
+\bottomrule
+\end{tabular}
+\end{table}
+% Driving-goal entropy, MAD z=1, no budget; uniform/temporal/SGM key-matched per house (Gibson 87 keys, HM3D 798; SGM 800);
+% every map + own gap nodes; image-based localisation + arrival. HM3D LH = 27 single-floor val houses, 230 eps, 10-17 m.
+% Gibson temporal running -- fill when complete.
+% remove overall
+% Show Curve Case -> only for NRNS
+% split able up
+% Add standard deviation
+% Bolden our method
+
+\textit{\textbf{Q3 -  How does an entropy map compare to other mapping approaches?}}
+\textbf{Entropy map has comparable success rates to other mapping approaches at lower computational efficiency}
+We compare our algorithm to other relevant baselines.
+The  policy entropy retains
+We compare our approach to other relevant methods in the literature to situate our work. The entropy-based map remains competitive with the other approaches.
+\begin{table}[H]
+\centering
+\scriptsize
+\setlength{\tabcolsep}{3pt}
+\caption{\textbf{NRNS episodes}~\cite{hahn2021no} (Gibson), SR/SPL in \%; Hard = 5--10\,m. The results with $\dagger$ are as published in TSGM~\cite{kim2023topological}}
+\label{tab:nrns}
+\begin{tabular}{@{}l cc cc cc cc@{}}
+\toprule
+& \multicolumn{4}{c}{Straight (2{,}806)} & \multicolumn{4}{c}{Curved (3{,}000)} \\
+\cmidrule(lr){2-5}\cmidrule(l){6-9}
+& \multicolumn{2}{c}{Hard} & \multicolumn{2}{c}{Overall} & \multicolumn{2}{c}{Hard} & \multicolumn{2}{c}{Overall} \\
+Method (Mapping / Low-Level) & SR & SPL & SR & SPL & SR & SPL & SR & SPL \\
+\midrule
+NRNS~\cite{hahn2021no}$^\dagger$         & 32.6 & 22.4 & 50.7 & 40.5 & 19.2 & 10.4 & 26.6 & 12.3 \\
+VGM~\cite{kwon2021visual}$^\dagger$     & 67.3 & 54.4 & 76.7 & 59.6 & 62.2 & 46.9 & 74.0 & 50.6 \\
+TSGM~\cite{kim2023topological}$^\dagger$ & 70.3 & \textbf{62.8} & 85.7 & \textbf{79.7} & 64.2 & \textbf{55.0} & 82.5 & \textbf{74.1} \\
+No Map / DEBiT~\cite{bono2024end})             & 80.4 & 59.7 & \textbf{91.8} & 77.0 & 72.4 & 48.3 & 86.4 & 62.1 \\
+ \midrule
+ Uniform map /~\cite{bono2024end}           & 79.8 & 51.6 & 90.4 & 63.0 & 74.4 & 45.2 & 86.6 & 53.4 \\
+\midrule
+Temporal map / ~\cite{bono2024end}         & 79.3 & 52.4 & 89.6 & 63.5 & 72.9 & 44.1 & 85.6 & 52.3 \\
+SGM map / ~\cite{bono2024end}                & 80.4 & 53.9 & 90.0 & 63.1 & 74.3 & 44.4 & 86.4 & 52.4 \\
+\textbf{Entropy map (ours) / ~\cite{bono2024end}}    & \textbf{81.6} & 54.6 & 90.8 & 64.3 & \textbf{75.7} & 44.9 & \textbf{86.8} & 53.1 \\
+\midrule
+No Map / OVRL~\cite{yadav2023offline}      & 30.9 & 21.8 & 45.4 & 31.3 & 30.3 & 19.7 & 43.6 & 28.3 \\
+\midrule
+
+ Uniform map /~\cite{yadav2023offline}          & 37.5 & 19.0 & 46.8 & 20.8 & 35.0 & 17.2 & 45.9 & 20.2 \\
+ \midrule
+Temporal map  /~\cite{yadav2023offline}         & 35.4 & 17.9 & 46.4 & 20.3 & 33.6 & 17.4 & 46.5 & 20.8 \\
+SGM map /~\cite{yadav2023offline}               & 33.3 & 16.6 & 45.3 & 19.8 & 33.2 & 16.9 & 45.0 & 19.7 \\
+\textbf{Entropy map  /~\cite{yadav2023offline}}    & 35.5 & 17.8 & 45.8 & 20.5 & 34.6 & 17.9 & 45.5 & 20.8 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+
+
+% MAIN TABLE -- Town07, ALIGNED navigator (EVAL_MAP_NEXT_ADVANCE=1), z25 maps in all bands, any
+% speed, LANE_UNKNOWN_MARKS_FATAL unset (=1), CARLA 0.9.15 local, episode sets
+% bench_t07_fresh_episodes.json (easy, medium) and bench_t07_turns_episodes.json (hard).
+%   c0    label na25            AR=2  image leg 75 decisions = 150 ticks  ckpt /home/robotlab/carla-sac-local/checkpoints/il_bc_c0/step_15000
+%   sac   label sacna25         AR=2  image leg 75 decisions = 150 ticks  ckpt /home/robotlab/carla-sac-local/checkpoints/frl_c0actor_priv_4towns_lc01_miss_2m_cluster/step_100000
+%   vint  label vintd3_nx_ar1   AR=1  image leg 150 decisions = 150 ticks  ckpt /home/robotlab/vint/final/dagger3_e1
+% SAC = frl_c0actor_priv_4towns_lc01_miss_2m (trained on Town05,Town01,Town04,Town10HD per its
+% training log; Town07 held out), checkpoint step_100000: an intermediate snapshot of a 2M-step run.
+% Rates differ by block (c0/SAC AR=2, ViNT AR=1): the claims are within-block map effects only.
+% Runners: carla-sac-local/t07/run_t07_na_ar2.sh (c0), run_t07_sacna.sh (SAC),
+%          vint-carla results/vint_town07_nx/run_vint_t07_nx.sh (ViNT).
+\begin{table}[H]
+\centering
+\footnotesize
+\setlength{\tabcolsep}{3.5pt}
+\caption{\textbf{Image-goal navigation in CARLA~\cite{dosovitskiy2017carla}}, held-out Town07, 100 episodes per cell; every policy and map runs the same episodes. Success: reaching within 1\,m of the goal, at any speed; a lane invasion reported by the simulator ends the episode. Easy: 10--25\,m. Medium: 25--50\,m with at least one junction turn. Hard: 50--149\,m with at least two junction turns. Uniform, Entropy and SGM maps hold 193 key nodes each plus 614--653 image gap nodes; \emph{ViNT map} is ViNT's own topological graph, built by its own procedure from the Town07 expert tour. The high-level policy advances to the next path node when that node wins the image match, as in Habitat. SAC is initialised from the BC policy and trained for 100k steps in Town01, Town04, Town05 and Town10HD. The BC and SAC policies act every second simulator tick and ViNT every tick, and every subgoal leg gets 150 ticks, so maps are compared within a policy, not absolute numbers across policies. $^{*}$/$^{\dagger}$: better/worse than \emph{None} of the same policy, $p<0.05$, paired exact McNemar, Holm-corrected across that policy's maps within each band.}
+\label{tab:map_navigation}
+\begin{tabular}{lcccccc}
+\toprule
+ & \multicolumn{2}{c}{Easy} & \multicolumn{2}{c}{Medium} & \multicolumn{2}{c}{Hard} \\
+\cmidrule(lr){2-3}\cmidrule(lr){4-5}\cmidrule(lr){6-7}
+Map & SR & SPL & SR & SPL & SR & SPL \\
+\midrule
+\multicolumn{7}{l}{\textit{BC policy}} \\
+None & 0.69 & 0.69 & 0.18 & 0.18 & 0.02 & 0.02 \\
+Uniform & 0.77 & 0.76 & 0.27 & 0.27 & 0.10 & 0.10 \\
+Entropy & 0.82$^{*}$ & 0.81 & 0.29 & 0.29 & 0.06 & 0.06 \\
+SGM & 0.78 & 0.77 & 0.28 & 0.28 & 0.07 & 0.07 \\
+\midrule
+\multicolumn{7}{l}{\textit{SAC fine-tuned from the BC policy}} \\
+None & 0.70 & 0.69 & 0.32 & 0.30 & 0.01 & 0.01 \\
+Uniform & 0.67 & 0.66 & 0.43 & 0.42 & 0.08$^{*}$ & 0.08 \\
+Entropy & 0.72 & 0.71 & 0.37 & 0.36 & 0.05 & 0.05 \\
+SGM & 0.65 & 0.64 & 0.24 & 0.23 & 0.06 & 0.06 \\
+\midrule
+\multicolumn{7}{l}{\textit{ViNT}~\cite{shah2023vint}} \\
+None & 0.50 & 0.48 & 0.19 & 0.19 & 0.01 & 0.01 \\
+Uniform & 0.49 & 0.47 & 0.20 & 0.19 & 0.05 & 0.05 \\
+ViNT map & 0.35$^{\dagger}$ & 0.33 & 0.18 & 0.17 & 0.00 & 0.00 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Algorithmic design}
+% show progression of algorithm design here
+\textit{\textbf{What is the role of gap nodes in map?}}
+% NOTE 2026-11-15: in CARLA the key-only maps localised by TRUE POSE score at or below no map
+% (tab:map_navigation_pose; the key-only graphs fragment, SCC in its caption). The CARLA evidence is
+% 'without gap nodes the map does not help', not 'gap nodes close the gap to a pose oracle'.
+As stated earlier, gap nodes are intended to provide visual references for high-level policy localization. To show their necessity, we show that in both environments, i.e in CARLA~\cite{dosovitskiy2017carla} and Habitat~\cite{habitat19iccv} on the HM3D dataset, gap nodes allow the map to close the performance gap between an oracle high-level policy that uses the pose of the agent and the nodes to localize both the agent and goal images, as opposed to using visual place recognition. The map used in this experiment contains only nodes selected by the node placer algorithm, and we compare uniform node spacing with nodes selected with high entropy at a matched node count.
+% Comment
+% Start with baseline policy
+% Show benefits of entropy nodes
+% Show benefits of gap nodes
+% KEY-ONLY MAPS, GROUND-TRUTH POSE -- c0 at ACTION_REPEAT=1 (all cells before 2026-11-15), any speed.
+%   key-only maps: cluster maps_expert_jx_keys_z25 (Town02 97 keys, Town03 319), local
+%   t07/maps_t07_keys_z25 (Town07 193). Cells: bench_oraclez25_* (easy, hard; Town07 all bands),
+%   bench_medturnoracle_* (Town02/Town03 medium = >=1 junction turn). Reference: the no-map cells of
+%   the same episodes (bench_fresh_any_mapless / bench_medturn_mapless / bench_turns_mapless,
+%   Town07 bench_imagez25_mapless / bench_t07_mapless). The pose arm uses no image navigator, so
+%   the subgoal-advance rule does not apply. Largest SCC recomputed 2026-11-15 from the map edges.
+\begin{table}[H]
+\centering
+\footnotesize
+\setlength{\tabcolsep}{3.5pt}
+\caption{\textbf{Key nodes alone, localised by ground-truth pose}, in CARLA, pooled over Town02, Town03 and Town07 (100 episodes per town, $n{=}300$ per cell); BC policy acting every simulator tick. The maps hold only the key nodes (97, 319 and 193; no gap nodes), and the agent and goal are placed on the graph by their true pose. \emph{No map} is the same policy on the same episodes. Without gap nodes the graphs fragment: the largest strongly connected component covers 0.93, 0.93 and 0.82 of the uniform graph, 0.69, 0.72 and 0.17 of the entropy graph and 0.49, 0.22 and 0.23 of the SGM graph (Town02, Town03, Town07), against 1.00 for the full maps. Bands and success as in Table~\ref{tab:map_navigation}. $^{*}$/$^{\dagger}$: better/worse than \emph{No map}, $p<0.05$, paired exact McNemar, Holm-corrected across the three maps within each band.}
+\label{tab:map_navigation_pose}
+\begin{tabular}{lcccccc}
+\toprule
+ & \multicolumn{2}{c}{Easy} & \multicolumn{2}{c}{Medium} & \multicolumn{2}{c}{Hard} \\
+\cmidrule(lr){2-3}\cmidrule(lr){4-5}\cmidrule(lr){6-7}
+Map (key nodes only) & SR & SPL & SR & SPL & SR & SPL \\
+\midrule
+No map & 0.78 & 0.78 & 0.32 & 0.32 & 0.05 & 0.05 \\
+\midrule
+Uniform & 0.72$^{\dagger}$ & 0.72 & 0.25$^{\dagger}$ & 0.25 & 0.07 & 0.07 \\
+Entropy & 0.74 & 0.74 & 0.23$^{\dagger}$ & 0.23 & 0.06 & 0.05 \\
+SGM & 0.73$^{\dagger}$ & 0.73 & 0.29 & 0.28 & 0.04 & 0.04 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{table}[H]
+\centering
+\scriptsize
+\setlength{\tabcolsep}{2pt}
+\caption{\textbf{Effect of gap nodes} on 230 HM3D single-floor episodes (10--17\,m). SR and SPL in \%. \emph{Keys}: key nodes over the 27 houses; \emph{key}: key nodes only; \emph{+ gap}: with gap nodes. Top: key count set by uniform spacing (1.40\,m), entropy matched to it. Bottom: key count chosen by causal entropy (MAD, $z{=}1$, no budget), uniform matched to it. \textbf{Bold}: best.}
+\label{tab:gap_nodes}
+\begin{tabular}{@{}lrrr@{}}
+\toprule
+Map & Keys & SR & SPL \\
+\midrule
+No map                     & --    & 51.3 & 23.9 \\
+Entropy (causal) key       & 558     & 52.6 & 24.4 \\
+\quad + gap                &         & 64.8 & 34.1 \\
+Uniform key                & 556     & 50.4 & 24.1 \\
+\quad + gap                &         & 63.9 & 33.3 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{table}[H]
+\centering
+\scriptsize
+\setlength{\tabcolsep}{2.5pt}
+\caption{\textbf{How episodes end} (230 HM3D single-floor episodes, 10--17\,m; key-node count set by causal entropy, uniform matched to it). \% of episodes. \emph{Wrong STOP}: STOP called $>$1\,m from the goal. \emph{Lost}: no STOP within 1{,}000 steps, ending within 3\,m (\emph{near}) or farther (\emph{far}) from the goal.}
+\label{tab:failures}
+\begin{tabular}{@{}lrrrr@{}}
+\toprule
+& & \multicolumn{3}{c}{Failure} \\
+\cmidrule(l){3-5}
+Map & Success & Wrong STOP & Lost, near & Lost, far \\
+\midrule
+No map                 & 51 & 2 & 2 & 45 \\
+\midrule
+Entropy (causal) key   & 53 & 2 & 3 & 43 \\
+\quad + gap            & \textbf{65} & 3 & 4 & \textbf{28} \\
+\midrule
+Uniform key            & 50 & 2 & 3 & 45 \\
+\quad + gap            & 64 & 2 & 1 & 33 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+% ==================================================================================================
+% APPENDIX TABLES (new, 2026-11-15): the earlier protocol, kept so the pooled three-town numbers
+% remain available. Move to the supplementary material, or drop them.
+% ==================================================================================================
+% --------------------------------------------------------------------------------------------------
+% APPENDIX / ALTERNATIVE -- the EARLIER protocol (original subgoal rule: the CURRENT node had to win),
+% c0 and ViNT at ACTION_REPEAT=1, pooled Town02 + Town03 + Town07, any speed, crossings fatal.
+% z25-CONSISTENT: every map cell is on the z=2.5 maps the paper describes. This differs from the
+% 2026-11-14 tab_map_navigation_main.tex in two places, both of which used the DENSER
+% maps_expert_jx_img build (255/1104 key nodes) for Town02/Town03:
+%   c0 easy maps: bench_imagez25_* here (z25) instead of bench_fresh_imageany_* (jx_img);
+%   ViNT uniform easy + hard: bench_vintd3_z25_uniform here instead of vintd3_fresh_any_uniform /
+%   vintd3_turns_uniform (jx_img). Medium cells (medturn) were already z25 for both policies.
+%   c0   easy   None      bench_fresh_any_mapless_Town02_easy, bench_fresh_any_mapless_Town03_easy, bench_imagez25_mapless_Town07_easy
+%   c0   easy   Uniform   bench_imagez25_uniform_Town02_easy, bench_imagez25_uniform_Town03_easy, bench_imagez25_uniform_Town07_easy
+%   c0   easy   Entropy   bench_imagez25_entropy_Town02_easy, bench_imagez25_entropy_Town03_easy, bench_imagez25_entropy_Town07_easy
+%   c0   easy   SGM       bench_imagez25_sgm_matched_Town02_easy, bench_imagez25_sgm_matched_Town03_easy, bench_imagez25_sgm_matched_Town07_easy
+%   c0   medium None      bench_medturn_mapless_Town02_medium, bench_medturn_mapless_Town03_medium, bench_imagez25_mapless_Town07_medium
+%   c0   medium Uniform   bench_medturn_uniform_Town02_medium, bench_medturn_uniform_Town03_medium, bench_imagez25_uniform_Town07_medium
+%   c0   medium Entropy   bench_medturn_entropy_Town02_medium, bench_medturn_entropy_Town03_medium, bench_imagez25_entropy_Town07_medium
+%   c0   medium SGM       bench_medturn_sgm_matched_Town02_medium, bench_medturn_sgm_matched_Town03_medium, bench_imagez25_sgm_matched_Town07_medium
+%   c0   turns  None      bench_turns_mapless_Town02_turns, bench_turns_mapless_Town03_turns, bench_t07_mapless_Town07_turns
+%   c0   turns  Uniform   bench_turnsz25_uniform_Town02_turns, bench_turnsz25_uniform_Town03_turns, bench_t07_uniform_Town07_turns
+%   c0   turns  Entropy   bench_turnsz25_entropy_Town02_turns, bench_turnsz25_entropy_Town03_turns, bench_t07_entropy_Town07_turns
+%   c0   turns  SGM       bench_turnsz25_sgm_matched_Town02_turns, bench_turnsz25_sgm_matched_Town03_turns, bench_t07_sgm_matched_Town07_turns
+%   vint easy   None      bench_vintd3_fresh_any_mapless_Town02_easy, bench_vintd3_fresh_any_mapless_Town03_easy, bench_vintd3_t07_mapless_Town07_easy
+%   vint easy   Uniform   bench_vintd3_z25_uniform_Town02_easy, bench_vintd3_z25_uniform_Town03_easy, bench_vintd3_t07_uniform_Town07_easy
+%   vint easy   ViNT map  bench_vintd3_fresh_any_vinttopo_Town02_easy, bench_vintd3_fresh_any_vinttopo_Town03_easy, bench_vintd3_t07_vinttopo_Town07_easy
+%   vint medium None      bench_vintd3_medturn_mapless_Town02_medium, bench_vintd3_medturn_mapless_Town03_medium, bench_vintd3_t07_mapless_Town07_medium
+%   vint medium Uniform   bench_vintd3_medturn_uniform_Town02_medium, bench_vintd3_medturn_uniform_Town03_medium, bench_vintd3_t07_uniform_Town07_medium
+%   vint medium ViNT map  bench_vintd3_medturn_vinttopo_Town02_medium, bench_vintd3_medturn_vinttopo_Town03_medium, bench_vintd3_t07_vinttopo_Town07_medium
+%   vint turns  None      bench_vintd3_turns_mapless_Town02_turns, bench_vintd3_turns_mapless_Town03_turns, bench_vintd3_t07_mapless_Town07_turns
+%   vint turns  Uniform   bench_vintd3_z25_uniform_Town02_turns, bench_vintd3_z25_uniform_Town03_turns, bench_vintd3_t07_uniform_Town07_turns
+%   vint turns  ViNT map  bench_vintd3_turns_vinttopo_Town02_turns, bench_vintd3_turns_vinttopo_Town03_turns, bench_vintd3_t07_vinttopo_Town07_turns
+\begin{table}[H]
+\centering
+\footnotesize
+\setlength{\tabcolsep}{3.5pt}
+\caption{\textbf{Earlier protocol, pooled over three held-out towns} (Town02, Town03, Town07; 100 episodes each, $n{=}300$ per cell). Bands, success rule and maps as in Table~\ref{tab:map_navigation} (96, 323 and 193 key nodes plus 300--875 image gap nodes), but the high-level policy advanced only when the \emph{current} path node won the image match, both policies acted every simulator tick, and Town02 and Town03 ran on CARLA 0.9.16 (Town07 on 0.9.15). $^{*}$/$^{\dagger}$ as in Table~\ref{tab:map_navigation}.}
+\label{tab:map_navigation_orignav}
+\begin{tabular}{lcccccc}
+\toprule
+ & \multicolumn{2}{c}{Easy} & \multicolumn{2}{c}{Medium} & \multicolumn{2}{c}{Hard} \\
+\cmidrule(lr){2-3}\cmidrule(lr){4-5}\cmidrule(lr){6-7}
+Map & SR & SPL & SR & SPL & SR & SPL \\
+\midrule
+\multicolumn{7}{l}{\textit{BC policy}} \\
+None & 0.78 & 0.78 & 0.32 & 0.32 & 0.05 & 0.05 \\
+Uniform & 0.79 & 0.79 & 0.34 & 0.34 & 0.13$^{*}$ & 0.13 \\
+Entropy & 0.78 & 0.78 & 0.37 & 0.36 & 0.13$^{*}$ & 0.13 \\
+SGM & 0.77 & 0.76 & 0.31 & 0.31 & 0.13$^{*}$ & 0.13 \\
+\midrule
+\multicolumn{7}{l}{\textit{ViNT}~\cite{shah2023vint}} \\
+None & 0.51 & 0.49 & 0.20 & 0.19 & 0.02 & 0.02 \\
+Uniform & 0.54 & 0.53 & 0.35$^{*}$ & 0.34 & 0.08$^{*}$ & 0.07 \\
+ViNT map & 0.44 & 0.43 & 0.24 & 0.24 & 0.05$^{*}$ & 0.05 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+% APPENDIX / ALTERNATIVE -- hard band of the earlier protocol, by town (same cells as above).
+%   wrong goal: bench_turnswrong_mapless_Town02/03_turns (cluster), bench_t07wrong_mapless_Town07_turns.
+\begin{table}[H]
+\centering
+\footnotesize
+\setlength{\tabcolsep}{4pt}
+\caption{\textbf{Earlier protocol, long-horizon routes by town}: the hard band of Table~\ref{tab:map_navigation_orignav} (50--149\,m, at least two junction turns, $n{=}100$ per cell). \emph{No Map, wrong goal}: the BC policy on the same episodes given a goal image from elsewhere in the town, i.e.\ what lane following alone reaches. $^{*}$/$^{\dagger}$ as in Table~\ref{tab:map_navigation}, tested within each town.}
+\label{tab:long_horizon_carla_orignav}
+\begin{tabular}{@{}lrrrrrr@{}}
+\toprule
+& \multicolumn{2}{c}{Town02} & \multicolumn{2}{c}{Town03} & \multicolumn{2}{c}{Town07} \\
+\cmidrule(lr){2-3}\cmidrule(lr){4-5}\cmidrule(lr){6-7}
+Map & SR & SPL & SR & SPL & SR & SPL \\
+\midrule
+\multicolumn{7}{@{}l}{\textit{BC policy}} \\
+None & 0.07 & 0.06 & 0.05 & 0.05 & 0.03 & 0.03 \\
+No Map, wrong goal & 0.04 & 0.03 & 0.05 & 0.05 & 0.01 & 0.01 \\
+Uniform & 0.18 & 0.18 & 0.04 & 0.04 & 0.17$^{*}$ & 0.17 \\
+Entropy & 0.18 & 0.18 & 0.07 & 0.07 & 0.15$^{*}$ & 0.15 \\
+SGM & 0.24$^{*}$ & 0.24 & 0.05 & 0.05 & 0.10 & 0.10 \\
+\midrule
+\multicolumn{7}{@{}l}{\textit{ViNT}~\cite{shah2023vint}} \\
+None & 0.04 & 0.04 & 0.00 & 0.00 & 0.01 & 0.01 \\
+Uniform & 0.21$^{*}$ & 0.19 & 0.00 & 0.00 & 0.03 & 0.03 \\
+ViNT map & 0.10 & 0.10 & 0.01 & 0.01 & 0.04 & 0.04 \\
+\bottomrule
+\end{tabular}
+\end{table}

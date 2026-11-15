@@ -667,7 +667,8 @@ def main():
                       | {"stats": r["stats"]} for k, r in B.items() if isinstance(k, tuple)},
                 "K": {b: {arm: [strip(x) for x in c["parts"]] for arm, c in r["cells"].items()}
                       | {"stats": r["stats"]} for b, r in K.items()},
-                "checks": CHECKS}
+                "checks": [re.sub(r"/home/[^/]+/carla-rl/", "cluster:carla-rl/", c.replace(root, "cluster:carla-rl/checkpoints/"))
+                           for c in CHECKS]}
         json.dump(dump, open(a.json_out, "w"), indent=1, default=str)
     if a.tex_out:
         emit_tex(pol, A, B, K, a.tex_out, a.rev)

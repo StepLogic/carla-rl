@@ -429,6 +429,28 @@ def priv_vector(info, mode: int) -> np.ndarray:
     return out
 
 
+def reward_breakdown(batch, lane_cost: float, ticks: int) -> Dict:
+    """WHAT THE CRITIC IS ACTUALLY PAID, PER DECISION (2026-11-15: is a value of -170 the reward or the
+    critic?). On a replay batch: r_net = mean stored reward (the lane cost already taken off), r_lane =
+    mean lane cost charged, and the same two for explore rows and goal rows apart (the mode is the
+    critic's own mode column). While the actor is frozen this is c0's true reward: r_net / (1 - gamma)
+    is the value a correct critic should report for an episode that never ends. Logging only."""
+    r = batch["rewards"].detach().float().cpu().numpy().reshape(-1)
+    out = {"r_net": float(r.mean())}
+    priv = batch["observations"].get("priv")
+    if priv is None:
+        return out
+    p = priv.detach().float().cpu().numpy()
+    cost = np.array([lane_step_cost(row, lane_cost, ticks) for row in p], np.float64)
+    goal = p[:, LANE_PRIV_DIM + 1] > 0.5
+    out["r_lane"] = float(cost.mean())
+    for name, m in (("x", ~goal), ("g", goal)):
+        if m.any():
+            out[f"r_net_{name}"] = float(r[m].mean())
+            out[f"r_lane_{name}"] = float(cost[m].mean())
+    return out
+
+
 @torch.no_grad()
 def steer_agreement(learner, batch, grid: int = 21) -> Dict:
     """DO THE ACTOR AND THE CRITIC AGREE ON WHICH WAY TO STEER? (user 2026-11-15). On a replay batch:
@@ -852,6 +874,12 @@ class Odometer:
                 f"m_per_fault={s['m_per_fault']:.0f}")
 
 
+def _diag(learner, rb, s) -> Dict:
+    """The log line's diagnostics on ONE replay batch: steering agreement and the reward breakdown."""
+    b = rb.sample(max(int(s.batch), 1024))
+    return dict(steer_agreement(learner, b), **reward_breakdown(b, s.lane_step_cost, _ticks()))
+
+
 def train(env, obs, info, out: str, *, trunk: C0Trunk, row_of: Callable, settings: LoopSettings,
           c0_dir: str, log: Callable = print, probe: Optional[SteerProbe] = None,
           to_env: Callable = box_map, ramp=None, rebuild_env: Optional[Callable] = None,
@@ -995,8 +1023,7 @@ def train(env, obs, info, out: str, *, trunk: C0Trunk, row_of: Callable, setting
             log(f"[FRL] step={step} policy={pol:.3f}(n={len(recent['policy'])}) "
                 f"goal={mean(g, 0):.3f}(n={len(g)}) goal_len={mean(g, 1):.0f} "
                 f"explore_len={mean(e, 1):.0f} {odo.line()} episodes={episodes} ends={ends} | "
-                + " ".join(f"{k}={v:.4g}" for k, v in sorted(
-                    dict(upd, **(steer_agreement(learner, rb.sample(s.batch)) if upd else {})).items()))
+                + " ".join(f"{k}={v:.4g}" for k, v in sorted(dict(upd, **(_diag(learner, rb, s) if upd else {})).items()))
                 + f" target_entropy={learner.target_entropy:.4f} | rollout steer_lock="
                 f"{roll['lock'] / max(1, roll['n']):.2f} throttle<0.05="
                 f"{roll['idle_thr'] / max(1, roll['n']):.2f} | "
@@ -1271,8 +1298,7 @@ def train_parallel(env, obs, info, out: str, *, trunk: C0Trunk, row_of: Callable
                 log(f"[FRL] step={next_log} policy={pol_sr:.3f}(n={len(recent['policy'])}) "
                     f"goal={mean(g, 0):.3f}(n={len(g)}) goal_len={mean(g, 1):.0f} "
                     f"explore_len={mean(e, 1):.0f} {odo.line()} episodes={episodes} ends={ends} | "
-                    + " ".join(f"{k}={v:.4g}" for k, v in sorted(
-                        dict(upd, **(steer_agreement(learner, rb.sample(s.batch)) if upd else {})).items()))
+                    + " ".join(f"{k}={v:.4g}" for k, v in sorted(dict(upd, **(_diag(learner, rb, s) if upd else {})).items()))
                     + f" target_entropy={learner.target_entropy:.4f} | rollout steer_lock="
                     f"{roll['lock'] / max(1, roll['n']):.2f} throttle<0.05="
                     f"{roll['idle_thr'] / max(1, roll['n']):.2f} | "

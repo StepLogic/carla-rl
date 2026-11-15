@@ -192,3 +192,17 @@ def test_steer_agreement_ignores_states_where_the_actor_drives_straight():
     batch = {"observations": {"priv": torch.zeros(16, fc.PRIV_DIM)}}
     out = fc.steer_agreement(_FakeLearner(0.0, 0.5), batch)
     assert math.isnan(out["steer_agree"]) and out["steer_gap"] == pytest.approx(0.5, abs=0.06)
+
+
+def test_reward_breakdown_reports_the_net_reward_and_the_lane_cost_per_mode():
+    priv = torch.zeros(4, fc.PRIV_DIM)
+    priv[:, 3] = 1.0                                   # cos(heading error) = 1: no heading error
+    priv[:2, 0] = 0.4                                  # two rows 0.4 m off centre, two centred
+    priv[1, fc.LANE_PRIV_DIM + 1] = 1.0                # row 1 and row 3 are goal rows
+    priv[3, fc.LANE_PRIV_DIM + 1] = 1.0
+    batch = {"observations": {"priv": priv}, "rewards": torch.tensor([0.1, 0.3, 0.5, 0.7])}
+    out = fc.reward_breakdown(batch, lane_cost=0.5, ticks=2)
+    assert out["r_net"] == pytest.approx(0.4)
+    assert out["r_lane"] == pytest.approx(0.2)         # 0.5 x 2 x 0.4 m on half the rows
+    assert out["r_net_x"] == pytest.approx(0.3) and out["r_net_g"] == pytest.approx(0.5)
+    assert out["r_lane_x"] == pytest.approx(0.2) and out["r_lane_g"] == pytest.approx(0.2)

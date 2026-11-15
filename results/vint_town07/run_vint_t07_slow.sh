@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# ON HOLD: run ONLY as part of a table-wide rerun of every arm (see PROVENANCE.md).
 # ViNT Town07 rerun under the CURRENT eval rules (see PROVENANCE.md): LIVE slow arrival
 # (BENCH_BASE_OVERLAY=slurm/il_eval_chw.env, GOAL_ARRIVAL_MAX_SPEED=10 from v52) and
 # LANE_UNKNOWN_MARKS_FATAL=0 (user 2026-11-15). Otherwise identical to run_vint_t07.sh.

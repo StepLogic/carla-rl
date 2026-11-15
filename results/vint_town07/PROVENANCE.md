@@ -14,6 +14,9 @@
     EVAL_MAP_REPLAN=3`, uniform arm with `EVAL_MAP_LOCALISE=image`;
   - `LANE_UNKNOWN_MARKS_FATAL` NOT set: the code default 1 applied, so a crossing of a lane
     edge with no marking data ended the episode. The 2026-11-15 rule sets it to 0 for evals.
+    This is a TABLE-WIDE property of every cell scored before 2026-11-15 (c0, ViNT and RL
+    alike), not a handicap on ViNT; such cells are not poolable with cells run under the
+    2026-11-15 rule.
 - Episodes: `bench_t07_fresh_episodes.json` (easy; medium = the >= 1-turn rule) and
   `bench_t07_turns_episodes.json` (hard), 100 each, from the map benchmark.
 - Maps: uniform = `t07/maps_t07_z25/uniform`. ViNT topomap = drive 0 of the Town07 expert tour
@@ -36,4 +39,24 @@ to the rules in force since 2026-11-13 / 2026-11-15:
   Success = within 1 m at <= 10 km/h, applied LIVE, so a fast pass does not end the episode.
 - `LANE_UNKNOWN_MARKS_FATAL=0`: a crossing of an edge with no marking data is not a fault.
 Because two settings change, the difference from the 2026-11-12 cells is not the speed rule
-alone. Status: prepared, NOT RUN. It waits for a GPU slot from the user.
+alone. Status: prepared, NOT RUN, and ON HOLD. A ViNT-only rerun would leave the main table
+mixed (ViNT at slow arrival + non-fatal no-data crossings, c0 and RL at any speed + fatal),
+which is worse than a consistent, dated table. It runs only as part of a TABLE-WIDE rerun of
+every arm, if the user chooses that over keeping every cell at any speed with a disclosure.
+
+## Every ViNT benchmark cell and the rule it ran under (checked from the logs, 2026-11-15)
+
+All `vintd3` = `vint_final/dagger3_e1`. No ViNT log sets `LANE_UNKNOWN_MARKS_FATAL`, so every
+cell below ran with no-data crossings FATAL (the pre-2026-11-15 default).
+
+| Label | Jobs | Towns | Bands | Arrival rule |
+|---|---|---|---|---|
+| `vintd3_fresh` | 464944-464946 (cluster, 0.9.16) | Town02, Town03 | easy, OLD length-only medium, OLD fresh hard | LIVE <= 10 km/h (old rule, il_eval_chw.env) |
+| `vintd3_fresh_any` | 465200-465202 (cancelled midway), 465271-465273 | Town02, Town03 | easy (and partial medium/hard from the cancelled jobs) | any speed |
+| `vintd3_medturn` | 466134 (Town02), 466159 (Town03) | Town02, Town03 | medium, >= 1 turn | any speed |
+| `vintd3_turns` | 465331-465333 | Town02, Town03 | hard, >= 2 turns | any speed |
+| `vintd3_z25` | 465470-465471 | Town02, Town03 | easy, medium, turns; uniform z=2.5 map only | any speed |
+| `vintd3_t07` | local, 2026-11-12 | Town07 | easy, medium (>= 1 turn), hard | any speed |
+
+Medium, any speed, mapless / uniform / ViNT topomap: Town02 (466134) .41 / .69 / .50,
+Town03 (466159) .04 / .02 / .05.

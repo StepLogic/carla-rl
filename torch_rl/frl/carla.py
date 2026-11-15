@@ -85,6 +85,12 @@ class LoopSettings:
     # so the checkpoint's Adam state does not apply. It also lets `actor` differ from the checkpoint's,
     # which the guard otherwise refuses.
     resume_new_actor: int = 0
+    # THE RESUME WARM-UP (user 2026-11-15: "go ahead"): after a resume the CRITIC ALONE is updated until
+    # the fresh replay holds this many own rows; the actor and the temperature wait, as they do for
+    # actor_freeze at a run's start. A resume updated the actor from its first start_training rows, and two
+    # resumes from step 175,000 lost ground whatever the reward: temperature 0.088 -> 0.14-0.20, steering
+    # gap 0.24 -> 0.40 (the run never restarted: 0.082-0.088 and 0.23-0.26). 0 = off, as every earlier resume.
+    resume_freeze: int = 0
     # THE CONTROL STREAM AS THE TRUNK (user 2026-11-14: "Queue online train for best fixes wirh SAC
     # with expert pinned rows"): a directory holding the pretrained torch_rl.control_cnn.ControlGRU
     # (params.pt from scripts/pretrain_control.py). Its frozen GRU state replaces c0's in the
@@ -1053,11 +1059,14 @@ def train(env, obs, info, out: str, *, trunk: C0Trunk, row_of: Callable, setting
 # Its learning, log line and checkpoints MIRROR train()'s above, which stays unchanged for the runs made
 # with it; the helpers below are used by train_parallel only.
 
-def _learn_step(learner, rb, expert, pinned: bool, s: LoopSettings, step: int) -> Dict:
+def _learn_step(learner, rb, expert, pinned: bool, s: LoopSettings, step: int, own_rows: int = -1) -> Dict:
     """One transition's learning, as train() does it: one update of s.batch split into s.utd
     minibatches; critic-only while the actor is frozen; FastRLAP's second expert update in "update"
     mode (none when the expert rows are pinned in the replay)."""
     frozen = step < s.start_training + s.actor_freeze
+    # the resume warm-up: own_rows = this run's own rows in the fresh replay (-1 = not given)
+    if s.resume and s.resume_freeze and 0 <= own_rows < s.resume_freeze:
+        frozen = True
     if frozen:
         upd = critic_only_update(learner, rb.sample(s.batch), s.utd)
     else:
@@ -1074,7 +1083,7 @@ def _learn_step(learner, rb, expert, pinned: bool, s: LoopSettings, step: int) -
 # Settings a resumed run may change: run length and cadence, devices, the loop, the resume itself (and
 # the seed, whose streams cannot be continued anyway). Every other LoopSettings field must match.
 RESUME_MAY_DIFFER = ("max_steps", "ckpt_every", "log_every", "device", "replay_device", "parallel",
-                     "resume", "seed", "expert", "batched_heads", "resume_new_actor",
+                     "resume", "seed", "expert", "batched_heads", "resume_new_actor", "resume_freeze",
                      # the stream's PATH (its identity is the checkpoint's c0_md5, checked below) and
                      # the warm-up, which a resumed learner is past
                      "control", "iql_pretrain",
@@ -1177,7 +1186,7 @@ def train_parallel(env, obs, info, out: str, *, trunk: C0Trunk, row_of: Callable
     if s.resume:
         log(f"[Resume] {s.resume}: learner restored at step {start}; fresh replay (pinned expert rows "
             f"{'+ ' if pinned else ''}own rows from 0); updates resume when {s.start_training} own rows "
-            f"are back")
+            f"are back; actor and temperature held until {s.resume_freeze} own rows (0 = not held)")
     rb = FeatureReplay(s.replay, trunk.emb_dim, trunk.state_dim, act_dim,
                        s.replay_device or s.device, s.seed + start,
                        pinned=expert.t if pinned else None,
@@ -1290,7 +1299,7 @@ def train_parallel(env, obs, info, out: str, *, trunk: C0Trunk, row_of: Callable
                     mode[i], ep_ret[i], ep_len[i] = _mode(ob), 0.0, 0
                     odo.start(i, inf)
             for k in learn_at:
-                upd = _learn_step(learner, rb, expert, pinned, s, k)
+                upd = _learn_step(learner, rb, expert, pinned, s, k, own_rows=rb.n)
             while step >= next_log:
                 g, e = recent["goal"], recent["explore"]
                 mean = lambda xs, j: float(np.mean([x[j] for x in xs])) if xs else float("nan")

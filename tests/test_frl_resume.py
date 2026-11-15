@@ -132,3 +132,44 @@ def test_the_loop_resumes_a_checkpoint_into_a_c0_actor(c0_dir, tmp_path):  # noq
 def test_settings_read_the_new_actor_flag():
     assert fc.LoopSettings.from_env({"FRL_RESUME_NEW_ACTOR": "1"}).resume_new_actor == 1
     assert fc.LoopSettings.from_env({}).resume_new_actor == 0
+
+
+# THE RESUME WARM-UP (user 2026-11-15: "go ahead"). Two resumes of the four-town run from step 175,000 lost
+# ground in their first 20,000 decisions whatever the reward (jobs 466554, 466557): the temperature went
+# 0.088 -> 0.14-0.20 and the actor-critic steering gap 0.24 -> 0.40, against 0.082-0.088 and 0.23-0.26 in
+# the run that was never restarted. A resume starts with an empty replay and updated the ACTOR from its first
+# 1,000 rows. resume_freeze = N: after a resume the critic alone is updated until N own rows are back.
+def test_after_a_resume_the_actor_and_temperature_wait_for_the_replay_to_refill(c0_dir, tmp_path, monkeypatch):  # noqa: F811
+    from torch_rl.frl.learner import SACLearner
+    ck = _first(tmp_path, c0_dir)
+    saved = torch.load(os.path.join(ck, "params.pt"))
+    full, critic_only = [], []
+    real, real_c = SACLearner.update, fc.critic_only_update
+    monkeypatch.setattr(SACLearner, "update", lambda self, *a, **kw: full.append(1) or real(self, *a, **kw))
+    monkeypatch.setattr(fc, "critic_only_update", lambda *a, **kw: critic_only.append(1) or real_c(*a, **kw))
+    # resumed at 12; own rows 2, 4, 6, 8, 10 at steps 14, 16, 18, 20, 22. Updates from 6 rows (steps 17-22);
+    # with resume_freeze=100 every one of them is critic-only.
+    learner, rb, _ = _run(c0_dir, tmp_path / "f", _settings(22, 4, resume=ck, resume_freeze=100))
+    assert len(critic_only) == 6 and not full
+    for name, t in learner.actor.state_dict().items():
+        assert torch.equal(t, saved["actor"][name]), name
+    assert float(learner.log_temp) == pytest.approx(float(saved["log_temp"]))
+    assert any(not torch.equal(t, saved["critic"][n]) for n, t in learner.critic.state_dict().items())
+
+
+def test_the_resume_warm_up_ends_when_the_own_rows_reach_it(c0_dir, tmp_path, monkeypatch):  # noqa: F811
+    from torch_rl.frl.learner import SACLearner
+    ck = _first(tmp_path, c0_dir)
+    full, critic_only = [], []
+    real, real_c = SACLearner.update, fc.critic_only_update
+    monkeypatch.setattr(SACLearner, "update", lambda self, *a, **kw: full.append(1) or real(self, *a, **kw))
+    monkeypatch.setattr(fc, "critic_only_update", lambda *a, **kw: critic_only.append(1) or real_c(*a, **kw))
+    # rows reach 6 at steps 17-18 (critic-only: 6 < 8), 8 at steps 19-20 and 10 at 21-22 (full updates)
+    _run(c0_dir, tmp_path / "g", _settings(22, 4, resume=ck, resume_freeze=8))
+    assert len(critic_only) == 2 and len(full) == 4
+
+
+def test_the_resume_warm_up_is_a_setting_a_resumed_run_may_set():
+    assert fc.LoopSettings.from_env({"FRL_RESUME_FREEZE": "15000"}).resume_freeze == 15000
+    assert fc.LoopSettings().resume_freeze == 0
+    assert "resume_freeze" in fc.RESUME_MAY_DIFFER
